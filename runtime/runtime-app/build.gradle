@@ -1,0 +1,35 @@
+plugins {
+    id 'application'
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+}
+
+application {
+    mainClass = 'com.mccompanion.runtime.RuntimeMain'
+}
+
+dependencies {
+    implementation project(':protocol:protocol-model')
+    implementation 'org.java-websocket:Java-WebSocket:1.6.0'
+    implementation 'org.xerial:sqlite-jdbc:3.49.1.0'
+    implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.18.3'
+    implementation 'org.slf4j:slf4j-simple:2.0.17'
+    testImplementation platform('org.junit:junit-bom:5.12.1')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.junit.jupiter:junit-jupiter-params'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(Test).configureEach { useJUnitPlatform() }
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 21
+    options.encoding = 'UTF-8'
+}

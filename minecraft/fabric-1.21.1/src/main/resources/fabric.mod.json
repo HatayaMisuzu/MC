@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "minecraft_ai_companion",
+  "version": "${version}",
+  "name": "Minecraft AI Companion",
+  "description": "Server-authoritative companion body and runtime bridge. External Runtime is optional at load time.",
+  "authors": [
+    "Minecraft AI Companion contributors"
+  ],
+  "license": "LicenseRef-All-Rights-Reserved",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "=1.21.1",
+    "java": ">=21",
+    "fabric-api": ">=0.116.13"
+  }
+}

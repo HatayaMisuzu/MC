@@ -1,0 +1,100 @@
+plugins {
+    id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+    id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = "minecraft-ai-companion-fabric-${minecraft_version}"
+}
+
+repositories {
+    mavenCentral()
+}
+
+sourceSets {
+    gametest {
+        compileClasspath += main.output + main.compileClasspath
+        runtimeClasspath += output + compileClasspath + main.runtimeClasspath
+    }
+}
+
+loom {
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+        }
+        "${mod_id}_gametest" {
+            sourceSet sourceSets.gametest
+        }
+    }
+
+    runs {
+        server {
+            server()
+            runDir 'build/launch-test/server'
+            programArg '--nogui'
+        }
+        gameTest {
+            server()
+            source sourceSets.gametest
+            runDir 'build/gametest'
+            vmArg '-Dfabric-api.gametest'
+            vmArg "-Dfabric-api.gametest.report-file=${file('build/test-results/gametest/results.xml').absolutePath}"
+        }
+    }
+}
+
+sourceSets.main.java.srcDir('../platform-bootstrap-common/src/main/java')
+
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    gametestImplementation sourceSets.main.output
+
+    implementation "com.mccompanion:pure-core:${mod_version}"
+    implementation "com.mccompanion:protocol-model:${mod_version}"
+}
+
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand version: project.version
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
+}
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    withSourcesJar()
+}
+
+jar {
+    manifest {
+        attributes(
+                'Implementation-Title': project.mod_name,
+                'Implementation-Version': project.version,
+                'Minecraft-Version': project.minecraft_version,
+                'Mod-Loader': 'Fabric'
+        )
+    }
+}
+
+publishing {
+    publications {
+        create('mavenJava', MavenPublication) {
+            from components.java
+        }
+    }
+}
+
+apply from: rootProject.file('../gradle/launch-test.gradle')

@@ -1,0 +1,18 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+    }
+}
+
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+rootProject.name = 'minecraft-ai-companion-neoforge-1.21.1'
+
+includeBuild('../..') {
+    dependencySubstitution {
+        substitute module('com.mccompanion:pure-core') using project(':core:pure-core')
+        substitute module('com.mccompanion:protocol-model') using project(':protocol:protocol-model')
+    }
+}

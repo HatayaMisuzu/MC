@@ -1,0 +1,121 @@
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
+
+def launchServerDirectory = layout.buildDirectory.dir('launch-test/server')
+def launchEvidenceDirectory = layout.buildDirectory.dir('launch-test/evidence')
+def launchReady = new AtomicBoolean(false)
+def launchTimedOut = new AtomicBoolean(false)
+def launchInputHolder = [input: null, output: null, monitor: null]
+
+def prepareLaunchTest = tasks.register('prepareLaunchTest') {
+    group = 'verification'
+    description = 'Prepares an isolated, disposable dedicated-server directory for launchTest.'
+    outputs.dir(launchServerDirectory)
+
+    doLast {
+        File serverDirectory = launchServerDirectory.get().asFile
+        File evidenceDirectory = launchEvidenceDirectory.get().asFile
+        project.delete(serverDirectory, evidenceDirectory)
+        serverDirectory.mkdirs()
+        evidenceDirectory.mkdirs()
+        new File(serverDirectory, 'eula.txt').setText('eula=true\n', 'UTF-8')
+        new File(serverDirectory, 'server.properties').setText(
+                'online-mode=false\n' +
+                'level-name=launch-test-world\n' +
+                'motd=Minecraft AI Companion launch test\n' +
+                'max-tick-time=120000\n',
+                'UTF-8')
+    }
+}
+
+def runServerTask = tasks.named('runServer')
+def launchTest = tasks.register('launchTest') {
+    group = 'verification'
+    description = 'Starts a real isolated dedicated server, waits for ready, then stops it cleanly.'
+    dependsOn runServerTask
+    outputs.upToDateWhen { false }
+
+    doLast {
+        Thread monitor = launchInputHolder.monitor as Thread
+        if (monitor != null) {
+            monitor.join(5_000L)
+        }
+        closeQuietly(launchInputHolder.output)
+        closeQuietly(launchInputHolder.input)
+
+        File logFile = new File(launchServerDirectory.get().asFile, 'logs/latest.log')
+        if (launchTimedOut.get()) {
+            throw new GradleException("Dedicated-server launch timed out; inspect ${logFile}")
+        }
+        if (!launchReady.get()) {
+            throw new GradleException("Dedicated server exited before reporting ready; inspect ${logFile}")
+        }
+        logger.lifecycle("Dedicated-server launch test passed: ${logFile}")
+    }
+}
+
+runServerTask.configure { task ->
+    dependsOn prepareLaunchTest
+
+    doFirst {
+        if (!gradle.taskGraph.hasTask(launchTest.get())) {
+            return
+        }
+
+        def pipeOutput = new PipedOutputStream()
+        def pipeInput = new PipedInputStream(pipeOutput)
+        launchInputHolder.output = pipeOutput
+        launchInputHolder.input = pipeInput
+        task.standardInput = pipeInput
+
+        File serverDirectory = launchServerDirectory.get().asFile
+        File logFile = new File(serverDirectory, 'logs/latest.log')
+        File evidenceFile = new File(launchEvidenceDirectory.get().asFile, 'ready.properties')
+        int timeoutSeconds = providers.gradleProperty('launchTestTimeoutSeconds').orElse('360').get().toInteger()
+
+        Thread monitor = new Thread({
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(timeoutSeconds)
+            try {
+                while (System.nanoTime() < deadline) {
+                    if (logFile.isFile()) {
+                        String log = Files.readString(logFile.toPath(), StandardCharsets.UTF_8)
+                        if (log.contains('Done (') && log.contains('For help, type "help"')) {
+                            launchReady.set(true)
+                            evidenceFile.parentFile.mkdirs()
+                            evidenceFile.setText(
+                                    "ready=true\nlog=${logFile.absolutePath}\n",
+                                    'UTF-8')
+                            pipeOutput.write('stop\n'.getBytes(StandardCharsets.UTF_8))
+                            pipeOutput.flush()
+                            return
+                        }
+                    }
+                    Thread.sleep(250L)
+                }
+                launchTimedOut.set(true)
+                pipeOutput.write('stop\n'.getBytes(StandardCharsets.UTF_8))
+                pipeOutput.flush()
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt()
+            } catch (IOException ioException) {
+                if (!launchReady.get()) {
+                    logger.error('launchTest monitor failed before server readiness', ioException)
+                }
+            }
+        }, "${project.name}-launch-test-monitor")
+        monitor.daemon = true
+        launchInputHolder.monitor = monitor
+        monitor.start()
+    }
+}
+
+static void closeQuietly(Object closeable) {
+    if (closeable instanceof Closeable) {
+        try {
+            closeable.close()
+        } catch (IOException ignored) {
+            // The launched server may close its stdin first during a normal shutdown.
+        }
+    }
+}

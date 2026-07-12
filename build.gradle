@@ -1,0 +1,112 @@
+plugins {
+    id 'base'
+}
+
+allprojects {
+    group = providers.gradleProperty('group').get()
+    version = providers.gradleProperty('version').get()
+}
+
+subprojects {
+    repositories { mavenCentral() }
+}
+
+def platformBuilds = [
+    'fabric-1.21.1': file('minecraft/fabric-1.21.1'),
+    'neoforge-1.21.1': file('minecraft/neoforge-1.21.1'),
+    'forge-1.20.1': file('minecraft/forge-1.20.1')
+]
+
+platformBuilds.each { target, directory ->
+    tasks.register("build-${target}", Exec) {
+        group = 'build'
+        description = "Builds ${target} in its isolated loader workspace."
+        workingDir = directory
+        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+            commandLine 'cmd', '/c', 'gradlew.bat', 'clean', 'build', "-PsharedVersion=${project.version}"
+        } else {
+            commandLine './gradlew', 'clean', 'build', "-PsharedVersion=${project.version}"
+        }
+    }
+}
+
+tasks.register('buildPlatforms') {
+    group = 'build'
+    dependsOn platformBuilds.keySet().collect { "build-${it}" }
+}
+
+tasks.named('build') {
+    dependsOn subprojects.collect { it.tasks.matching { t -> t.name == 'build' } }
+    dependsOn 'buildPlatforms'
+}
+
+tasks.register('test') {
+    group = 'verification'
+    description = 'Runs all JVM unit and integration tests in shared modules.'
+    dependsOn subprojects.collect { it.tasks.matching { t -> t.name == 'test' } }
+}
+
+def platformLaunchTasks = platformBuilds.collectEntries { target, directory ->
+    [(target): tasks.register("launchTest-${target}", Exec) {
+        group = 'verification'
+        workingDir = directory
+        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+            commandLine 'cmd', '/c', 'gradlew.bat', 'launchTest'
+        } else {
+            commandLine './gradlew', 'launchTest'
+        }
+    }]
+}
+
+tasks.register('launchTest') {
+    group = 'verification'
+    description = 'Runs isolated dedicated-server launch tests for every supported target.'
+    dependsOn platformLaunchTasks.values()
+}
+
+tasks.register('forbiddenApiCheck') {
+    group = 'verification'
+    doLast {
+        exec {
+            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/forbidden-api-check.ps1').absolutePath
+        }
+    }
+}
+
+tasks.register('packageAlpha') {
+    group = 'distribution'
+    dependsOn 'build', 'test', 'forbiddenApiCheck'
+    doLast {
+        exec {
+            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/package-alpha.ps1').absolutePath
+        }
+    }
+}
+
+tasks.register('independenceCheck') {
+    group = 'verification'
+    description = 'Verifies that production source, metadata, and dependency declarations do not depend on Numen or Baritone.'
+    doLast {
+        exec {
+            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/independence-check.ps1').absolutePath
+        }
+    }
+}
+
+tasks.register('secretCheck') {
+    group = 'verification'
+    description = 'Fails when key-shaped secret material is present in source files.'
+    doLast {
+        exec {
+            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/secret-check.ps1').absolutePath
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn 'test', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck'
+}

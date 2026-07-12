@@ -1,0 +1,16 @@
+direct_copied_code: false
+references:
+  - project: FabricMC/fabric-example-mod
+    usage: official build layout reference only
+  - project: NeoForgeMDKs/MDK-1.21.1-ModDevGradle
+    usage: official build layout reference only
+  - project: NeoForgeMDKs/MDK-Forge-1.20.1-ModDevGradle
+    usage: official Forge build layout reference only
+  - project: Dwinovo/minecraft-numen
+    usage: architecture and lifecycle risk reference only
+  - project: cabaletta/baritone
+    usage: pathfinding concepts only
+rules:
+  - No third-party source is copied into first-party modules.
+  - Production builds do not require Numen or Baritone.
+

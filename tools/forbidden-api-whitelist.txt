@@ -1,0 +1,5 @@
+# Relative-path glob | token | reason
+# Spawn, respawn, persistence migration, and test fixtures may be added only
+# with an exact path and a reviewed reason. There are no production exceptions
+# at project initialization.
+minecraft\fabric-1.21.1\src\main\java\com\mccompanion\minecraft\fabric\CompanionRegistry.java | moveTo | Initial spawn placement beside the owner; behavior ticks use vanilla travel input.

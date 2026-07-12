@@ -15,6 +15,7 @@ base {
 java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 sourceSets.main.java.srcDir('../platform-bootstrap-common/src/main/java')
+sourceSets.main.java.srcDir('../platform-1.20.1-common/src/main/java')
 sourceSets.main.resources.srcDir('src/generated/resources')
 
 repositories {
@@ -35,6 +36,11 @@ legacyForge {
             gameDirectory = project.file('build/launch-test/server')
             programArgument '--nogui'
             systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+        }
+        gameTestServer {
+            type = "gameTestServer"
+            gameDirectory = project.file('build/gametest')
+            systemProperty 'forge.enabledGameTestNamespaces', "${project.mod_id},minecraft"
         }
     }
 

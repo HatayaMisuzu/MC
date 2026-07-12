@@ -1,4 +1,4 @@
-package com.mccompanion.minecraft.fabric;
+package com.mccompanion.minecraft.v120;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.DoubleArgumentType;
@@ -11,11 +11,11 @@ import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 
-final class CompanionCommands {
+public final class CompanionCommands {
     private CompanionCommands() {
     }
 
-    static void register(
+    public static void register(
             CommandDispatcher<CommandSourceStack> dispatcher,
             Function<CommandSourceStack, CompanionRegistry> registryLookup,
             String capabilityJson) {
@@ -24,6 +24,8 @@ final class CompanionCommands {
                         .executes(context -> status(context, registryLookup)))
                 .then(Commands.literal("capabilities")
                         .executes(context -> success(context.getSource(), capabilityJson)))
+                .then(Commands.literal("runtime")
+                        .executes(context -> runtimeStatus(context, registryLookup)))
                 .then(Commands.literal("help")
                         .executes(context -> success(context.getSource(), helpText())))
                 .then(Commands.literal("create")
@@ -40,6 +42,8 @@ final class CompanionCommands {
                         .executes(context -> ownerCommand(context, registryLookup, CompanionRegistry::remove)))
                 .then(Commands.literal("follow")
                         .executes(context -> ownerCommand(context, registryLookup, CompanionRegistry::follow)))
+                .then(Commands.literal("come")
+                        .executes(context -> ownerCommand(context, registryLookup, CompanionRegistry::come)))
                 .then(Commands.literal("goto")
                         .then(Commands.argument("x", DoubleArgumentType.doubleArg())
                                 .then(Commands.argument("y", DoubleArgumentType.doubleArg())
@@ -70,6 +74,15 @@ final class CompanionCommands {
         return success(context.getSource(), player == null ? registry.globalStatus() : registry.status(player));
     }
 
+    private static int runtimeStatus(
+            CommandContext<CommandSourceStack> context,
+            Function<CommandSourceStack, CompanionRegistry> registryLookup) {
+        CompanionRegistry registry = registryLookup.apply(context.getSource());
+        return registry == null
+                ? success(context.getSource(), "runtime=OFFLINE server=NOT_READY")
+                : success(context.getSource(), registry.globalStatus());
+    }
+
     private static int ownerCommand(
             CommandContext<CommandSourceStack> context,
             Function<CommandSourceStack, CompanionRegistry> registryLookup,
@@ -95,8 +108,8 @@ final class CompanionCommands {
     }
 
     private static String helpText() {
-        return "/companion create [name] | spawn | despawn | remove | follow | goto <x> <y> <z> | "
-                + "stop | pause | resume | status | capabilities. Mutating commands control only your own companion.";
+        return "/companion create [name] | spawn | despawn | remove | follow | come | goto <x> <y> <z> | "
+                + "stop | pause | resume | status | runtime | capabilities. Mutating commands control only your own companion.";
     }
 
     @FunctionalInterface

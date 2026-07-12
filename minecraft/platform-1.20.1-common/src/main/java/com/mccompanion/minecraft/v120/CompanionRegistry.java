@@ -1,4 +1,4 @@
-package com.mccompanion.minecraft.fabric;
+package com.mccompanion.minecraft.v120;
 
 import com.mojang.authlib.GameProfile;
 import java.util.ArrayList;
@@ -11,11 +11,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.network.CommonListenerCookie;
 import org.slf4j.Logger;
 
 /** Owns all live companion bodies and their persistent behavior state for one dedicated server. */
-final class CompanionRegistry {
+public final class CompanionRegistry {
     private final MinecraftServer server;
     private final Logger logger;
     private final CompanionSavedData savedData;
@@ -23,17 +22,18 @@ final class CompanionRegistry {
     private final BehaviorDirector behaviorDirector;
     private final CompanionDeathController deathController;
 
-    CompanionRegistry(MinecraftServer server, Logger logger) {
+    public CompanionRegistry(MinecraftServer server, Logger logger) {
         this.server = Objects.requireNonNull(server, "server");
         this.logger = Objects.requireNonNull(logger, "logger");
         this.savedData = server.overworld().getDataStorage().computeIfAbsent(
-                CompanionSavedData.FACTORY,
+                CompanionSavedData::load,
+                CompanionSavedData::new,
                 CompanionSavedData.STORAGE_ID);
         this.behaviorDirector = new BehaviorDirector(server, savedData, logger);
         this.deathController = new CompanionDeathController(logger);
     }
 
-    void start() {
+    public void start() {
         for (CompanionEntry entry : new ArrayList<>(savedData.entries())) {
             if (entry.spawned) {
                 spawnBody(entry, null);
@@ -42,7 +42,7 @@ final class CompanionRegistry {
         logger.info("Loaded {} companion record(s), {} live body/bodies", savedData.entries().size(), liveBodies.size());
     }
 
-    void shutdown() {
+    public void shutdown() {
         for (CompanionPlayer body : new ArrayList<>(liveBodies.values())) {
             body.stopWalking();
         }
@@ -228,7 +228,7 @@ final class CompanionRegistry {
                 + " " + behaviorDirector.evidenceSummary(entry.companionId);
     }
 
-    String globalStatus() {
+    public String globalStatus() {
         return "records=" + savedData.entries().size() + " liveBodies=" + liveBodies.size()
                 + " runtime=OFFLINE localControl=AVAILABLE";
     }
@@ -239,7 +239,7 @@ final class CompanionRegistry {
         return entry == null ? null : liveBodies.get(entry.companionId);
     }
 
-    void tick() {
+    public void tick() {
         for (CompanionEntry entry : new ArrayList<>(savedData.entries())) {
             CompanionPlayer body = liveBodies.get(entry.companionId);
             if (!entry.spawned) {
@@ -288,8 +288,7 @@ final class CompanionRegistry {
                 // Spawn placement is isolated here; all behavior ticks use travel(...) and never teleport/setPos.
                 body.moveTo(spawnBeside.getX(), spawnBeside.getY(), spawnBeside.getZ(), spawnBeside.getYRot(), 0.0F);
             }
-            CommonListenerCookie cookie = CommonListenerCookie.createInitial(body.getGameProfile(), false);
-            server.getPlayerList().placeNewPlayer(connection, body, cookie);
+            server.getPlayerList().placeNewPlayer(connection, body);
             if (entry.deathPendingRecovery) {
                 // Lifecycle-only recovery: vanilla already performed drops and saved that inventory before this load.
                 // Restore health and place the newly constructed ServerPlayer body beside its owner; behaviors never

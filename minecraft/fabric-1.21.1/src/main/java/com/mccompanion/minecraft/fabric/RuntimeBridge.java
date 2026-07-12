@@ -1,0 +1,382 @@
+package com.mccompanion.minecraft.fabric;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mccompanion.minecraft.v121.CompanionRegistry;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.WebSocket;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Locale;
+import java.util.UUID;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import net.minecraft.server.MinecraftServer;
+import org.slf4j.Logger;
+
+/** Optional, reconnecting local WebSocket bridge. All game mutations are re-entered on the server thread. */
+final class RuntimeBridge implements AutoCloseable {
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String PROTOCOL = "mc-companion/1";
+
+    private final MinecraftServer server;
+    private final CompanionRegistry registry;
+    private final Logger logger;
+    private final URI uri;
+    private final Path tokenFile;
+    private final ScheduledExecutorService executor;
+    private final HttpClient client;
+    private final AtomicLong outgoingSequence = new AtomicLong();
+    private final AtomicBoolean connecting = new AtomicBoolean();
+    private volatile WebSocket socket;
+    private volatile String sessionId;
+    private volatile boolean closed;
+    private volatile boolean missingTokenReported;
+
+    private RuntimeBridge(MinecraftServer server, CompanionRegistry registry, Logger logger) {
+        this.server = server;
+        this.registry = registry;
+        this.logger = logger;
+        this.uri = URI.create(System.getProperty("mccompanion.runtime.url", "ws://127.0.0.1:8766"));
+        this.tokenFile = Path.of(System.getProperty(
+                "mccompanion.runtime.tokenFile",
+                "config/minecraft-ai-companion/runtime.token")).toAbsolutePath().normalize();
+        this.executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-runtime-bridge");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.client = HttpClient.newBuilder().executor(executor).connectTimeout(Duration.ofSeconds(3)).build();
+    }
+
+    static RuntimeBridge start(MinecraftServer server, CompanionRegistry registry, Logger logger) {
+        RuntimeBridge bridge = new RuntimeBridge(server, registry, logger);
+        bridge.executor.scheduleWithFixedDelay(bridge::connectIfNeeded, 0, 5, TimeUnit.SECONDS);
+        bridge.executor.scheduleWithFixedDelay(bridge::publishStatus, 1, 1, TimeUnit.SECONDS);
+        return bridge;
+    }
+
+    private void connectIfNeeded() {
+        if (closed || socket != null || !connecting.compareAndSet(false, true)) return;
+        try {
+            if (!Files.isRegularFile(tokenFile)) {
+                if (!missingTokenReported) {
+                    logger.info("Runtime bridge offline: pairing token not found at {}", tokenFile);
+                    missingTokenReported = true;
+                }
+                connecting.set(false);
+                return;
+            }
+            String token = Files.readString(tokenFile, StandardCharsets.UTF_8).trim();
+            if (token.length() < 16 || token.length() > 512 || token.chars().anyMatch(Character::isWhitespace)) {
+                logger.warn("Runtime bridge token file is invalid; expected one 16..512 character token");
+                connecting.set(false);
+                return;
+            }
+            missingTokenReported = false;
+            client.newWebSocketBuilder()
+                    .connectTimeout(Duration.ofSeconds(3))
+                    .header("Authorization", "Bearer " + token)
+                    .buildAsync(uri, new Listener())
+                    .whenComplete((webSocket, failure) -> {
+                        connecting.set(false);
+                        if (failure != null && !closed) {
+                            logger.warn("Runtime bridge connection failed; local commands remain available ({})",
+                                    failure.getClass().getSimpleName());
+                        }
+                    });
+        } catch (IOException | RuntimeException failure) {
+            connecting.set(false);
+            logger.warn("Runtime bridge could not read its local configuration ({})",
+                    failure.getClass().getSimpleName());
+        }
+    }
+
+    private void sendHello(WebSocket webSocket) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("protocol", PROTOCOL)
+                .put("modVersion", MinecraftAiCompanionFabric.MOD_VERSION)
+                .put("minecraftVersion", "1.21.1")
+                .put("loader", "fabric")
+                .put("worldId", worldId());
+        payload.putObject("capabilities")
+                .put("server_player_body", true)
+                .put("follow", true)
+                .put("travel", true)
+                .put("runtime_safe_idle", true);
+        ObjectNode hello = JSON.createObjectNode().put("protocol", PROTOCOL).put("type", "hello");
+        hello.set("payload", payload);
+        webSocket.sendText(write(hello), true);
+    }
+
+    private void handle(String text) {
+        final JsonNode message;
+        try {
+            message = JSON.readTree(text);
+        } catch (IOException malformed) {
+            logger.warn("Runtime bridge ignored malformed JSON");
+            return;
+        }
+        String type = message.path("type").asText("");
+        if (type.equals("hello_ack")) {
+            if (!message.path("accepted").asBoolean(false)) {
+                logger.warn("Runtime rejected bridge handshake: {}", message.path("code").asText("UNKNOWN"));
+                closeSocket(1008, "handshake rejected");
+                return;
+            }
+            sessionId = message.path("sessionId").asText();
+            outgoingSequence.set(0);
+            server.execute(() -> registry.setRuntimeConnected(true));
+            logger.info("Runtime bridge connected: protocol={} safeIdleOnDisconnect=true", PROTOCOL);
+            publishStatus();
+            return;
+        }
+        if (type.equals("query") && message.path("name").asText().equals("list_companions")) {
+            publishStatus();
+        } else if (type.equals("command")) {
+            server.execute(() -> processCommand(message.path("payload")));
+        } else if (type.equals("heartbeat_ack") || type.equals("subscription")) {
+            // Subscription is fulfilled by the periodic status publisher.
+        }
+    }
+
+    private void processCommand(JsonNode command) {
+        String commandId = command.path("commandId").asText();
+        String companionId = command.path("companionId").asText();
+        String commandType = command.path("command").asText().toUpperCase(Locale.ROOT).replace('-', '_');
+        String leaseId = command.path("leaseId").isNull() ? null : command.path("leaseId").asText(null);
+        long epoch = command.path("controlEpoch").asLong(0);
+        JsonNode arguments = command.path("arguments");
+        CompanionRegistry.RuntimeResult result;
+        switch (commandType) {
+            case "ACQUIRE_LEASE" -> result = registry.runtimeAcquireLease(
+                    companionId,
+                    arguments.path("proposedLeaseId").asText(),
+                    arguments.path("proposedEpoch").asLong(),
+                    arguments.path("expiresAt").asLong());
+            case "RENEW_LEASE" -> result = registry.runtimeRenewLease(
+                    companionId, leaseId, epoch, arguments.path("expiresAt").asLong());
+            case "RELEASE_LEASE" -> result = registry.runtimeReleaseLease(companionId, leaseId, epoch);
+            case "START_BEHAVIOR" -> {
+                JsonNode parameters = arguments.path("parameters");
+                JsonNode target = parameters.path("target");
+                result = registry.runtimeStart(
+                        companionId, leaseId, epoch,
+                        arguments.path("behaviorId").asText(),
+                        arguments.path("behaviorType").asText(),
+                        target.has("x") ? target.path("x").asDouble() : null,
+                        target.has("y") ? target.path("y").asDouble() : null,
+                        target.has("z") ? target.path("z").asDouble() : null);
+            }
+            case "PAUSE_BEHAVIOR" -> result = registry.runtimePause(companionId, leaseId, epoch);
+            case "RESUME_BEHAVIOR" -> result = registry.runtimeResume(companionId, leaseId, epoch);
+            case "CANCEL_BEHAVIOR" -> result = registry.runtimeCancel(companionId, leaseId, epoch);
+            case "QUERY_STATUS" -> {
+                publishStatusOnServerThread();
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
+            default -> result = new CompanionRegistry.RuntimeResult(false, "UNKNOWN_COMMAND", null, 0, "FAILED");
+        }
+        if (!result.success()) {
+            sendProtocolError(commandId, result.code());
+            return;
+        }
+        registry.recordRuntimeCommand();
+        sendCommandAccepted(commandId, result);
+        if (result.behaviorId() != null && !commandType.equals("ACQUIRE_LEASE")
+                && !commandType.equals("RENEW_LEASE") && !commandType.equals("RELEASE_LEASE")) {
+            sendBehaviorEvent(commandId, companionId, result, commandType);
+        }
+        publishStatusOnServerThread();
+    }
+
+    private void sendCommandAccepted(String commandId, CompanionRegistry.RuntimeResult result) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("commandId", commandId)
+                .put("duplicate", false)
+                .put("behaviorRevision", result.behaviorRevision())
+                .put("acceptedAt", Instant.now().toString());
+        if (result.behaviorId() != null) payload.put("behaviorId", result.behaviorId());
+        sendEnvelope("command_accepted", payload);
+    }
+
+    private void sendBehaviorEvent(
+            String commandId,
+            String companionId,
+            CompanionRegistry.RuntimeResult result,
+            String commandType) {
+        String event = switch (commandType) {
+            case "PAUSE_BEHAVIOR" -> "paused";
+            case "RESUME_BEHAVIOR" -> "resumed";
+            case "CANCEL_BEHAVIOR", "RELEASE_LEASE" -> "cancelled";
+            default -> "started";
+        };
+        String state = result.state().toLowerCase(Locale.ROOT);
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", UUID.randomUUID().toString())
+                .put("behaviorId", result.behaviorId())
+                .put("commandId", commandId)
+                .put("companionId", companionId)
+                .put("event", event)
+                .put("state", state)
+                .put("revision", result.behaviorRevision())
+                .put("tick", server.getTickCount())
+                .put("progress", 0.0D)
+                .put("occurredAt", Instant.now().toString());
+        payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        sendEnvelope("behavior_event", payload);
+    }
+
+    private long currentEpoch(String companionId) {
+        return registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId))
+                .mapToLong(CompanionRegistry.RuntimeSnapshot::controlEpoch)
+                .findFirst().orElse(0L);
+    }
+
+    private void sendProtocolError(String commandId, String code) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("failureCode", code)
+                .put("message", "Mod rejected Runtime command: " + code)
+                .put("retryable", code.equals("RUNTIME_OFFLINE") || code.equals("OWNER_OFFLINE"))
+                .put("commandId", commandId)
+                .put("occurredAt", Instant.now().toString());
+        payload.putObject("details");
+        sendEnvelope("protocol_error", payload);
+    }
+
+    private void publishStatus() {
+        if (closed || socket == null || sessionId == null) return;
+        server.execute(this::publishStatusOnServerThread);
+    }
+
+    private void publishStatusOnServerThread() {
+        if (socket == null || sessionId == null) return;
+        ArrayNode companions = JSON.createArrayNode();
+        for (CompanionRegistry.RuntimeSnapshot snapshot : registry.runtimeSnapshots(true)) {
+            ObjectNode status = companions.addObject()
+                    .put("companionId", snapshot.companionId())
+                    .put("ownerId", snapshot.ownerId())
+                    .put("displayName", snapshot.displayName())
+                    .put("worldId", worldId())
+                    .put("dimension", snapshot.dimension())
+                    .put("bodyState", snapshot.bodyState().toLowerCase(Locale.ROOT))
+                    .put("behaviorRevision", snapshot.behaviorRevision())
+                    .put("controlEpoch", snapshot.controlEpoch())
+                    .put("runtimeConnected", true)
+                    .put("observedAt", Instant.now().toString());
+            status.putObject("position").put("x", snapshot.x()).put("y", snapshot.y()).put("z", snapshot.z());
+            status.putObject("capabilities");
+            if (snapshot.behaviorId() != null) {
+                status.put("behaviorId", snapshot.behaviorId());
+                status.put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT));
+            }
+        }
+        ObjectNode payload = JSON.createObjectNode();
+        payload.set("companions", companions);
+        sendEnvelope("companion_list", payload);
+    }
+
+    private void sendEnvelope(String type, JsonNode payload) {
+        WebSocket current = socket;
+        String currentSession = sessionId;
+        if (current == null || currentSession == null || current.isOutputClosed()) return;
+        ObjectNode envelope = JSON.createObjectNode()
+                .put("protocol", PROTOCOL)
+                .put("type", type)
+                .put("sessionId", currentSession)
+                .put("worldId", worldId())
+                .put("sequence", outgoingSequence.incrementAndGet())
+                .put("timestamp", System.currentTimeMillis());
+        envelope.set("payload", payload);
+        current.sendText(write(envelope), true);
+    }
+
+    private String worldId() {
+        return server.getWorldData().getLevelName().replaceAll("[^A-Za-z0-9_.:-]", "_");
+    }
+
+    private void disconnected(WebSocket expected, String reason) {
+        if (socket == expected) socket = null;
+        sessionId = null;
+        if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
+        server.execute(() -> {
+            registry.setRuntimeConnected(false);
+            registry.runtimeDisconnected();
+        });
+    }
+
+    private void closeSocket(int code, String reason) {
+        WebSocket current = socket;
+        if (current != null) current.sendClose(code, reason);
+    }
+
+    private static String write(JsonNode value) {
+        try {
+            return JSON.writeValueAsString(value);
+        } catch (IOException impossible) {
+            throw new IllegalStateException("Unable to encode Runtime bridge JSON", impossible);
+        }
+    }
+
+    @Override
+    public void close() {
+        closed = true;
+        WebSocket current = socket;
+        socket = null;
+        sessionId = null;
+        if (current != null) current.sendClose(WebSocket.NORMAL_CLOSURE, "server stopping");
+        registry.runtimeDisconnected();
+        registry.setRuntimeConnected(false);
+        executor.shutdownNow();
+    }
+
+    private final class Listener implements WebSocket.Listener {
+        private final StringBuilder partial = new StringBuilder();
+
+        @Override
+        public void onOpen(WebSocket webSocket) {
+            socket = webSocket;
+            sendHello(webSocket);
+            webSocket.request(1);
+        }
+
+        @Override
+        public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+            if (partial.length() + data.length() > 1_048_576) {
+                webSocket.sendClose(1009, "message too large");
+                return null;
+            }
+            partial.append(data);
+            if (last) {
+                String text = partial.toString();
+                partial.setLength(0);
+                handle(text);
+            }
+            webSocket.request(1);
+            return null;
+        }
+
+        @Override
+        public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
+            disconnected(webSocket, reason == null || reason.isBlank() ? "closed" : reason);
+            return null;
+        }
+
+        @Override
+        public void onError(WebSocket webSocket, Throwable error) {
+            disconnected(webSocket, error.getClass().getSimpleName());
+        }
+    }
+}

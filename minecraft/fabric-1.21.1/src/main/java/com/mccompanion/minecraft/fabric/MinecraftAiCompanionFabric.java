@@ -1,6 +1,8 @@
 package com.mccompanion.minecraft.fabric;
 
 import com.mccompanion.minecraft.bootstrap.BootstrapCapabilityReport;
+import com.mccompanion.minecraft.v121.CompanionCommands;
+import com.mccompanion.minecraft.v121.CompanionRegistry;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -27,11 +29,12 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
             "PLAYER_TRAVEL_ONLY",
             java.util.List.of(
                     "status", "capabilities", "help", "create", "spawn", "despawn", "remove",
-                    "follow", "goto", "stop", "pause", "resume"),
-            java.util.List.of("runtime_control_lease"),
+                    "follow", "come", "goto", "stop", "pause", "resume", "runtime"),
+            java.util.List.of(),
             java.util.List.of());
     private static volatile MinecraftServer activeServer;
     private static volatile CompanionRegistry registry;
+    private static volatile RuntimeBridge runtimeBridge;
 
     @Override
     public void onInitialize() {
@@ -49,6 +52,7 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
         CompanionRegistry nextRegistry = new CompanionRegistry(server, LOGGER);
         registry = nextRegistry;
         nextRegistry.start();
+        runtimeBridge = RuntimeBridge.start(server, nextRegistry, LOGGER);
     }
 
     private static void onServerTick(MinecraftServer server) {
@@ -59,6 +63,11 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
     }
 
     private static void onServerStopping(MinecraftServer server) {
+        RuntimeBridge bridge = runtimeBridge;
+        runtimeBridge = null;
+        if (bridge != null) {
+            bridge.close();
+        }
         CompanionRegistry current = registryFor(server);
         if (current != null) {
             current.shutdown();
@@ -72,7 +81,7 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
     }
 
     /** Package-scoped access for the isolated headless integration-test mod. */
-    static CompanionRegistry integrationRegistryFor(MinecraftServer server) {
+    public static CompanionRegistry integrationRegistryFor(MinecraftServer server) {
         return registryFor(server);
     }
 }

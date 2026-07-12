@@ -1,4 +1,4 @@
-package com.mccompanion.minecraft.fabric;
+package com.mccompanion.minecraft.v121;
 
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;

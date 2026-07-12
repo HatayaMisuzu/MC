@@ -42,12 +42,16 @@ loom {
             source sourceSets.gametest
             runDir 'build/gametest'
             vmArg '-Dfabric-api.gametest'
+            vmArg "-Dmccompanion.runtime.e2e=${project.findProperty('mccompanionRuntimeE2E') ?: 'false'}"
+            vmArg "-Dmccompanion.persistence.seed=${project.findProperty('mccompanionPersistenceSeed') ?: 'false'}"
+            vmArg "-Dmccompanion.persistence.verify=${project.findProperty('mccompanionPersistenceVerify') ?: 'false'}"
             vmArg "-Dfabric-api.gametest.report-file=${file('build/test-results/gametest/results.xml').absolutePath}"
         }
     }
 }
 
 sourceSets.main.java.srcDir('../platform-bootstrap-common/src/main/java')
+sourceSets.main.java.srcDir('../platform-1.21.1-common/src/main/java')
 
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
@@ -98,3 +102,18 @@ publishing {
 }
 
 apply from: rootProject.file('../gradle/launch-test.gradle')
+
+tasks.named('runGameTest').configure {
+    doFirst {
+        boolean persistenceRun = project.hasProperty('mccompanionPersistenceSeed')
+                || project.hasProperty('mccompanionPersistenceVerify')
+        boolean runtimeE2E = project.hasProperty('mccompanionRuntimeE2E')
+        if (!persistenceRun && !runtimeE2E) {
+            delete file('build/gametest')
+        }
+        file('build/gametest').mkdirs()
+        file('build/gametest/server.properties').setText(
+                'online-mode=false\nlevel-name=world\nspawn-protection=0\n', 'UTF-8')
+        file('build/gametest/eula.txt').setText('eula=true\n', 'UTF-8')
+    }
+}

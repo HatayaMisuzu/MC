@@ -1,4 +1,4 @@
-package com.mccompanion.minecraft.fabric;
+package com.mccompanion.minecraft.v120;
 
 import java.util.UUID;
 import net.minecraft.world.phys.Vec3;

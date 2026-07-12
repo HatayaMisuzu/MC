@@ -1,4 +1,4 @@
-package com.mccompanion.minecraft.fabric;
+package com.mccompanion.minecraft.v120;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -88,7 +88,7 @@ final class PlayerActionGateway {
             ItemStack stack = body.getInventory().getItem(slot);
             hash = 31 * hash + stack.getItem().hashCode();
             hash = 31 * hash + stack.getCount();
-            hash = 31 * hash + stack.getComponents().hashCode();
+            hash = 31 * hash + (stack.hasTag() ? stack.getTag().hashCode() : 0);
         }
         return hash;
     }

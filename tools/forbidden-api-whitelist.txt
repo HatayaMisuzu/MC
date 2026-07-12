@@ -2,4 +2,6 @@
 # Spawn, respawn, persistence migration, and test fixtures may be added only
 # with an exact path and a reviewed reason. There are no production exceptions
 # at project initialization.
-minecraft\fabric-1.21.1\src\main\java\com\mccompanion\minecraft\fabric\CompanionRegistry.java | moveTo | Initial spawn placement beside the owner; behavior ticks use vanilla travel input.
+minecraft\platform-1.21.1-common\src\main\java\com\mccompanion\minecraft\v121\CompanionRegistry.java | moveTo | Lifecycle-only spawn/recovery placement; behavior ticks use vanilla travel input.
+minecraft\platform-1.20.1-common\src\main\java\com\mccompanion\minecraft\v120\CompanionRegistry.java | moveTo | Lifecycle-only spawn/recovery placement; behavior ticks use vanilla travel input.
+minecraft\forge-1.20.1\src\main\java\com\mccompanion\minecraft\v120\CompanionLifecycleForgeGameTests.java | moveTo | GameTest-only owner fixture placement before the behavior under test.

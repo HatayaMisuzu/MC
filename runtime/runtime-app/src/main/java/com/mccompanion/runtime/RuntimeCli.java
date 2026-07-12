@@ -126,7 +126,7 @@ public final class RuntimeCli implements AutoCloseable {
         if (words.length < 2) {
             throw new IllegalArgumentException(type.name().toLowerCase() + " requires a companion id");
         }
-        printReply(commands.execute(commandId(), words[1], new Intent(type, arguments, original)));
+        printReply(commands.execute(commandId(), resolveCompanionId(words[1]), new Intent(type, arguments, original)));
         return true;
     }
 
@@ -142,7 +142,7 @@ public final class RuntimeCli implements AutoCloseable {
                 .put("x", x).put("y", y).put("z", z);
         ObjectNode arguments = Json.object();
         arguments.set("target", target);
-        printReply(commands.execute(commandId(), values[1], new Intent(TaskType.TRAVEL, arguments, line)));
+        printReply(commands.execute(commandId(), resolveCompanionId(values[1]), new Intent(TaskType.TRAVEL, arguments, line)));
         return true;
     }
 
@@ -156,8 +156,23 @@ public final class RuntimeCli implements AutoCloseable {
                     + ": " + (resolution.userMessage() == null ? "Request was not recognized" : resolution.userMessage()));
             return true;
         }
-        printReply(commands.execute(commandId(), words[1], resolution.intent().get()));
+        printReply(commands.execute(commandId(), resolveCompanionId(words[1]), resolution.intent().get()));
         return true;
+    }
+
+    private String resolveCompanionId(String value) {
+        if (!value.equalsIgnoreCase("first") && !value.equals("@first")) {
+            return value;
+        }
+        try {
+            return companions.list().stream()
+                    .filter(record -> record.sessionId() != null)
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("No online companion is available"))
+                    .companionId();
+        } catch (SQLException failure) {
+            throw new IllegalArgumentException("Unable to resolve the first online companion", failure);
+        }
     }
 
     private boolean requestShutdown() {
@@ -188,4 +203,3 @@ public final class RuntimeCli implements AutoCloseable {
         }
     }
 }
-

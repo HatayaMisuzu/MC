@@ -64,6 +64,49 @@ tasks.register('launchTest') {
     dependsOn platformLaunchTasks.values()
 }
 
+def platformGameTests = [
+    'fabric-1.21.1'  : 'runGameTest',
+    'neoforge-1.21.1': 'runGameTestServer',
+    'forge-1.20.1'   : 'runGameTestServer'
+].collectEntries { target, taskName ->
+    [(target): tasks.register("gameTest-${target}", Exec) {
+        group = 'verification'
+        workingDir = platformBuilds[target]
+        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+            commandLine 'cmd', '/c', 'gradlew.bat', taskName, '--no-daemon'
+        } else {
+            commandLine './gradlew', taskName, '--no-daemon'
+        }
+    }]
+}
+
+tasks.register('gameTest') {
+    group = 'verification'
+    description = 'Runs real companion lifecycle GameTests on all three loaders.'
+    dependsOn platformGameTests.values()
+}
+
+tasks.register('runtimeFabricE2E') {
+    group = 'verification'
+    dependsOn ':runtime:runtime-app:installDist'
+    doLast {
+        exec {
+            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/runtime-fabric-e2e.ps1').absolutePath
+        }
+    }
+}
+
+tasks.register('persistenceRestartTest') {
+    group = 'verification'
+    doLast {
+        exec {
+            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/fabric-persistence-restart.ps1').absolutePath
+        }
+    }
+}
+
 tasks.register('forbiddenApiCheck') {
     group = 'verification'
     doLast {

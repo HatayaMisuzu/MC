@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -28,13 +29,14 @@ public final class Json {
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION)
             .disable(StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
             .build();
-    public static final ObjectMapper MAPPER = new ObjectMapper(FACTORY)
-            .registerModule(new JavaTimeModule())
+    public static final ObjectMapper MAPPER = JsonMapper.builder(FACTORY)
+            .addModule(new JavaTimeModule())
             .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)
             .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
             .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
-            .enable(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY);
+            .enable(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY)
+            .build();
 
     private Json() {
     }

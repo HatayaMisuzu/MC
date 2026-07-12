@@ -3,7 +3,7 @@
 | 命令 | 作用 |
 |---|---|
 | `/companion create <name>` | 为执行者创建稳定 UUID 的同伴 |
-| `/companion remove` | 永久移除自己的同伴注册（需要确认策略） |
+| `/companion remove` | 永久移除自己的同伴注册；原版 playerdata 保留用于人工恢复 |
 | `/companion spawn` | 从 playerdata/项目数据恢复并进入世界 |
 | `/companion despawn` | 保存后让同伴休眠 |
 | `/companion follow` | 持续跟随在线 owner |
@@ -13,8 +13,7 @@
 | `/companion pause` | 暂停并清除当前移动输入 |
 | `/companion resume` | 从有效快照继续 |
 | `/companion status` | 显示身体、行为、Runtime 和错误状态 |
-| `/companion runtime` | 显示/触发 Runtime 重连状态 |
-| `/companion debug capability` | OP 查询冻结后的平台能力表 |
+| `/companion runtime` | 显示 Runtime 在线/离线与本地控制状态 |
+| `/companion capabilities` | 查询当前平台能力表 |
 
 owner 只能控制自己的 companion；OP 可以诊断和管理。Dedicated Server 上以 UUID 校验，不以显示名授权。`stop` 和 `pause` 是本地高优先命令，不等待 Runtime 或 LLM。
-

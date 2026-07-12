@@ -30,7 +30,7 @@ Gradle toolchain 会为 1.21.1 和 Runtime 选择 Java 21，为 Forge 1.20.1 选
 2. 启动世界或 Dedicated Server。
 3. 执行 `/companion create Numenless`。
 4. 使用 `/companion follow`、`/companion goto <x> <y> <z>` 和 `/companion stop`。
-5. 可选：按 [Runtime 设置](docs/RUNTIME_SETUP.md) 启动外部 Runtime，再用 CLI 发送中文规则命令。
+5. Fabric 主目标可选：按 [Runtime 设置](docs/RUNTIME_SETUP.md) 配对外部 Runtime，再用 CLI 发送中文规则命令。
 
 详细说明见 [命令](docs/COMMANDS.md)、[架构](docs/ARCHITECTURE.md)、[兼容性](docs/COMPATIBILITY.md) 与 [排错](docs/TROUBLESHOOTING.md)。
 
@@ -45,8 +45,7 @@ Gradle toolchain 会为 1.21.1 和 Runtime 选择 Java 21，为 Forge 1.20.1 选
 ## 数据位置
 
 - Minecraft 原生 playerdata：背包、装备、生命、饥饿、经验、位置和效果。
-- 世界侧项目数据：同伴 ID、owner、显示名、策略、schema version 与恢复元数据。
+- 世界侧项目数据：同伴 ID、owner、显示名、行为、schema version 与恢复元数据。
 - Runtime SQLite：session、companion、lease、task、task event、behavior run 与 action evidence，使用 WAL。
 
 不要把测试世界、token、API key、账号文件或交付 ZIP 放入源码仓库。
-

@@ -34,6 +34,7 @@ final class RuntimeBridge implements AutoCloseable {
     private final CompanionRegistry registry;
     private final Logger logger;
     private final URI uri;
+    private final boolean enabled;
     private final Path tokenFile;
     private final String installationId;
     private final String instanceId;
@@ -52,6 +53,7 @@ final class RuntimeBridge implements AutoCloseable {
         this.registry = registry;
         this.logger = logger;
         BridgeSettings settings = BridgeSettings.load(logger);
+        this.enabled = settings.enabled();
         this.uri = settings.uri();
         this.tokenFile = settings.tokenFile();
         this.installationId = settings.installationId();
@@ -67,6 +69,10 @@ final class RuntimeBridge implements AutoCloseable {
 
     static RuntimeBridge start(MinecraftServer server, CompanionRegistry registry, Logger logger) {
         RuntimeBridge bridge = new RuntimeBridge(server, registry, logger);
+        if (!bridge.enabled) {
+            logger.info("Runtime bridge disabled by instance config; local companion control remains available");
+            return bridge;
+        }
         bridge.executor.scheduleWithFixedDelay(bridge::connectIfNeeded, 0, 5, TimeUnit.SECONDS);
         bridge.executor.scheduleWithFixedDelay(bridge::publishStatus, 1, 1, TimeUnit.SECONDS);
         return bridge;
@@ -339,20 +345,22 @@ final class RuntimeBridge implements AutoCloseable {
     }
 
     /** Instance JSON is optional; JVM properties remain the highest-priority test/advanced override. */
-    private record BridgeSettings(URI uri, Path tokenFile, String installationId, String instanceId,
+    record BridgeSettings(boolean enabled, URI uri, Path tokenFile, String installationId, String instanceId,
                                   String launcherType) {
-        private static BridgeSettings load(Logger logger) {
-            Path config = Path.of("config", "minecraft-ai-companion", "runtime.json").toAbsolutePath().normalize();
+        static BridgeSettings load(Logger logger) { return load(Path.of("config", "minecraft-ai-companion", "runtime.json"),logger); }
+        static BridgeSettings load(Path config,Logger logger) {
+            config=config.toAbsolutePath().normalize();
             String url = "ws://127.0.0.1:8766";
             String token = "runtime.token";
             String installation = null;
             String instance = null;
             String launcher = null;
+            boolean enabled = true;
             if (Files.isRegularFile(config)) {
                 try {
                     JsonNode root = JSON.readTree(Files.readString(config, StandardCharsets.UTF_8));
                     if (root.path("schemaVersion").asInt(0) != 1) throw new IOException("unsupported schemaVersion");
-                    if (!root.path("enabled").asBoolean(true)) logger.info("Runtime bridge is disabled by instance config");
+                    enabled = root.path("enabled").asBoolean(true);
                     url = root.path("runtimeUrl").asText(url);
                     token = root.path("tokenFile").asText(token);
                     installation = textOrNull(root, "installationId");
@@ -371,7 +379,7 @@ final class RuntimeBridge implements AutoCloseable {
                 Path parsed = Path.of(token);
                 tokenPath = parsed.isAbsolute() ? parsed : config.getParent().resolve(parsed);
             }
-            return new BridgeSettings(URI.create(url), tokenPath.toAbsolutePath().normalize(), installation, instance, launcher);
+            return new BridgeSettings(enabled, URI.create(url), tokenPath.toAbsolutePath().normalize(), installation, instance, launcher);
         }
         private static String textOrNull(JsonNode root, String field) {
             String value = root.path(field).asText(null);

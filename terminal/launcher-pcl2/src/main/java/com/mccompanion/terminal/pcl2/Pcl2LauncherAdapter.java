@@ -2,6 +2,7 @@ package com.mccompanion.terminal.pcl2;
 
 import com.mccompanion.terminal.launcher.*;
 import com.mccompanion.terminal.probe.InstanceFactory;
+import com.mccompanion.terminal.probe.LogGameDirParser;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -54,10 +55,11 @@ public final class Pcl2LauncherAdapter implements LauncherAdapter {
                         Map<String, String> versionSetup = setup.parse(versionDir.resolve("PCL").resolve("Setup.ini"));
                         boolean isolated = "true".equalsIgnoreCase(versionSetup.get("VersionArgumentIndieV2"))
                                 || InstanceFactory.looksIsolated(versionDir);
-                        Path gameDir = isolated ? versionDir : root;
+                        Path logged=new LogGameDirParser().latest(List.of(launcher.dataDirectory().resolve("Log1.txt"),launcher.dataDirectory().resolve("Log2.txt")),versionId).orElse(null);
+                        Path gameDir = logged!=null?logged:isolated ? versionDir : root;
                         result.add(instances.create(launcher, root, versionDir, gameDir,
-                                isolated ? InstanceIsolation.VERSION_DIRECTORY : InstanceIsolation.MINECRAFT_ROOT,
-                                isolated ? DetectionConfidence.HIGH : DetectionConfidence.MEDIUM));
+                                logged!=null?InstanceIsolation.EXPLICIT:isolated ? InstanceIsolation.VERSION_DIRECTORY : InstanceIsolation.MINECRAFT_ROOT,
+                                logged!=null||isolated ? DetectionConfidence.HIGH : DetectionConfidence.MEDIUM));
                     } catch (IOException ignored) { }
                 }
             } catch (IOException ignored) { }

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mccompanion.terminal.launcher.*;
 import com.mccompanion.terminal.probe.InstanceFactory;
+import com.mccompanion.terminal.probe.LogGameDirParser;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -58,15 +59,20 @@ public final class HmclLauncherAdapter implements LauncherAdapter {
                     String id = versionDir.getFileName().toString();
                     if (!Files.isRegularFile(versionDir.resolve(id + ".json"))) continue;
                     boolean isolated = InstanceFactory.looksIsolated(versionDir);
-                    try { result.add(instances.create(launcher, root, versionDir, isolated ? versionDir : root,
-                            isolated ? InstanceIsolation.VERSION_DIRECTORY : InstanceIsolation.MINECRAFT_ROOT,
-                            isolated ? DetectionConfidence.HIGH : DetectionConfidence.MEDIUM)); }
+                    Path logged=new LogGameDirParser().latest(findLogs(launcher.dataDirectory()),id).orElse(null);
+                    Path running=runningDirectory(versionDir).orElse(null);
+                    Path game=logged!=null?logged:running!=null?running:isolated?versionDir:root;
+                    try { result.add(instances.create(launcher, root, versionDir, game,
+                            logged!=null||running!=null?InstanceIsolation.EXPLICIT:isolated ? InstanceIsolation.VERSION_DIRECTORY : InstanceIsolation.MINECRAFT_ROOT,
+                            logged!=null||running!=null||isolated ? DetectionConfidence.HIGH : DetectionConfidence.MEDIUM)); }
                     catch (IOException ignored) { }
                 }
             } catch (IOException ignored) { }
         }
         return result;
     }
+    private static List<Path> findLogs(Path data){List<Path> result=new ArrayList<>();for(Path dir:List.of(data.resolve("logs"),data)){if(Files.isDirectory(dir))try(var files=Files.newDirectoryStream(dir,"*.log")){for(Path p:files)result.add(p);}catch(IOException ignored){}}return result;}
+    private static java.util.Optional<Path> runningDirectory(Path version){for(String name:List.of("hmclversion.json","config.json")){Path file=version.resolve(name);if(Files.isRegularFile(file))try{JsonNode n=JSON.readTree(file.toFile());String value=n.path("runningDirectory").asText("");if(!value.isBlank()){Path p=Path.of(value);return java.util.Optional.of((p.isAbsolute()?p:version.resolve(p)).normalize().toAbsolutePath());}}catch(Exception ignored){}}return java.util.Optional.empty();}
 
     private static Path findExecutable(Path root) {
         try (DirectoryStream<Path> files = Files.newDirectoryStream(root, "*.exe")) {

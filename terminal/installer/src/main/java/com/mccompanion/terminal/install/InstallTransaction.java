@@ -69,6 +69,9 @@ public final class InstallTransaction {
         }
         Files.deleteIfExists(manifest);
     }
+    public boolean verify(Path gameDir)throws IOException{Path root=gameDir.toAbsolutePath().normalize();Path manifest=root.resolve(".mccompanion/install-manifest.json");if(!Files.isRegularFile(manifest))return false;var node=JSON.readTree(manifest.toFile());int schema=node.path("schemaVersion").asInt(1);if(schema!=1)throw new IOException("Unsupported install manifest schema: "+schema);Path installed=root.resolve(node.path("installedFile").asText()).normalize();return installed.startsWith(root.resolve("mods"))&&Files.isRegularFile(installed)&&sha256(installed).equals(node.path("sha256").asText());}
+    public void uninstall(Path gameDir)throws IOException{Path root=gameDir.toAbsolutePath().normalize();Path manifest=root.resolve(".mccompanion/install-manifest.json");if(!Files.isRegularFile(manifest))throw new IOException("No managed install manifest");var node=JSON.readTree(manifest.toFile());Path installed=root.resolve(node.path("installedFile").asText()).normalize();if(!installed.startsWith(root.resolve("mods")))throw new IOException("Unsafe managed file path");Files.deleteIfExists(installed);Files.deleteIfExists(manifest);}
+    public List<String> rollbackPoints(Path gameDir)throws IOException{Path root=gameDir.toAbsolutePath().normalize().resolve(".mccompanion/backups");if(!Files.isDirectory(root))return List.of();try(var dirs=Files.newDirectoryStream(root,Files::isDirectory)){List<String> values=new ArrayList<>();for(Path p:dirs)values.add(p.getFileName().toString());return values.stream().sorted().toList();}}
 
     private static void writeManifest(InstallPlan plan, Path file, String hash) throws IOException {
         ObjectNode root = JSON.createObjectNode().put("schemaVersion", 1).put("installationId", plan.rollbackId())

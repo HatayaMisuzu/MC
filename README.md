@@ -1,76 +1,73 @@
-# Minecraft AI Companion Control Terminal v1.0
+# Minecraft AI Companion Control Terminal 0.2-alpha
 
-Minecraft AI Companion 是一个不依赖 Numen 或 Baritone 的服务端同伴项目。v1.0 新增统一控制终端 `mcac`，负责发现 PCL2/HMCL、识别真实游戏目录、兼容诊断、事务安装、Runtime 管理、可回滚 Hook 和脱敏支持包。PCL2/HMCL 仍负责账号登录和 Minecraft 启动。
+统一控制终端负责 PCL2/HMCL 实例发现、兼容诊断、事务安装、独立 Runtime profile、真实握手等待、安全测试、Hook、Provider 配置和脱敏支持包。启动器继续负责账号登录与 Minecraft 启动。
+
+## 直接启动
+
+在仓库根目录双击 `启动终端.cmd`，或运行：
+
+```powershell
+.\mcac.cmd
+.\mcac.ps1 --help
+```
+
+无参数进入中文 TUI。根脚本会优先使用自包含发布版，其次使用本地 staged 版或开发版；不存在时自动构建开发终端。
+
+## 常用命令
+
+```powershell
+.\mcac.cmd --root "<PCL2或HMCL目录>" launcher scan
+.\mcac.cmd --root "<PCL2或HMCL目录>" instance scan
+.\mcac.cmd --root "<PCL2或HMCL目录>" doctor <实例ID>
+.\mcac.cmd --root "<PCL2或HMCL目录>" plan install <实例ID>
+.\mcac.cmd --root "<PCL2或HMCL目录>" install <实例ID> --yes
+.\mcac.cmd --root "<PCL2或HMCL目录>" play <实例ID>
+.\mcac.cmd --root "<PCL2或HMCL目录>" test smoke <实例ID>
+```
+
+写入操作必须显式 `--yes`。`MEDIUM` gameDir 禁止安装；确认真实目录时使用 `--confirm-game-dir <绝对路径>`，确认只保存在终端 profile。
+
+Runtime 每实例使用稳定 Token 和独立端口（8766–8866）：
+
+```powershell
+.\mcac.cmd runtime profiles
+.\mcac.cmd --root <目录> runtime start <实例ID>
+.\mcac.cmd --root <目录> runtime status <实例ID>
+.\mcac.cmd --root <目录> runtime rotate-token <实例ID> --yes
+```
+
+Provider API Key 只从指定环境变量读取，不写入 JSON/YAML：
+
+```powershell
+.\mcac.cmd --root <目录> provider configure <实例ID> --base-url <URL> --model <模型> --api-key-env MC_COMPANION_API_KEY
+.\mcac.cmd --root <目录> provider test <实例ID>
+.\mcac.cmd --root <目录> provider disable <实例ID>
+```
 
 ## 支持矩阵
 
-| Minecraft | Loader | Java | Runtime |
+| Minecraft | Loader | Java | 模式 |
 |---|---|---:|---|
-| 1.21.1 | Fabric | 21 | 完整握手与控制 |
-| 1.21.1 | NeoForge | 21 | `LOCAL_ONLY` |
-| 1.20.1 | Forge | 17 | `LOCAL_ONLY` |
+| 1.21.1 | Fabric | 21 | FULL Runtime |
+| 1.21.1 | NeoForge | 21 | LOCAL_ONLY |
+| 1.20.1 | Forge | 17 | LOCAL_ONLY |
 
-终端只会精确匹配上表目标。其他版本可以扫描和诊断，但安装会被阻止。Runtime 不在线时，Mod 仍可加载并提供本地 `/companion` 命令。
+其他目标可扫描但禁止安装。Runtime 离线或禁用不会阻止 Mod 本地命令。
 
-## 构建
-
-```powershell
-cd D:\工作台\MC
-.\gradlew.bat clean test
-.\gradlew.bat buildPlatforms
-.\gradlew.bat :terminal:terminal-app:installDist
-.\gradlew.bat :runtime:runtime-app:installDist
-```
-
-生成便携分发目录：
+## 构建与验证
 
 ```powershell
-.\gradlew.bat packageTerminalZip
+.\gradlew.bat clean test check
+.\gradlew.bat buildPlatforms launchTest gameTest
+.\gradlew.bat runtimeFabricE2E persistenceRestartTest
+.\gradlew.bat verifyTerminalPackage runtimeMultiProfileTest
 ```
 
-开发版入口位于 `terminal/terminal-app/build/install/mcac/bin/mcac.bat`。
+发布产物：
 
-## 快速使用
-
-先执行只读扫描。启动器不在常用目录时，通过 `--root` 指定启动器所在目录：
-
-```powershell
-mcac --root "F:\wodeshijie\ceshi" launcher scan
-mcac --root "F:\wodeshijie\ceshi" instance scan
-mcac --root "F:\wodeshijie\ceshi" doctor
+```text
+build/distributions/mcac-release/
+build/distributions/mcac-release.zip
 ```
 
-安装默认只显示计划；确认后才写文件：
-
-```powershell
-mcac --root <启动器目录> plan install <实例ID>
-mcac --root <启动器目录> install <实例ID> --yes
-mcac --root <启动器目录> rollback <实例ID> --id <回滚点> --yes
-```
-
-开发目录中可用 `--artifacts D:\工作台\MC` 指定构建产物；打包版会自动使用随包产物。安装器只管理清单记录的文件，不删除未知 Mod、存档或启动器配置。
-
-Runtime 与会话：
-
-```powershell
-mcac --root <启动器目录> runtime start <实例ID>
-mcac --root <启动器目录> runtime status <实例ID>
-mcac --root <启动器目录> play <实例ID>
-```
-
-可选 Hook 必须显式确认，且启动器运行时禁止写入：
-
-```powershell
-mcac --root <启动器目录> hook install <实例ID> --mcac-executable <mcac.exe或mcac.bat> --yes
-mcac --root <启动器目录> hook remove <实例ID> --yes
-```
-
-生成脱敏支持包：
-
-```powershell
-mcac --root <启动器目录> logs collect <实例ID>
-```
-
-终端不会读取启动器账号文件、Microsoft/Mojang 登录凭据或聊天记录，也不会修改启动器 EXE、Minecraft 版本 JAR 或 libraries。
-
-详细命令见 [docs/CONTROL_TERMINAL.md](docs/CONTROL_TERMINAL.md)。
+详细说明见 [docs/CONTROL_TERMINAL.md](docs/CONTROL_TERMINAL.md)，验收证据见 [FINAL_REPORT.md](FINAL_REPORT.md)。

@@ -14,6 +14,9 @@ import java.util.zip.ZipOutputStream;
 /** Creates a deliberately allow-listed and redacted support archive. */
 final class SupportBundleService {
     private static final Pattern SECRET = Pattern.compile("(?i)(api[_-]?key|token|authorization|secret)(\\s*[:=]\\s*)([^,\\s}]+)");
+    private static final Pattern ABSOLUTE_PATH=Pattern.compile("(?i)[A-Z]:\\\\[^\\r\\n\"']+");
+    private static final Pattern IPV4=Pattern.compile("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?::[0-9]{1,5})?");
+    private static final Pattern IPV6=Pattern.compile("(?i)(?<![0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?:%[0-9a-z]+)?(?:\\:[0-9]{1,5})?");
     Path collect(MinecraftInstance instance, Path output) throws IOException {
         Files.createDirectories(output.toAbsolutePath().normalize().getParent());
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(output))) {
@@ -35,14 +38,21 @@ final class SupportBundleService {
             }
             add(zip, "mods.txt", mods.toString());
         }
+        verifySanitized(output);
         return output;
     }
+    private static void verifySanitized(Path output)throws IOException{try(var zip=new java.util.zip.ZipFile(output.toFile())){var entries=zip.entries();while(entries.hasMoreElements()){var entry=entries.nextElement();if(entry.isDirectory())continue;String text=new String(zip.getInputStream(entry).readAllBytes(),StandardCharsets.UTF_8);if(SECRET.matcher(text).find()&&!text.contains("<REDACTED>"))throw new IOException("Support bundle secret scan failed: "+entry.getName());if(ABSOLUTE_PATH.matcher(text).find()||IPV4.matcher(text).find()||IPV6.matcher(text).find())throw new IOException("Support bundle privacy scan failed: "+entry.getName());}}}
     private static String redact(String text) {
         String value = SECRET.matcher(text).replaceAll("$1$2<REDACTED>");
         value = value.replace(System.getProperty("user.home", ""), "<HOME>");
         String user = System.getProperty("user.name", "");
         if (!user.isBlank()) value = value.replace(user, "<USER>");
-        return value.replaceAll("(?i)Bearer\\s+[A-Za-z0-9._~-]+", "Bearer <REDACTED>");
+        value=value.replaceAll("(?i)Bearer\\s+[^\\s,]+", "Bearer <REDACTED>")
+                .replaceAll("(?i)([?&](?:key|token|secret|signature|auth)=)[^&\\s]+","$1<REDACTED>")
+                .replaceAll("(?i)(Authorization\\s*:\\s*)[^\\r\\n]+","$1<REDACTED>");
+        value=ABSOLUTE_PATH.matcher(value).replaceAll("<PATH>");
+        value=IPV4.matcher(value).replaceAll("<IP>");
+        return IPV6.matcher(value).replaceAll("<IP>");
     }
     private static void add(ZipOutputStream zip, String name, String content) throws IOException {
         zip.putNextEntry(new ZipEntry(name)); zip.write(content.getBytes(StandardCharsets.UTF_8)); zip.closeEntry();

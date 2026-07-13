@@ -26,6 +26,11 @@ def prepareLaunchTest = tasks.register('prepareLaunchTest') {
                 'motd=Minecraft AI Companion launch test\n' +
                 'max-tick-time=120000\n',
                 'UTF-8')
+        if (project.hasProperty('mccompanionRuntimeDisabled')) {
+            File config = new File(serverDirectory, 'config/minecraft-ai-companion/runtime.json')
+            config.parentFile.mkdirs()
+            config.setText('{"schemaVersion":1,"enabled":false,"runtimeUrl":"ws://127.0.0.1:8766","tokenFile":"../../.mccompanion/runtime.token"}\n','UTF-8')
+        }
     }
 }
 

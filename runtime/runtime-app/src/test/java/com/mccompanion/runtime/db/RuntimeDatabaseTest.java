@@ -4,12 +4,15 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -31,6 +34,30 @@ class RuntimeDatabaseTest {
             }
             assertTrue(tables.containsAll(Set.of("runtime_session", "companion", "control_lease", "task",
                     "task_event", "behavior_run", "action_evidence", "schema_migration")));
+        }
+    }
+
+    @Test
+    void openingConcurrentConnectionDoesNotReconfigureWalDuringActiveWrite() throws Exception {
+        Path path = temporary.resolve("concurrent-open.db");
+        try (RuntimeDatabase database = new RuntimeDatabase(path)) {
+            database.initialize();
+            try (Connection writer = database.open(); Statement statement = writer.createStatement()) {
+                writer.setAutoCommit(false);
+                statement.executeUpdate("INSERT INTO control_epoch(companion_id, last_epoch) VALUES ('held', 1)");
+
+                CompletableFuture<String> opened = CompletableFuture.supplyAsync(() -> {
+                    try (Connection concurrent = database.open(); Statement query = concurrent.createStatement();
+                         ResultSet result = query.executeQuery("PRAGMA journal_mode")) {
+                        return result.next() ? result.getString(1) : "";
+                    } catch (SQLException failure) {
+                        throw new RuntimeException(failure);
+                    }
+                });
+
+                assertEquals("wal", opened.get(2, TimeUnit.SECONDS).toLowerCase());
+                writer.rollback();
+            }
         }
     }
 
@@ -58,4 +85,3 @@ class RuntimeDatabaseTest {
         assertTrue(failure.getMessage().contains("contiguous"));
     }
 }
-

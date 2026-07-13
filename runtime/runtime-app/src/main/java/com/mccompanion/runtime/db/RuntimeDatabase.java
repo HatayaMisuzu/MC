@@ -52,6 +52,12 @@ public final class RuntimeDatabase implements AutoCloseable {
             throw new IOException("Database path must not be a symbolic link");
         }
         try (Connection connection = open(); Statement statement = connection.createStatement()) {
+            // journal_mode is persistent database state and takes a database lock when it is
+            // changed (or re-asserted by some SQLite builds). Configure it once before the
+            // Runtime starts concurrent command, WebSocket and lease-sweep work. Repeating
+            // this PRAGMA from every open() can otherwise surface SQLITE_BUSY even though
+            // busy_timeout is configured for ordinary statements.
+            statement.execute("PRAGMA journal_mode=WAL");
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS schema_migration (
                       version INTEGER PRIMARY KEY,
@@ -123,7 +129,6 @@ public final class RuntimeDatabase implements AutoCloseable {
         try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA foreign_keys=ON");
             statement.execute("PRAGMA busy_timeout=5000");
-            statement.execute("PRAGMA journal_mode=WAL");
             statement.execute("PRAGMA synchronous=NORMAL");
         } catch (SQLException failure) {
             connection.close();

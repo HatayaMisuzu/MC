@@ -10,8 +10,10 @@ Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath $fixtureSource -Destination $fixture -Recurse -Force
 
 Set-Location -LiteralPath $repository
-& (Join-Path $repository 'gradlew.bat') webBuild ':terminal:terminal-app:installDist' ':runtime:runtime-app:installDist' 'build-fabric-1.21.1'
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if ($env:MCAC_E2E_PREBUILT -ne '1') {
+    & (Join-Path $repository 'gradlew.bat') webBuild ':terminal:terminal-app:installDist' ':runtime:runtime-app:installDist' 'build-fabric-1.21.1'
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 $terminal = Join-Path $repository 'terminal\terminal-app\build\install\mcac\bin\mcac.bat'
 & $terminal web --no-browser --port 32145 --state-file $state --web-root (Join-Path $webRoot 'dist') --root $fixture

@@ -31,9 +31,16 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npx playwright install chromium
+      - name: Build browser end-to-end backend and Fabric artifact
+        shell: pwsh
+        run: >-
+          ./gradlew.bat webBuild :terminal:terminal-app:installDist
+          :runtime:runtime-app:installDist build-fabric-1.21.1 --stacktrace
       - name: Run the full browser product path
         shell: pwsh
         working-directory: terminal/web-ui
+        env:
+          MCAC_E2E_PREBUILT: '1'
         run: npm run e2e
       - name: Build and execute clean HTML terminal package
         shell: pwsh

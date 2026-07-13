@@ -84,4 +84,9 @@ test('ordinary user completes the managed HTML product loop', async ({ page }) =
   await confirmAndWait(page)
 
   expect(consoleErrors).toEqual([])
+
+  await page.getByRole('button', { name: '设置与安全', exact: true }).click()
+  await page.getByRole('button', { name: '生成停止计划', exact: true }).click()
+  await page.getByRole('button', { name: '确认停止后台', exact: true }).click()
+  await expect(page.getByText('后台服务正在停止，可以关闭此页面。', { exact: true })).toBeVisible()
 })

@@ -111,6 +111,11 @@ public final class WindowsRuntimeSupervisor {
     public void stop(RuntimeProfile profile) throws IOException {
         Optional<Long> pid = activePid(profile);
         if (pid.isEmpty()) { Files.deleteIfExists(profile.pidFile()); return; }
+        RuntimeHealth health = status(profile);
+        if (!health.processIdentityMatches()) {
+            Files.deleteIfExists(profile.pidFile());
+            throw new IOException("Refusing to stop stale PID because process identity does not match Runtime");
+        }
         ProcessHandle handle = ProcessHandle.of(pid.get()).orElseThrow();
         handle.destroy();
         try { handle.onExit().get(Duration.ofSeconds(5).toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS); }

@@ -22,6 +22,11 @@ jobs:
           java-version: |
             17
             21
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@v4
       - name: Build all supported Loader artifacts
         shell: pwsh

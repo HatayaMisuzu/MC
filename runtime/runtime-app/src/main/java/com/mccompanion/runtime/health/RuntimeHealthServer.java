@@ -133,7 +133,10 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     .put("pid", ProcessHandle.current().pid())
                     .put("startedAt", startedAt.toString())
                     .put("databaseStatus", "READY")
-                    .put("sessionCount", sessions.sessions().size());
+                    .put("sessionCount", sessions.sessions().size())
+                    .put("onlineCompanionCount", sessions.sessions().stream()
+                            .mapToInt(session -> session.companionIds().size())
+                            .sum());
             sendJson(exchange, 200, body);
         }
     }

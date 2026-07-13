@@ -18,7 +18,7 @@ final class SupportBundleService {
     private static final Pattern IPV4=Pattern.compile("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?::[0-9]{1,5})?");
     private static final Pattern IPV6=Pattern.compile("(?i)(?<![0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?:%[0-9a-z]+)?(?:\\:[0-9]{1,5})?");
     private static final Pattern UUID=Pattern.compile("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b");
-    private static final Pattern HOSTNAME=Pattern.compile("(?i)\\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}(?::[0-9]{1,5})?\\b");
+    private static final Pattern HOSTNAME=Pattern.compile("(?i)\\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?!(?:jar|log|json|txt|ya?ml)\\b)[a-z]{2,63}(?::[0-9]{1,5})?\\b");
     Path collect(MinecraftInstance instance, Path output) throws IOException {
         Files.createDirectories(output.toAbsolutePath().normalize().getParent());
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(output))) {
@@ -38,7 +38,7 @@ final class SupportBundleService {
             if (Files.isDirectory(instance.modsDirectory())) try (var files = Files.newDirectoryStream(instance.modsDirectory(), "*.jar")) {
                 for (Path file : files) mods.append(file.getFileName()).append('\n');
             }
-            add(zip, "mods.txt", mods.toString());
+            add(zip, "mods.txt", redact(mods.toString()));
         }
         verifySanitized(output);
         return output;

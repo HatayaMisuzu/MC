@@ -1,7 +1,7 @@
 # 安装：NeoForge 1.21.1
 
 1. 安装 Minecraft 1.21.1、Java 21，以及 JAR metadata 声明范围内的 NeoForge 21.1.x。
-2. 将 `minecraft-ai-companion-neoforge-1.21.1-0.2.1-rc.1.jar` 放入 `mods/`。
+2. 推荐直接在 HTML 控制终端的“安装管理”中生成计划并确认；对应受管产物为 `minecraft-ai-companion-neoforge-1.21.1-0.3.0.jar`。
 3. 启动世界或 Dedicated Server，确认初始化日志与 `LOCAL_ONLY` 状态。
 4. 进入世界后执行 `/companion create <name>` 和 `/companion status`。
 

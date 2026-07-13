@@ -19,12 +19,28 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build and execute clean terminal package
+      - name: Install Chromium for browser end-to-end tests
+        shell: pwsh
+        working-directory: terminal/web-ui
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install chromium
+      - name: Run the full browser product path
+        shell: pwsh
+        working-directory: terminal/web-ui
+        run: npm run e2e
+      - name: Build and execute clean HTML terminal package
         shell: pwsh
         run: >-
           ./gradlew.bat verifyTerminalPackage tuiIntegrationTest rootLauncherTest
-          releaseStarterTest runtimeMultiProfileTest runtimeDisabledLaunchTest --stacktrace
+          releaseStarterTest htmlTerminalStartTest runtimeMultiProfileTest
+          runtimeDisabledLaunchTest --stacktrace
       - name: Upload safe reports and launch logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -37,4 +53,3 @@ jobs:
             **/build/test-results/
             minecraft/*/build/launch-test/server/logs/
             build/reports/problems/
-

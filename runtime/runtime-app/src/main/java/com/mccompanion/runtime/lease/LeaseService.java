@@ -239,7 +239,11 @@ public final class LeaseService {
     private String newToken() {
         byte[] data = new byte[32];
         random.nextBytes(data);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(data);
+        // A lease bearer is also carried as a protocol wire identifier. Base64URL
+        // can begin with '-' or '_', while protocol identifiers must begin with an
+        // ASCII letter or digit. Keep the full 256 bits of entropy and add a stable
+        // alphabetic prefix so every generated token is protocol-valid.
+        return "lease-" + Base64.getUrlEncoder().withoutPadding().encodeToString(data);
     }
 
     private static void validateDuration(Duration duration) {

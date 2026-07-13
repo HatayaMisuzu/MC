@@ -10,14 +10,15 @@ $starterName = [string]([char]0x542F) + [char]0x52A8 + [char]0x7EC8 + [char]0x7A
 
 function Assert-Version([scriptblock]$Command, [string]$Name) {
     $output = & $Command 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 0 -or $output -notmatch 'mcac 0\.2') {
+    if ($LASTEXITCODE -ne 0 -or $output -notmatch 'mcac 0\.3\.0') {
         throw "$Name did not return the mcac version. Output: $output"
     }
 }
 
 if ($Mode -eq 'tui') {
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = Join-Path $release 'mcac.exe'
+    $start.FileName = Join-Path $release 'mcac-cli.exe'
+    $start.Arguments = '--tui'
     $start.WorkingDirectory = $env:TEMP
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true

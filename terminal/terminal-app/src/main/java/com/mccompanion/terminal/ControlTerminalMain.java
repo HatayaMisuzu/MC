@@ -17,8 +17,8 @@ import picocli.CommandLine.*;
 @Command(
     name = "mcac",
     mixinStandardHelpOptions = true,
-    version = "mcac 0.2.1-rc.1",
-    description = "Minecraft AI Companion Control Terminal",
+    version = "mcac 0.3.0",
+    description = "Minecraft AI Companion automation CLI (the default entry opens the HTML terminal)",
     subcommands = {
       ControlTerminalMain.LauncherCmd.class,
       ControlTerminalMain.InstanceCmd.class,
@@ -57,6 +57,27 @@ public final class ControlTerminalMain implements Runnable {
   final TerminalContext context = new TerminalContext();
 
   public static void main(String[] args) {
+    if (args.length == 0 || "web".equals(args[0])) {
+      try {
+        WebTerminalOptions options = WebTerminalOptions.parse(args);
+        ControlTerminalMain root = new ControlTerminalMain();
+        root.suppliedRoots.addAll(options.scanRoots());
+        WebTerminalInstanceCoordinator.run(root, options);
+        return;
+      } catch (Exception failure) {
+        System.err.println("Unable to start HTML terminal: " + failure.getMessage());
+        System.exit(INTERNAL);
+      }
+    }
+    if ("--tui".equals(args[0])) {
+      try {
+        new InteractiveTerminal(new ControlTerminalMain(), System.in, System.out).run();
+        return;
+      } catch (IOException failure) {
+        System.err.println("Unable to start TUI: " + failure.getMessage());
+        System.exit(INTERNAL);
+      }
+    }
     CommandLine c = new CommandLine(new ControlTerminalMain());
     c.setExecutionExceptionHandler(
         (e, l, p) -> {
@@ -74,11 +95,7 @@ public final class ControlTerminalMain implements Runnable {
   }
 
   public void run() {
-    try {
-      new InteractiveTerminal(this, System.in, System.out).run();
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
-    }
+    throw new IllegalArgumentException("请使用 mcac.exe 打开 HTML 控制终端，或使用 --tui 启动维护模式");
   }
 
   List<Path> roots() {
@@ -92,6 +109,7 @@ public final class ControlTerminalMain implements Runnable {
         for (String s : Files.readAllLines(manual)) if (!s.isBlank()) v.add(Path.of(s));
       } catch (IOException ignored) {
       }
+    if (v.isEmpty()) v.addAll(new LauncherRootDiscoveryService().discover());
     if (v.isEmpty()) v.add(Path.of("."));
     return v.stream().map(p -> p.toAbsolutePath().normalize()).distinct().toList();
   }

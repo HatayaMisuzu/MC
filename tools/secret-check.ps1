@@ -6,7 +6,7 @@ if (-not $RepositoryRoot) { $RepositoryRoot = Split-Path -Parent $PSScriptRoot }
 $root = (Resolve-Path -LiteralPath $RepositoryRoot).Path
 $matches = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue |
     Where-Object {
-        $_.FullName -notmatch '[\\/](\.git|\.gradle|build|run|runs|mcac-local)[\\/]' -and
+        $_.FullName -notmatch '[\\/](\.git|\.gradle|build|run|runs|mcac-local|node_modules|dist|test-results|playwright-report)[\\/]' -and
         $_.Extension -notin @('.jar', '.zip', '.class', '.png', '.jpg', '.jpeg')
     } |
     Select-String -Pattern 'sk-[A-Za-z0-9_-]{16,}' -ErrorAction SilentlyContinue

@@ -32,6 +32,8 @@ class LeaseServiceTest {
         ControlLease first = leases.acquire("companion-1", "runtime-main", Duration.ofSeconds(30),
                 ControlLease.ControlMode.EXTERNAL_RUNTIME);
         assertEquals(1, first.epoch());
+        assertTrue(first.token().matches("[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}"),
+                "generated lease token must be a valid protocol wire identifier");
         assertEquals(first, leases.validate("companion-1", "runtime-main", first.token(), 1));
         assertEquals("STALE_EPOCH", assertThrows(LeaseException.class,
                 () -> leases.validate("companion-1", "runtime-main", first.token(), 2)).code());
@@ -66,4 +68,3 @@ class LeaseServiceTest {
         assertEquals(2, next.epoch());
     }
 }
-

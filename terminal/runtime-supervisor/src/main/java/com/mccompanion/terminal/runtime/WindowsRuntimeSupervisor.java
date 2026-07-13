@@ -35,13 +35,51 @@ public final class WindowsRuntimeSupervisor {
                 .redirectOutput(ProcessBuilder.Redirect.appendTo(profile.logFile().toFile())).start();
         Files.writeString(profile.pidFile(), Long.toString(process.pid()), StandardCharsets.UTF_8,
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-        RuntimeHealth health = awaitHealthy(profile, Duration.ofSeconds(15));
+        HealthIdentity identity = awaitStartingIdentity(profile, process, Duration.ofSeconds(15));
+        if (identity != null) {
+            Files.writeString(profile.pidFile(), Long.toString(identity.pid()), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        }
+        RuntimeHealth health = awaitHealthy(profile, Duration.ofSeconds(2));
         if (!health.healthy()) {
+            process.descendants().forEach(child -> child.destroyForcibly());
             process.destroyForcibly();
             Files.deleteIfExists(profile.pidFile());
             throw new IOException("Runtime did not report matching authenticated health: " + health.detail());
         }
         return process;
+    }
+
+    private HealthIdentity awaitStartingIdentity(RuntimeProfile profile, Process wrapper, Duration timeout) {
+        Instant deadline = Instant.now().plus(timeout);
+        do {
+            HealthIdentity identity = requestHealth(profile).orElse(null);
+            if (identity != null && profileIdentityMatches(profile, identity)
+                    && isChildRuntime(wrapper, identity.pid())) return identity;
+            try { Thread.sleep(100); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        } while (Instant.now().isBefore(deadline));
+        return null;
+    }
+
+    private static boolean profileIdentityMatches(RuntimeProfile profile, HealthIdentity identity) {
+        return identity.profileId().equals(profile.instanceId())
+                && identity.instanceId().equals(profile.instanceId())
+                && identity.port() == profile.port()
+                && identity.managementPort() == profile.healthPort()
+                && PROTOCOL.equals(identity.protocolVersion());
+    }
+
+    private static boolean isChildRuntime(Process wrapper, long pid) {
+        if (pid <= 0) return false;
+        if (wrapper.descendants().anyMatch(child -> child.pid() == pid)) return true;
+        return ProcessHandle.of(pid)
+                .flatMap(ProcessHandle::parent)
+                .map(parent -> parent.pid() == wrapper.pid())
+                .orElse(false);
     }
     public RuntimeHealth status(RuntimeProfile profile){
         Optional<Long> pid=activePid(profile);
@@ -49,9 +87,7 @@ public final class WindowsRuntimeSupervisor {
         if(pid.isPresent())processIdentity=ProcessHandle.of(pid.get()).flatMap(h->h.info().command()).map(command->{String expected=profile.launcherScript().getFileName().toString().toLowerCase();String actual=java.nio.file.Path.of(command).getFileName().toString().toLowerCase();return actual.equals(expected)||actual.contains("java")&&expected.endsWith(".bat");}).orElse(false);
         boolean online=portOnline(profile);
         HealthIdentity identity = requestHealth(profile).orElse(null);
-        boolean identityMatches = identity != null && identity.profileId().equals(profile.instanceId())
-                && identity.instanceId().equals(profile.instanceId()) && identity.port() == profile.port()
-                && identity.managementPort() == profile.healthPort() && PROTOCOL.equals(identity.protocolVersion())
+        boolean identityMatches = identity != null && profileIdentityMatches(profile, identity)
                 && pid.isPresent() && identity.pid() == pid.get();
         boolean healthy=pid.isPresent()&&processIdentity&&online&&identityMatches;
         String detail = healthy ? "authenticated health identity verified"

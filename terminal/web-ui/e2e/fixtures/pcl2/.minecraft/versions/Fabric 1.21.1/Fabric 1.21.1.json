@@ -1,0 +1,8 @@
+{
+  "id": "Fabric 1.21.1",
+  "clientVersion": "1.21.1",
+  "javaVersion": { "majorVersion": 21 },
+  "libraries": [
+    { "name": "net.fabricmc:fabric-loader:0.16.14" }
+  ]
+}

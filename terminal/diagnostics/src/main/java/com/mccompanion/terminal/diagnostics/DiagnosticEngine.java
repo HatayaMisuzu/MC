@@ -26,7 +26,7 @@ public final class DiagnosticEngine {
                         "Unsupported target: Minecraft " + instance.minecraftVersion() + " / " + instance.loader()));
         int expected = switch (instance.minecraftVersion()) { case "1.20.1" -> 17; case "1.21.1" -> 21; default -> 0; };
         boolean javaKnown = instance.requiredJavaMajor() > 0;
-        result.add(new DiagnosticResult(expected == 0 ? DiagnosticResult.Severity.UNKNOWN
+        result.add(new DiagnosticResult(expected == 0 ? DiagnosticResult.Severity.BLOCKED
                 : instance.requiredJavaMajor() == expected ? DiagnosticResult.Severity.PASS : DiagnosticResult.Severity.WARNING,
                 "java.requirement", javaKnown ? "Instance requires Java " + instance.requiredJavaMajor() : "Java requirement is unknown", Map.of()));
         boolean writable = writableOrCreatable(instance.modsDirectory());
@@ -42,12 +42,12 @@ public final class DiagnosticEngine {
                     api ? "Fabric API is installed" : "Fabric API is missing"));
         }
         Path state=instance.gameDirectory().resolve(".mccompanion"); Path manifest=state.resolve("install-manifest.json");
-        result.add(new DiagnosticResult(instance.configuredJava().isPresent()?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.UNKNOWN,"java.configured",instance.configuredJava().map(p->"Configured Java detected").orElse("Launcher Java path not confirmed"),Map.of()));
+        result.add(new DiagnosticResult(instance.configuredJava().isPresent()?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"java.configured",instance.configuredJava().map(p->"Configured Java detected").orElse("Launcher Java path not confirmed"),Map.of()));
         Path crash=instance.gameDirectory().resolve("crash-reports");result.add(new DiagnosticResult(Files.isDirectory(crash)?DiagnosticResult.Severity.WARNING:DiagnosticResult.Severity.PASS,"recent.crash",Files.isDirectory(crash)?"Crash reports exist; inspect newest report":"No crash-report directory",Map.of()));
         Path latest=instance.logsDirectory().resolve("latest.log");boolean loaded=false;try{loaded=Files.isRegularFile(latest)&&Files.readString(latest).contains("minecraft_ai_companion");}catch(IOException ignored){}
-        result.add(new DiagnosticResult(loaded?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.UNKNOWN,"recent.mod_load",loaded?"Recent log contains Companion":"No recent Companion load evidence",Map.of()));
-        try{long usable=Files.getFileStore(instance.gameDirectory()).getUsableSpace();result.add(new DiagnosticResult(usable>512L*1024*1024?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"disk.space","Usable disk space: "+(usable/1024/1024)+" MiB",Map.of()));}catch(IOException e){result.add(new DiagnosticResult(DiagnosticResult.Severity.UNKNOWN,"disk.space","Disk space unavailable",Map.of()));}
-        result.add(new DiagnosticResult(Files.isRegularFile(manifest)?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.UNKNOWN,"install.manifest",Files.isRegularFile(manifest)?"Install manifest present":"Not installed by mcac",Map.of()));
+        result.add(new DiagnosticResult(loaded?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"recent.mod_load",loaded?"Recent log contains Companion":"No recent Companion load evidence",Map.of("logPresent",Boolean.toString(Files.isRegularFile(latest)))));
+        try{long usable=Files.getFileStore(instance.gameDirectory()).getUsableSpace();result.add(new DiagnosticResult(usable>512L*1024*1024?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"disk.space","Usable disk space: "+(usable/1024/1024)+" MiB",Map.of("usableBytes",Long.toString(usable))));}catch(IOException e){result.add(new DiagnosticResult(DiagnosticResult.Severity.WARNING,"disk.space","Disk space check failed: "+e.getClass().getSimpleName(),Map.of()));}
+        result.add(new DiagnosticResult(Files.isRegularFile(manifest)?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"install.manifest",Files.isRegularFile(manifest)?"Install manifest present":"Not installed by mcac",Map.of("present",Boolean.toString(Files.isRegularFile(manifest)))));
         return result;
     }
     private static boolean writableOrCreatable(java.nio.file.Path path) {

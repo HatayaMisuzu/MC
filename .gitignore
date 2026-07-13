@@ -19,5 +19,12 @@ local.properties
 .env.*
 !.env.example
 mcac-local/
+terminal/web-ui/node_modules/
+terminal/web-ui/dist/
+terminal/web-ui/test-results/
+terminal/web-ui/playwright-report/
+terminal/web-ui/*.tsbuildinfo
+terminal/web-ui/vite.config.js
+terminal/web-ui/vite.config.d.ts
 terminal-test-results/
 launch-logs/

@@ -32,4 +32,21 @@ class InstallTransactionTest {
                 LoaderType.VANILLA,"",25,Optional.empty(),InstanceIsolation.VERSION_DIRECTORY,DetectionConfidence.HIGH);
         assertFalse(InstallPlanner.isSupported(value));
     }
+    @Test void uninstallRefusesToDeleteModifiedManagedJar() throws Exception {
+        MinecraftInstance instance=instance();Files.createDirectories(instance.modsDirectory());
+        Path artifact=temp.resolve("new.jar");Files.writeString(artifact,"new");
+        InstallPlan plan=new InstallPlan(instance,artifact,instance.modsDirectory().resolve("new.jar"),List.of(),false,"point-two");
+        InstallTransaction transaction=new InstallTransaction();transaction.execute(plan);
+        Files.writeString(plan.destination(),"user-modified");
+        assertThrows(java.io.IOException.class,()->transaction.uninstall(instance.gameDirectory()));
+        assertTrue(Files.exists(plan.destination()));
+    }
+    @Test void legacyManifestSchemaStillVerifies() throws Exception {
+        MinecraftInstance instance=instance();Files.createDirectories(instance.modsDirectory());
+        Path jar=instance.modsDirectory().resolve("managed.jar");Files.writeString(jar,"managed");
+        String hash=java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(jar)));
+        Path state=instance.gameDirectory().resolve(".mccompanion");Files.createDirectories(state);
+        Files.writeString(state.resolve("install-manifest.json"),"{\"schemaVersion\":1,\"installedFile\":\"mods/managed.jar\",\"sha256\":\""+hash+"\"}");
+        assertTrue(new InstallTransaction().verify(instance.gameDirectory()));
+    }
 }

@@ -25,6 +25,17 @@ jobs:
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@v4
+      - name: Warm Gradle wrapper with network retry
+        shell: pwsh
+        run: |
+          $exitCode = 1
+          foreach ($attempt in 1..3) {
+            ./gradlew.bat --version
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -eq 0) { break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds 10 }
+          }
+          if ($exitCode -ne 0) { exit $exitCode }
       - name: Install Chromium for browser end-to-end tests
         shell: pwsh
         working-directory: terminal/web-ui

@@ -8,7 +8,7 @@
 
 目标 PR：#2
 
-本报告只记录已经实际执行的检查。当前源代码尚未推送时，GitHub Actions 状态记为 `REMOTE_PENDING`；推送后必须以 PR #2 的最新提交全绿为发布门槛。
+本报告只记录已经实际执行的检查。实现提交 `a1f3a55` 已通过 PR #2 的 Linux shared checks 与 Windows Chromium/干净发布包远程门禁。
 
 ## 产品结果
 
@@ -23,7 +23,8 @@
 | 实时通道 | LOCAL_PASS | 状态、操作和行为事件使用 SSE；Runtime/Minecraft 日志使用独立 SSE 流 |
 | 视觉与响应式 | LOCAL_PASS | 中文桌面控制中心、深浅主题、1366×768 与 3840×2160 检查无横向溢出；后端断开有显式横幅 |
 | 发布包 | LOCAL_PASS | 自带 Java Runtime、Web 产物和 Mod 工件；任意工作目录启动，无需 Node.js、Gradle 或系统 Java |
-| GitHub Actions | REMOTE_PENDING | PR 快速、Windows 完整、Minecraft 重型三套 workflow 已更新；必须在推送后确认最新提交全绿 |
+| GitHub Actions PR 门禁 | REMOTE_PASS | `PR fast checks` run 29230795783 与 `Windows terminal validation` run 29230795729 均成功 |
+| GitHub Actions 主分支重型回归 | MERGE_GATE_PENDING | `Minecraft heavy validation` 只允许在 `main`、定时或手动运行；合并后自动触发并继续监控 |
 
 ## 自动化和真实运行证据
 
@@ -65,4 +66,9 @@
 - 第三方启动器账号登录和个人存档进入依赖用户已有会话；自动化不接触账号凭据。
 - Companion 使用安全局部移动、卡住检测和有限重规划，不提供 Baritone 式全局寻路。
 
-更多说明见 `KNOWN_LIMITATIONS.md`。远程 CI 变为 PASS 后，应在本报告中补充对应 run 证据，再执行最终合并。
+更多说明见 `KNOWN_LIMITATIONS.md`。PR 远程证据：
+
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29230795783>
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29230795729>
+
+合并到 `main` 后必须等待自动触发的 Minecraft 重型回归完成；若失败则继续修复，不把“已合并”等同于“已验收”。

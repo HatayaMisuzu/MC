@@ -1,0 +1,53 @@
+name: Minecraft heavy validation
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '23 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  loaders-and-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build all supported Loader artifacts
+        shell: pwsh
+        run: ./gradlew.bat buildPlatforms --stacktrace
+      - name: Launch dedicated servers
+        shell: pwsh
+        run: ./gradlew.bat launchTest --stacktrace
+      - name: Run all Loader GameTests
+        shell: pwsh
+        run: ./gradlew.bat gameTest --stacktrace
+      - name: Run Runtime and persistence end-to-end tests
+        shell: pwsh
+        run: >-
+          ./gradlew.bat runtimeFabricE2E persistenceRestartTest
+          runtimeMultiProfileTest --stacktrace
+      - name: Upload safe test reports and logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minecraft-heavy-failure-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+            minecraft/*/build/launch-test/server/logs/
+            minecraft/*/build/gametest/logs/
+            build/e2e-runtime/evidence/
+            build/reports/problems/

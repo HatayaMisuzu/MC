@@ -55,7 +55,7 @@ public final class Pcl2LauncherAdapter implements LauncherAdapter {
                         Map<String, String> versionSetup = setup.parse(versionDir.resolve("PCL").resolve("Setup.ini"));
                         boolean isolated = "true".equalsIgnoreCase(versionSetup.get("VersionArgumentIndieV2"))
                                 || InstanceFactory.looksIsolated(versionDir);
-                        Path logged=new LogGameDirParser().latest(List.of(launcher.dataDirectory().resolve("Log1.txt"),launcher.dataDirectory().resolve("Log2.txt")),versionId).orElse(null);
+                        Path logged=new LogGameDirParser().latest(List.of(launcher.dataDirectory().resolve("Log1.txt"),launcher.dataDirectory().resolve("Log2.txt")),versionId,root).orElse(null);
                         Path gameDir = logged!=null?logged:isolated ? versionDir : root;
                         result.add(instances.create(launcher, root, versionDir, gameDir,
                                 logged!=null?InstanceIsolation.EXPLICIT:isolated ? InstanceIsolation.VERSION_DIRECTORY : InstanceIsolation.MINECRAFT_ROOT,

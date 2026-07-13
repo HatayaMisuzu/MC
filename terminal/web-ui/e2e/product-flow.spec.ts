@@ -6,7 +6,11 @@ async function confirmAndWait(page: Page) {
   const dialog = page.getByRole('dialog')
   await expect(dialog).toBeVisible()
   await dialog.getByRole('button', { name: '确认并执行', exact: true }).click()
-  await expect(dialog.getByText('SUCCEEDED', { exact: true })).toBeVisible({ timeout: 60_000 })
+  const state = dialog.locator('.operation-meta strong')
+  await expect(state).toHaveText(/SUCCEEDED|FAILED/, { timeout: 60_000 })
+  const stateText = await state.textContent()
+  const error = stateText === 'FAILED' ? await dialog.locator('.inline-error').textContent() : ''
+  expect(stateText, error ?? '').toBe('SUCCEEDED')
   await dialog.locator('footer').getByRole('button', { name: '关闭', exact: true }).click()
 }
 

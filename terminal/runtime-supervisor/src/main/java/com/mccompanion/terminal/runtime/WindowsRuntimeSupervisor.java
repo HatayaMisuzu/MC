@@ -28,7 +28,9 @@ public final class WindowsRuntimeSupervisor {
             if(!health.identityMatches())throw new IOException("PID belongs to a different process");
             return null;
         }
-        if(portOnline(profile))throw new IOException("Runtime profile port is occupied by another process");
+        if (portsOnline(profile) && !awaitPortsOffline(profile, Duration.ofSeconds(3))) {
+            throw new IOException("Runtime profile port is occupied by another process");
+        }
         Files.createDirectories(profile.profileDirectory());
         Process process = new ProcessBuilder(profile.launcherScript().toString(), "--config", profile.configFile().toString(), "--no-cli")
                 .directory(profile.profileDirectory().toFile()).redirectErrorStream(true)
@@ -106,8 +108,28 @@ public final class WindowsRuntimeSupervisor {
         } catch (IOException | NumberFormatException ignored) { return Optional.empty(); }
     }
     public boolean portOnline(RuntimeProfile profile) {
-        try (Socket socket = new Socket()) { socket.connect(new InetSocketAddress("127.0.0.1", profile.port()), 300); return true; }
+        return portOnline(profile.port());
+    }
+
+    private boolean portsOnline(RuntimeProfile profile) {
+        return portOnline(profile.port()) || portOnline(profile.healthPort());
+    }
+
+    private static boolean portOnline(int port) {
+        try (Socket socket = new Socket()) { socket.connect(new InetSocketAddress("127.0.0.1", port), 300); return true; }
         catch (IOException ignored) { return false; }
+    }
+
+    private boolean awaitPortsOffline(RuntimeProfile profile, Duration timeout) {
+        Instant deadline = Instant.now().plus(timeout);
+        while (portsOnline(profile) && Instant.now().isBefore(deadline)) {
+            try { Thread.sleep(100); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return !portsOnline(profile);
     }
 
     public RuntimeHealth awaitHealthy(RuntimeProfile profile, Duration timeout) {
@@ -157,6 +179,9 @@ public final class WindowsRuntimeSupervisor {
         try { handle.onExit().get(Duration.ofSeconds(5).toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS); }
         catch (Exception timeout) { handle.destroyForcibly(); }
         Files.deleteIfExists(profile.pidFile());
+        if (!awaitPortsOffline(profile, Duration.ofSeconds(5))) {
+            throw new IOException("Runtime process stopped but its local ports were not released");
+        }
     }
     private record HealthIdentity(String runtimeVersion,String protocolVersion,String profileId,String instanceId,
                                   int port,int managementPort,long pid,int sessionCount){}

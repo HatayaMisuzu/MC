@@ -51,6 +51,7 @@ export function ConfirmDialog() {
               <strong>{operation.state}</strong>
               <span>{operation.progress}%</span>
             </div>
+            {operation.error && <div className="inline-error">{operation.error}</div>}
             {operation.result && <pre>{JSON.stringify(operation.result, null, 2)}</pre>}
           </div>
         )}

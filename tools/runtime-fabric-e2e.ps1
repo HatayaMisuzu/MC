@@ -19,7 +19,7 @@ if (Test-Path -LiteralPath $runtimeHome) {
 }
 New-Item -ItemType Directory -Force -Path $runtimeHome | Out-Null
 
-function Start-RedirectedProcess([string]$file, [string]$arguments, [string]$workingDirectory) {
+function Start-TestProcess([string]$file, [string]$arguments, [string]$workingDirectory, [bool]$captureOutput) {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $file
     $start.Arguments = $arguments
@@ -27,12 +27,17 @@ function Start-RedirectedProcess([string]$file, [string]$arguments, [string]$wor
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
     $start.RedirectStandardInput = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
+    $start.RedirectStandardOutput = $captureOutput
+    $start.RedirectStandardError = $captureOutput
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
     if (-not $process.Start()) { throw "Unable to start $file" }
     return $process
+}
+
+function Read-ProcessLog([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return '' }
+    return [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
 }
 
 function Invoke-RuntimeCommand(
@@ -73,8 +78,16 @@ $runtime = $null
 $game = $null
 $commandEvidence = @()
 try {
-    $runtimeArgs = "/d /s /c `"`"$runtimeBat`" --config `"$config`"`""
-    $runtime = Start-RedirectedProcess 'cmd.exe' $runtimeArgs $root
+    Write-Output '[runtime-e2e] starting Runtime'
+    $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
+    $runtimeClasspath = ((Get-ChildItem -LiteralPath $runtimeLib -Filter '*.jar' -File).FullName -join ';')
+    if ([string]::IsNullOrWhiteSpace($runtimeClasspath)) { throw 'Runtime classpath is empty.' }
+    $javaHome = if ($env:MCAC_TEST_JAVA_HOME) { $env:MCAC_TEST_JAVA_HOME } elseif ($env:JAVA_HOME) { $env:JAVA_HOME } else { $null }
+    if (-not $javaHome) { throw 'A real Java home was not provided by Gradle.' }
+    $java = Join-Path $javaHome 'bin\java.exe'
+    if (-not (Test-Path -LiteralPath $java -PathType Leaf)) { throw 'The Gradle Java executable is missing.' }
+    $runtimeArgs = "-classpath `"$runtimeClasspath`" com.mccompanion.runtime.RuntimeMain --config `"$config`""
+    $runtime = Start-TestProcess $java $runtimeArgs $root $true
     $runtimeOut = $runtime.StandardOutput.ReadToEndAsync()
     $runtimeErr = $runtime.StandardError.ReadToEndAsync()
 
@@ -84,6 +97,7 @@ try {
         if ([DateTime]::UtcNow -gt $deadline) { throw 'Runtime pairing token was not created in time.' }
         Start-Sleep -Milliseconds 200
     }
+    Write-Output '[runtime-e2e] Runtime token ready; starting Fabric GameTest'
 
     if (Test-Path -LiteralPath $gameRun) {
         Remove-Item -LiteralPath $gameRun -Recurse -Force
@@ -92,10 +106,10 @@ try {
     Copy-Item -LiteralPath $token -Destination $gameToken -Force
     $pairingToken = (Get-Content -Raw -LiteralPath $token).Trim()
 
-    $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon`""
-    $game = Start-RedirectedProcess 'cmd.exe' $gameArgs $fabric
-    $gameOut = $game.StandardOutput.ReadToEndAsync()
-    $gameErr = $game.StandardError.ReadToEndAsync()
+    $gameOutFile = Join-Path $runtimeHome 'fabric-gametest.out.log'
+    $gameErrFile = Join-Path $runtimeHome 'fabric-gametest.err.log'
+    $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon > `"$gameOutFile`" 2> `"$gameErrFile`"`""
+    $game = Start-TestProcess 'cmd.exe' $gameArgs $fabric $false
 
     $gameLog = Join-Path $gameRun 'logs\latest.log'
     $registrationDeadline = [DateTime]::UtcNow.AddSeconds(60)
@@ -117,6 +131,7 @@ try {
             ((Get-Content -Raw -LiteralPath $gameLog) -match 'runtime_e2e_ready companion=([0-9a-f-]{36})') -and
             ($null -ne $health) -and ($health.onlineCompanionCount -ge 1)
     } until ($registrationReady)
+    Write-Output '[runtime-e2e] Fabric companion registered; exercising behavior controls'
 
     $readyMatch = [regex]::Match((Get-Content -Raw -LiteralPath $gameLog),
         'runtime_e2e_ready companion=([0-9a-f-]{36})')
@@ -143,13 +158,20 @@ try {
     $cancelled = Wait-RuntimeTaskState $pairingToken $follow.taskId 'CANCELLED'
     $commandEvidence += [pscustomobject]@{ command = 'STOP'; reply = $stop; snapshot = $cancelled }
 
+    Write-Output '[runtime-e2e] behavior controls passed; waiting for Fabric GameTest shutdown'
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
+    Write-Output '[runtime-e2e] Fabric GameTest exited; stopping Runtime'
     $runtime.StandardInput.WriteLine('quit')
     $runtime.StandardInput.Flush()
-    if (-not $runtime.WaitForExit(15000)) { throw 'Runtime did not shut down after quit.' }
+    if (-not $runtime.WaitForExit(15000)) {
+        $runtime.Kill($true)
+        if (-not $runtime.WaitForExit(5000)) { throw 'Runtime process tree did not stop after forced shutdown.' }
+        throw 'Runtime did not shut down after quit.'
+    }
+    Write-Output '[runtime-e2e] Runtime exited; collecting evidence'
 
-    $gameStdout = $gameOut.GetAwaiter().GetResult()
-    $gameStderr = $gameErr.GetAwaiter().GetResult()
+    $gameStdout = Read-ProcessLog $gameOutFile
+    $gameStderr = Read-ProcessLog $gameErrFile
     $runtimeStdout = $runtimeOut.GetAwaiter().GetResult()
     $runtimeStderr = $runtimeErr.GetAwaiter().GetResult()
     New-Item -ItemType Directory -Force -Path (Join-Path $runtimeHome 'evidence') | Out-Null

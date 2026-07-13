@@ -94,6 +94,7 @@ tasks.register('runtimeFabricE2E') {
     dependsOn ':runtime:runtime-app:installDist'
     doLast {
         exec {
+            environment 'MCAC_TEST_JAVA_HOME', System.getProperty('java.home')
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/runtime-fabric-e2e.ps1').absolutePath
         }

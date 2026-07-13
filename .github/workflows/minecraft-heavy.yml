@@ -49,6 +49,7 @@ jobs:
         shell: pwsh
         run: ./gradlew.bat gameTest --stacktrace
       - name: Run Runtime/Fabric end-to-end test
+        timeout-minutes: 10
         shell: pwsh
         run: ./gradlew.bat runtimeFabricE2E --stacktrace
       - name: Run persistence restart test

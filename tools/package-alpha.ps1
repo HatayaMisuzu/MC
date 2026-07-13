@@ -110,7 +110,9 @@ $artifactRows = Get-ChildItem -LiteralPath (Join-Path $delivery 'jars'), (Join-P
         "| ``$relative`` | ``$hash`` |"
     }
 $hashSection = @('', '## 交付产物 SHA-256', '', '| 文件 | SHA-256 |', '|---|---|') + $artifactRows
-[IO.File]::AppendAllLines($reportPath, $hashSection, [Text.UTF8Encoding]::new($false))
+[IO.File]::AppendAllText($reportPath,
+    [Environment]::NewLine + ($hashSection -join [Environment]::NewLine) + [Environment]::NewLine,
+    [Text.UTF8Encoding]::new($false))
 
 $hashes = Get-ChildItem -LiteralPath $delivery -Recurse -File |
     Where-Object { $_.Name -ne 'SHA256SUMS.txt' } |

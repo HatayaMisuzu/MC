@@ -25,7 +25,7 @@ public final class ModJarInspector {
         try (DirectoryStream<Path> jars = Files.newDirectoryStream(mods, "*.jar")) {
             for (Path jar : jars) {
                 try { result.add(inspect(jar)); }
-                catch (IOException failure) { result.add(new ModInfo(jar, "unknown", "unknown", false, failure.getMessage())); }
+                catch (IOException failure) { result.add(new ModInfo(jar, "unknown", "unknown", false, failure.getMessage(), "unknown")); }
             }
         } catch (IOException ignored) { }
         return result;
@@ -38,13 +38,13 @@ public final class ModJarInspector {
             if (fabric != null) {
                 JsonNode node = readJson(zip, fabric);
                 return new ModInfo(jar, node.path("id").asText("unknown"), node.path("version").asText("unknown"),
-                        isCompanion(node.path("id").asText()), "fabric");
+                        isCompanion(node.path("id").asText()), "fabric", fabricMinecraft(node));
             }
             ZipEntry neo = zip.getEntry("META-INF/neoforge.mods.toml");
             if (neo != null) return tomlInfo(jar, zip, neo, "neoforge");
             ZipEntry forge = zip.getEntry("META-INF/mods.toml");
             if (forge != null) return tomlInfo(jar, zip, forge, "forge");
-            return new ModInfo(jar, "unknown", "unknown", false, "no supported metadata");
+            return new ModInfo(jar, "unknown", "unknown", false, "no supported metadata", "unknown");
         }
     }
     private static JsonNode readJson(ZipFile zip, ZipEntry entry) throws IOException {
@@ -65,7 +65,8 @@ public final class ModJarInspector {
         }
         String id = match(text, "(?m)^\\s*modId\\s*=\\s*[\"']([^\"']+)");
         String version = match(text, "(?m)^\\s*version\\s*=\\s*[\"']([^\"']+)");
-        return new ModInfo(jar, id, version, isCompanion(id), loader);
+        String minecraft = match(text, "(?s)modId\\s*=\\s*[\"']minecraft[\"'].*?versionRange\\s*=\\s*[\"']([^\"']+)");
+        return new ModInfo(jar, id, version, isCompanion(id), loader, minecraft);
     }
     private static String match(String text, String pattern) {
         var matcher = java.util.regex.Pattern.compile(pattern).matcher(text);
@@ -75,5 +76,6 @@ public final class ModJarInspector {
         String value = id == null ? "" : id.toLowerCase(Locale.ROOT);
         return value.equals("minecraft_ai_companion") || value.equals("minecraft-ai-companion") || value.equals("mccompanion");
     }
-    public record ModInfo(Path jar, String id, String version, boolean companion, String metadataType) {}
+    private static String fabricMinecraft(JsonNode node){JsonNode value=node.path("depends").path("minecraft");if(value.isTextual())return value.asText();if(value.isArray()&&value.size()>0)return value.get(0).asText();return "unknown";}
+    public record ModInfo(Path jar, String id, String version, boolean companion, String metadataType, String minecraftRange) {}
 }

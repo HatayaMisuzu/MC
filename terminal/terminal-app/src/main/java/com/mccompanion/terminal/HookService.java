@@ -65,14 +65,15 @@ final class HookService {
     private static void installHmcl(MinecraftInstance instance, LauncherInstallation launcher, Path mcac, Path state, Path wrapper) throws IOException {
         Path target = launcher.dataDirectory().resolve("hmcl.json");
         ObjectNode document = (ObjectNode) JSON.readTree(target.toFile());
-        ObjectNode selected = null;
+        List<ObjectNode> matches = new ArrayList<>();
         var fields = document.path("configurations").fields();
         while (fields.hasNext()) {
             var entry = fields.next(); JsonNode config = entry.getValue();
             String version = config.path("selectedMinecraftVersion").asText("");
-            if (version.equals(instance.displayName()) && config instanceof ObjectNode object) { selected = object; break; }
+            if (version.equals(instance.displayName()) && config instanceof ObjectNode object) matches.add(object);
         }
-        if (selected == null) throw new IOException("HMCL configuration for this selected version is ambiguous; use guided play mode");
+        if (matches.size()!=1) throw new IOException("HMCL selected version matched "+matches.size()+" configurations; use guided play mode");
+        ObjectNode selected=matches.getFirst();
         String existing = selected.path("preLaunchCommand").asText(selected.path("precalledCommand").asText(""));
         writeWrapper(wrapper, existing, mcac, launcher.executable().getParent(), instance.instanceId());
         selected.put("preLaunchCommand", wrapper.toString());
@@ -100,8 +101,12 @@ final class HookService {
         JSON.writerWithDefaultPrettyPrinter().writeValue(state.resolve("state.json").toFile(), metadata);
     }
     private static void writeWrapper(Path wrapper, String existing, Path mcac, Path launcherRoot, String instanceId) throws IOException {
-        StringBuilder text = new StringBuilder("@echo off\r\n");
-        if (existing != null && !existing.isBlank()) text.append("call ").append(existing).append(" 2>nul\r\n");
+        StringBuilder text = new StringBuilder("@echo off\r\nsetlocal\r\n");
+        if (existing != null && !existing.isBlank()) {
+            Path userHook=wrapper.resolveSibling("user-existing-hook.cmd");
+            Files.writeString(userHook,"@echo off\r\n"+existing+"\r\nexit /b 0\r\n",StandardCharsets.UTF_8);
+            text.append("call \"").append(userHook.toAbsolutePath().normalize()).append("\" 2>nul\r\n");
+        }
         text.append("start \"\" /b \"").append(mcac.toAbsolutePath().normalize()).append("\" --root \"")
                 .append(launcherRoot.toAbsolutePath().normalize()).append("\" runtime start \"")
                 .append(instanceId.replace("\"", "")).append("\" 2>nul\r\nexit /b 0\r\n");

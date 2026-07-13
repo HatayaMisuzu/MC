@@ -2,6 +2,7 @@ package com.mccompanion.terminal.install;
 
 import com.mccompanion.terminal.launcher.LoaderType;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
+import com.mccompanion.terminal.launcher.DetectionConfidence;
 import com.mccompanion.terminal.probe.ModJarInspector;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -13,6 +14,7 @@ public final class InstallPlanner {
     private final ModJarInspector inspector = new ModJarInspector();
     public InstallPlan plan(MinecraftInstance instance, Path artifact) throws IOException {
         if (!isSupported(instance)) throw new IOException("Unsupported target: Minecraft " + instance.minecraftVersion() + " / " + instance.loader());
+        if(instance.confidence()!=DetectionConfidence.HIGH)throw new IOException("Installation requires HIGH gameDir confidence; explicitly confirm the absolute game directory first");
         validateInstancePaths(instance);
         ModJarInspector.ModInfo artifactInfo = inspector.inspect(artifact);
         String expected = instance.loader().name().toLowerCase();

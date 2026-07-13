@@ -154,11 +154,12 @@ tasks.named('check') {
     dependsOn 'test', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck'
 }
 
-def terminalImage = layout.buildDirectory.dir('distributions/mcac-windows-x64')
+def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')
 def terminalInput = layout.buildDirectory.dir('tmp/jpackage-terminal-input')
+def terminalJpackage = layout.buildDirectory.dir('tmp/jpackage-terminal-output')
 
 tasks.register('cleanTerminalPackage', Delete) {
-    delete terminalImage, terminalInput
+    delete terminalImage, terminalInput, terminalJpackage
 }
 
 tasks.register('prepareTerminalPackageInput', Copy) {
@@ -176,35 +177,48 @@ tasks.register('jpackageTerminal', Exec) {
         def toolchains = project(':terminal:terminal-app').extensions.getByType(org.gradle.jvm.toolchain.JavaToolchainService)
         def java21 = toolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
         def jpackage = java21.get().metadata.installationPath.file('bin/jpackage.exe').asFile
-        commandLine jpackage, '--type', 'app-image', '--name', 'mcac-windows-x64',
+        commandLine jpackage, '--type', 'app-image', '--name', 'mcac',
                 '--input', terminalInput.get().asFile,
                 '--main-jar', "terminal-app-${project.version}.jar",
                 '--main-class', 'com.mccompanion.terminal.ControlTerminalMain',
-                '--dest', layout.buildDirectory.dir('distributions').get().asFile,
+                '--dest', terminalJpackage.get().asFile,
                 '--add-launcher', "runtime-app=${file('tools/runtime-launcher.properties').absolutePath}",
                 '--win-console', '--java-options', '-Dfile.encoding=UTF-8'
     }
 }
 
-tasks.register('packageTerminal') {
+tasks.register('stageTerminal') {
     group = 'distribution'
     dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms'
     doLast {
         copy {
             into terminalImage
+            from(terminalJpackage.map { it.dir('mcac') })
             from('tools/runtime-app-bundled.cmd')
+            from('启动终端.cmd')
             from('minecraft/fabric-1.21.1/build/libs') { into 'artifacts/fabric-1.21.1'; include '*.jar'; exclude '*sources*', '*gametest*' }
             from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
             from('minecraft/forge-1.20.1/build/libs') { into 'artifacts/forge-1.20.1'; include '*.jar'; exclude '*sources*' }
-            from('README.md', 'LICENSE')
+            from('README.md') { rename { 'README.txt' } }
+            from('LICENSE') { into 'legal' }
         }
+        def root=terminalImage.get().asFile
+        def files=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt' }.files.findAll { it.isFile() }.sort { it.absolutePath }
+        file("${root}/SHA256SUMS.txt").withWriter('UTF-8'){w->files.each{f->def digest=java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString();w.write("${digest}  ${root.toPath().relativize(f.toPath()).toString().replace('\\','/')}\n")}}
     }
 }
+
+tasks.register('stageTerminalAtProjectRoot', Copy) { dependsOn 'stageTerminal'; from terminalImage; into 'mcac-local' }
+tasks.register('packageTerminal') { group='distribution'; dependsOn 'stageTerminal' }
 
 tasks.register('packageTerminalZip', Zip) {
     group = 'distribution'
     dependsOn 'packageTerminal'
-    archiveFileName = 'mcac-windows-x64.zip'
+    archiveFileName = 'mcac-release.zip'
     destinationDirectory = layout.buildDirectory.dir('distributions')
-    from(terminalImage) { into 'mcac-windows-x64' }
+    from(terminalImage)
 }
+
+tasks.register('verifyTerminalPackage') { group='verification'; dependsOn 'packageTerminalZip'; doLast { exec { commandLine 'powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/verify-terminal-package.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('runtimeMultiProfileTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine 'powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/runtime-multi-profile-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('runtimeDisabledLaunchTest', Exec) { group='verification'; workingDir file('minecraft/fabric-1.21.1'); commandLine 'cmd','/c','gradlew.bat','launchTest','-PmccompanionRuntimeDisabled=true'; doLast { def log=file('minecraft/fabric-1.21.1/build/launch-test/server/logs/latest.log').getText('UTF-8'); if(!log.contains('Runtime bridge disabled by instance config')||log.contains('pairing token not found'))throw new GradleException('enabled=false Runtime bridge regression') } }

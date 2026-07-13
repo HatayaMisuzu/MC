@@ -1,0 +1,3 @@
+package com.mccompanion.terminal;
+import com.mccompanion.terminal.install.*;import com.mccompanion.terminal.launcher.*;import java.nio.file.*;
+final class InstallService{InstallPlan plan(MinecraftInstance i,Path root)throws Exception{if(!InstallPlanner.isSupported(i))throw new java.io.IOException("Unsupported target: Minecraft "+i.minecraftVersion()+" / "+i.loader());Path artifact=new ArtifactResolver().resolve(i,root).orElseThrow(()->new java.io.IOException("No exact artifact for target"));return new InstallPlanner().plan(i,artifact);}InstallTransaction.Result install(InstallPlan p)throws Exception{return new InstallTransaction().execute(p);}void rollback(MinecraftInstance i,String id)throws Exception{new InstallTransaction().rollback(i.gameDirectory(),id);}}

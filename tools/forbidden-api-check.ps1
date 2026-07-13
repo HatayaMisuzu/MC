@@ -35,7 +35,7 @@ if (Test-Path -LiteralPath $whitelistPath) {
                 throw "Invalid forbidden API whitelist entry: $_"
             }
             [pscustomobject]@{
-                Path = $parts[0].Trim().Replace('/', '\')
+                Path = $parts[0].Trim() -replace '\\', '/'
                 Token = $parts[1].Trim()
                 Reason = $parts[2].Trim()
             }
@@ -71,7 +71,7 @@ foreach ($relativeRoot in $productionRoots) {
             $lineNumber++
             foreach ($entry in $patterns.GetEnumerator()) {
                 if ($line -match $entry.Key) {
-                    $relative = $path.Substring($root.Length).TrimStart([char[]]'\/')
+                    $relative = $path.Substring($root.Length).TrimStart([char[]]'\/') -replace '\\', '/'
                     $allowed = $whitelist | Where-Object {
                         $relative -like $_.Path -and $entry.Value -eq $_.Token
                     }

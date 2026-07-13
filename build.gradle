@@ -2,6 +2,9 @@ plugins {
     id 'base'
 }
 
+def powershellExecutable = System.getProperty('os.name').toLowerCase().contains('windows')
+        ? 'powershell' : 'pwsh'
+
 allprojects {
     group = providers.gradleProperty('group').get()
     version = providers.gradleProperty('version').get()
@@ -91,7 +94,7 @@ tasks.register('runtimeFabricE2E') {
     dependsOn ':runtime:runtime-app:installDist'
     doLast {
         exec {
-            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/runtime-fabric-e2e.ps1').absolutePath
         }
     }
@@ -101,7 +104,7 @@ tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {
         exec {
-            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/fabric-persistence-restart.ps1').absolutePath
         }
     }
@@ -111,7 +114,7 @@ tasks.register('forbiddenApiCheck') {
     group = 'verification'
     doLast {
         exec {
-            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/forbidden-api-check.ps1').absolutePath
         }
     }
@@ -122,7 +125,7 @@ tasks.register('packageAlpha') {
     dependsOn 'build', 'test', 'forbiddenApiCheck'
     doLast {
         exec {
-            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/package-alpha.ps1').absolutePath
         }
     }
@@ -133,7 +136,7 @@ tasks.register('independenceCheck') {
     description = 'Verifies that production source, metadata, and dependency declarations do not depend on Numen or Baritone.'
     doLast {
         exec {
-            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/independence-check.ps1').absolutePath
         }
     }
@@ -144,19 +147,46 @@ tasks.register('secretCheck') {
     description = 'Fails when key-shaped secret material is present in source files.'
     doLast {
         exec {
-            commandLine 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/secret-check.ps1').absolutePath
         }
     }
 }
 
 tasks.named('check') {
-    dependsOn 'test', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck'
+    dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck'
 }
 
 def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')
 def terminalInput = layout.buildDirectory.dir('tmp/jpackage-terminal-input')
 def terminalJpackage = layout.buildDirectory.dir('tmp/jpackage-terminal-output')
+
+def npmCommand = org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'npm.cmd' : 'npm'
+
+tasks.register('webInstall', Exec) {
+    group = 'build'
+    workingDir file('terminal/web-ui')
+    commandLine npmCommand, 'ci', '--no-audit', '--no-fund'
+    inputs.files 'terminal/web-ui/package.json', 'terminal/web-ui/package-lock.json'
+    outputs.dir 'terminal/web-ui/node_modules'
+}
+
+tasks.register('webTest', Exec) {
+    group = 'verification'
+    dependsOn 'webInstall'
+    workingDir file('terminal/web-ui')
+    commandLine npmCommand, 'test'
+}
+
+tasks.register('webBuild', Exec) {
+    group = 'build'
+    dependsOn 'webInstall'
+    workingDir file('terminal/web-ui')
+    commandLine npmCommand, 'run', 'build'
+    inputs.dir 'terminal/web-ui/src'
+    inputs.files 'terminal/web-ui/index.html', 'terminal/web-ui/vite.config.ts', 'terminal/web-ui/tsconfig.json', 'terminal/web-ui/tsconfig.app.json'
+    outputs.dir 'terminal/web-ui/dist'
+}
 
 tasks.register('cleanTerminalPackage', Delete) {
     delete terminalImage, terminalInput, terminalJpackage
@@ -183,18 +213,22 @@ tasks.register('jpackageTerminal', Exec) {
                 '--main-class', 'com.mccompanion.terminal.ControlTerminalMain',
                 '--dest', terminalJpackage.get().asFile,
                 '--add-launcher', "runtime-app=${file('tools/runtime-launcher.properties').absolutePath}",
-                '--win-console', '--java-options', '-Dfile.encoding=UTF-8'
+                '--add-launcher', "mcac-cli=${file('tools/mcac-cli-launcher.properties').absolutePath}",
+                '--java-options', '-Dfile.encoding=UTF-8'
     }
 }
 
 tasks.register('stageTerminal') {
     group = 'distribution'
-    dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms'
+    dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
     doLast {
         copy {
             into terminalImage
             from(terminalJpackage.map { it.dir('mcac') })
+            from('mcac.cmd')
+            from('mcac.ps1')
             from('tools/runtime-app-bundled.cmd')
+            from('terminal/web-ui/dist') { into 'web' }
             from('启动终端.cmd')
             from('minecraft/fabric-1.21.1/build/libs') { into 'artifacts/fabric-1.21.1'; include '*.jar'; exclude '*sources*', '*gametest*' }
             from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
@@ -219,6 +253,15 @@ tasks.register('packageTerminalZip', Zip) {
     from(terminalImage)
 }
 
-tasks.register('verifyTerminalPackage') { group='verification'; dependsOn 'packageTerminalZip'; doLast { exec { commandLine 'powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/verify-terminal-package.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
-tasks.register('runtimeMultiProfileTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine 'powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/runtime-multi-profile-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('verifyTerminalPackage') { group='verification'; dependsOn 'packageTerminalZip'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/verify-terminal-package.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('runtimeMultiProfileTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/runtime-multi-profile-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('tuiIntegrationTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','tui' } } }
+tasks.register('rootLauncherTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','root' } } }
+tasks.register('releaseStarterTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','release' } } }
+tasks.register('htmlTerminalStartTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/html-terminal-start-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
 tasks.register('runtimeDisabledLaunchTest', Exec) { group='verification'; workingDir file('minecraft/fabric-1.21.1'); commandLine 'cmd','/c','gradlew.bat','launchTest','-PmccompanionRuntimeDisabled=true'; doLast { def log=file('minecraft/fabric-1.21.1/build/launch-test/server/logs/latest.log').getText('UTF-8'); if(!log.contains('Runtime bridge disabled by instance config')||log.contains('pairing token not found'))throw new GradleException('enabled=false Runtime bridge regression') } }
+
+// These tests share Fabric run directories and fixed loopback ports, so a combined invocation must serialize them.
+tasks.named('persistenceRestartTest') { mustRunAfter 'runtimeFabricE2E' }
+tasks.named('runtimeDisabledLaunchTest') { mustRunAfter 'persistenceRestartTest' }
+tasks.named('runtimeMultiProfileTest') { mustRunAfter 'runtimeDisabledLaunchTest' }

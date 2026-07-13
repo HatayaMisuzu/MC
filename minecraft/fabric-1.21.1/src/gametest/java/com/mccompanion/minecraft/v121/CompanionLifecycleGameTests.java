@@ -11,9 +11,12 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Headless integration tests that exercise the real ServerPlayer body and fake connection. */
 public final class CompanionLifecycleGameTests implements FabricGameTest {
+    private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000)
     public void blockedGotoStopsWithBoundedStuckFailure(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
@@ -175,6 +178,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                             "death recovery duplicated the dropped inventory item");
 
                     if (Boolean.getBoolean("mccompanion.runtime.e2e")) {
+                        LOGGER.info("runtime_e2e_ready companion={}", recovered.getUUID());
                         helper.succeedWhen(() -> {
                             helper.assertTrue(registry.runtimeCommandCount() >= 5,
                                     "waiting for Runtime lease/follow/pause/resume/stop commands");

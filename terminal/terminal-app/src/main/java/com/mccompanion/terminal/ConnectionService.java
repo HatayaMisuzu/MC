@@ -1,7 +1,66 @@
 package com.mccompanion.terminal;
-import com.mccompanion.terminal.runtime.*;import java.nio.file.*;import java.sql.*;import java.time.*;
-final class ConnectionService{
- record Status(boolean runtimeHealthy,int sessions,int companions,String mode){boolean connected(){return runtimeHealthy&&sessions>0;}}
- Status status(RuntimeProfile profile){var health=new WindowsRuntimeSupervisor().status(profile);int sessions=0,companions=0;Path db=profile.profileDirectory().resolve("companion.db");if(Files.isRegularFile(db))try(Connection c=DriverManager.getConnection("jdbc:sqlite:"+db)){try(var s=c.createStatement();var r=s.executeQuery("SELECT COUNT(*) FROM runtime_session WHERE disconnected_at IS NULL")){if(r.next())sessions=r.getInt(1);}try(var s=c.createStatement();var r=s.executeQuery("SELECT COUNT(*) FROM companion WHERE session_id IS NOT NULL")){if(r.next())companions=r.getInt(1);}}catch(SQLException ignored){}return new Status(health.healthy(),sessions,companions,health.healthy()&&sessions>0?"FULL":health.healthy()?"SAFE_IDLE":"LOCAL_ONLY");}
- Status waitForHandshake(RuntimeProfile profile,Duration timeout)throws InterruptedException{Instant end=Instant.now().plus(timeout);Status value;do{value=status(profile);if(value.connected())return value;Thread.sleep(500);}while(Instant.now().isBefore(end));return value;}
+
+import com.mccompanion.terminal.runtime.*;
+import java.nio.file.*;
+import java.sql.*;
+import java.time.*;
+import java.util.Optional;
+
+final class ConnectionService {
+  record Status(boolean runtimeHealthy, int sessions, int companions, String mode) {
+    boolean connected() {
+      return runtimeHealthy && sessions > 0;
+    }
+  }
+
+  Status status(RuntimeProfile profile) {
+    var health = new WindowsRuntimeSupervisor().status(profile);
+    int sessions = 0, companions = 0;
+    Path db = profile.profileDirectory().resolve("companion.db");
+    if (Files.isRegularFile(db))
+      try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db)) {
+        try (var s = c.createStatement();
+            var r =
+                s.executeQuery(
+                    "SELECT COUNT(*) FROM runtime_session WHERE disconnected_at IS NULL")) {
+          if (r.next()) sessions = r.getInt(1);
+        }
+        try (var s = c.createStatement();
+            var r = s.executeQuery("SELECT COUNT(*) FROM companion WHERE session_id IS NOT NULL")) {
+          if (r.next()) companions = r.getInt(1);
+        }
+      } catch (SQLException ignored) {
+      }
+    return new Status(
+        health.healthy(),
+        sessions,
+        companions,
+        health.healthy() && sessions > 0 ? "FULL" : health.healthy() ? "SAFE_IDLE" : "LOCAL_ONLY");
+  }
+
+  Status waitForHandshake(RuntimeProfile profile, Duration timeout) throws InterruptedException {
+    Instant end = Instant.now().plus(timeout);
+    Status value;
+    do {
+      value = status(profile);
+      if (value.connected()) return value;
+      Thread.sleep(500);
+    } while (Instant.now().isBefore(end));
+    return value;
+  }
+
+  Optional<String> firstCompanionId(RuntimeProfile profile) {
+    Path db = profile.profileDirectory().resolve("companion.db");
+    if (!Files.isRegularFile(db)) return Optional.empty();
+    try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + db);
+        var s =
+            c.prepareStatement(
+                "SELECT companion_id FROM companion WHERE session_id IS NOT NULL ORDER BY"
+                    + " last_seen_at DESC LIMIT 1");
+        var r = s.executeQuery()) {
+      return r.next() ? Optional.of(r.getString(1)) : Optional.empty();
+    } catch (SQLException ignored) {
+      return Optional.empty();
+    }
+  }
 }

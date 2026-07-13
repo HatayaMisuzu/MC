@@ -35,10 +35,9 @@ public final class VersionJsonResolver {
             current = inherited == null || inherited.isBlank() ? null : validateId(inherited);
         }
         if (current != null) throw new IOException("Version inheritance exceeds " + MAX_DEPTH + " levels");
-        String minecraft = firstText(chain, "clientVersion");
-        if (minecraft == null) minecraft = firstText(chain, "id");
-        int javaMajor = firstInt(chain, "javaVersion", "majorVersion");
         Loader loader = detectLoader(chain);
+        String minecraft = detectMinecraftVersion(chain, loader);
+        int javaMajor = firstInt(chain, "javaVersion", "majorVersion");
         return new ResolvedVersion(minecraft == null ? versionId : minecraft, loader.type(), loader.version(),
                 javaMajor > 0 ? javaMajor : JavaRequirementResolver.requiredFor(minecraft), List.copyOf(chain));
     }
@@ -52,9 +51,42 @@ public final class VersionJsonResolver {
         }
         for (JsonNode node : chain) {
             String target = node.path("arguments").path("game").toString().toLowerCase();
-            if (target.contains("forgeclient")) return new Loader(LoaderType.FORGE, "unknown");
+            if (target.contains("forgeclient") || target.contains("--fml.mcversion")
+                    || target.contains("--fml.forgegroup")) return new Loader(LoaderType.FORGE, "unknown");
         }
         return new Loader(LoaderType.VANILLA, "");
+    }
+
+    private static String detectMinecraftVersion(List<JsonNode> chain, Loader loader) {
+        String explicit = firstText(chain, "clientVersion");
+        if (explicit != null) return explicit;
+        for (JsonNode node : chain) {
+            JsonNode arguments = node.path("arguments").path("game");
+            if (arguments.isArray()) for (int index = 0; index + 1 < arguments.size(); index++) {
+                if ("--fml.mcVersion".equals(arguments.get(index).asText())) {
+                    String value = arguments.get(index + 1).asText("");
+                    if (!value.isBlank()) return value;
+                }
+            }
+        }
+        for (JsonNode node : chain) for (JsonNode library : node.path("libraries")) {
+            String coordinate = library.path("name").asText("");
+            if (coordinate.startsWith("net.minecraftforge:forge:")) {
+                String version = tail(coordinate);
+                int separator = version.indexOf('-');
+                if (separator > 0) return version.substring(0, separator);
+            }
+            if (coordinate.startsWith("net.minecraft:client:")) return tail(coordinate);
+        }
+        if (loader.type() == LoaderType.NEOFORGE && loader.version().matches("2[0-9]\\.[0-9]+(?:\\..*)?")) {
+            String[] parts = loader.version().split("\\.");
+            return "1." + parts[0] + "." + parts[1];
+        }
+        for (int index = chain.size() - 1; index >= 0; index--) {
+            String id = chain.get(index).path("id").asText("");
+            if (id.matches("(?:1\\.)?[0-9]+(?:\\.[0-9]+){1,2}")) return id;
+        }
+        return firstText(chain, "id");
     }
 
     private static String firstText(List<JsonNode> chain, String field) {

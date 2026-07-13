@@ -11,6 +11,8 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardCopyOption;
 import java.security.SecureRandom;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 public final class PairingService {
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -37,7 +39,11 @@ public final class PairingService {
         Path providerFile=profile.profileDirectory().resolve("provider.json");
         var provider=Files.isRegularFile(providerFile)?JSON.readTree(providerFile.toFile()):JSON.createObjectNode().put("mode","rules");
         String mode=safe(provider.path("mode").asText("rules")),base=safe(provider.path("baseUrl").asText("https://api.openai.com")),env=safe(provider.path("apiKeyEnv").asText("MC_COMPANION_API_KEY")),model=safe(provider.path("model").asText("disabled"));
-        String yaml = "server:\n  bind: 127.0.0.1\n  port: " + profile.port() + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
+        String yaml = "server:\n  bind: 127.0.0.1\n  port: " + profile.port()
+                + "\n  management_port: " + profile.healthPort()
+                + "\n  profile_id: \"" + safe(profile.instanceId()) + "\""
+                + "\n  instance_id: \"" + safe(instance.instanceId()) + "\""
+                + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
                 + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: 60\n"
                 + "logging:\n  file: ./runtime.log\n  console: false\n";
         Files.writeString(profile.configFile(), yaml, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
@@ -64,6 +70,32 @@ public final class PairingService {
         String right = readToken(profile.profileDirectory().resolve("pairing.token"));
         return left != null && left.equals(right);
     }
+    public Snapshot snapshot(MinecraftInstance instance, RuntimeProfile profile) throws IOException {
+        Map<Path, byte[]> files = new LinkedHashMap<>();
+        for (Path file : managedFiles(instance, profile)) {
+            files.put(file, Files.exists(file) ? Files.readAllBytes(file) : null);
+        }
+        return new Snapshot(files);
+    }
+    public void restore(Snapshot snapshot) throws IOException {
+        IOException failure = null;
+        for (var entry : snapshot.files().entrySet()) {
+            try { restore(entry.getKey(), entry.getValue()); }
+            catch (IOException error) {
+                if (failure == null) failure = new IOException("Unable to restore pairing transaction");
+                failure.addSuppressed(error);
+            }
+        }
+        if (failure != null) throw failure;
+    }
+    private static java.util.List<Path> managedFiles(MinecraftInstance instance, RuntimeProfile profile) {
+        return java.util.List.of(
+                instance.gameDirectory().resolve(".mccompanion/runtime.token"),
+                instance.configDirectory().resolve("minecraft-ai-companion/runtime.json"),
+                profile.profileDirectory().resolve("pairing.token"),
+                profile.configFile(),
+                profile.profileDirectory().resolve("profile.json"));
+    }
     private static String newToken() { byte[] bytes = new byte[32]; RANDOM.nextBytes(bytes); return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes); }
     private static String readToken(Path file) throws IOException { if (!Files.isRegularFile(file)) return null; String value=Files.readString(file,StandardCharsets.US_ASCII).trim(); return value.isBlank()?null:value; }
     private static void restore(Path file, byte[] value) throws IOException { if(value==null) Files.deleteIfExists(file); else Files.write(file,value); }
@@ -82,5 +114,12 @@ public final class PairingService {
                 acl.setAcl(java.util.List.of(entry));
             }
         } catch (UnsupportedOperationException ignored) { }
+    }
+    public record Snapshot(Map<Path, byte[]> files) {
+        public Snapshot {
+            Map<Path, byte[]> copy = new LinkedHashMap<>();
+            files.forEach((path, bytes) -> copy.put(path, bytes == null ? null : bytes.clone()));
+            files = java.util.Collections.unmodifiableMap(copy);
+        }
     }
 }

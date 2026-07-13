@@ -1,100 +1,74 @@
-# Control Terminal 0.2-alpha 最终验收报告
+# Minecraft AI Companion 0.3.0 验收报告
 
-## 版本
+日期：2026-07-13
 
-- Base commit: `0c53ac1`
-- Terminal: `0.2-alpha`
-- Runtime/Mod: `0.1.0-alpha`
-- OS: Windows 11
-- Date: 2026-07-13
+平台：Windows 11
 
-状态只使用：`IMPLEMENTED`、`AUTOMATED_PASS`、`WINDOWS_LIVE_PASS`、`MANUAL_PENDING`、`BLOCKED_BY_EXTERNAL`、`NOT_IMPLEMENTED`。
+工作分支：`agent/control-terminal-0.2.1-completion`
 
-## 已修复问题
+目标 PR：#2
 
-| ID | Severity | Root cause | Fix | Regression test | Status |
-|---|---|---|---|---|---|
-| P1-01 | P1 | 普通 configure 总是生成 Token | `ensureConfigured` 幂等；rotate 独立、原子、双端一致 | 连续 20 次 hash 不变；rotate 双端一致 | AUTOMATED_PASS |
-| P1-02 | P1 | 所有实例硬编码 8766 | profile.json 持久化 8766–8866 独立端口 | 双 Runtime 8766/8767；停止 A 不影响 B | WINDOWS_LIVE_PASS |
-| P1-03 | P1 | 仅目录启发式判断 gameDir | PCL/HMCL 配置、日志、runningDirectory、显式确认；MEDIUM 阻止安装 | Parser fixture + PCL2 真实实例 | AUTOMATED_PASS |
-| P1-04 | P1 | play 打开启动器后立即退出 | 状态机输出并查询 Runtime SQLite 权威 session，等待真实握手 | Runtime E2E；GUI 客户端待验 | MANUAL_PENDING |
-| P1-05 | P1 | HMCL Hook 命中首项 | 收集全部匹配，必须恰好一个 | 重名双匹配阻止 | AUTOMATED_PASS |
-| P2-01 | P2 | enabled=false 仅记录日志 | 禁用时不调度连接/读取 Token | Fabric Dedicated Server 禁用配置启动 | WINDOWS_LIVE_PASS |
-| P2-02 | P2 | 原 Hook 命令直接 call | 原命令隔离到独立 wrapper，主 wrapper 仅引用文件 | 中文及 `&|<>^()` 回归 | AUTOMATED_PASS |
-| P2-03 | P2 | 返回首个 JAR | 读取 Mod ID/Loader/MC 范围，多个精确候选阻止 | exact/wrong/multiple fixture | AUTOMATED_PASS |
-| P2-04 | P2 | doctor 检查过少 | 补齐 launcher/gameDir/Java/mod/runtime/protocol/hook/crash/disk/manifest/hash | CLI 实测 | AUTOMATED_PASS |
-| P2-05 | P2 | 缺 connect/smoke/provider/attach | 完整注册并实现实际查询/测试/配置逻辑 | CLI help、Runtime E2E | AUTOMATED_PASS |
-| P2-06 | P2 | 支持包脱敏不完整 | 路径、Token、Bearer、query secret、IP、Authorization 脱敏并二次扫描 | PCL2 真实日志支持包 | WINDOWS_LIVE_PASS |
+本报告只记录已经实际执行的检查。实现提交 `a1f3a55` 已通过 PR #2 的 Linux shared checks 与 Windows Chromium/干净发布包远程门禁。
 
-## 根目录启动
+## 产品结果
 
-- `mcac.cmd`、`mcac.ps1`、`启动终端.cmd`：WINDOWS_LIVE_PASS
-- 任意工作目录、参数转发和退出码：AUTOMATED_PASS
-- `stageTerminalAtProjectRoot` 生成忽略的 `mcac-local/`：WINDOWS_LIVE_PASS
+| 项目 | 状态 | 证据 |
+|---|---|---|
+| 默认入口 | LOCAL_PASS | 发布包 `mcac.exe` 无参数启动本地 HTML 终端；CLI 仅由 `mcac-cli.exe` 或显式参数进入 |
+| 本地服务安全 | LOCAL_PASS | 仅监听 `127.0.0.1` 动态端口；随机 Bootstrap/Session/CSRF Token；校验 Host、Origin、Fetch Metadata；拒绝非 Loopback |
+| 单实例复用 | LOCAL_PASS | 第二次启动复用已有后端并打开新的 Bootstrap URL，不重复占用端口 |
+| HTML 功能闭环 | LOCAL_PASS | 扫描、计划、安装、修复、Runtime、连接、Doctor、日志、支持包、回滚、重装、卸载均由 Playwright 在真实浏览器中完成 |
+| 写操作事务 | LOCAL_PASS | 所有 Web 写入口执行“计划 → 确认 → 进度 → 验证”；失败路径调用已有 Service 回滚能力 |
+| 前后端分层 | LOCAL_PASS | React 不读取 SQLite、Token 或 Minecraft 文件；所有状态和写入均经过 Java API/Service |
+| 实时通道 | LOCAL_PASS | 状态、操作和行为事件使用 SSE；Runtime/Minecraft 日志使用独立 SSE 流 |
+| 视觉与响应式 | LOCAL_PASS | 中文桌面控制中心、深浅主题、1366×768 与 3840×2160 检查无横向溢出；后端断开有显式横幅 |
+| 发布包 | LOCAL_PASS | 自带 Java Runtime、Web 产物和 Mod 工件；任意工作目录启动，无需 Node.js、Gradle 或系统 Java |
+| GitHub Actions PR 门禁 | REMOTE_PASS | `PR fast checks` run 29230795783 与 `Windows terminal validation` run 29230795729 均成功 |
+| GitHub Actions 主分支重型回归 | MERGE_GATE_PENDING | `Minecraft heavy validation` 只允许在 `main`、定时或手动运行；合并后自动触发并继续监控 |
 
-## TUI 与 CLI
+## 自动化和真实运行证据
 
-- 无参数中文数字 TUI、取消和统一退出码：AUTOMATED_PASS
-- 规范列出的 launcher/instance/install/runtime/provider/play/attach/connect/test/hook/logs 命令均有实现：IMPLEMENTED
+| 检查 | 结果 |
+|---|---|
+| `gradlew check` | PASS：Java 单元/集成测试、3 个 React 组件测试、秘密扫描、Forbidden API、独立性检查 |
+| `npm run e2e` | PASS：Chromium 完成普通用户管理闭环，不只是检查标题或按钮存在 |
+| `runtimeFabricE2E` | PASS：真实 Fabric GameTest + Runtime WebSocket 握手、注册、Lease、FOLLOW、PAUSE、RESUME、STOP、最终 CANCELLED |
+| `persistenceRestartTest` | PASS：停止/重启后恢复 Companion UUID、身体和物品，无复制 |
+| `runtimeDisabledLaunchTest` | PASS：Runtime 禁用时 Mod 正常加载并保持本地能力 |
+| `runtimeMultiProfileTest` | PASS：8766/8767 两个认证 Runtime 同时健康，停止 A 不影响 B |
+| `gameTest launchTest` | PASS：Fabric、Forge、NeoForge 的 GameTest/专用服务器真实启动回归 |
+| `verify-terminal-package.ps1` | PASS：结构、逐文件 SHA-256、ZIP 内容、CLI 维护入口 |
+| `html-terminal-start-test.ps1` | PASS：从任意工作目录启动真实 `mcac.exe`、动态端口、第二实例复用、认证 API、内嵌 HTML |
+| 入口测试 | PASS：项目根入口、发布包入口、维护 TUI 均从任意工作目录运行 |
+| 手工浏览器 QA | PASS：安装 SHA/回滚点、Runtime 身份、SAFE_IDLE、21 项动态 Doctor（UNKNOWN=0）、日志 SSE、脱敏支持包、回滚/重装/卸载 |
 
-## PCL2 / HMCL
+## 真实启动器只读扫描
 
-- PCL2 2.13.0.1、26.2 Vanilla：WINDOWS_LIVE_PASS（准确发现、BLOCKED、目录无变化）
-- PCL2/HMCL parser、Unicode、多 root、损坏配置、隔离和 Hook：AUTOMATED_PASS
-- HMCL GUI：MANUAL_PENDING
+| 来源 | 结果 |
+|---|---|
+| `F:\wodeshijie\ceshi` | PCL2 正式版 2.13.0.1；Minecraft 26.2 Vanilla；HIGH 置信度；不支持安装且未修改实例 |
+| `F:\wodeshijie\nizhuanweilai` | HMCL 3.10.3；Minecraft 1.20.1 Forge；Java 17；HIGH 置信度；因无 Bridge 显示 `LOCAL_ONLY` |
 
-## Runtime 多实例
+自动化 PCL2 Fabric 1.21.1 夹具覆盖浏览器内的扫描、安装、修复、回滚和卸载；真实 Fabric Mod 与 Runtime 行为由独立 GameTest E2E 覆盖。测试不读取第三方启动器账号，也不会替用户登录个人存档。
 
-- profile identity、稳定端口、稳定 Token、PID/command/port health：AUTOMATED_PASS
-- 两个自包含 Runtime 同时在线，stop A 不影响 B：WINDOWS_LIVE_PASS
+## 发布产物
 
-## 安装/修复/回滚
+- 目录：`build/distributions/mcac-release/`
+- ZIP：`build/distributions/mcac-release.zip`
+- ZIP 大小：76,409,347 字节
+- ZIP SHA-256：`099ebe1a5a96aa30d1a51e786318d5b773014a56ec4cbe86ff021823db490d8a`
+- 发布目录内含逐文件 `SHA256SUMS.txt`
 
-- 精确 Artifact、HIGH confidence、锁、SHA-256、原子替换、备份、rollback、repair、uninstall 管理边界：AUTOMATED_PASS
-- 正式 26.2 实例未产生 `.mccompanion`：WINDOWS_LIVE_PASS
+## 已知限制
 
-## Fabric handshake 与 smoke
+- Forge 1.20.1 与 NeoForge 1.21.1 尚无 Runtime Bridge，只能 `LOCAL_ONLY`，界面不会显示完整连接成功。
+- OpenAI-compatible Provider 的真实付费端点需要用户通过环境变量或 Windows Credential Manager 提供 Key；仓库和普通配置不保存 Key。
+- 第三方启动器账号登录和个人存档进入依赖用户已有会话；自动化不接触账号凭据。
+- Companion 使用安全局部移动、卡住检测和有限重规划，不提供 Baritone 式全局寻路。
 
-- Runtime handshake、注册、lease、follow、pause、resume、stop、safe shutdown：AUTOMATED_PASS
-- GUI 世界中的 `mcac test smoke`：MANUAL_PENDING
+更多说明见 `KNOWN_LIMITATIONS.md`。PR 远程证据：
 
-## Forge/NeoForge LOCAL_ONLY
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29230795783>
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29230795729>
 
-- Dedicated Server launch 与 GameTest：AUTOMATED_PASS
-- 明确 LOCAL_ONLY，不报告 Runtime PASS：IMPLEMENTED
-
-## 原项目回归
-
-- `clean test check`：AUTOMATED_PASS
-- `buildPlatforms`：AUTOMATED_PASS
-- `launchTest` 三 Loader：AUTOMATED_PASS
-- `gameTest` 三 Loader：AUTOMATED_PASS
-- `runtimeFabricE2E`：AUTOMATED_PASS
-- `persistenceRestartTest`：AUTOMATED_PASS
-- Fabric stability：AUTOMATED_PASS
-
-## 安全与支持包
-
-- secret/forbidden API/independence checks：AUTOMATED_PASS
-- PCL2 真实日志生成支持包并通过二次 privacy scanner：WINDOWS_LIVE_PASS
-- 未读取或打包启动器账号文件：IMPLEMENTED
-
-## Windows 干净发布包
-
-- 根目录 `mcac.exe`、内置 Java 21、三 Artifact、legal、README、SHA256SUMS：WINDOWS_LIVE_PASS
-- ZIP 解压根直接含 EXE：WINDOWS_LIVE_PASS
-- 发布包无 Token/DB/log/account：AUTOMATED_PASS
-
-## 手工验收项
-
-- PCL2/HMCL Fabric 1.21.1 登录并进入图形世界：MANUAL_PENDING
-- HMCL GUI Hook 生命周期：MANUAL_PENDING
-- OpenAI-compatible Provider 真实付费端点：MANUAL_PENDING
-
-## 产物
-
-- `build/distributions/mcac-release/`
-- `build/distributions/mcac-release.zip`
-- `build/terminal-test-results/`
-
-具体文件哈希记录在发布包 `SHA256SUMS.txt`。
+合并到 `main` 后必须等待自动触发的 Minecraft 重型回归完成；若失败则继续修复，不把“已合并”等同于“已验收”。

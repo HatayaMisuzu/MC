@@ -1,8 +1,8 @@
-# Known limitations — 0.2-alpha
+# Known limitations — 0.3.0
 
-- PCL2 2.13.0.1 + Minecraft 26.2 Vanilla 已完成真实扫描与无修改阻止验证，但 26.2 不在项目支持矩阵，不能安装 Companion。
-- 当前没有可登录的 PCL2/HMCL Fabric 1.21.1 图形客户端测试副本，因此 GUI 进入世界、`play` 面板和终端交互 smoke 标记为 `MANUAL_PENDING`；Dedicated Server、GameTest 和 Runtime E2E 已自动通过。
-- HMCL 3.10.3 的解析和 Hook 使用脱敏 fixture 自动测试；本轮没有 HMCL EXE 测试副本，因此 HMCL GUI 打开为 `MANUAL_PENDING`。
-- Forge 1.20.1 与 NeoForge 1.21.1 没有 Runtime Bridge，只提供 `LOCAL_ONLY`；不会伪装为 FULL 或握手通过。
-- Provider rules 模式已验证。OpenAI-compatible 网络测试需要用户提供环境变量中的 API Key 和可访问端点，本轮状态为 `MANUAL_PENDING`。
-- `test smoke` 会验证静态状态、Runtime 健康、真实握手和同伴注册；行为命令链由真实 `runtimeFabricE2E` 覆盖。图形客户端中的终端触发仍需人工检查点。
+- Forge 1.20.1 与 NeoForge 1.21.1 当前没有 Runtime Bridge，只提供本地 Companion 能力；HTML 终端始终显示 `LOCAL_ONLY`。
+- 用户提供的 `F:\wodeshijie\ceshi` 当前是 PCL2 的 Vanilla 非支持版本；真实扫描必须阻止安装且不修改实例。
+- 用户提供的 HMCL Forge 1.20.1 实例可扫描，但因上述 Bridge 限制只能进入 `LOCAL_ONLY`。
+- 自动化使用 PCL2/HMCL 文件夹夹具覆盖浏览器完整管理流程，并使用 Dedicated Server/GameTest 覆盖真实 Mod 加载、握手与行为；登录第三方启动器账号并进入个人存档仍取决于用户已有的启动器会话，测试不会读取或保存账号凭据。
+- OpenAI-compatible Provider 的真实付费端点需要用户自行提供环境变量或 Windows Credential Manager 中的 Key；测试不会包含真实密钥或产生外部费用。
+- Companion 移动采用安全的局部移动、卡住检测和有限重规划，不等同于 Baritone 的全局寻路。

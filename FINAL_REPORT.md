@@ -4,11 +4,11 @@
 
 平台：Windows 11
 
-工作分支：`agent/control-terminal-0.2.1-completion`
+工作分支：`main`
 
-目标 PR：#2
+目标 PR：#2（已合并）
 
-本报告只记录已经实际执行的检查。实现提交 `a1f3a55` 已通过 PR #2 的 Linux shared checks 与 Windows Chromium/干净发布包远程门禁。
+本报告只记录已经实际执行的检查。最终实现提交 `244712e` 已通过 `main` 的共享检查、Windows Chromium/干净发布包门禁与 Minecraft 重型回归。
 
 ## 产品结果
 
@@ -23,8 +23,8 @@
 | 实时通道 | LOCAL_PASS | 状态、操作和行为事件使用 SSE；Runtime/Minecraft 日志使用独立 SSE 流 |
 | 视觉与响应式 | LOCAL_PASS | 中文桌面控制中心、深浅主题、1366×768 与 3840×2160 检查无横向溢出；后端断开有显式横幅 |
 | 发布包 | LOCAL_PASS | 自带 Java Runtime、Web 产物和 Mod 工件；任意工作目录启动，无需 Node.js、Gradle 或系统 Java |
-| GitHub Actions PR 门禁 | REMOTE_PASS | `PR fast checks` run 29230795783 与 `Windows terminal validation` run 29230795729 均成功 |
-| GitHub Actions 主分支重型回归 | MERGE_GATE_PENDING | `Minecraft heavy validation` 只允许在 `main`、定时或手动运行；合并后自动触发并继续监控 |
+| GitHub Actions 快速与 Windows 门禁 | REMOTE_PASS | `PR fast checks` run 29237032481 与 `Windows terminal validation` run 29237032616 均成功 |
+| GitHub Actions 主分支重型回归 | REMOTE_PASS | `Minecraft heavy validation` run 29237032639 成功；三 Loader、Runtime/Fabric、持久化与多 Profile 均通过 |
 
 ## 自动化和真实运行证据
 
@@ -55,8 +55,8 @@
 
 - 目录：`build/distributions/mcac-release/`
 - ZIP：`build/distributions/mcac-release.zip`
-- ZIP 大小：76,409,347 字节
-- ZIP SHA-256：`099ebe1a5a96aa30d1a51e786318d5b773014a56ec4cbe86ff021823db490d8a`
+- ZIP 大小：76,409,899 字节
+- ZIP SHA-256：`c3fce5a346d8c9e6ffa25f906705a30410135cd51710498303047f7673f51091`
 - 发布目录内含逐文件 `SHA256SUMS.txt`
 
 ## 已知限制
@@ -66,9 +66,10 @@
 - 第三方启动器账号登录和个人存档进入依赖用户已有会话；自动化不接触账号凭据。
 - Companion 使用安全局部移动、卡住检测和有限重规划，不提供 Baritone 式全局寻路。
 
-更多说明见 `KNOWN_LIMITATIONS.md`。PR 远程证据：
+更多说明见 `KNOWN_LIMITATIONS.md`。最终 `main` 远程证据：
 
-- <https://github.com/HatayaMisuzu/MC/actions/runs/29230795783>
-- <https://github.com/HatayaMisuzu/MC/actions/runs/29230795729>
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29237032481>
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29237032616>
+- <https://github.com/HatayaMisuzu/MC/actions/runs/29237032639>
 
-合并到 `main` 后必须等待自动触发的 Minecraft 重型回归完成；若失败则继续修复，不把“已合并”等同于“已验收”。
+PR #2 已合并到 `main`；最终实现提交的三组 GitHub Actions 均成功，工作区发布包已按同一源码重建并重新校验。

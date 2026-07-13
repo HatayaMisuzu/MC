@@ -264,6 +264,10 @@ public final class TaskRepository {
         }
     }
 
+    public List<TaskEvent> events(String taskId) throws SQLException {
+        return events.list(taskId);
+    }
+
     public List<TaskRecord> unfinished() throws SQLException {
         List<TaskRecord> tasks = new ArrayList<>();
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""

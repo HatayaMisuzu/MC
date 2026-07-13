@@ -499,9 +499,23 @@ public final class CommandService implements SessionRegistry.Listener {
         return prefix + '-' + UUID.randomUUID();
     }
 
-    private static CommandReply dispatched(TaskRecord task, long epoch, String message) {
+    public Optional<TaskRecord> task(String taskId) throws SQLException {
+        return tasks.get(taskId);
+    }
+
+    public List<com.mccompanion.runtime.task.TaskEvent> taskEvents(String taskId) throws SQLException {
+        return tasks.events(taskId);
+    }
+
+    public Optional<ControlLease> leaseFor(String companionId) {
+        return leases.processLease(companionId);
+    }
+
+    private CommandReply dispatched(TaskRecord task, long epoch, String message) {
+        ObjectNode data = Json.object().put("behaviorId", task.behaviorId());
+        leases.processLease(task.companionId()).ifPresent(lease -> data.put("leaseId", lease.token()));
         return new CommandReply(true, "COMMAND_DISPATCHED", message, task.taskId(), task.state().name(),
-                task.revision(), epoch, Json.object().put("behaviorId", task.behaviorId()));
+                task.revision(), epoch, data);
     }
 
     private record LeaseUse(ControlLease lease, boolean newlyAcquired) { }

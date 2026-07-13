@@ -25,6 +25,15 @@ final class HookService {
         ensureLauncherStopped(launcher);
         Path state = controlHome.resolve("hooks").resolve(instance.instanceId());
         Files.createDirectories(state);
+        Path metadata = state.resolve("state.json");
+        if (Files.isRegularFile(metadata)) {
+            JsonNode current = JSON.readTree(metadata.toFile());
+            Path target = Path.of(current.path("target").asText()).toAbsolutePath().normalize();
+            if (Files.isRegularFile(target) && sha256(target).equals(current.path("modifiedSha256").asText())) {
+                return;
+            }
+            throw new IOException("Managed hook state exists but launcher configuration changed; remove or repair it first");
+        }
         Path wrapper = state.resolve(launcher.type() == LauncherType.PCL2 ? "pcl-prelaunch.cmd" : "hmcl-prelaunch.cmd");
         if (launcher.type() == LauncherType.PCL2) installPcl(instance, launcher, mcac, state, wrapper);
         else if (launcher.type() == LauncherType.HMCL) installHmcl(instance, launcher, mcac, state, wrapper);
@@ -44,6 +53,7 @@ final class HookService {
         Files.copy(backup, target, StandardCopyOption.REPLACE_EXISTING);
         Files.deleteIfExists(state.resolve("pcl-prelaunch.cmd"));
         Files.deleteIfExists(state.resolve("hmcl-prelaunch.cmd"));
+        Files.deleteIfExists(state.resolve("mcac-hook.cmd"));
         Files.deleteIfExists(metadata);
     }
 
@@ -57,7 +67,7 @@ final class HookService {
         List<String> lines = Files.isRegularFile(target) ? Files.readAllLines(target, StandardCharsets.UTF_8) : new ArrayList<>();
         String existing = value(lines, "VersionAdvanceRun");
         writeWrapper(wrapper, existing, mcac, launcher.executable().getParent(), instance.instanceId());
-        replace(lines, "VersionAdvanceRun", wrapper.toString());
+        replace(lines, "VersionAdvanceRun", "\"" + wrapper.toAbsolutePath().normalize() + "\"");
         replace(lines, "VersionAdvanceRunWait", "False");
         backupAndWrite(target, String.join("\r\n", lines) + "\r\n", state, LauncherType.PCL2);
     }
@@ -101,16 +111,26 @@ final class HookService {
         JSON.writerWithDefaultPrettyPrinter().writeValue(state.resolve("state.json").toFile(), metadata);
     }
     private static void writeWrapper(Path wrapper, String existing, Path mcac, Path launcherRoot, String instanceId) throws IOException {
-        StringBuilder text = new StringBuilder("@echo off\r\nsetlocal\r\n");
+        StringBuilder text = new StringBuilder("@echo off\r\nchcp 65001 >nul 2>nul\r\nsetlocal\r\n");
         if (existing != null && !existing.isBlank()) {
             Path userHook=wrapper.resolveSibling("user-existing-hook.cmd");
-            Files.writeString(userHook,"@echo off\r\n"+existing+"\r\nexit /b 0\r\n",StandardCharsets.UTF_8);
-            text.append("call \"").append(userHook.toAbsolutePath().normalize()).append("\" 2>nul\r\n");
+            Files.writeString(userHook,"@echo off\r\nchcp 65001 >nul 2>nul\r\n"+existing+"\r\nexit /b 0\r\n",StandardCharsets.UTF_8);
+            text.append("call \"").append(escapeBatchPath(userHook)).append("\" 2>nul\r\n");
         }
-        text.append("start \"\" /b \"").append(mcac.toAbsolutePath().normalize()).append("\" --root \"")
-                .append(launcherRoot.toAbsolutePath().normalize()).append("\" runtime start \"")
-                .append(instanceId.replace("\"", "")).append("\" 2>nul\r\nexit /b 0\r\n");
+        Path executable = mcac.toAbsolutePath().normalize();
+        Path helper = wrapper.resolveSibling("mcac-hook.cmd");
+        String helperText = "@echo off\r\nchcp 65001 >nul 2>nul\r\ncall \"" + escapeBatchPath(executable)
+                + "\" --root \"" + escapeBatchPath(launcherRoot)
+                + "\" runtime start \""
+                + instanceId.replace("\"", "") + "\" 2>nul\r\nexit /b 0\r\n";
+        Files.writeString(helper, helperText, StandardCharsets.UTF_8);
+        text.append("start \"\" /b cmd.exe /d /c call \"").append(escapeBatchPath(helper))
+                .append("\" 2>nul\r\n");
+        text.append("exit /b 0\r\n");
         Files.writeString(wrapper, text, StandardCharsets.UTF_8);
+    }
+    private static String escapeBatchPath(Path path) {
+        return path.toAbsolutePath().normalize().toString().replace("%", "%%%%").replace("^", "^^^^");
     }
     private static String value(List<String> lines, String key) { for(String line:lines)if(line.startsWith(key+":"))return line.substring(key.length()+1);return ""; }
     private static void replace(List<String> lines,String key,String value){for(int i=0;i<lines.size();i++)if(lines.get(i).startsWith(key+":")){lines.set(i,key+":"+value);return;}lines.add(key+":"+value);}

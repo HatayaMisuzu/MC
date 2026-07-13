@@ -3,9 +3,6 @@ package com.mccompanion.terminal.runtime;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.mccompanion.terminal.launcher.*;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.ServerSocket;
 import java.nio.file.*;
 import java.util.Optional;
 import java.util.concurrent.*;
@@ -52,7 +49,8 @@ class PairingAndProfileServiceTest {
 
   @Test
   void profilesGetStableDistinctPorts() throws Exception {
-    var service = new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe"));
+    var service =
+        new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe"), port -> true);
     var a = service.ensure("a");
     var b = service.ensure("b");
     assertEquals(8766, a.port());
@@ -75,12 +73,13 @@ class PairingAndProfileServiceTest {
 
   @Test
   void occupiedPortIsSkippedForNewProfile() throws Exception {
-    try (ServerSocket occupied = new ServerSocket()) {
-      occupied.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 8766));
-      var profile =
-          new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe")).ensure("a");
-      assertEquals(8767, profile.port());
-    }
+    var profile =
+        new RuntimeProfileService(
+                temp.resolve("home"),
+                temp.resolve("runtime.exe"),
+                port -> port != 8766 && port != 18_766)
+            .ensure("a");
+    assertEquals(8767, profile.port());
   }
 
   @Test
@@ -93,13 +92,15 @@ class PairingAndProfileServiceTest {
           () -> {
             ready.countDown();
             go.await();
-            return new RuntimeProfileService(home, temp.resolve("runtime.exe")).ensure("a");
+            return new RuntimeProfileService(home, temp.resolve("runtime.exe"), port -> true)
+                .ensure("a");
           };
       Callable<RuntimeProfile> second =
           () -> {
             ready.countDown();
             go.await();
-            return new RuntimeProfileService(home, temp.resolve("runtime.exe")).ensure("b");
+            return new RuntimeProfileService(home, temp.resolve("runtime.exe"), port -> true)
+                .ensure("b");
           };
       Future<RuntimeProfile> a = pool.submit(first), b = pool.submit(second);
       assertTrue(ready.await(5, TimeUnit.SECONDS));

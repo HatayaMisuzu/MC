@@ -14,6 +14,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.IntPredicate;
 import java.util.regex.Pattern;
 
 /** Allocates and persists one stable profile/port per instance. */
@@ -24,7 +25,15 @@ public final class RuntimeProfileService {
     public static final int FIRST_PORT=8766, LAST_PORT=8866;
     private final Path profilesHome;
     private final Path launcher;
-    public RuntimeProfileService(Path controlHome, Path launcher){this.profilesHome=controlHome.resolve("profiles");this.launcher=launcher;}
+    private final IntPredicate availability;
+    public RuntimeProfileService(Path controlHome, Path launcher){
+        this(controlHome, launcher, RuntimeProfileService::available);
+    }
+    RuntimeProfileService(Path controlHome, Path launcher, IntPredicate availability){
+        this.profilesHome=controlHome.resolve("profiles");
+        this.launcher=launcher;
+        this.availability=java.util.Objects.requireNonNull(availability, "availability");
+    }
     public RuntimeProfile ensure(String instanceId) throws IOException {
         if (instanceId == null || !SAFE_ID.matcher(instanceId).matches()) {
             throw new IOException("Unsafe instance id");
@@ -54,7 +63,7 @@ public final class RuntimeProfileService {
         Set<Integer> used=new HashSet<>();
         if(Files.isDirectory(profilesHome))try(var dirs=Files.newDirectoryStream(profilesHome,Files::isDirectory)){for(Path dir:dirs){Path file=dir.resolve("profile.json");if(Files.isRegularFile(file))try{used.add(JSON.readTree(file.toFile()).path("port").asInt());}catch(IOException ignored){}}}
         int port=java.util.stream.IntStream.rangeClosed(FIRST_PORT,LAST_PORT)
-                .filter(p->!used.contains(p) && available(p) && available(p + 10_000))
+                .filter(p->!used.contains(p) && availability.test(p) && availability.test(p + 10_000))
                 .findFirst().orElseThrow(()->new IOException("No free Runtime profile port"));
         RuntimeProfile profile=new RuntimeProfile(instanceId,directory,launcher,port,port + 10_000);
         writeIdentity(profile);

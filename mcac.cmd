@@ -1,5 +1,6 @@
 @echo off
 setlocal
+chcp 65001 >nul 2>nul
 set "ROOT=%~dp0"
 if exist "%ROOT%mcac.exe" set "MCAC=%ROOT%mcac.exe"& goto run
 if exist "%ROOT%build\distributions\mcac-release\mcac.exe" set "MCAC=%ROOT%build\distributions\mcac-release\mcac.exe"& goto run

@@ -1,10 +1,8 @@
-# Alpha 0.1 已知限制
+# Known limitations
 
-- Travel 首版只承诺同维度地面行走、一格台阶、普通跳跃、开放地形和简单绕障。
-- 搭桥、挖隧道、复杂游泳、跨维度门户路线和通用机器自动化不在冻结验收范围。
-- Alpha 0.1 没有发布 Create、AE2、Mekanism adapter；这些 Mod 缺失时主 Mod 不受影响，也不宣称深度生产线支持。
-- 外部 Runtime WebSocket 控制只在 Fabric 1.21.1 主目标启用；NeoForge 1.21.1 与 Forge 1.20.1 提供完整离线身体、本地命令与持久化，但 `/companion runtime` 会报告离线。
-- Travel 使用有上限的局部避障与 stuck 失败，不是全局最优路径规划器；复杂迷宫可能安全暂停并返回 `STUCK`。
-- LLM 只输出高层 Intent/Behavior，不能逐 Tick 控制，也不能绕过 verifier。
-- 本 Alpha 没有视觉模型、完整人格、多同伴社会或通用长时自主任务。
-- 未在兼容报告中列为已启动验证的整合包组合均视为未验证。
+- 安装目标严格限定为 Fabric 1.21.1、NeoForge 1.21.1 和 Forge 1.20.1。其他 Minecraft/Loader 组合可以扫描，但会被诊断和安装器阻止。
+- Forge 1.20.1 与 NeoForge 1.21.1 当前提供本地同伴身体和本地命令，尚未实现 Runtime WebSocket Bridge，终端会显示 `LOCAL_ONLY`。
+- Fabric 自动依赖下载默认关闭。缺少 Fabric API 时只给出警告，终端不会从未知来源静默下载。
+- `play` 只打开目标启动器并等待用户正常登录/点击启动；不会自动操作 PCL2/HMCL UI。
+- HMCL Hook 仅在 `selectedMinecraftVersion` 可唯一匹配时写入；证据不足会退回 Guided 模式。
+- 本次提供的真实测试实例是 PCL2 2.13.0.1 + Minecraft 26.2 Vanilla，不属于项目支持矩阵，因此只执行了只读发现、诊断和错误安装保护测试，没有向该实例安装 Mod 或启动游戏。

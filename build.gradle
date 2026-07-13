@@ -153,3 +153,58 @@ tasks.register('secretCheck') {
 tasks.named('check') {
     dependsOn 'test', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck'
 }
+
+def terminalImage = layout.buildDirectory.dir('distributions/mcac-windows-x64')
+def terminalInput = layout.buildDirectory.dir('tmp/jpackage-terminal-input')
+
+tasks.register('cleanTerminalPackage', Delete) {
+    delete terminalImage, terminalInput
+}
+
+tasks.register('prepareTerminalPackageInput', Copy) {
+    dependsOn 'cleanTerminalPackage', ':terminal:terminal-app:installDist', ':runtime:runtime-app:installDist'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from('terminal/terminal-app/build/install/mcac/lib')
+    from('runtime/runtime-app/build/install/runtime-app/lib')
+    into terminalInput
+}
+
+tasks.register('jpackageTerminal', Exec) {
+    group = 'distribution'
+    dependsOn 'prepareTerminalPackageInput'
+    doFirst {
+        def toolchains = project(':terminal:terminal-app').extensions.getByType(org.gradle.jvm.toolchain.JavaToolchainService)
+        def java21 = toolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+        def jpackage = java21.get().metadata.installationPath.file('bin/jpackage.exe').asFile
+        commandLine jpackage, '--type', 'app-image', '--name', 'mcac-windows-x64',
+                '--input', terminalInput.get().asFile,
+                '--main-jar', "terminal-app-${project.version}.jar",
+                '--main-class', 'com.mccompanion.terminal.ControlTerminalMain',
+                '--dest', layout.buildDirectory.dir('distributions').get().asFile,
+                '--add-launcher', "runtime-app=${file('tools/runtime-launcher.properties').absolutePath}",
+                '--win-console', '--java-options', '-Dfile.encoding=UTF-8'
+    }
+}
+
+tasks.register('packageTerminal') {
+    group = 'distribution'
+    dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms'
+    doLast {
+        copy {
+            into terminalImage
+            from('tools/runtime-app-bundled.cmd')
+            from('minecraft/fabric-1.21.1/build/libs') { into 'artifacts/fabric-1.21.1'; include '*.jar'; exclude '*sources*', '*gametest*' }
+            from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
+            from('minecraft/forge-1.20.1/build/libs') { into 'artifacts/forge-1.20.1'; include '*.jar'; exclude '*sources*' }
+            from('README.md', 'LICENSE')
+        }
+    }
+}
+
+tasks.register('packageTerminalZip', Zip) {
+    group = 'distribution'
+    dependsOn 'packageTerminal'
+    archiveFileName = 'mcac-windows-x64.zip'
+    destinationDirectory = layout.buildDirectory.dir('distributions')
+    from(terminalImage) { into 'mcac-windows-x64' }
+}

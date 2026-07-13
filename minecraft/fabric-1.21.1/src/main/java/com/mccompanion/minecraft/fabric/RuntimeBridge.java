@@ -35,6 +35,9 @@ final class RuntimeBridge implements AutoCloseable {
     private final Logger logger;
     private final URI uri;
     private final Path tokenFile;
+    private final String installationId;
+    private final String instanceId;
+    private final String launcherType;
     private final ScheduledExecutorService executor;
     private final HttpClient client;
     private final AtomicLong outgoingSequence = new AtomicLong();
@@ -48,10 +51,12 @@ final class RuntimeBridge implements AutoCloseable {
         this.server = server;
         this.registry = registry;
         this.logger = logger;
-        this.uri = URI.create(System.getProperty("mccompanion.runtime.url", "ws://127.0.0.1:8766"));
-        this.tokenFile = Path.of(System.getProperty(
-                "mccompanion.runtime.tokenFile",
-                "config/minecraft-ai-companion/runtime.token")).toAbsolutePath().normalize();
+        BridgeSettings settings = BridgeSettings.load(logger);
+        this.uri = settings.uri();
+        this.tokenFile = settings.tokenFile();
+        this.installationId = settings.installationId();
+        this.instanceId = settings.instanceId();
+        this.launcherType = settings.launcherType();
         this.executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-bridge");
             thread.setDaemon(true);
@@ -110,6 +115,9 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("minecraftVersion", "1.21.1")
                 .put("loader", "fabric")
                 .put("worldId", worldId());
+        if (installationId != null) payload.put("installationId", installationId);
+        if (instanceId != null) payload.put("instanceId", instanceId);
+        if (launcherType != null) payload.put("launcherType", launcherType);
         payload.putObject("capabilities")
                 .put("server_player_body", true)
                 .put("follow", true)
@@ -327,6 +335,47 @@ final class RuntimeBridge implements AutoCloseable {
             return JSON.writeValueAsString(value);
         } catch (IOException impossible) {
             throw new IllegalStateException("Unable to encode Runtime bridge JSON", impossible);
+        }
+    }
+
+    /** Instance JSON is optional; JVM properties remain the highest-priority test/advanced override. */
+    private record BridgeSettings(URI uri, Path tokenFile, String installationId, String instanceId,
+                                  String launcherType) {
+        private static BridgeSettings load(Logger logger) {
+            Path config = Path.of("config", "minecraft-ai-companion", "runtime.json").toAbsolutePath().normalize();
+            String url = "ws://127.0.0.1:8766";
+            String token = "runtime.token";
+            String installation = null;
+            String instance = null;
+            String launcher = null;
+            if (Files.isRegularFile(config)) {
+                try {
+                    JsonNode root = JSON.readTree(Files.readString(config, StandardCharsets.UTF_8));
+                    if (root.path("schemaVersion").asInt(0) != 1) throw new IOException("unsupported schemaVersion");
+                    if (!root.path("enabled").asBoolean(true)) logger.info("Runtime bridge is disabled by instance config");
+                    url = root.path("runtimeUrl").asText(url);
+                    token = root.path("tokenFile").asText(token);
+                    installation = textOrNull(root, "installationId");
+                    instance = textOrNull(root, "instanceId");
+                    launcher = textOrNull(root, "launcherType");
+                } catch (IOException | RuntimeException failure) {
+                    logger.warn("Runtime bridge ignored invalid instance runtime.json ({})", failure.getClass().getSimpleName());
+                }
+            }
+            String propertyUrl = System.getProperty("mccompanion.runtime.url");
+            if (propertyUrl != null && !propertyUrl.isBlank()) url = propertyUrl;
+            String propertyToken = System.getProperty("mccompanion.runtime.tokenFile");
+            Path tokenPath;
+            if (propertyToken != null && !propertyToken.isBlank()) tokenPath = Path.of(propertyToken);
+            else {
+                Path parsed = Path.of(token);
+                tokenPath = parsed.isAbsolute() ? parsed : config.getParent().resolve(parsed);
+            }
+            return new BridgeSettings(URI.create(url), tokenPath.toAbsolutePath().normalize(), installation, instance, launcher);
+        }
+        private static String textOrNull(JsonNode root, String field) {
+            String value = root.path(field).asText(null);
+            return value == null || value.isBlank() ? null : value;
         }
     }
 

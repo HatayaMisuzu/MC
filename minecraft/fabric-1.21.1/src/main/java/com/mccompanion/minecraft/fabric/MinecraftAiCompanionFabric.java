@@ -13,7 +13,7 @@ import org.slf4j.LoggerFactory;
 
 public final class MinecraftAiCompanionFabric implements ModInitializer {
     public static final String MOD_ID = "minecraft_ai_companion";
-    public static final String MOD_VERSION = "0.1.0-alpha";
+    public static final String MOD_VERSION = "0.2.1-rc.1";
     private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     private static final BootstrapCapabilityReport CAPABILITIES = new BootstrapCapabilityReport(
             MOD_VERSION,

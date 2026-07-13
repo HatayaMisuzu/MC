@@ -32,11 +32,15 @@ jobs:
       - name: Run all Loader GameTests
         shell: pwsh
         run: ./gradlew.bat gameTest --stacktrace
-      - name: Run Runtime and persistence end-to-end tests
+      - name: Run Runtime/Fabric end-to-end test
         shell: pwsh
-        run: >-
-          ./gradlew.bat runtimeFabricE2E persistenceRestartTest
-          runtimeMultiProfileTest --stacktrace
+        run: ./gradlew.bat runtimeFabricE2E --stacktrace
+      - name: Run persistence restart test
+        shell: pwsh
+        run: ./gradlew.bat persistenceRestartTest --stacktrace
+      - name: Run Runtime multi-profile test
+        shell: pwsh
+        run: ./gradlew.bat runtimeMultiProfileTest --stacktrace
       - name: Upload safe test reports and logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

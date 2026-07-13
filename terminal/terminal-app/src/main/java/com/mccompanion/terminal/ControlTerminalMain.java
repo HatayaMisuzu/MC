@@ -1,77 +1,989 @@
 package com.mccompanion.terminal;
 
-import com.mccompanion.terminal.diagnostics.*;import com.mccompanion.terminal.install.*;import com.mccompanion.terminal.launcher.*;import com.mccompanion.terminal.runtime.*;import picocli.CommandLine;import picocli.CommandLine.*;
-import java.awt.Desktop;import java.io.*;import java.nio.charset.StandardCharsets;import java.nio.file.*;import java.time.Duration;import java.util.*;import java.util.concurrent.Callable;
+import com.mccompanion.terminal.diagnostics.*;
+import com.mccompanion.terminal.install.*;
+import com.mccompanion.terminal.launcher.*;
+import com.mccompanion.terminal.runtime.*;
+import java.awt.Desktop;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.time.Duration;
+import java.util.*;
+import java.util.concurrent.Callable;
+import picocli.CommandLine;
+import picocli.CommandLine.*;
 
-@Command(name="mcac",mixinStandardHelpOptions=true,version="mcac 0.2-alpha",description="Minecraft AI Companion Control Terminal",subcommands={ControlTerminalMain.LauncherCmd.class,ControlTerminalMain.InstanceCmd.class,ControlTerminalMain.Doctor.class,ControlTerminalMain.PlanCmd.class,ControlTerminalMain.Install.class,ControlTerminalMain.Update.class,ControlTerminalMain.Repair.class,ControlTerminalMain.Rollback.class,ControlTerminalMain.Uninstall.class,ControlTerminalMain.RuntimeCmd.class,ControlTerminalMain.ProviderCmd.class,ControlTerminalMain.Play.class,ControlTerminalMain.Attach.class,ControlTerminalMain.ConnectCmd.class,ControlTerminalMain.TestCmd.class,ControlTerminalMain.HookCmd.class,ControlTerminalMain.LogsCmd.class})
-public final class ControlTerminalMain implements Runnable{
- static final int PASS=0,INTERNAL=1,BLOCKED=2,WARNING=3,TIMEOUT=4,CONNECTION_FAILED=5,TEST_FAILED=6,CANCELLED=7;
- @Option(names="--root",description="PCL2/HMCL root or executable (repeatable)")List<Path> suppliedRoots=new ArrayList<>();@Option(names="--verbose-paths")boolean verbosePaths;final TerminalContext context=new TerminalContext();
- public static void main(String[] args){CommandLine c=new CommandLine(new ControlTerminalMain());c.setExecutionExceptionHandler((e,l,p)->{l.getErr().println((e instanceof IOException||e instanceof IllegalArgumentException?"BLOCKED: ":"ERROR: ")+(e.getMessage()==null?e.getClass().getSimpleName():e.getMessage()));return e instanceof IOException||e instanceof IllegalArgumentException?BLOCKED:INTERNAL;});System.exit(c.execute(args));}
- public void run(){try{new InteractiveTerminal(this,System.in,System.out).run();}catch(IOException e){throw new UncheckedIOException(e);}}
- List<Path> roots(){List<Path> v=new ArrayList<>(suppliedRoots);String env=System.getenv("MCAC_SCAN_ROOTS");if(env!=null)for(String s:env.split(File.pathSeparator))if(!s.isBlank())v.add(Path.of(s));Path manual=controlHome().resolve("manual-roots.txt");if(Files.isRegularFile(manual))try{for(String s:Files.readAllLines(manual))if(!s.isBlank())v.add(Path.of(s));}catch(IOException ignored){}if(v.isEmpty())v.add(Path.of("."));return v.stream().map(p->p.toAbsolutePath().normalize()).distinct().toList();}
- MinecraftInstance instance(String id){MinecraftInstance i=context.requireInstance(roots(),id);Path confirmed=controlHome().resolve("profiles").resolve(i.instanceId()).resolve("confirmed-game-dir.txt");if(Files.isRegularFile(confirmed))try{return withGameDir(i,Path.of(Files.readString(confirmed).strip()));}catch(IOException ignored){}return i;}
- MinecraftInstance confirm(MinecraftInstance i,Path path)throws IOException{if(!path.isAbsolute()||!Files.isDirectory(path))throw new IOException("--confirm-game-dir must be an existing absolute directory");Path file=controlHome().resolve("profiles").resolve(i.instanceId()).resolve("confirmed-game-dir.txt");Files.createDirectories(file.getParent());Files.writeString(file,path.toRealPath().toString(),StandardCharsets.UTF_8);return withGameDir(i,path.toRealPath());}
- static MinecraftInstance withGameDir(MinecraftInstance i,Path g){return new MinecraftInstance(i.instanceId(),i.launcherId(),i.displayName(),i.minecraftRoot(),i.versionDirectory(),g,g.resolve("mods"),g.resolve("config"),g.resolve("logs"),i.minecraftVersion(),i.loader(),i.loaderVersion(),i.requiredJavaMajor(),i.configuredJava(),InstanceIsolation.EXPLICIT,DetectionConfidence.HIGH);}
- RuntimeProfile profile(MinecraftInstance i)throws IOException{return new RuntimeProfileService(controlHome(),locateRuntime()).ensure(i.instanceId());}
- LauncherInstallation launcher(MinecraftInstance i){return context.launchers(roots()).stream().filter(l->l.launcherId().equals(i.launcherId())).findFirst().orElseThrow(()->new IllegalArgumentException("Owning launcher not found"));}
- String display(Path p){if(verbosePaths)return p.toString();return p.getFileName()==null?"<local>":"...\\"+p.getFileName();}
- int printDoctor(MinecraftInstance i)throws IOException{int exit=PASS;for(var r:new TerminalDiagnosticService().run(i,profile(i),launcher(i),controlHome())){System.out.printf("%-18s %-28s %s%n",r.severity(),r.code(),r.summary());if(!r.evidence().isEmpty())System.out.println("  evidence: "+r.evidence());if(r.severity()!=DiagnosticResult.Severity.PASS&&!r.repairs().isEmpty())System.out.println("  repair: "+String.join("; ",r.repairs()));if(r.severity()==DiagnosticResult.Severity.BLOCKED)exit=BLOCKED;else if(exit==PASS&&(r.severity()==DiagnosticResult.Severity.WARNING||r.severity()==DiagnosticResult.Severity.UNKNOWN))exit=WARNING;}return exit;}
- static Path controlHome(){String local=System.getenv("LOCALAPPDATA");return Path.of(local==null?System.getProperty("user.home"):local,"MinecraftAICompanion");}
- static Path locateRuntime(){Path cwd=Path.of("").toAbsolutePath();Path dev=cwd.resolve("runtime/runtime-app/build/install/runtime-app/bin/runtime-app.bat");if(Files.isRegularFile(dev))return dev;try{Path jar=Path.of(ControlTerminalMain.class.getProtectionDomain().getCodeSource().getLocation().toURI());Path image=(Files.isDirectory(jar)?jar:jar.getParent()).getParent();for(String n:List.of("runtime-app.exe","runtime-app-bundled.cmd")){Path p=image.resolve(n);if(Files.isRegularFile(p))return p;}}catch(Exception ignored){}return dev;}
- static Path artifacts(){Path cwd=Path.of("").toAbsolutePath();if(Files.isDirectory(cwd.resolve("minecraft")))return cwd;try{Path jar=Path.of(ControlTerminalMain.class.getProtectionDomain().getCodeSource().getLocation().toURI());Path image=(Files.isDirectory(jar)?jar:jar.getParent()).getParent();if(Files.isDirectory(image.resolve("artifacts")))return image.resolve("artifacts");}catch(Exception ignored){}return cwd.resolve("artifacts");}
- static Path currentMcac(){try{Path jar=Path.of(ControlTerminalMain.class.getProtectionDomain().getCodeSource().getLocation().toURI());Path image=(Files.isDirectory(jar)?jar:jar.getParent()).getParent();Path exe=image.resolve("mcac.exe");if(Files.isRegularFile(exe))return exe;}catch(Exception ignored){}return Path.of("mcac.cmd").toAbsolutePath();}
+@Command(
+    name = "mcac",
+    mixinStandardHelpOptions = true,
+    version = "mcac 0.2.1-rc.1",
+    description = "Minecraft AI Companion Control Terminal",
+    subcommands = {
+      ControlTerminalMain.LauncherCmd.class,
+      ControlTerminalMain.InstanceCmd.class,
+      ControlTerminalMain.Doctor.class,
+      ControlTerminalMain.PlanCmd.class,
+      ControlTerminalMain.Install.class,
+      ControlTerminalMain.Update.class,
+      ControlTerminalMain.Repair.class,
+      ControlTerminalMain.Rollback.class,
+      ControlTerminalMain.Uninstall.class,
+      ControlTerminalMain.RuntimeCmd.class,
+      ControlTerminalMain.ProviderCmd.class,
+      ControlTerminalMain.Play.class,
+      ControlTerminalMain.Attach.class,
+      ControlTerminalMain.ConnectCmd.class,
+      ControlTerminalMain.TestCmd.class,
+      ControlTerminalMain.HookCmd.class,
+      ControlTerminalMain.LogsCmd.class
+    })
+public final class ControlTerminalMain implements Runnable {
+  static final int PASS = 0,
+      INTERNAL = 1,
+      BLOCKED = 2,
+      WARNING = 3,
+      TIMEOUT = 4,
+      CONNECTION_FAILED = 5,
+      TEST_FAILED = 6,
+      CANCELLED = 7;
 
- @Command(name="launcher",subcommands={LauncherScan.class,LauncherList.class,LauncherInspect.class})static class LauncherCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- @Command(name="scan")static class LauncherScan implements Callable<Integer>{@ParentCommand LauncherCmd p;public Integer call(){return print(p.root);}static int print(ControlTerminalMain r){var values=r.context.launchers(r.roots());values.forEach(v->System.out.printf("%s %s %s %s%n",v.launcherId(),v.type(),v.detectedVersion(),r.display(v.executable())));return values.isEmpty()?WARNING:PASS;}}
- @Command(name="list")static class LauncherList extends LauncherScan{}
- @Command(name="inspect")static class LauncherInspect implements Callable<Integer>{@ParentCommand LauncherCmd p;@Parameters(index="0")String id;public Integer call(){var v=p.root.context.launchers(p.root.roots()).stream().filter(x->x.launcherId().equalsIgnoreCase(id)).findFirst().orElseThrow();System.out.println(v);return PASS;}}
- @Command(name="instance",subcommands={InstanceScan.class,InstanceList.class,InstanceInspect.class,InstanceAdd.class})static class InstanceCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- @Command(name="scan")static class InstanceScan implements Callable<Integer>{@ParentCommand InstanceCmd p;public Integer call(){return print(p.root);}static int print(ControlTerminalMain r){var v=r.context.instances(r.roots());v.forEach(i->System.out.printf("%s %s Minecraft %s / %s Java %s gameDir=%s confidence=%s%n",i.instanceId(),i.displayName(),i.minecraftVersion(),i.loader(),i.requiredJavaMajor(),r.display(i.gameDirectory()),i.confidence()));return v.isEmpty()?WARNING:PASS;}}
- @Command(name="list")static class InstanceList extends InstanceScan{}
- @Command(name="inspect")static class InstanceInspect implements Callable<Integer>{@ParentCommand InstanceCmd p;@Parameters(index="0")String id;public Integer call(){System.out.println(p.root.instance(id));return PASS;}}
- @Command(name="add")static class InstanceAdd implements Callable<Integer>{@ParentCommand InstanceCmd p;@Parameters(index="0")Path path;public Integer call()throws Exception{Path value=path.toRealPath();Path file=controlHome().resolve("manual-roots.txt");Files.createDirectories(file.getParent());List<String> lines=Files.isRegularFile(file)?new ArrayList<>(Files.readAllLines(file)):new ArrayList<>();if(!lines.contains(value.toString()))lines.add(value.toString());Files.write(file,lines);System.out.println("Added scan root: "+value);return PASS;}}
- @Command(name="doctor")static class Doctor implements Callable<Integer>{@ParentCommand ControlTerminalMain root;@Parameters(index="0",arity="0..1")String id;public Integer call()throws Exception{if(id!=null)return root.printDoctor(root.instance(id));int e=PASS;for(var i:root.context.instances(root.roots()))e=Math.max(e,root.printDoctor(i));return e;}}
- @Command(name="plan",subcommands=PlanInstall.class)static class PlanCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- @Command(name="install")static class PlanInstall extends InstallBase{public Integer call()throws Exception{show(plan());return PASS;}}
- abstract static class InstallBase implements Callable<Integer>{@ParentCommand Object parent;@Parameters(index="0")String id;@Option(names="--artifacts")Path artifactRoot;@Option(names="--confirm-game-dir")Path confirmed;ControlTerminalMain root(){return parent instanceof PlanCmd p?p.root:(ControlTerminalMain)parent;}MinecraftInstance value()throws Exception{var i=root().instance(id);return confirmed==null?i:root().confirm(i,confirmed);}InstallPlan plan()throws Exception{return new InstallService().plan(value(),artifactRoot==null?artifacts():artifactRoot);}void show(InstallPlan p){System.out.printf("Install plan (no changes yet)%n instance=%s%n gameDir=%s%n artifact=%s%n rollback=%s%n",p.instance().displayName(),p.instance().gameDirectory(),p.artifact().getFileName(),p.rollbackId());if(p.fabricApiMissing())System.out.println("WARNING: Fabric API missing");}}
- @Command(name="install")static class Install extends InstallBase{@Option(names="--yes")boolean yes;public Integer call()throws Exception{var p=plan();show(p);if(!yes)return CANCELLED;var r=new InstallService().install(p);System.out.println("Installed sha256="+r.sha256()+" rollback="+r.rollbackId());return PASS;}}
- @Command(name="update")static class Update extends Install{}
- @Command(name="repair")static class Repair extends InstallBase{@Option(names="--yes")boolean yes;public Integer call()throws Exception{var i=value();var tx=new InstallTransaction();if(tx.verify(i.gameDirectory())){System.out.println("Installed artifact hash verified");return PASS;}if(!yes){System.out.println("Repair required; add --yes");return BLOCKED;}var p=plan();show(p);new InstallService().install(p);return PASS;}}
- @Command(name="rollback")static class Rollback implements Callable<Integer>{@ParentCommand ControlTerminalMain root;@Parameters(index="0")String id;@Option(names="--id")String point;@Option(names="--list")boolean list;@Option(names="--yes")boolean yes;public Integer call()throws Exception{var i=root.instance(id);var tx=new InstallTransaction();if(list){tx.rollbackPoints(i.gameDirectory()).forEach(System.out::println);return PASS;}if(point==null)throw new IOException("--id is required");if(!yes)return CANCELLED;tx.rollback(i.gameDirectory(),point);return PASS;}}
- @Command(name="uninstall")static class Uninstall implements Callable<Integer>{@ParentCommand ControlTerminalMain root;@Parameters(index="0")String id;@Option(names="--yes")boolean yes;public Integer call()throws Exception{if(!yes)return CANCELLED;new InstallTransaction().uninstall(root.instance(id).gameDirectory());return PASS;}}
- @Command(name="runtime",subcommands={RuntimeProfiles.class,RuntimeStart.class,RuntimeStop.class,RuntimeRestart.class,RuntimeStatus.class,RuntimeLogs.class,RuntimeRotate.class})static class RuntimeCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- abstract static class RuntimeBase implements Callable<Integer>{@ParentCommand RuntimeCmd p;@Parameters(index="0")String id;MinecraftInstance i(){return p.root.instance(id);}RuntimeProfile profile()throws Exception{return p.root.profile(i());}}
- @Command(name="profiles")static class RuntimeProfiles implements Callable<Integer>{@ParentCommand RuntimeCmd p;public Integer call()throws Exception{Path home=controlHome().resolve("profiles");if(Files.isDirectory(home))try(var dirs=Files.newDirectoryStream(home,Files::isDirectory)){for(Path d:dirs)System.out.println(d.getFileName());}return PASS;}}
- @Command(name="start")static class RuntimeStart extends RuntimeBase{public Integer call()throws Exception{var i=i();var profile=profile();new PairingService().ensureConfigured(i,profile);new WindowsRuntimeSupervisor().start(profile);System.out.println("Runtime profile="+profile.instanceId()+" port="+profile.port());return PASS;}}
- @Command(name="stop")static class RuntimeStop extends RuntimeBase{public Integer call()throws Exception{new WindowsRuntimeSupervisor().stop(profile());return PASS;}}
- @Command(name="restart")static class RuntimeRestart extends RuntimeBase{public Integer call()throws Exception{var i=i();var p=profile();var s=new WindowsRuntimeSupervisor();s.stop(p);new PairingService().ensureConfigured(i,p);s.start(p);return PASS;}}
- @Command(name="status")static class RuntimeStatus extends RuntimeBase{public Integer call()throws Exception{var h=new WindowsRuntimeSupervisor().status(profile());System.out.println(h);return h.healthy()?PASS:WARNING;}}
- @Command(name="logs")static class RuntimeLogs extends RuntimeBase{public Integer call()throws Exception{return tail(profile().logFile());}}
- @Command(name="rotate-token")static class RuntimeRotate extends RuntimeBase{@Option(names="--yes")boolean yes;@Option(names="--timeout",defaultValue="90")int timeout;public Integer call()throws Exception{if(!yes)return CANCELLED;var report=new TokenRotationService().rotate(i(),profile(),Duration.ofSeconds(timeout));System.out.println("Token rotation committed runtimeRestarted="+report.runtimeRestarted()+" modReconnected="+report.modReconnected());return PASS;}}
- @Command(name="provider",subcommands={ProviderConfigure.class,ProviderTest.class,ProviderDisable.class,ProviderStatus.class})static class ProviderCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- abstract static class ProviderBase implements Callable<Integer>{@ParentCommand ProviderCmd p;@Parameters(index="0")String id;RuntimeProfile profile()throws Exception{return p.root.profile(p.root.instance(id));}}
- @Command(name="configure")static class ProviderConfigure extends ProviderBase{@Option(names="--base-url",required=true)String url;@Option(names="--model",required=true)String model;@Option(names="--api-key-env",defaultValue="MC_COMPANION_API_KEY")String env;@Option(names="--timeout-seconds",defaultValue="15")int timeout;public Integer call()throws Exception{new ProviderConfigurationService().configure(profile(),url,model,env,timeout);System.out.println("Configured without storing API key");return PASS;}}
- @Command(name="test")static class ProviderTest extends ProviderBase{public Integer call()throws Exception{var r=new ProviderConfigurationService().test(profile());System.out.printf("success=%s latency=%dms model=%s %s%n",r.success(),r.latencyMillis(),r.model(),r.message());return r.success()?PASS:CONNECTION_FAILED;}}
- @Command(name="disable")static class ProviderDisable extends ProviderBase{public Integer call()throws Exception{new ProviderConfigurationService().disable(profile());return PASS;}}
- @Command(name="status")static class ProviderStatus extends ProviderBase{public Integer call()throws Exception{System.out.println(new ProviderConfigurationService().status(profile()).toPrettyString());return PASS;}}
- @Command(name="play")static class Play implements Callable<Integer>{@ParentCommand ControlTerminalMain root;@Parameters(index="0")String id;@Option(names="--wait-seconds",defaultValue="90")int wait;public Integer call()throws Exception{var i=root.instance(id);if(root.printDoctor(i)==BLOCKED)return BLOCKED;System.out.println("State PREPARING");RuntimeProfile p=root.profile(i);if(i.loader()==LoaderType.FABRIC){new PairingService().ensureConfigured(i,p);new WindowsRuntimeSupervisor().start(p);System.out.println("State RUNTIME_STARTING port="+p.port());}else System.out.println("State LOCAL_ONLY");var l=root.launcher(i);if(Desktop.isDesktopSupported())Desktop.getDesktop().open(l.executable().toFile());else new ProcessBuilder(l.executable().toString()).start();System.out.println("State LAUNCHER_OPEN\nState WAITING_FOR_HANDSHAKE");if(i.loader()!=LoaderType.FABRIC)return WARNING;var s=new ConnectionService().waitForHandshake(p,Duration.ofSeconds(wait));System.out.printf("Launcher OPEN%nRuntime %s%nMod %s%nCompanion %d%nMode %s%n",s.runtimeHealthy()?"ONLINE":"FAILED",s.connected()?"CONNECTED":"WAITING",s.companions(),s.mode());return s.connected()?PASS:TIMEOUT;}}
- @Command(name="attach")static class Attach implements Callable<Integer>{@ParentCommand ControlTerminalMain root;@Parameters(index="0",arity="0..1")String id;public Integer call()throws Exception{if(id!=null)return show(root.profile(root.instance(id)));int e=WARNING;for(var i:root.context.instances(root.roots()))try{e=Math.min(e,show(root.profile(i)));}catch(Exception ignored){}return e;}int show(RuntimeProfile p){var s=new ConnectionService().status(p);System.out.println(p.instanceId()+" "+s);return s.connected()?PASS:WARNING;}}
- @Command(name="connect",subcommands={ConnectWait.class,ConnectTest.class})static class ConnectCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- abstract static class ConnectBase implements Callable<Integer>{@ParentCommand ConnectCmd p;@Parameters(index="0")String id;RuntimeProfile profile()throws Exception{return p.root.profile(p.root.instance(id));}}
- @Command(name="wait")static class ConnectWait extends ConnectBase{@Option(names="--timeout",defaultValue="90")int timeout;public Integer call()throws Exception{return new ConnectionService().waitForHandshake(profile(),Duration.ofSeconds(timeout)).connected()?PASS:TIMEOUT;}}
- @Command(name="test")static class ConnectTest extends ConnectBase{public Integer call()throws Exception{var s=new ConnectionService().status(profile());System.out.println(s);return s.connected()?PASS:CONNECTION_FAILED;}}
- @Command(name="test",subcommands={StaticTest.class,HandshakeTest.class,Smoke.class})static class TestCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- @Command(name="static")static class StaticTest implements Callable<Integer>{@ParentCommand TestCmd p;@Parameters(index="0")String id;public Integer call()throws Exception{return p.root.printDoctor(p.root.instance(id));}}
- @Command(name="handshake")static class HandshakeTest implements Callable<Integer>{@ParentCommand TestCmd p;@Parameters(index="0")String id;public Integer call()throws Exception{var i=p.root.instance(id);var s=new ConnectionService().status(p.root.profile(i));System.out.println(s);return s.connected()?PASS:CONNECTION_FAILED;}}
- @Command(name="smoke")static class Smoke implements Callable<Integer>{@ParentCommand TestCmd p;@Parameters(index="0")String id;public Integer call()throws Exception{var i=p.root.instance(id);var r=new SmokeTestService().run(i,p.root.profile(i));System.out.println(r.summary());return r.success()?(r.manualRequired()?WARNING:PASS):r.manualRequired()?WARNING:TEST_FAILED;}}
- @Command(name="hook",subcommands={HookInstall.class,HookStatus.class,HookRemove.class})static class HookCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- abstract static class HookBase implements Callable<Integer>{@ParentCommand HookCmd p;@Parameters(index="0")String id;MinecraftInstance i(){return p.root.instance(id);}}
- @Command(name="status")static class HookStatus extends HookBase{public Integer call(){System.out.println(new HookService().status(i(),controlHome()));return PASS;}}
- @Command(name="install")static class HookInstall extends HookBase{@Option(names="--yes")boolean yes;@Option(names="--mcac-executable")Path exe;public Integer call()throws Exception{if(!yes)return CANCELLED;var i=i();new HookService().install(i,p.root.launcher(i),exe==null?currentMcac():exe,controlHome());return PASS;}}
- @Command(name="remove")static class HookRemove extends HookBase{@Option(names="--yes")boolean yes;public Integer call()throws Exception{if(!yes)return CANCELLED;var i=i();new HookService().remove(i,p.root.launcher(i),controlHome());return PASS;}}
- @Command(name="logs",subcommands={LogsTail.class,LogsCollect.class})static class LogsCmd implements Runnable{@ParentCommand ControlTerminalMain root;public void run(){new CommandLine(this).usage(System.out);}}
- @Command(name="tail")static class LogsTail implements Callable<Integer>{@ParentCommand LogsCmd p;@Parameters(index="0")String id;public Integer call(){return tail(p.root.instance(id).logsDirectory().resolve("latest.log"));}}
- @Command(name="collect")static class LogsCollect implements Callable<Integer>{@ParentCommand LogsCmd p;@Parameters(index="0")String id;@Option(names="--output")Path output;public Integer call()throws Exception{var i=p.root.instance(id);Path out=output==null?Path.of("mcac-support-"+i.instanceId()+".zip").toAbsolutePath():output.toAbsolutePath();new SupportBundleService().collect(i,out);System.out.println(out);return PASS;}}
- static int tail(Path file){if(!Files.isRegularFile(file)){System.out.println("No log file");return WARNING;}try{var lines=Files.readAllLines(file);lines.subList(Math.max(0,lines.size()-100),lines.size()).forEach(System.out::println);return PASS;}catch(IOException e){throw new UncheckedIOException(e);}}
+  @Option(names = "--root", description = "PCL2/HMCL root or executable (repeatable)")
+  List<Path> suppliedRoots = new ArrayList<>();
+
+  @Option(names = "--verbose-paths")
+  boolean verbosePaths;
+
+  final TerminalContext context = new TerminalContext();
+
+  public static void main(String[] args) {
+    CommandLine c = new CommandLine(new ControlTerminalMain());
+    c.setExecutionExceptionHandler(
+        (e, l, p) -> {
+          l.getErr()
+              .println(
+                  (e instanceof IOException || e instanceof IllegalArgumentException
+                          ? "BLOCKED: "
+                          : "ERROR: ")
+                      + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+          return e instanceof IOException || e instanceof IllegalArgumentException
+              ? BLOCKED
+              : INTERNAL;
+        });
+    System.exit(c.execute(args));
+  }
+
+  public void run() {
+    try {
+      new InteractiveTerminal(this, System.in, System.out).run();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  List<Path> roots() {
+    List<Path> v = new ArrayList<>(suppliedRoots);
+    String env = System.getenv("MCAC_SCAN_ROOTS");
+    if (env != null)
+      for (String s : env.split(File.pathSeparator)) if (!s.isBlank()) v.add(Path.of(s));
+    Path manual = controlHome().resolve("manual-roots.txt");
+    if (Files.isRegularFile(manual))
+      try {
+        for (String s : Files.readAllLines(manual)) if (!s.isBlank()) v.add(Path.of(s));
+      } catch (IOException ignored) {
+      }
+    if (v.isEmpty()) v.add(Path.of("."));
+    return v.stream().map(p -> p.toAbsolutePath().normalize()).distinct().toList();
+  }
+
+  MinecraftInstance instance(String id) {
+    MinecraftInstance i = context.requireInstance(roots(), id);
+    Path confirmed =
+        controlHome().resolve("profiles").resolve(i.instanceId()).resolve("confirmed-game-dir.txt");
+    if (Files.isRegularFile(confirmed))
+      try {
+        return withGameDir(i, Path.of(Files.readString(confirmed).strip()));
+      } catch (IOException ignored) {
+      }
+    return i;
+  }
+
+  MinecraftInstance confirm(MinecraftInstance i, Path path) throws IOException {
+    if (!path.isAbsolute() || !Files.isDirectory(path))
+      throw new IOException("--confirm-game-dir must be an existing absolute directory");
+    Path file =
+        controlHome().resolve("profiles").resolve(i.instanceId()).resolve("confirmed-game-dir.txt");
+    Files.createDirectories(file.getParent());
+    Files.writeString(file, path.toRealPath().toString(), StandardCharsets.UTF_8);
+    return withGameDir(i, path.toRealPath());
+  }
+
+  static MinecraftInstance withGameDir(MinecraftInstance i, Path g) {
+    return new MinecraftInstance(
+        i.instanceId(),
+        i.launcherId(),
+        i.displayName(),
+        i.minecraftRoot(),
+        i.versionDirectory(),
+        g,
+        g.resolve("mods"),
+        g.resolve("config"),
+        g.resolve("logs"),
+        i.minecraftVersion(),
+        i.loader(),
+        i.loaderVersion(),
+        i.requiredJavaMajor(),
+        i.configuredJava(),
+        InstanceIsolation.EXPLICIT,
+        DetectionConfidence.HIGH);
+  }
+
+  RuntimeProfile profile(MinecraftInstance i) throws IOException {
+    return new RuntimeProfileService(controlHome(), locateRuntime()).ensure(i.instanceId());
+  }
+
+  LauncherInstallation launcher(MinecraftInstance i) {
+    return context.launchers(roots()).stream()
+        .filter(l -> l.launcherId().equals(i.launcherId()))
+        .findFirst()
+        .orElseThrow(() -> new IllegalArgumentException("Owning launcher not found"));
+  }
+
+  String display(Path p) {
+    if (verbosePaths) return p.toString();
+    return p.getFileName() == null ? "<local>" : "...\\" + p.getFileName();
+  }
+
+  int printDoctor(MinecraftInstance i) throws IOException {
+    int exit = PASS;
+    for (var r : new TerminalDiagnosticService().run(i, profile(i), launcher(i), controlHome())) {
+      System.out.printf("%-18s %-28s %s%n", r.severity(), r.code(), r.summary());
+      if (!r.evidence().isEmpty()) System.out.println("  evidence: " + r.evidence());
+      if (r.severity() != DiagnosticResult.Severity.PASS && !r.repairs().isEmpty())
+        System.out.println("  repair: " + String.join("; ", r.repairs()));
+      if (r.severity() == DiagnosticResult.Severity.BLOCKED) exit = BLOCKED;
+      else if (exit == PASS
+          && (r.severity() == DiagnosticResult.Severity.WARNING
+              || r.severity() == DiagnosticResult.Severity.UNKNOWN)) exit = WARNING;
+    }
+    return exit;
+  }
+
+  static Path controlHome() {
+    String local = System.getenv("LOCALAPPDATA");
+    return Path.of(local == null ? System.getProperty("user.home") : local, "MinecraftAICompanion");
+  }
+
+  static Path locateRuntime() {
+    Path cwd = Path.of("").toAbsolutePath();
+    Path dev = cwd.resolve("runtime/runtime-app/build/install/runtime-app/bin/runtime-app.bat");
+    if (Files.isRegularFile(dev)) return dev;
+    try {
+      Path jar =
+          Path.of(
+              ControlTerminalMain.class
+                  .getProtectionDomain()
+                  .getCodeSource()
+                  .getLocation()
+                  .toURI());
+      Path image = (Files.isDirectory(jar) ? jar : jar.getParent()).getParent();
+      for (String n : List.of("runtime-app.exe", "runtime-app-bundled.cmd")) {
+        Path p = image.resolve(n);
+        if (Files.isRegularFile(p)) return p;
+      }
+    } catch (Exception ignored) {
+    }
+    return dev;
+  }
+
+  static Path artifacts() {
+    Path cwd = Path.of("").toAbsolutePath();
+    if (Files.isDirectory(cwd.resolve("minecraft"))) return cwd;
+    try {
+      Path jar =
+          Path.of(
+              ControlTerminalMain.class
+                  .getProtectionDomain()
+                  .getCodeSource()
+                  .getLocation()
+                  .toURI());
+      Path image = (Files.isDirectory(jar) ? jar : jar.getParent()).getParent();
+      if (Files.isDirectory(image.resolve("artifacts"))) return image.resolve("artifacts");
+    } catch (Exception ignored) {
+    }
+    return cwd.resolve("artifacts");
+  }
+
+  static Path currentMcac() {
+    try {
+      Path jar =
+          Path.of(
+              ControlTerminalMain.class
+                  .getProtectionDomain()
+                  .getCodeSource()
+                  .getLocation()
+                  .toURI());
+      Path image = (Files.isDirectory(jar) ? jar : jar.getParent()).getParent();
+      Path exe = image.resolve("mcac.exe");
+      if (Files.isRegularFile(exe)) return exe;
+    } catch (Exception ignored) {
+    }
+    return Path.of("mcac.cmd").toAbsolutePath();
+  }
+
+  @Command(
+      name = "launcher",
+      subcommands = {LauncherScan.class, LauncherList.class, LauncherInspect.class})
+  static class LauncherCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  @Command(name = "scan")
+  static class LauncherScan implements Callable<Integer> {
+    @ParentCommand LauncherCmd p;
+
+    public Integer call() {
+      return print(p.root);
+    }
+
+    static int print(ControlTerminalMain r) {
+      var values = r.context.launchers(r.roots());
+      values.forEach(
+          v ->
+              System.out.printf(
+                  "%s %s %s %s%n",
+                  v.launcherId(), v.type(), v.detectedVersion(), r.display(v.executable())));
+      return values.isEmpty() ? WARNING : PASS;
+    }
+  }
+
+  @Command(name = "list")
+  static class LauncherList extends LauncherScan {}
+
+  @Command(name = "inspect")
+  static class LauncherInspect implements Callable<Integer> {
+    @ParentCommand LauncherCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    public Integer call() {
+      var v =
+          p.root.context.launchers(p.root.roots()).stream()
+              .filter(x -> x.launcherId().equalsIgnoreCase(id))
+              .findFirst()
+              .orElseThrow();
+      System.out.println(v);
+      return PASS;
+    }
+  }
+
+  @Command(
+      name = "instance",
+      subcommands = {
+        InstanceScan.class,
+        InstanceList.class,
+        InstanceInspect.class,
+        InstanceAdd.class
+      })
+  static class InstanceCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  @Command(name = "scan")
+  static class InstanceScan implements Callable<Integer> {
+    @ParentCommand InstanceCmd p;
+
+    public Integer call() {
+      return print(p.root);
+    }
+
+    static int print(ControlTerminalMain r) {
+      var v = r.context.instances(r.roots());
+      v.forEach(
+          i ->
+              System.out.printf(
+                  "%s %s Minecraft %s / %s Java %s gameDir=%s confidence=%s%n",
+                  i.instanceId(),
+                  i.displayName(),
+                  i.minecraftVersion(),
+                  i.loader(),
+                  i.requiredJavaMajor(),
+                  r.display(i.gameDirectory()),
+                  i.confidence()));
+      return v.isEmpty() ? WARNING : PASS;
+    }
+  }
+
+  @Command(name = "list")
+  static class InstanceList extends InstanceScan {}
+
+  @Command(name = "inspect")
+  static class InstanceInspect implements Callable<Integer> {
+    @ParentCommand InstanceCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    public Integer call() {
+      System.out.println(p.root.instance(id));
+      return PASS;
+    }
+  }
+
+  @Command(name = "add")
+  static class InstanceAdd implements Callable<Integer> {
+    @ParentCommand InstanceCmd p;
+
+    @Parameters(index = "0")
+    Path path;
+
+    public Integer call() throws Exception {
+      Path value = path.toRealPath();
+      Path file = controlHome().resolve("manual-roots.txt");
+      Files.createDirectories(file.getParent());
+      List<String> lines =
+          Files.isRegularFile(file) ? new ArrayList<>(Files.readAllLines(file)) : new ArrayList<>();
+      if (!lines.contains(value.toString())) lines.add(value.toString());
+      Files.write(file, lines);
+      System.out.println("Added scan root: " + value);
+      return PASS;
+    }
+  }
+
+  @Command(name = "doctor")
+  static class Doctor implements Callable<Integer> {
+    @ParentCommand ControlTerminalMain root;
+
+    @Parameters(index = "0", arity = "0..1")
+    String id;
+
+    public Integer call() throws Exception {
+      if (id != null) return root.printDoctor(root.instance(id));
+      int e = PASS;
+      for (var i : root.context.instances(root.roots())) e = Math.max(e, root.printDoctor(i));
+      return e;
+    }
+  }
+
+  @Command(name = "plan", subcommands = PlanInstall.class)
+  static class PlanCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  @Command(name = "install")
+  static class PlanInstall extends InstallBase {
+    public Integer call() throws Exception {
+      show(plan());
+      return PASS;
+    }
+  }
+
+  abstract static class InstallBase implements Callable<Integer> {
+    @ParentCommand Object parent;
+
+    @Parameters(index = "0")
+    String id;
+
+    @Option(names = "--artifacts")
+    Path artifactRoot;
+
+    @Option(names = "--confirm-game-dir")
+    Path confirmed;
+
+    ControlTerminalMain root() {
+      return parent instanceof PlanCmd p ? p.root : (ControlTerminalMain) parent;
+    }
+
+    MinecraftInstance value() throws Exception {
+      var i = root().instance(id);
+      return confirmed == null ? i : root().confirm(i, confirmed);
+    }
+
+    InstallPlan plan() throws Exception {
+      return new InstallService().plan(value(), artifactRoot == null ? artifacts() : artifactRoot);
+    }
+
+    void show(InstallPlan p) {
+      System.out.printf(
+          "Install plan (no changes yet)%n instance=%s%n gameDir=%s%n artifact=%s%n rollback=%s%n",
+          p.instance().displayName(),
+          p.instance().gameDirectory(),
+          p.artifact().getFileName(),
+          p.rollbackId());
+      if (p.fabricApiMissing()) System.out.println("WARNING: Fabric API missing");
+    }
+  }
+
+  @Command(name = "install")
+  static class Install extends InstallBase {
+    @Option(names = "--yes")
+    boolean yes;
+
+    public Integer call() throws Exception {
+      var p = plan();
+      show(p);
+      if (!yes) return CANCELLED;
+      var r = new InstallService().install(p);
+      System.out.println("Installed sha256=" + r.sha256() + " rollback=" + r.rollbackId());
+      return PASS;
+    }
+  }
+
+  @Command(name = "update")
+  static class Update extends Install {}
+
+  @Command(name = "repair")
+  static class Repair extends InstallBase {
+    @Option(names = "--yes")
+    boolean yes;
+
+    public Integer call() throws Exception {
+      var i = value();
+      var tx = new InstallTransaction();
+      if (tx.verify(i.gameDirectory())) {
+        System.out.println("Installed artifact hash verified");
+        return PASS;
+      }
+      if (!yes) {
+        System.out.println("Repair required; add --yes");
+        return BLOCKED;
+      }
+      var p = plan();
+      show(p);
+      new InstallService().install(p);
+      return PASS;
+    }
+  }
+
+  @Command(name = "rollback")
+  static class Rollback implements Callable<Integer> {
+    @ParentCommand ControlTerminalMain root;
+
+    @Parameters(index = "0")
+    String id;
+
+    @Option(names = "--id")
+    String point;
+
+    @Option(names = "--list")
+    boolean list;
+
+    @Option(names = "--yes")
+    boolean yes;
+
+    public Integer call() throws Exception {
+      var i = root.instance(id);
+      var tx = new InstallTransaction();
+      if (list) {
+        tx.rollbackPoints(i.gameDirectory()).forEach(System.out::println);
+        return PASS;
+      }
+      if (point == null) throw new IOException("--id is required");
+      if (!yes) return CANCELLED;
+      tx.rollback(i.gameDirectory(), point);
+      return PASS;
+    }
+  }
+
+  @Command(name = "uninstall")
+  static class Uninstall implements Callable<Integer> {
+    @ParentCommand ControlTerminalMain root;
+
+    @Parameters(index = "0")
+    String id;
+
+    @Option(names = "--yes")
+    boolean yes;
+
+    public Integer call() throws Exception {
+      if (!yes) return CANCELLED;
+      new InstallTransaction().uninstall(root.instance(id).gameDirectory());
+      return PASS;
+    }
+  }
+
+  @Command(
+      name = "runtime",
+      subcommands = {
+        RuntimeProfiles.class,
+        RuntimeStart.class,
+        RuntimeStop.class,
+        RuntimeRestart.class,
+        RuntimeStatus.class,
+        RuntimeLogs.class,
+        RuntimeRotate.class
+      })
+  static class RuntimeCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  abstract static class RuntimeBase implements Callable<Integer> {
+    @ParentCommand RuntimeCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    MinecraftInstance i() {
+      return p.root.instance(id);
+    }
+
+    RuntimeProfile profile() throws Exception {
+      return p.root.profile(i());
+    }
+  }
+
+  @Command(name = "profiles")
+  static class RuntimeProfiles implements Callable<Integer> {
+    @ParentCommand RuntimeCmd p;
+
+    public Integer call() throws Exception {
+      Path home = controlHome().resolve("profiles");
+      if (Files.isDirectory(home))
+        try (var dirs = Files.newDirectoryStream(home, Files::isDirectory)) {
+          for (Path d : dirs) System.out.println(d.getFileName());
+        }
+      return PASS;
+    }
+  }
+
+  @Command(name = "start")
+  static class RuntimeStart extends RuntimeBase {
+    public Integer call() throws Exception {
+      var i = i();
+      var profile = profile();
+      new PairingService().ensureConfigured(i, profile);
+      new WindowsRuntimeSupervisor().start(profile);
+      System.out.println("Runtime profile=" + profile.instanceId() + " port=" + profile.port());
+      return PASS;
+    }
+  }
+
+  @Command(name = "stop")
+  static class RuntimeStop extends RuntimeBase {
+    public Integer call() throws Exception {
+      new WindowsRuntimeSupervisor().stop(profile());
+      return PASS;
+    }
+  }
+
+  @Command(name = "restart")
+  static class RuntimeRestart extends RuntimeBase {
+    public Integer call() throws Exception {
+      var i = i();
+      var p = profile();
+      var s = new WindowsRuntimeSupervisor();
+      s.stop(p);
+      new PairingService().ensureConfigured(i, p);
+      s.start(p);
+      return PASS;
+    }
+  }
+
+  @Command(name = "status")
+  static class RuntimeStatus extends RuntimeBase {
+    public Integer call() throws Exception {
+      var h = new WindowsRuntimeSupervisor().status(profile());
+      System.out.println(h);
+      return h.healthy() ? PASS : WARNING;
+    }
+  }
+
+  @Command(name = "logs")
+  static class RuntimeLogs extends RuntimeBase {
+    public Integer call() throws Exception {
+      return tail(profile().logFile());
+    }
+  }
+
+  @Command(name = "rotate-token")
+  static class RuntimeRotate extends RuntimeBase {
+    @Option(names = "--yes")
+    boolean yes;
+
+    @Option(names = "--timeout", defaultValue = "90")
+    int timeout;
+
+    public Integer call() throws Exception {
+      if (!yes) return CANCELLED;
+      var report = new TokenRotationService().rotate(i(), profile(), Duration.ofSeconds(timeout));
+      System.out.println(
+          "Token rotation committed runtimeRestarted="
+              + report.runtimeRestarted()
+              + " modReconnected="
+              + report.modReconnected());
+      return PASS;
+    }
+  }
+
+  @Command(
+      name = "provider",
+      subcommands = {
+        ProviderConfigure.class,
+        ProviderTest.class,
+        ProviderDisable.class,
+        ProviderStatus.class
+      })
+  static class ProviderCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  abstract static class ProviderBase implements Callable<Integer> {
+    @ParentCommand ProviderCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    RuntimeProfile profile() throws Exception {
+      return p.root.profile(p.root.instance(id));
+    }
+  }
+
+  @Command(name = "configure")
+  static class ProviderConfigure extends ProviderBase {
+    @Option(names = "--base-url", required = true)
+    String url;
+
+    @Option(names = "--model", required = true)
+    String model;
+
+    @Option(names = "--api-key-env", defaultValue = "MC_COMPANION_API_KEY")
+    String env;
+
+    @Option(names = "--timeout-seconds", defaultValue = "15")
+    int timeout;
+
+    public Integer call() throws Exception {
+      new ProviderConfigurationService().configure(profile(), url, model, env, timeout);
+      System.out.println("Configured without storing API key");
+      return PASS;
+    }
+  }
+
+  @Command(name = "test")
+  static class ProviderTest extends ProviderBase {
+    public Integer call() throws Exception {
+      var r = new ProviderConfigurationService().test(profile());
+      System.out.printf(
+          "success=%s latency=%dms model=%s %s%n",
+          r.success(), r.latencyMillis(), r.model(), r.message());
+      return r.success() ? PASS : CONNECTION_FAILED;
+    }
+  }
+
+  @Command(name = "disable")
+  static class ProviderDisable extends ProviderBase {
+    public Integer call() throws Exception {
+      new ProviderConfigurationService().disable(profile());
+      return PASS;
+    }
+  }
+
+  @Command(name = "status")
+  static class ProviderStatus extends ProviderBase {
+    public Integer call() throws Exception {
+      System.out.println(new ProviderConfigurationService().status(profile()).toPrettyString());
+      return PASS;
+    }
+  }
+
+  @Command(name = "play")
+  static class Play implements Callable<Integer> {
+    @ParentCommand ControlTerminalMain root;
+
+    @Parameters(index = "0")
+    String id;
+
+    @Option(names = "--wait-seconds", defaultValue = "90")
+    int wait;
+
+    public Integer call() throws Exception {
+      var i = root.instance(id);
+      if (root.printDoctor(i) == BLOCKED) return BLOCKED;
+      System.out.println("State PREPARING");
+      RuntimeProfile p = root.profile(i);
+      if (i.loader() == LoaderType.FABRIC) {
+        new PairingService().ensureConfigured(i, p);
+        new WindowsRuntimeSupervisor().start(p);
+        System.out.println("State RUNTIME_STARTING port=" + p.port());
+      } else System.out.println("State LOCAL_ONLY");
+      var l = root.launcher(i);
+      if (Desktop.isDesktopSupported()) Desktop.getDesktop().open(l.executable().toFile());
+      else new ProcessBuilder(l.executable().toString()).start();
+      System.out.println("State LAUNCHER_OPEN\nState WAITING_FOR_HANDSHAKE");
+      if (i.loader() != LoaderType.FABRIC) return WARNING;
+      var s = new ConnectionService().waitForHandshake(p, Duration.ofSeconds(wait));
+      System.out.printf(
+          "Launcher OPEN%nRuntime %s%nMod %s%nCompanion %d%nMode %s%n",
+          s.runtimeHealthy() ? "ONLINE" : "FAILED",
+          s.connected() ? "CONNECTED" : "WAITING",
+          s.companions(),
+          s.mode());
+      return s.connected() ? PASS : TIMEOUT;
+    }
+  }
+
+  @Command(name = "attach")
+  static class Attach implements Callable<Integer> {
+    @ParentCommand ControlTerminalMain root;
+
+    @Parameters(index = "0", arity = "0..1")
+    String id;
+
+    public Integer call() throws Exception {
+      if (id != null) return show(root.profile(root.instance(id)));
+      int e = WARNING;
+      for (var i : root.context.instances(root.roots()))
+        try {
+          e = Math.min(e, show(root.profile(i)));
+        } catch (Exception ignored) {
+        }
+      return e;
+    }
+
+    int show(RuntimeProfile p) {
+      var s = new ConnectionService().status(p);
+      System.out.println(p.instanceId() + " " + s);
+      return s.connected() ? PASS : WARNING;
+    }
+  }
+
+  @Command(
+      name = "connect",
+      subcommands = {ConnectWait.class, ConnectTest.class})
+  static class ConnectCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  abstract static class ConnectBase implements Callable<Integer> {
+    @ParentCommand ConnectCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    RuntimeProfile profile() throws Exception {
+      return p.root.profile(p.root.instance(id));
+    }
+  }
+
+  @Command(name = "wait")
+  static class ConnectWait extends ConnectBase {
+    @Option(names = "--timeout", defaultValue = "90")
+    int timeout;
+
+    public Integer call() throws Exception {
+      return new ConnectionService()
+              .waitForHandshake(profile(), Duration.ofSeconds(timeout))
+              .connected()
+          ? PASS
+          : TIMEOUT;
+    }
+  }
+
+  @Command(name = "test")
+  static class ConnectTest extends ConnectBase {
+    public Integer call() throws Exception {
+      var s = new ConnectionService().status(profile());
+      System.out.println(s);
+      return s.connected() ? PASS : CONNECTION_FAILED;
+    }
+  }
+
+  @Command(
+      name = "test",
+      subcommands = {StaticTest.class, HandshakeTest.class, Smoke.class})
+  static class TestCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  @Command(name = "static")
+  static class StaticTest implements Callable<Integer> {
+    @ParentCommand TestCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    public Integer call() throws Exception {
+      return p.root.printDoctor(p.root.instance(id));
+    }
+  }
+
+  @Command(name = "handshake")
+  static class HandshakeTest implements Callable<Integer> {
+    @ParentCommand TestCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    public Integer call() throws Exception {
+      var i = p.root.instance(id);
+      var s = new ConnectionService().status(p.root.profile(i));
+      System.out.println(s);
+      return s.connected() ? PASS : CONNECTION_FAILED;
+    }
+  }
+
+  @Command(name = "smoke")
+  static class Smoke implements Callable<Integer> {
+    @ParentCommand TestCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    public Integer call() throws Exception {
+      var i = p.root.instance(id);
+      var r = new SmokeTestService().run(i, p.root.profile(i));
+      System.out.println(r.summary());
+      return r.success()
+          ? (r.manualRequired() ? WARNING : PASS)
+          : r.manualRequired() ? WARNING : TEST_FAILED;
+    }
+  }
+
+  @Command(
+      name = "hook",
+      subcommands = {HookInstall.class, HookStatus.class, HookRemove.class})
+  static class HookCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  abstract static class HookBase implements Callable<Integer> {
+    @ParentCommand HookCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    MinecraftInstance i() {
+      return p.root.instance(id);
+    }
+  }
+
+  @Command(name = "status")
+  static class HookStatus extends HookBase {
+    public Integer call() {
+      System.out.println(new HookService().status(i(), controlHome()));
+      return PASS;
+    }
+  }
+
+  @Command(name = "install")
+  static class HookInstall extends HookBase {
+    @Option(names = "--yes")
+    boolean yes;
+
+    @Option(names = "--mcac-executable")
+    Path exe;
+
+    public Integer call() throws Exception {
+      if (!yes) return CANCELLED;
+      var i = i();
+      new HookService()
+          .install(i, p.root.launcher(i), exe == null ? currentMcac() : exe, controlHome());
+      return PASS;
+    }
+  }
+
+  @Command(name = "remove")
+  static class HookRemove extends HookBase {
+    @Option(names = "--yes")
+    boolean yes;
+
+    public Integer call() throws Exception {
+      if (!yes) return CANCELLED;
+      var i = i();
+      new HookService().remove(i, p.root.launcher(i), controlHome());
+      return PASS;
+    }
+  }
+
+  @Command(
+      name = "logs",
+      subcommands = {LogsTail.class, LogsCollect.class})
+  static class LogsCmd implements Runnable {
+    @ParentCommand ControlTerminalMain root;
+
+    public void run() {
+      new CommandLine(this).usage(System.out);
+    }
+  }
+
+  @Command(name = "tail")
+  static class LogsTail implements Callable<Integer> {
+    @ParentCommand LogsCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    public Integer call() {
+      return tail(p.root.instance(id).logsDirectory().resolve("latest.log"));
+    }
+  }
+
+  @Command(name = "collect")
+  static class LogsCollect implements Callable<Integer> {
+    @ParentCommand LogsCmd p;
+
+    @Parameters(index = "0")
+    String id;
+
+    @Option(names = "--output")
+    Path output;
+
+    public Integer call() throws Exception {
+      var i = p.root.instance(id);
+      Path out =
+          output == null
+              ? Path.of("mcac-support-" + i.instanceId() + ".zip").toAbsolutePath()
+              : output.toAbsolutePath();
+      new SupportBundleService().collect(i, out);
+      System.out.println(out);
+      return PASS;
+    }
+  }
+
+  static int tail(Path file) {
+    if (!Files.isRegularFile(file)) {
+      System.out.println("No log file");
+      return WARNING;
+    }
+    try {
+      var lines = Files.readAllLines(file);
+      lines.subList(Math.max(0, lines.size() - 100), lines.size()).forEach(System.out::println);
+      return PASS;
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
 }

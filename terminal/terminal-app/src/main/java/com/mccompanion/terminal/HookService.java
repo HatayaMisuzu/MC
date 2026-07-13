@@ -17,127 +17,225 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 
-/** Explicit, backed-up launcher hook mutations. Generated wrappers always let Minecraft continue. */
+/**
+ * Explicit, backed-up launcher hook mutations. Generated wrappers always let Minecraft continue.
+ */
 final class HookService {
-    private static final ObjectMapper JSON = new ObjectMapper();
+  private static final ObjectMapper JSON = new ObjectMapper();
 
-    void install(MinecraftInstance instance, LauncherInstallation launcher, Path mcac, Path controlHome) throws IOException {
-        ensureLauncherStopped(launcher);
-        Path state = controlHome.resolve("hooks").resolve(instance.instanceId());
-        Files.createDirectories(state);
-        Path metadata = state.resolve("state.json");
-        if (Files.isRegularFile(metadata)) {
-            JsonNode current = JSON.readTree(metadata.toFile());
-            Path target = Path.of(current.path("target").asText()).toAbsolutePath().normalize();
-            if (Files.isRegularFile(target) && sha256(target).equals(current.path("modifiedSha256").asText())) {
-                return;
-            }
-            throw new IOException("Managed hook state exists but launcher configuration changed; remove or repair it first");
-        }
-        Path wrapper = state.resolve(launcher.type() == LauncherType.PCL2 ? "pcl-prelaunch.cmd" : "hmcl-prelaunch.cmd");
-        if (launcher.type() == LauncherType.PCL2) installPcl(instance, launcher, mcac, state, wrapper);
-        else if (launcher.type() == LauncherType.HMCL) installHmcl(instance, launcher, mcac, state, wrapper);
-        else throw new IOException("Hooks are unavailable for generic launchers");
+  void install(
+      MinecraftInstance instance, LauncherInstallation launcher, Path mcac, Path controlHome)
+      throws IOException {
+    ensureLauncherStopped(launcher);
+    Path state = controlHome.resolve("hooks").resolve(instance.instanceId());
+    Files.createDirectories(state);
+    Path metadata = state.resolve("state.json");
+    if (Files.isRegularFile(metadata)) {
+      JsonNode current = JSON.readTree(metadata.toFile());
+      Path target = Path.of(current.path("target").asText()).toAbsolutePath().normalize();
+      if (Files.isRegularFile(target)
+          && sha256(target).equals(current.path("modifiedSha256").asText())) {
+        return;
+      }
+      throw new IOException(
+          "Managed hook state exists but launcher configuration changed; remove or repair it"
+              + " first");
     }
+    Path wrapper =
+        state.resolve(
+            launcher.type() == LauncherType.PCL2 ? "pcl-prelaunch.cmd" : "hmcl-prelaunch.cmd");
+    if (launcher.type() == LauncherType.PCL2) installPcl(instance, launcher, mcac, state, wrapper);
+    else if (launcher.type() == LauncherType.HMCL)
+      installHmcl(instance, launcher, mcac, state, wrapper);
+    else throw new IOException("Hooks are unavailable for generic launchers");
+  }
 
-    void remove(MinecraftInstance instance, LauncherInstallation launcher, Path controlHome) throws IOException {
-        ensureLauncherStopped(launcher);
-        Path state = controlHome.resolve("hooks").resolve(instance.instanceId());
-        Path metadata = state.resolve("state.json");
-        if (!Files.isRegularFile(metadata)) throw new IOException("No managed hook is installed");
-        JsonNode node = JSON.readTree(metadata.toFile());
-        Path target = Path.of(node.path("target").asText()).toAbsolutePath().normalize();
-        if (!Files.isRegularFile(target) || !sha256(target).equals(node.path("modifiedSha256").asText()))
-            throw new IOException("Launcher hook config changed after install; refusing to overwrite user changes");
-        Path backup = state.resolve("original.backup");
-        Files.copy(backup, target, StandardCopyOption.REPLACE_EXISTING);
-        Files.deleteIfExists(state.resolve("pcl-prelaunch.cmd"));
-        Files.deleteIfExists(state.resolve("hmcl-prelaunch.cmd"));
-        Files.deleteIfExists(state.resolve("mcac-hook.cmd"));
-        Files.deleteIfExists(metadata);
-    }
+  void remove(MinecraftInstance instance, LauncherInstallation launcher, Path controlHome)
+      throws IOException {
+    ensureLauncherStopped(launcher);
+    Path state = controlHome.resolve("hooks").resolve(instance.instanceId());
+    Path metadata = state.resolve("state.json");
+    if (!Files.isRegularFile(metadata)) throw new IOException("No managed hook is installed");
+    JsonNode node = JSON.readTree(metadata.toFile());
+    Path target = Path.of(node.path("target").asText()).toAbsolutePath().normalize();
+    if (!Files.isRegularFile(target)
+        || !sha256(target).equals(node.path("modifiedSha256").asText()))
+      throw new IOException(
+          "Launcher hook config changed after install; refusing to overwrite user changes");
+    Path backup = state.resolve("original.backup");
+    Files.copy(backup, target, StandardCopyOption.REPLACE_EXISTING);
+    Files.deleteIfExists(state.resolve("pcl-prelaunch.cmd"));
+    Files.deleteIfExists(state.resolve("hmcl-prelaunch.cmd"));
+    Files.deleteIfExists(state.resolve("mcac-hook.cmd"));
+    Files.deleteIfExists(metadata);
+  }
 
-    String status(MinecraftInstance instance, Path controlHome) {
-        return Files.isRegularFile(controlHome.resolve("hooks").resolve(instance.instanceId()).resolve("state.json")) ? "INSTALLED" : "NOT_INSTALLED";
-    }
+  String status(MinecraftInstance instance, Path controlHome) {
+    return Files.isRegularFile(
+            controlHome.resolve("hooks").resolve(instance.instanceId()).resolve("state.json"))
+        ? "INSTALLED"
+        : "NOT_INSTALLED";
+  }
 
-    private static void installPcl(MinecraftInstance instance, LauncherInstallation launcher, Path mcac, Path state, Path wrapper) throws IOException {
-        Path target = instance.versionDirectory().resolve("PCL").resolve("Setup.ini");
-        Files.createDirectories(target.getParent());
-        List<String> lines = Files.isRegularFile(target) ? Files.readAllLines(target, StandardCharsets.UTF_8) : new ArrayList<>();
-        String existing = value(lines, "VersionAdvanceRun");
-        writeWrapper(wrapper, existing, mcac, launcher.executable().getParent(), instance.instanceId());
-        replace(lines, "VersionAdvanceRun", "\"" + wrapper.toAbsolutePath().normalize() + "\"");
-        replace(lines, "VersionAdvanceRunWait", "False");
-        backupAndWrite(target, String.join("\r\n", lines) + "\r\n", state, LauncherType.PCL2);
-    }
+  private static void installPcl(
+      MinecraftInstance instance,
+      LauncherInstallation launcher,
+      Path mcac,
+      Path state,
+      Path wrapper)
+      throws IOException {
+    Path target = instance.versionDirectory().resolve("PCL").resolve("Setup.ini");
+    Files.createDirectories(target.getParent());
+    List<String> lines =
+        Files.isRegularFile(target)
+            ? Files.readAllLines(target, StandardCharsets.UTF_8)
+            : new ArrayList<>();
+    String existing = value(lines, "VersionAdvanceRun");
+    writeWrapper(wrapper, existing, mcac, launcher.executable().getParent(), instance.instanceId());
+    replace(lines, "VersionAdvanceRun", "\"" + wrapper.toAbsolutePath().normalize() + "\"");
+    replace(lines, "VersionAdvanceRunWait", "False");
+    backupAndWrite(target, String.join("\r\n", lines) + "\r\n", state, LauncherType.PCL2);
+  }
 
-    private static void installHmcl(MinecraftInstance instance, LauncherInstallation launcher, Path mcac, Path state, Path wrapper) throws IOException {
-        Path target = launcher.dataDirectory().resolve("hmcl.json");
-        ObjectNode document = (ObjectNode) JSON.readTree(target.toFile());
-        List<ObjectNode> matches = new ArrayList<>();
-        var fields = document.path("configurations").fields();
-        while (fields.hasNext()) {
-            var entry = fields.next(); JsonNode config = entry.getValue();
-            String version = config.path("selectedMinecraftVersion").asText("");
-            if (version.equals(instance.displayName()) && config instanceof ObjectNode object) matches.add(object);
-        }
-        if (matches.size()!=1) throw new IOException("HMCL selected version matched "+matches.size()+" configurations; use guided play mode");
-        ObjectNode selected=matches.getFirst();
-        String existing = selected.path("preLaunchCommand").asText(selected.path("precalledCommand").asText(""));
-        writeWrapper(wrapper, existing, mcac, launcher.executable().getParent(), instance.instanceId());
-        selected.put("preLaunchCommand", wrapper.toString());
-        Path temporary = state.resolve("hmcl.modified.json");
-        JSON.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), document);
-        JSON.readTree(temporary.toFile());
-        backupAndMove(target, temporary, state, LauncherType.HMCL);
+  private static void installHmcl(
+      MinecraftInstance instance,
+      LauncherInstallation launcher,
+      Path mcac,
+      Path state,
+      Path wrapper)
+      throws IOException {
+    Path target = launcher.dataDirectory().resolve("hmcl.json");
+    ObjectNode document = (ObjectNode) JSON.readTree(target.toFile());
+    List<ObjectNode> matches = new ArrayList<>();
+    var fields = document.path("configurations").fields();
+    while (fields.hasNext()) {
+      var entry = fields.next();
+      JsonNode config = entry.getValue();
+      String version = config.path("selectedMinecraftVersion").asText("");
+      if (version.equals(instance.displayName()) && config instanceof ObjectNode object)
+        matches.add(object);
     }
+    if (matches.size() != 1)
+      throw new IOException(
+          "HMCL selected version matched "
+              + matches.size()
+              + " configurations; use guided play mode");
+    ObjectNode selected = matches.getFirst();
+    String existing =
+        selected.path("preLaunchCommand").asText(selected.path("precalledCommand").asText(""));
+    writeWrapper(wrapper, existing, mcac, launcher.executable().getParent(), instance.instanceId());
+    selected.put("preLaunchCommand", wrapper.toString());
+    Path temporary = state.resolve("hmcl.modified.json");
+    JSON.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), document);
+    JSON.readTree(temporary.toFile());
+    backupAndMove(target, temporary, state, LauncherType.HMCL);
+  }
 
-    private static void backupAndWrite(Path target, String content, Path state, LauncherType type) throws IOException {
-        if (Files.isRegularFile(target)) Files.copy(target, state.resolve("original.backup"), StandardCopyOption.REPLACE_EXISTING);
-        else Files.writeString(state.resolve("original.backup"), "", StandardCharsets.UTF_8);
-        Path temp = state.resolve("modified.tmp"); Files.writeString(temp, content, StandardCharsets.UTF_8);
-        Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
-        writeState(target, state, type);
+  private static void backupAndWrite(Path target, String content, Path state, LauncherType type)
+      throws IOException {
+    if (Files.isRegularFile(target))
+      Files.copy(target, state.resolve("original.backup"), StandardCopyOption.REPLACE_EXISTING);
+    else Files.writeString(state.resolve("original.backup"), "", StandardCharsets.UTF_8);
+    Path temp = state.resolve("modified.tmp");
+    Files.writeString(temp, content, StandardCharsets.UTF_8);
+    Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
+    writeState(target, state, type);
+  }
+
+  private static void backupAndMove(Path target, Path temporary, Path state, LauncherType type)
+      throws IOException {
+    Files.copy(target, state.resolve("original.backup"), StandardCopyOption.REPLACE_EXISTING);
+    Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
+    writeState(target, state, type);
+  }
+
+  private static void writeState(Path target, Path state, LauncherType type) throws IOException {
+    ObjectNode metadata =
+        JSON.createObjectNode()
+            .put("schemaVersion", 1)
+            .put("launcher", type.name())
+            .put("target", target.toAbsolutePath().normalize().toString())
+            .put("modifiedSha256", sha256(target));
+    JSON.writerWithDefaultPrettyPrinter()
+        .writeValue(state.resolve("state.json").toFile(), metadata);
+  }
+
+  private static void writeWrapper(
+      Path wrapper, String existing, Path mcac, Path launcherRoot, String instanceId)
+      throws IOException {
+    StringBuilder text = new StringBuilder("@echo off\r\nchcp 65001 >nul 2>nul\r\nsetlocal\r\n");
+    if (existing != null && !existing.isBlank()) {
+      Path userHook = wrapper.resolveSibling("user-existing-hook.cmd");
+      Files.writeString(
+          userHook,
+          "@echo off\r\nchcp 65001 >nul 2>nul\r\n" + existing + "\r\nexit /b 0\r\n",
+          StandardCharsets.UTF_8);
+      text.append("call \"").append(escapeBatchPath(userHook)).append("\" 2>nul\r\n");
     }
-    private static void backupAndMove(Path target, Path temporary, Path state, LauncherType type) throws IOException {
-        Files.copy(target, state.resolve("original.backup"), StandardCopyOption.REPLACE_EXISTING);
-        Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
-        writeState(target, state, type);
+    Path executable = mcac.toAbsolutePath().normalize();
+    Path helper = wrapper.resolveSibling("mcac-hook.cmd");
+    String helperText =
+        "@echo off\r\nchcp 65001 >nul 2>nul\r\ncall \""
+            + escapeBatchPath(executable)
+            + "\" --root \""
+            + escapeBatchPath(launcherRoot)
+            + "\" runtime start \""
+            + instanceId.replace("\"", "")
+            + "\" 2>nul\r\nexit /b 0\r\n";
+    Files.writeString(helper, helperText, StandardCharsets.UTF_8);
+    text.append("start \"\" /b cmd.exe /d /c call \"")
+        .append(escapeBatchPath(helper))
+        .append("\" 2>nul\r\n");
+    text.append("exit /b 0\r\n");
+    Files.writeString(wrapper, text, StandardCharsets.UTF_8);
+  }
+
+  private static String escapeBatchPath(Path path) {
+    return path.toAbsolutePath().normalize().toString().replace("%", "%%%%").replace("^", "^^^^");
+  }
+
+  private static String value(List<String> lines, String key) {
+    for (String line : lines)
+      if (line.startsWith(key + ":")) return line.substring(key.length() + 1);
+    return "";
+  }
+
+  private static void replace(List<String> lines, String key, String value) {
+    for (int i = 0; i < lines.size(); i++)
+      if (lines.get(i).startsWith(key + ":")) {
+        lines.set(i, key + ":" + value);
+        return;
+      }
+    lines.add(key + ":" + value);
+  }
+
+  private static String sha256(Path file) throws IOException {
+    try {
+      return HexFormat.of()
+          .formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
     }
-    private static void writeState(Path target, Path state, LauncherType type) throws IOException {
-        ObjectNode metadata = JSON.createObjectNode().put("schemaVersion",1).put("launcher",type.name())
-                .put("target",target.toAbsolutePath().normalize().toString()).put("modifiedSha256",sha256(target));
-        JSON.writerWithDefaultPrettyPrinter().writeValue(state.resolve("state.json").toFile(), metadata);
-    }
-    private static void writeWrapper(Path wrapper, String existing, Path mcac, Path launcherRoot, String instanceId) throws IOException {
-        StringBuilder text = new StringBuilder("@echo off\r\nchcp 65001 >nul 2>nul\r\nsetlocal\r\n");
-        if (existing != null && !existing.isBlank()) {
-            Path userHook=wrapper.resolveSibling("user-existing-hook.cmd");
-            Files.writeString(userHook,"@echo off\r\nchcp 65001 >nul 2>nul\r\n"+existing+"\r\nexit /b 0\r\n",StandardCharsets.UTF_8);
-            text.append("call \"").append(escapeBatchPath(userHook)).append("\" 2>nul\r\n");
-        }
-        Path executable = mcac.toAbsolutePath().normalize();
-        Path helper = wrapper.resolveSibling("mcac-hook.cmd");
-        String helperText = "@echo off\r\nchcp 65001 >nul 2>nul\r\ncall \"" + escapeBatchPath(executable)
-                + "\" --root \"" + escapeBatchPath(launcherRoot)
-                + "\" runtime start \""
-                + instanceId.replace("\"", "") + "\" 2>nul\r\nexit /b 0\r\n";
-        Files.writeString(helper, helperText, StandardCharsets.UTF_8);
-        text.append("start \"\" /b cmd.exe /d /c call \"").append(escapeBatchPath(helper))
-                .append("\" 2>nul\r\n");
-        text.append("exit /b 0\r\n");
-        Files.writeString(wrapper, text, StandardCharsets.UTF_8);
-    }
-    private static String escapeBatchPath(Path path) {
-        return path.toAbsolutePath().normalize().toString().replace("%", "%%%%").replace("^", "^^^^");
-    }
-    private static String value(List<String> lines, String key) { for(String line:lines)if(line.startsWith(key+":"))return line.substring(key.length()+1);return ""; }
-    private static void replace(List<String> lines,String key,String value){for(int i=0;i<lines.size();i++)if(lines.get(i).startsWith(key+":")){lines.set(i,key+":"+value);return;}lines.add(key+":"+value);}
-    private static String sha256(Path file)throws IOException{try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file)));}catch(NoSuchAlgorithmException e){throw new IllegalStateException(e);}}
-    private static void ensureLauncherStopped(LauncherInstallation launcher) throws IOException {
-        String name = launcher.executable().getFileName().toString().toLowerCase();
-        boolean running = ProcessHandle.allProcesses().anyMatch(process -> process.info().command().map(command -> Path.of(command).getFileName().toString().toLowerCase().equals(name)).orElse(false));
-        if (running) throw new IOException("Launcher is running; close it before modifying hook configuration");
-    }
+  }
+
+  private static void ensureLauncherStopped(LauncherInstallation launcher) throws IOException {
+    String name = launcher.executable().getFileName().toString().toLowerCase();
+    boolean running =
+        ProcessHandle.allProcesses()
+            .anyMatch(
+                process ->
+                    process
+                        .info()
+                        .command()
+                        .map(
+                            command ->
+                                Path.of(command)
+                                    .getFileName()
+                                    .toString()
+                                    .toLowerCase()
+                                    .equals(name))
+                        .orElse(false));
+    if (running)
+      throw new IOException("Launcher is running; close it before modifying hook configuration");
+  }
 }

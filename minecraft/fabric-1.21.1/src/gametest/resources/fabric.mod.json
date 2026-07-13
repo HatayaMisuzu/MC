@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "minecraft_ai_companion_gametest",
-  "version": "0.1.0-alpha",
+  "version": "0.2.1-rc.1",
   "name": "Minecraft AI Companion GameTests",
   "environment": "server",
   "entrypoints": {
@@ -13,6 +13,6 @@
     "fabricloader": ">=0.19.3",
     "fabric-api": "*",
     "minecraft": "=1.21.1",
-    "minecraft_ai_companion": "=0.1.0-alpha"
+    "minecraft_ai_companion": "=0.2.1-rc.1"
   }
 }

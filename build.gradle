@@ -227,3 +227,8 @@ tasks.register('tuiIntegrationTest') { group='verification'; dependsOn 'stageTer
 tasks.register('rootLauncherTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine 'powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','root' } } }
 tasks.register('releaseStarterTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine 'powershell','-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','release' } } }
 tasks.register('runtimeDisabledLaunchTest', Exec) { group='verification'; workingDir file('minecraft/fabric-1.21.1'); commandLine 'cmd','/c','gradlew.bat','launchTest','-PmccompanionRuntimeDisabled=true'; doLast { def log=file('minecraft/fabric-1.21.1/build/launch-test/server/logs/latest.log').getText('UTF-8'); if(!log.contains('Runtime bridge disabled by instance config')||log.contains('pairing token not found'))throw new GradleException('enabled=false Runtime bridge regression') } }
+
+// These tests share Fabric run directories and fixed loopback ports, so a combined invocation must serialize them.
+tasks.named('persistenceRestartTest') { mustRunAfter 'runtimeFabricE2E' }
+tasks.named('runtimeDisabledLaunchTest') { mustRunAfter 'persistenceRestartTest' }
+tasks.named('runtimeMultiProfileTest') { mustRunAfter 'runtimeDisabledLaunchTest' }

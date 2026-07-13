@@ -1,9 +1,8 @@
 # 安装：Forge 1.20.1
 
 1. 安装 Minecraft 1.20.1、Java 17，以及 JAR metadata 声明范围内的 Forge 47.x。
-2. 将 `minecraft-ai-companion-forge-1.20.1-0.1.0-alpha.jar` 放入 `mods/`。
+2. 将 `minecraft-ai-companion-forge-1.20.1-0.2.1-rc.1.jar` 放入 `mods/`。
 3. 启动世界或 Dedicated Server，确认 Mod 初始化且状态为 `LOCAL_ONLY`（Runtime 未启动时）。
 4. 进入世界后执行 `/companion create <name>` 和 `/companion status`。
 
 不要用 Java 8 启动该目标。Runtime 可以使用单独的 Java 21，不要求 Minecraft 与 Runtime 共用进程。
-

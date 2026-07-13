@@ -33,7 +33,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class RuntimeWebSocketServer extends WebSocketServer implements AutoCloseable {
     public static final String PROTOCOL = "mc-companion/1";
-    public static final String VERSION = "0.1.0-alpha";
+    public static final String VERSION = "0.2.1-rc.1";
     private static final int MAX_MESSAGE_CHARS = 1_048_576;
     private final String pairingToken;
     private final SessionRegistry sessions;

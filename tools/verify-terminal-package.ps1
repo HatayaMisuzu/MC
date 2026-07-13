@@ -24,6 +24,30 @@ foreach ($item in $required) {
     }
 }
 
+$sumFile = Join-Path $release 'SHA256SUMS.txt'
+foreach ($line in Get-Content -LiteralPath $sumFile -Encoding UTF8) {
+    if ($line -notmatch '^([0-9a-f]{64})  (.+)$') { throw "Malformed SHA256SUMS line: $line" }
+    $target = Join-Path $release ($Matches[2] -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "Hash target is missing: $($Matches[2])" }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $target).Hash.ToLowerInvariant()
+    if ($actual -ne $Matches[1]) { throw "SHA-256 mismatch: $($Matches[2])" }
+}
+
+$zipPath = Join-Path (Split-Path $release -Parent) 'mcac-release.zip'
+if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Release ZIP is missing' }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
+try {
+    $names = @($zip.Entries | ForEach-Object FullName)
+    foreach ($name in @('mcac.exe', 'mcac.cmd', 'mcac.ps1', $starterName)) {
+        if ($names -notcontains $name) { throw "ZIP first layer is missing $name" }
+    }
+    if ($names | Where-Object { $_ -match '^mcac-release/' }) {
+        throw 'ZIP contains an unexpected wrapper directory'
+    }
+}
+finally { $zip.Dispose() }
+
 Push-Location $release
 try {
     & (Join-Path $release 'mcac.exe') --version

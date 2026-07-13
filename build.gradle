@@ -194,6 +194,8 @@ tasks.register('stageTerminal') {
         copy {
             into terminalImage
             from(terminalJpackage.map { it.dir('mcac') })
+            from('mcac.cmd')
+            from('mcac.ps1')
             from('tools/runtime-app-bundled.cmd')
             from('启动终端.cmd')
             from('minecraft/fabric-1.21.1/build/libs') { into 'artifacts/fabric-1.21.1'; include '*.jar'; exclude '*sources*', '*gametest*' }

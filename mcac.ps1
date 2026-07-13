@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $candidates = @(
+    (Join-Path $root 'mcac.exe'),
     (Join-Path $root 'build\distributions\mcac-release\mcac.exe'),
     (Join-Path $root 'build\distributions\mcac-windows-x64\mcac-windows-x64.exe'),
     (Join-Path $root 'mcac-local\mcac.exe'),
@@ -8,9 +9,9 @@ $candidates = @(
 )
 $mcac = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 if (-not $mcac) {
-    & (Join-Path $root 'gradlew.bat') ':terminal:terminal-app:installDist'
+    & (Join-Path $root 'gradlew.bat') 'stageTerminalAtProjectRoot'
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    $mcac = $candidates[-1]
+    $mcac = Join-Path $root 'mcac-local\mcac.exe'
 }
 & $mcac @args
 exit $LASTEXITCODE

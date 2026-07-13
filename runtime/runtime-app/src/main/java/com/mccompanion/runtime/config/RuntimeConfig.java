@@ -61,6 +61,11 @@ public final class RuntimeConfig {
         if (server.port < 0 || server.port > 65_535) {
             throw new IllegalArgumentException("server.port must be between 0 and 65535");
         }
+        if (server.managementPort < 1 || server.managementPort > 65_535 || server.managementPort == server.port) {
+            throw new IllegalArgumentException("server.management_port must be a distinct port between 1 and 65535");
+        }
+        server.profileId = requireText(server.profileId, "server.profile_id");
+        server.instanceId = requireText(server.instanceId, "server.instance_id");
         if (server.heartbeatSeconds < 2 || server.heartbeatSeconds > 300) {
             throw new IllegalArgumentException("server.heartbeat_seconds must be between 2 and 300");
         }
@@ -124,6 +129,9 @@ public final class RuntimeConfig {
                 server:
                   bind: 127.0.0.1
                   port: 8766
+                  management_port: 18766
+                  profile_id: default
+                  instance_id: default
                   token_file: ./data/pairing.token
                   heartbeat_seconds: 15
                   allow_remote: false
@@ -149,6 +157,12 @@ public final class RuntimeConfig {
     public static final class Server {
         public String bind = "127.0.0.1";
         public int port = 8766;
+        @JsonProperty("management_port")
+        public int managementPort = 18766;
+        @JsonProperty("profile_id")
+        public String profileId = "default";
+        @JsonProperty("instance_id")
+        public String instanceId = "default";
         @JsonProperty("token_file")
         public String tokenFile = "./data/pairing.token";
         @JsonProperty("heartbeat_seconds")

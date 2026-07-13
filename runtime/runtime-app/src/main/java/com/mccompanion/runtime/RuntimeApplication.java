@@ -6,6 +6,7 @@ import com.mccompanion.runtime.command.ProtocolCommandSender;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.intent.RuleIntentParser;
+import com.mccompanion.runtime.health.RuntimeHealthServer;
 import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
@@ -41,6 +42,7 @@ public final class RuntimeApplication implements AutoCloseable {
     private final IntentProvider provider;
     private final ProviderRouter providerRouter;
     private final RuntimeWebSocketServer webSocket;
+    private final RuntimeHealthServer healthServer;
     private final ScheduledExecutorService maintenance;
     private final RuntimeCli cli;
     private final CountDownLatch stopped = new CountDownLatch(1);
@@ -56,6 +58,7 @@ public final class RuntimeApplication implements AutoCloseable {
             IntentProvider provider,
             ProviderRouter providerRouter,
             RuntimeWebSocketServer webSocket,
+            RuntimeHealthServer healthServer,
             ScheduledExecutorService maintenance,
             RuntimeCli cli) {
         this.config = config;
@@ -67,6 +70,7 @@ public final class RuntimeApplication implements AutoCloseable {
         this.provider = provider;
         this.providerRouter = providerRouter;
         this.webSocket = webSocket;
+        this.healthServer = healthServer;
         this.maintenance = maintenance;
         this.cli = cli;
     }
@@ -82,6 +86,7 @@ public final class RuntimeApplication implements AutoCloseable {
         IntentProvider provider = null;
         SessionRegistry sessions = null;
         RuntimeWebSocketServer webSocket = null;
+        RuntimeHealthServer healthServer = null;
         ScheduledExecutorService maintenance = null;
         RuntimeCli cli = null;
         try {
@@ -119,6 +124,8 @@ public final class RuntimeApplication implements AutoCloseable {
                     commands,
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
+            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, log);
+            healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;
             SessionRegistry activeSessions = sessions;
@@ -148,7 +155,7 @@ public final class RuntimeApplication implements AutoCloseable {
                 }, System.in, System.out);
             }
             RuntimeApplication application = new RuntimeApplication(config, log, database, companions, sessions,
-                    commands, provider, providerRouter, webSocket, maintenance, cli);
+                    commands, provider, providerRouter, webSocket, healthServer, maintenance, cli);
             holder[0] = application;
             log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, provider="
                     + (provider == null ? "rules" : "openai-compatible")
@@ -161,6 +168,7 @@ public final class RuntimeApplication implements AutoCloseable {
             closeQuietly(cli);
             shutdownExecutor(maintenance);
             closeQuietly(webSocket);
+            closeQuietly(healthServer);
             closeQuietly(sessions);
             closeQuietly(provider);
             closeQuietly(database);
@@ -233,6 +241,7 @@ public final class RuntimeApplication implements AutoCloseable {
             log.error("Unable to release all control leases during shutdown", failure);
         }
         closeQuietly(webSocket);
+        closeQuietly(healthServer);
         closeQuietly(sessions);
         closeQuietly(provider);
         closeQuietly(database);

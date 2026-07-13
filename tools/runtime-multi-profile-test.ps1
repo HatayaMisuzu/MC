@@ -5,6 +5,9 @@ function New-Profile([string]$id,[int]$port){$dir=Join-Path $testHome $id;New-It
 server:
   bind: 127.0.0.1
   port: $port
+  management_port: $($port + 10000)
+  profile_id: "$id"
+  instance_id: "$id"
   token_file: ./pairing.token
   heartbeat_seconds: 15
   allow_remote: false
@@ -19,7 +22,8 @@ provider:
 logging:
   file: ./runtime.log
   console: false
-"@|Set-Content -LiteralPath (Join-Path $dir 'runtime.yml') -Encoding utf8;return $dir}
+"@|Set-Content -LiteralPath (Join-Path $dir 'runtime.yml') -Encoding utf8;return @{Dir=$dir;Token=$token;Id=$id;Port=$port}}
 function Port([int]$p){$c=[Net.Sockets.TcpClient]::new();try{$c.Connect('127.0.0.1',$p);return $true}catch{return $false}finally{$c.Dispose()}}
+function Health($profile){try{$headers=@{Authorization="Bearer $($profile.Token)"};$result=Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Headers $headers -Uri "http://127.0.0.1:$($profile.Port + 10000)/health";return $result.profileId -eq $profile.Id -and $result.instanceId -eq $profile.Id -and $result.protocolVersion -eq 'mc-companion/1' -and $result.port -eq $profile.Port}catch{return $false}}
 $a=New-Profile a 8766;$b=New-Profile b 8767;$pa=$null;$pb=$null
-try{$pa=Start-Process -FilePath (Join-Path $ReleaseDir 'runtime-app.exe') -ArgumentList '--config',(Join-Path $a 'runtime.yml'),'--no-cli' -WorkingDirectory $a -WindowStyle Hidden -PassThru;$pb=Start-Process -FilePath (Join-Path $ReleaseDir 'runtime-app.exe') -ArgumentList '--config',(Join-Path $b 'runtime.yml'),'--no-cli' -WorkingDirectory $b -WindowStyle Hidden -PassThru;$limit=[DateTime]::UtcNow.AddSeconds(20);while(((-not (Port 8766)) -or (-not (Port 8767))) -and [DateTime]::UtcNow -lt $limit){Start-Sleep -Milliseconds 200};if((-not (Port 8766)) -or (-not (Port 8767))){throw 'Two Runtime profiles did not become ready'};Stop-Process -Id $pa.Id -Force;$pa.WaitForExit();Start-Sleep -Milliseconds 300;if(-not (Port 8767)){throw 'Stopping profile A affected profile B'};Write-Output 'Runtime multi-profile test passed: 8766 and 8767 online; stop A left B online.'}finally{foreach($p in @($pa,$pb)){if($p -and (-not $p.HasExited)){Stop-Process -Id $p.Id -Force}}}
+try{$pa=Start-Process -FilePath (Join-Path $ReleaseDir 'runtime-app.exe') -ArgumentList '--config runtime.yml --no-cli' -WorkingDirectory $a.Dir -WindowStyle Hidden -PassThru;$pb=Start-Process -FilePath (Join-Path $ReleaseDir 'runtime-app.exe') -ArgumentList '--config runtime.yml --no-cli' -WorkingDirectory $b.Dir -WindowStyle Hidden -PassThru;$limit=[DateTime]::UtcNow.AddSeconds(20);while(((-not (Health $a)) -or (-not (Health $b))) -and [DateTime]::UtcNow -lt $limit){Start-Sleep -Milliseconds 200};if((-not (Health $a)) -or (-not (Health $b))){throw 'Two Runtime profiles did not report matching authenticated health'};Stop-Process -Id $pa.Id -Force;$pa.WaitForExit();Start-Sleep -Milliseconds 300;if(-not (Health $b)){throw 'Stopping profile A affected profile B'};Write-Output 'Runtime multi-profile test passed: authenticated identity for 8766 and 8767; stop A left B healthy.'}finally{foreach($p in @($pa,$pb)){if($p -and (-not $p.HasExited)){Stop-Process -Id $p.Id -Force}}}

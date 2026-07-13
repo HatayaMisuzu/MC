@@ -37,7 +37,11 @@ public final class PairingService {
         Path providerFile=profile.profileDirectory().resolve("provider.json");
         var provider=Files.isRegularFile(providerFile)?JSON.readTree(providerFile.toFile()):JSON.createObjectNode().put("mode","rules");
         String mode=safe(provider.path("mode").asText("rules")),base=safe(provider.path("baseUrl").asText("https://api.openai.com")),env=safe(provider.path("apiKeyEnv").asText("MC_COMPANION_API_KEY")),model=safe(provider.path("model").asText("disabled"));
-        String yaml = "server:\n  bind: 127.0.0.1\n  port: " + profile.port() + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
+        String yaml = "server:\n  bind: 127.0.0.1\n  port: " + profile.port()
+                + "\n  management_port: " + profile.healthPort()
+                + "\n  profile_id: \"" + safe(profile.instanceId()) + "\""
+                + "\n  instance_id: \"" + safe(instance.instanceId()) + "\""
+                + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
                 + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: 60\n"
                 + "logging:\n  file: ./runtime.log\n  console: false\n";
         Files.writeString(profile.configFile(), yaml, StandardCharsets.UTF_8, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);

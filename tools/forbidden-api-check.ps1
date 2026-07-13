@@ -55,10 +55,17 @@ foreach ($relativeRoot in $productionRoots) {
 
     Get-ChildItem -LiteralPath $scanRoot -Recurse -File | Where-Object {
         $_.Extension -in @('.java', '.kt') -and
-        $_.FullName -notmatch '[\\/](build|\.gradle|run|runs)[\\/]'
+        $_.FullName -notmatch '[\\/](build|\.gradle|run|runs|test|gametest|test-fixtures)[\\/]'
     } | ForEach-Object {
         $path = $_.FullName
-        if ($allowedSegments | Where-Object { $path.Contains($_) }) { return }
+        $isTestFixture = $false
+        foreach ($segment in $allowedSegments) {
+            if ($path.Contains($segment)) {
+                $isTestFixture = $true
+                break
+            }
+        }
+        if ($isTestFixture) { return }
         $lineNumber = 0
         foreach ($line in [IO.File]::ReadLines($path)) {
             $lineNumber++

@@ -61,18 +61,20 @@ try {
     $gameOut = $game.StandardOutput.ReadToEndAsync()
     $gameErr = $game.StandardError.ReadToEndAsync()
 
-    $controlDeadline = [DateTime]::UtcNow.AddSeconds(45)
-    while (-not $game.HasExited -and [DateTime]::UtcNow -lt $controlDeadline) {
-        $runtime.StandardInput.WriteLine('follow first')
-        $runtime.StandardInput.Flush()
-        Start-Sleep -Milliseconds 250
-        $runtime.StandardInput.WriteLine('pause first')
-        $runtime.StandardInput.Flush()
-        Start-Sleep -Milliseconds 250
-        $runtime.StandardInput.WriteLine('resume first')
-        $runtime.StandardInput.Flush()
-        Start-Sleep -Milliseconds 250
-        $runtime.StandardInput.WriteLine('stop first')
+    $gameLog = Join-Path $gameRun 'logs\latest.log'
+    $registrationDeadline = [DateTime]::UtcNow.AddSeconds(45)
+    do {
+        if ($game.HasExited) { throw "Fabric Runtime GameTest exited before companion registration ($($game.ExitCode))." }
+        if ([DateTime]::UtcNow -gt $registrationDeadline) { throw 'Fabric companion did not register with Runtime in time.' }
+        Start-Sleep -Milliseconds 200
+        $registrationReady = (Test-Path -LiteralPath $gameLog) -and
+            ((Get-Content -Raw -LiteralPath $gameLog) -match 'Runtime bridge connected') -and
+            ((Get-Content -Raw -LiteralPath $gameLog) -match 'companion_created')
+    } until ($registrationReady)
+    Start-Sleep -Milliseconds 500
+
+    foreach ($command in @('follow first', 'pause first', 'resume first', 'stop first')) {
+        $runtime.StandardInput.WriteLine($command)
         $runtime.StandardInput.Flush()
         Start-Sleep -Milliseconds 250
     }
@@ -95,10 +97,19 @@ try {
     if ($game.ExitCode -ne 0) { throw "Fabric GameTest failed with exit code $($game.ExitCode)." }
     if ($runtime.ExitCode -ne 0) { throw "Runtime failed with exit code $($runtime.ExitCode)." }
     if ($gameStdout -notmatch 'Runtime bridge connected') { throw 'Fabric log has no successful Runtime handshake.' }
-    if ($gameStdout -notmatch 'All 1 required tests passed') { throw 'Fabric lifecycle GameTest did not pass.' }
+    if ($gameStdout -notmatch 'All [0-9]+ required tests passed') { throw 'Fabric lifecycle GameTest did not pass.' }
     if ($runtimeStdout -notmatch 'COMMAND_DISPATCHED') { throw 'Runtime CLI did not dispatch a behavior command.' }
     if ($runtimeStdout -notmatch '"state":"CANCELLED"|Cancel command dispatched') {
         throw 'Runtime CLI did not complete the cancellation path.'
+    }
+    if ($runtimeStderr -match 'Invalid CompanionStatus payload' -or $runtimeStdout -match 'Invalid CompanionStatus payload') {
+        throw 'Runtime rejected a CompanionStatus payload during E2E.'
+    }
+    if ($runtimeStdout -match '(?m)^CLI_ERROR:') {
+        throw 'Runtime CLI emitted a command error after companion registration.'
+    }
+    if ($runtimeStderr -match '(?m)^.*SEVERE.*$') {
+        throw 'Runtime emitted a SEVERE error during E2E.'
     }
     Write-Output 'Runtime/Fabric E2E passed: handshake, companion registration, lease, follow, pause, resume, stop, safe shutdown.'
 } finally {

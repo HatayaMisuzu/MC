@@ -4,7 +4,9 @@ import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -12,6 +14,43 @@ import net.minecraft.world.phys.Vec3;
 
 /** Headless integration tests that exercise the real ServerPlayer body and fake connection. */
 public final class CompanionLifecycleGameTests implements FabricGameTest {
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000)
+    public void blockedGotoStopsWithBoundedStuckFailure(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "BlockedCompanion").success(), "blocked test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "blocked test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int y = -1; y <= 2; y++) {
+            for (int x = -1; x <= 1; x++) {
+                for (int z = -1; z <= 1; z++) {
+                    if (x != 0 || z != 0 || y == -1 || y == 2) {
+                        body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.BEDROCK.defaultBlockState());
+                    }
+                }
+            }
+        }
+        helper.assertTrue(registry.goTo(owner, origin.getX() + 8.0D, origin.getY(), origin.getZ()).success(),
+                "blocked goto failed to start");
+        helper.runAfterDelay(450, () -> {
+            String status = registry.status(owner);
+            helper.assertTrue(status.contains("mode=PAUSED"), "blocked goto did not enter safe PAUSED state: " + status);
+            helper.assertTrue(status.contains("failure=STUCK"), "blocked goto did not expose STUCK evidence: " + status);
+            helper.assertValueEqual(body.fakeConnection().retainedPacketCount(), 0,
+                    "blocked goto retained packets in fake connection");
+            helper.assertTrue(registry.remove(owner).success(), "blocked test cleanup failed");
+            helper.succeed();
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 100000)
     public void createMoveStopSleepAndWake(GameTestHelper helper) {
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
@@ -46,6 +85,23 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "login did not exercise fake connection packet disposal");
         helper.assertValueEqual(body.fakeConnection().retainedPacketCount(), 0,
                 "fake connection retained a packet during login");
+        if (Boolean.getBoolean("mccompanion.stability")) {
+            long discardedAtStart = body.fakeConnection().discardedPacketCount();
+            owner.moveTo(owner.getX(), owner.getY(), owner.getZ() + 20.0D, owner.getYRot(), owner.getXRot());
+            helper.assertTrue(registry.follow(owner).success(), "stability follow failed to start");
+            helper.runAfterDelay(2400, () -> {
+                helper.assertTrue(registry.liveBodyForOwner(owner.getUUID()) == body,
+                        "companion body was lost during the two-minute stability run");
+                helper.assertTrue(body.fakeConnection().discardedPacketCount() >= discardedAtStart,
+                        "fake connection diagnostic counter moved backwards during stability run");
+                helper.assertValueEqual(body.fakeConnection().retainedPacketCount(), 0,
+                        "fake connection retained packets during the two-minute stability run");
+                helper.assertTrue(registry.stop(owner).success(), "stability stop failed");
+                helper.assertTrue(registry.remove(owner).success(), "stability cleanup failed");
+                helper.succeed();
+            });
+            return;
+        }
         if (Boolean.getBoolean("mccompanion.persistence.seed")) {
             helper.assertTrue(body.addItem(new ItemStack(Items.DIAMOND)),
                     "restart seed item could not enter inventory");

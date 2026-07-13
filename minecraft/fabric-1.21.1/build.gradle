@@ -45,6 +45,7 @@ loom {
             vmArg "-Dmccompanion.runtime.e2e=${project.findProperty('mccompanionRuntimeE2E') ?: 'false'}"
             vmArg "-Dmccompanion.persistence.seed=${project.findProperty('mccompanionPersistenceSeed') ?: 'false'}"
             vmArg "-Dmccompanion.persistence.verify=${project.findProperty('mccompanionPersistenceVerify') ?: 'false'}"
+            vmArg "-Dmccompanion.stability=${project.findProperty('mccompanionStability') ?: 'false'}"
             vmArg "-Dfabric-api.gametest.report-file=${file('build/test-results/gametest/results.xml').absolutePath}"
         }
     }
@@ -58,6 +59,14 @@ dependencies {
     mappings loom.officialMojangMappings()
     modImplementation "net.fabricmc:fabric-loader:${loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    // RuntimeBridge is part of the production Fabric JAR. Loom's development
+    // classpath is not available to players, so its JSON runtime must travel as
+    // Fabric nested JARs rather than being an undeclared host dependency.
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    include 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    include 'com.fasterxml.jackson.core:jackson-core:2.18.3'
+    include 'com.fasterxml.jackson.core:jackson-annotations:2.18.3'
 
     gametestImplementation sourceSets.main.output
 
@@ -108,7 +117,8 @@ tasks.named('runGameTest').configure {
         boolean persistenceRun = project.hasProperty('mccompanionPersistenceSeed')
                 || project.hasProperty('mccompanionPersistenceVerify')
         boolean runtimeE2E = project.hasProperty('mccompanionRuntimeE2E')
-        if (!persistenceRun && !runtimeE2E) {
+        boolean stabilityRun = project.hasProperty('mccompanionStability')
+        if (!persistenceRun && !runtimeE2E && !stabilityRun) {
             delete file('build/gametest')
         }
         file('build/gametest').mkdirs()

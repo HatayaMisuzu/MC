@@ -21,7 +21,7 @@ $seed = & '.\gradlew.bat' runGameTest -PmccompanionPersistenceSeed=true --no-dae
 $seedExit = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 $seed | Set-Content -LiteralPath (Join-Path $evidence 'seed-and-stop.log') -Encoding UTF8
-if ($seedExit -ne 0 -or ($seed -join "`n") -notmatch 'All 1 required tests passed') {
+if ($seedExit -ne 0 -or ($seed -join "`n") -notmatch 'All [0-9]+ required tests passed') {
     throw 'Persistence seed server did not pass and stop normally.'
 }
 
@@ -30,7 +30,7 @@ $verify = & '.\gradlew.bat' runGameTest -PmccompanionPersistenceVerify=true --no
 $verifyExit = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 $verify | Set-Content -LiteralPath (Join-Path $evidence 'restart-and-verify.log') -Encoding UTF8
-if ($verifyExit -ne 0 -or ($verify -join "`n") -notmatch 'All 1 required tests passed') {
+if ($verifyExit -ne 0 -or ($verify -join "`n") -notmatch 'All [0-9]+ required tests passed') {
     throw 'Restart server did not recover the companion UUID, body and inventory.'
 }
 

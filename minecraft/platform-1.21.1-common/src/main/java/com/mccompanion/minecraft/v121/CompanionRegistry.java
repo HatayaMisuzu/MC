@@ -258,7 +258,7 @@ public final class CompanionRegistry {
                     body == null ? "SLEEPING" : "SPAWNED",
                     control == null ? null : control.behaviorId,
                     behaviorState(entry),
-                    control == null ? 0L : control.behaviorRevision,
+                    control == null || control.behaviorId == null ? 0L : control.behaviorRevision,
                     control == null ? 0L : control.epoch,
                     runtimeConnected));
         }

@@ -32,7 +32,7 @@ final class BehaviorDirector {
     }
 
     void start(CompanionEntry entry, CompanionPlayer body) {
-        navigation.put(entry.companionId, new NavigationProgress(body.position(), server.getTickCount()));
+        navigation.put(entry.companionId, new NavigationProgress(server.getTickCount()));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
@@ -85,14 +85,15 @@ final class BehaviorDirector {
 
         NavigationProgress progress = navigation.computeIfAbsent(
                 entry.companionId,
-                ignored -> new NavigationProgress(body.position(), server.getTickCount()));
+                ignored -> new NavigationProgress(server.getTickCount()));
         if (server.getTickCount() - progress.startedTick > BEHAVIOR_TIMEOUT_TICKS) {
             pauseSafely(entry, body, "BEHAVIOR_TIMEOUT");
             return;
         }
 
         Vec3 delta = target.subtract(body.position());
-        if (delta.lengthSqr() <= arrivalDistanceSquared) {
+        double distanceSquared = delta.lengthSqr();
+        if (distanceSquared <= arrivalDistanceSquared) {
             stop(entry, body, true, "NONE");
             if (entry.mode == CompanionEntry.Mode.GOTO) {
                 entry.mode = CompanionEntry.Mode.IDLE;
@@ -103,8 +104,8 @@ final class BehaviorDirector {
             return;
         }
 
-        if (body.position().distanceToSqr(progress.lastProgressPosition) >= 0.05D * 0.05D) {
-            progress.lastProgressPosition = body.position();
+        if (distanceSquared + 0.25D < progress.bestDistanceSquared) {
+            progress.bestDistanceSquared = distanceSquared;
             progress.stagnantTicks = 0;
         } else if (++progress.stagnantTicks >= STUCK_TICKS) {
             if (progress.replanCount >= MAX_REPLANS) {
@@ -114,7 +115,6 @@ final class BehaviorDirector {
             progress.yawOffset = REPLAN_YAW_OFFSETS[progress.replanCount++];
             progress.avoidanceTicks = AVOIDANCE_TICKS;
             progress.stagnantTicks = 0;
-            progress.lastProgressPosition = body.position();
             logger.info("companion_replan companion={} attempt={} yawOffset={}",
                     entry.companionId,
                     progress.replanCount,
@@ -141,15 +141,14 @@ final class BehaviorDirector {
     }
 
     private static final class NavigationProgress {
-        private Vec3 lastProgressPosition;
+        private double bestDistanceSquared = Double.POSITIVE_INFINITY;
         private int stagnantTicks;
         private int replanCount;
         private int avoidanceTicks;
         private float yawOffset;
         private final int startedTick;
 
-        private NavigationProgress(Vec3 lastProgressPosition, int startedTick) {
-            this.lastProgressPosition = lastProgressPosition;
+        private NavigationProgress(int startedTick) {
             this.startedTick = startedTick;
         }
     }

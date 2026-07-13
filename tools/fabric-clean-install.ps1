@@ -1,16 +1,22 @@
 [CmdletBinding()]
 param(
-    [switch]$WithLithium
+    [switch]$WithLithium,
+    [string]$ProductionJar,
+    [string]$EvidenceName
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$variant = if ($WithLithium) { 'fabric-1.21.1-lithium' } else { 'fabric-1.21.1' }
+$variant = if ($EvidenceName) { $EvidenceName } elseif ($WithLithium) { 'fabric-1.21.1-lithium' } else { 'fabric-1.21.1' }
 $instance = Join-Path $root "build\clean-install\$variant"
 $evidence = Join-Path $root "build\clean-install-evidence\$variant"
 $installer = Join-Path $root 'build\downloads\fabric-installer-1.1.1.jar'
-$modJar = Get-ChildItem -LiteralPath (Join-Path $root 'minecraft\fabric-1.21.1\build\libs') -Filter '*.jar' -File |
-    Where-Object { $_.Name -notmatch '(-sources|-dev|-shadow)\.jar$' } | Select-Object -First 1
+$modJar = if ($ProductionJar) {
+    Get-Item -LiteralPath $ProductionJar -ErrorAction Stop
+} else {
+    Get-ChildItem -LiteralPath (Join-Path $root 'minecraft\fabric-1.21.1\build\libs') -Filter '*.jar' -File |
+        Where-Object { $_.Name -notmatch '(-sources|-dev|-shadow)\.jar$' } | Select-Object -First 1
+}
 $fabricApi = Get-ChildItem -Path "$env:USERPROFILE\.gradle\caches\modules-2\files-2.1\net.fabricmc.fabric-api\fabric-api\0.116.13+1.21.1" `
     -Recurse -Filter 'fabric-api-0.116.13+1.21.1.jar' -File | Select-Object -First 1
 $java = Get-ChildItem -Path "$env:USERPROFILE\.gradle\jdks" -Directory -Filter 'eclipse_adoptium-21*' |

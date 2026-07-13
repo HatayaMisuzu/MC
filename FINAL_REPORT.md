@@ -37,6 +37,7 @@
 | Fabric 服务器重启持久化 | PASS | `traces/persistence-restart` |
 | 2,400 游戏 tick 稳定性/FakeConnection | PASS | `traces/stability` |
 | 干净生产 JAR + Fabric API 安装 | PASS | `compatibility/clean-install/fabric-1.21.1` |
+| 从交付目录取出 JAR 后重新干净安装 | PASS | `compatibility/clean-install/delivery-fabric-1.21.1` |
 | 干净生产 JAR + Lithium | PASS | `compatibility/clean-install/fabric-1.21.1-lithium` |
 | 禁止 API、独立性、密钥和依赖审计 | PASS | `traces/release-audit` |
 

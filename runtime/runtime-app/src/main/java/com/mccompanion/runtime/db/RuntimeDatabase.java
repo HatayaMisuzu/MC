@@ -22,7 +22,7 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "conversation_event", "waiting_question", "schema_migration");
+            "memory_fact", "conversation_event", "waiting_question", "brain_session", "brain_tool_call", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -460,6 +460,36 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
         List<String> memoryProvenance = List.of(
                 "ALTER TABLE memory_fact ADD COLUMN source TEXT NOT NULL DEFAULT 'LEGACY'");
+        List<String> brainAudit = List.of(
+                """
+                CREATE TABLE brain_session (
+                  session_id TEXT PRIMARY KEY,
+                  controller_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  provider TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  last_code TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX brain_session_companion_idx ON brain_session(companion_id,updated_at)",
+                """
+                CREATE TABLE brain_tool_call (
+                  session_id TEXT NOT NULL,
+                  call_id TEXT NOT NULL,
+                  tool_name TEXT NOT NULL,
+                  arguments_json TEXT NOT NULL,
+                  success INTEGER NOT NULL,
+                  result_code TEXT NOT NULL,
+                  observation_json TEXT NOT NULL,
+                  terminal INTEGER NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(session_id,call_id),
+                  FOREIGN KEY(session_id) REFERENCES brain_session(session_id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE INDEX brain_tool_call_session_idx ON brain_tool_call(session_id,created_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -467,6 +497,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(4, "durable agent plans, steps, observations, and typed memory", agentKernel),
                 new Migration(5, "persist replan budgets, semantic revisions, and loop fingerprints", replanning),
                 new Migration(6, "persist companion conversation and waiting questions", companionInteraction),
-                new Migration(7, "record typed memory provenance", memoryProvenance));
+                new Migration(7, "record typed memory provenance", memoryProvenance),
+                new Migration(8, "persist external brain sessions and tool observations", brainAudit));
     }
 }

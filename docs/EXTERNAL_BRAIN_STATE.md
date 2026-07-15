@@ -8,7 +8,7 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `EXTERNAL_BRAIN_SEARCH_MEMORY_REPLAY_VERIFIED`
+Current milestone: `EXTERNAL_BRAIN_DURABLE_AUDIT_REPLAY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
 the complete generic Minecraft tool set, External Brain persistence/reconnect,
@@ -53,6 +53,16 @@ product UI controls, and release/install verification remain incomplete.
   user edits are stored with `USER` provenance and take precedence over inference.
 - Added authenticated loopback memory list/search/export, user correction, delete, and
   per-category clear operations. Secret-shaped values are rejected from Brain suggestions.
+
+## Brain persistence and restart slice
+
+- Schema migration 8 persists external Brain sessions and each bounded tool call result.
+- Audits store tool arguments, verified observations, result codes, and lifecycle state;
+  hidden model reasoning is intentionally not stored.
+- Runtime startup marks crash-left active Brain sessions `INTERRUPTED` with
+  `RUNTIME_RESTARTED`; it does not pretend a remote session survived a process restart.
+- Normal cancellation and tool-budget exhaustion are durably recorded.
+- Added authenticated `/brain/audit` inspection for UI/diagnostics and Replay coverage.
 
 ## Verification boundary
 

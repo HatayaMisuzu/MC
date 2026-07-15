@@ -13,6 +13,7 @@ import com.mccompanion.runtime.agent.DecisionKind;
 import com.mccompanion.runtime.agent.StepState;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
+import com.mccompanion.runtime.brain.BrainAuditRepository;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
@@ -53,6 +54,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final ConversationService conversations;
     private final MemoryRepository memories;
     private final ExternalBrainCoordinator externalBrain;
+    private final BrainAuditRepository brainAudit;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -71,6 +73,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             ConversationService conversations,
             MemoryRepository memories,
             ExternalBrainCoordinator externalBrain,
+            BrainAuditRepository brainAudit,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -84,6 +87,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.conversations = conversations;
         this.memories = memories;
         this.externalBrain = externalBrain;
+        this.brainAudit = brainAudit;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -169,6 +173,19 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private void brain(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;
+            if (exchange.getRequestURI().getPath().equals("/brain/audit")) {
+                if (!"GET".equals(exchange.getRequestMethod())) { exchange.sendResponseHeaders(405, -1); return; }
+                String companionId = queryParameter(exchange, "companionId");
+                if (companionId == null || companionId.isBlank()) {
+                    sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED")); return;
+                }
+                try { sendJson(exchange, 200, brainAudit.inspect(companionId, 50)); }
+                catch (java.sql.SQLException failure) {
+                    log.error("Unable to inspect Brain audit", failure);
+                    sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+                }
+                return;
+            }
             if (externalBrain == null) {
                 sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
                 return;

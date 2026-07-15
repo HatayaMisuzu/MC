@@ -7,6 +7,7 @@ import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.brain.ExternalBrainAdapter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
+import com.mccompanion.runtime.brain.BrainAuditRepository;
 import com.mccompanion.runtime.brain.HermesBrainAdapter;
 import com.mccompanion.runtime.brain.OpenAiCompatibleBrainAdapter;
 import com.mccompanion.runtime.config.RuntimeConfig;
@@ -138,6 +139,8 @@ public final class RuntimeApplication implements AutoCloseable {
         CompositeToolGateway toolGateway = null;
         try {
             database.initialize();
+            BrainAuditRepository brainAudit = new BrainAuditRepository(database);
+            int interruptedBrainSessions = brainAudit.interruptActiveSessions();
             CompanionRepository companions = new CompanionRepository(database);
             TaskEventStore events = new TaskEventStore(database);
             TaskRepository tasks = new TaskRepository(database, events);
@@ -176,8 +179,9 @@ public final class RuntimeApplication implements AutoCloseable {
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains)));
             externalBrain = brainOverride == null
-                    ? createExternalBrain(config, redactor, log, toolGateway)
-                    : new ExternalBrainCoordinator(brainOverride, toolGateway, config.brain.maxToolCallsPerTurn);
+                    ? createExternalBrain(config, redactor, log, toolGateway, brainAudit)
+                    : new ExternalBrainCoordinator(brainOverride, toolGateway,
+                    config.brain.maxToolCallsPerTurn, brainAudit);
             kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
                     capabilityVisibility, memories, conversations);
             commands.setTaskLifecycleListener(kernel);
@@ -186,10 +190,12 @@ public final class RuntimeApplication implements AutoCloseable {
             int staleSessions = sessions.recoverStaleSessions();
             int reconciliationTasks = tasks.markUnfinishedForReconciliation().size();
             int recoveryPlans = plans.pauseRunningForRecovery();
-            if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0 || recoveryPlans > 0) {
+            if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
+                    || recoveryPlans > 0 || interruptedBrainSessions > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
-                        + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans);
+                        + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
+                        + ", interruptedBrainSessions=" + interruptedBrainSessions);
             }
 
             webSocket = new RuntimeWebSocketServer(
@@ -207,7 +213,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
-                    kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, log);
+                    kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;
@@ -292,7 +298,8 @@ public final class RuntimeApplication implements AutoCloseable {
     }
 
     private static ExternalBrainCoordinator createExternalBrain(RuntimeConfig config, Redactor redactor,
-                                                                 RuntimeLog log, ToolGateway tools) {
+                                                                 RuntimeLog log, ToolGateway tools,
+                                                                 BrainAuditRepository brainAudit) {
         if ("disabled".equals(config.brain.mode)) return null;
         String token = config.brain.resolveToken().orElse(null);
         if (token == null) {
@@ -306,7 +313,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     config.brain.model, config.brain.timeout(), config.brain.maxOutputTokens);
             default -> throw new IllegalArgumentException("Unsupported external Brain mode");
         };
-        return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn);
+        return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn, brainAudit);
     }
 
     private static SearchProvider createSearchProvider(RuntimeConfig config, Redactor redactor, RuntimeLog log) {

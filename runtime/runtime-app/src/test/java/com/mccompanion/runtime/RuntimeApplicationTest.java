@@ -192,6 +192,12 @@ class RuntimeApplicationTest {
             assertEquals("search.open", body.path("result").path("toolResults").path(2).path("toolName").asText());
             assertTrue(body.path("result").path("toolResults").path(2).path("observation")
                     .path("content").asText().startsWith("UNTRUSTED_EXTERNAL_CONTENT"));
+            HttpResponse<String> audit = HttpClient.newHttpClient().send(HttpRequest.newBuilder(new URI(
+                            "http://127.0.0.1:" + config.server.managementPort
+                                    + "/brain/audit?companionId=brain-companion"))
+                    .header("Authorization", "Bearer " + token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, audit.statusCode(), audit.body());
+            assertEquals(3, Json.parse(audit.body()).path(0).path("toolCalls").size());
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 

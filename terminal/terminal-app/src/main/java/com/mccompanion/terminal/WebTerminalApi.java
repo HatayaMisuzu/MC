@@ -64,6 +64,12 @@ final class WebTerminalApi {
         send(exchange, 200, sessionStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/companions".equals(path))
         send(exchange, 200, companionSnapshot(requiredQuery(exchange, "instanceId")));
+      else if ("GET".equals(method) && "/api/brain/status".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/brain"));
+      else if ("GET".equals(method) && "/api/brain/audit".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/brain/audit", "companionId"));
+      else if ("GET".equals(method) && "/api/memories".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/memories", "companionId", "kind", "query"));
       else if ("GET".equals(method) && "/api/logs/tail".equals(path))
         send(exchange, 200, logSnapshot(exchange));
       else if ("POST".equals(method) && path.endsWith("/plan"))
@@ -294,6 +300,21 @@ final class WebTerminalApi {
     var connection = new ConnectionService().status(root.profile(instance));
     value.put("mode", connection.connected() ? connection.mode() : "SAFE_IDLE");
     return value;
+  }
+
+  private JsonNode runtimeInspect(HttpExchange exchange, String runtimePath, String... forwarded) throws Exception {
+    Map<String, String> query = query(exchange);
+    MinecraftInstance instance = root.instance(required(query, "instanceId"));
+    StringBuilder path = new StringBuilder(runtimePath);
+    boolean first = true;
+    for (String name : forwarded) {
+      String value = query.get(name);
+      if (value == null || value.isBlank()) continue;
+      path.append(first ? '?' : '&').append(java.net.URLEncoder.encode(name, StandardCharsets.UTF_8))
+          .append('=').append(java.net.URLEncoder.encode(value, StandardCharsets.UTF_8));
+      first = false;
+    }
+    return new RuntimeControlClient().inspect(root.profile(instance), path.toString(), Duration.ofSeconds(8));
   }
 
   ObjectNode logSnapshot(HttpExchange exchange) throws Exception {
@@ -606,9 +627,9 @@ final class WebTerminalApi {
         "agent", "request", instanceId, false, details,
         progress -> {
           progress.update(20, "正在规范化输入并构建有限世界上下文");
-          JsonNode result = new RuntimeControlClient().agent(root.profile(instance), "web-agent-" + UUID.randomUUID(),
-              companionId, text, true, Duration.ofSeconds(35));
-          progress.update(85, "正在校验计划、权限和能力参数");
+          JsonNode result = new RuntimeControlClient().brain(root.profile(instance), "runtime-primary",
+              companionId, text, Duration.ofSeconds(65));
+          progress.update(85, "正在校验外部大脑响应、工具权限和观察结果");
           if (!result.path("accepted").asBoolean())
             throw new IOException(result.path("message").asText("伙伴请求被安全拒绝"));
           return result;

@@ -1,6 +1,7 @@
 import {
   Activity,
   Bot,
+  BrainCircuit,
   Boxes,
   ClipboardCheck,
   FileText,
@@ -30,6 +31,7 @@ export type Route =
   | 'smoke'
   | 'runtime'
   | 'provider'
+  | 'brain'
   | 'doctor'
   | 'logs'
   | 'settings'
@@ -43,6 +45,7 @@ const navigation: Array<{ id: Route; label: string; icon: typeof Gauge }> = [
   { id: 'smoke', label: '自动测试', icon: ClipboardCheck },
   { id: 'runtime', label: 'Runtime', icon: Server },
   { id: 'provider', label: 'Provider', icon: Activity },
+  { id: 'brain', label: 'External Brain', icon: BrainCircuit },
   { id: 'doctor', label: 'Doctor', icon: HeartPulse },
   { id: 'logs', label: '日志与支持', icon: FileText },
   { id: 'settings', label: '设置与安全', icon: Settings },

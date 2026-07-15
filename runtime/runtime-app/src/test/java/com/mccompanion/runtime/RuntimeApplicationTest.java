@@ -171,7 +171,7 @@ class RuntimeApplicationTest {
             }
 
             String requestBody = """
-                    {"controllerId":"desktop-controller","companionId":"brain-companion",
+                    {"controllerId":"runtime-primary","companionId":"brain-companion",
                      "text":"What do you see?"}
                     """;
             HttpRequest request = HttpRequest.newBuilder()
@@ -201,6 +201,16 @@ class RuntimeApplicationTest {
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 
+            client.send("""
+                    {"type":"player_request","sessionId":"%s","sequence":1,"payload":{
+                      "requestId":"brain-game-1","companionId":"brain-companion","ownerId":"owner-1",
+                      "text":"Check again from the game chat."}}
+                    """.formatted(sessionId));
+            JsonNode gameReply = client.awaitType("player_reply", 5);
+            assertTrue(gameReply.path("payload").path("accepted").asBoolean());
+            assertEquals("external-brain", gameReply.path("payload").path("source").asText());
+            assertEquals("FINAL_RESPONSE", gameReply.path("payload").path("decision").asText());
+
             URI memoryUri = new URI("http://127.0.0.1:" + config.server.managementPort
                     + "/memories?companionId=brain-companion");
             HttpResponse<String> savedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(memoryUri)
@@ -221,7 +231,7 @@ class RuntimeApplicationTest {
 
             var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(
                     new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())).list("brain-companion", 10);
-            assertEquals(List.of("MESSAGE", "CHAT"), transcript.stream().map(
+            assertEquals(List.of("MESSAGE", "CHAT", "MESSAGE", "CHAT"), transcript.stream().map(
                     com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
             client.closeBlocking();
         }

@@ -11,6 +11,7 @@ import { InstancesPage } from './pages/InstancesPage'
 import { LogsPage } from './pages/LogsPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { ProviderPage } from './pages/ProviderPage'
+import { BrainPage } from './pages/BrainPage'
 import { RuntimePage } from './pages/RuntimePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SmokePage } from './pages/SmokePage'
@@ -24,6 +25,7 @@ const pages: Record<Route, React.ComponentType> = {
   smoke: SmokePage,
   runtime: RuntimePage,
   provider: ProviderPage,
+  brain: BrainPage,
   doctor: DoctorPage,
   logs: LogsPage,
   settings: SettingsPage,

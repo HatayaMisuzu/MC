@@ -41,6 +41,23 @@ final class RuntimeControlClient {
         return request(profile, "POST", "/agent", body.toString(), timeout);
     }
 
+    JsonNode brain(RuntimeProfile profile, String controllerId, String companionId, String text,
+                   Duration timeout) throws IOException {
+        if (text == null || text.isBlank() || text.length() > 4096) {
+            throw new IllegalArgumentException("Brain input must be 1..4096 characters");
+        }
+        ObjectNode body = JSON.createObjectNode().put("controllerId", controllerId)
+                .put("companionId", companionId).put("text", text);
+        return request(profile, "POST", "/brain", body.toString(), timeout);
+    }
+
+    JsonNode inspect(RuntimeProfile profile, String path, Duration timeout) throws IOException {
+        if (path == null || !path.startsWith("/") || path.contains("..") || path.contains("#")) {
+            throw new IllegalArgumentException("Runtime inspection path is invalid");
+        }
+        return request(profile, "GET", path, null, timeout);
+    }
+
     private JsonNode request(RuntimeProfile profile, String method, String path, String body, Duration timeout)
             throws IOException {
         String token = Files.readString(profile.profileDirectory().resolve("pairing.token"),

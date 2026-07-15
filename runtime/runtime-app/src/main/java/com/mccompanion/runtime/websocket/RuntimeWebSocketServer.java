@@ -32,6 +32,8 @@ import com.mccompanion.runtime.session.SessionPeer;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.provider.ProviderRouter;
+import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
+import com.mccompanion.runtime.brain.BrainTurnResult;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
@@ -63,6 +65,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final CapabilityVisibility capabilityVisibility;
     private final MemoryRepository memories;
     private final ConversationService conversations;
+    private final ExternalBrainCoordinator externalBrain;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
@@ -78,14 +81,25 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                                   CapabilityVisibility capabilityVisibility, MemoryRepository memories,
                                   ConversationService conversations, RuntimeLog log) {
         this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, memories, conversations, log, Clock.systemUTC());
+                capabilityVisibility, memories, conversations, null, log, Clock.systemUTC());
+    }
+
+    public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
+                                  CommandService commands, CompanionRepository companions, ProviderRouter providers,
+                                  AgentPlanRepository plans, AgentKernel kernel,
+                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories,
+                                  ConversationService conversations, ExternalBrainCoordinator externalBrain,
+                                  RuntimeLog log) {
+        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
+                capabilityVisibility, memories, conversations, externalBrain, log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                            CommandService commands, CompanionRepository companions, ProviderRouter providers,
                            AgentPlanRepository plans, AgentKernel kernel,
                            CapabilityVisibility capabilityVisibility, MemoryRepository memories,
-                           ConversationService conversations, RuntimeLog log, Clock clock) {
+                           ConversationService conversations, ExternalBrainCoordinator externalBrain,
+                           RuntimeLog log, Clock clock) {
         super(address);
         this.pairingToken = pairingToken;
         this.sessions = sessions;
@@ -97,6 +111,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.capabilityVisibility = capabilityVisibility;
         this.memories = memories;
         this.conversations = conversations;
+        this.externalBrain = externalBrain;
         this.log = log;
         this.clock = clock;
         this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
@@ -270,6 +285,29 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
                         memories.verifiedLandmarkKeys(companionId),
                         visible.availableNames(), memories.preferenceContext(companionId, 24), 5);
+                if (externalBrain != null) {
+                    var brainResult = externalBrain.continueTurn("runtime-primary", companionId, text, context);
+                    reply.put("accepted", true).put("source", "external-brain").put("code", brainResult.code())
+                            .put("decision", brainResult.kind().name()).put("reply", brainResult.response());
+                    reply.set("capabilityStates", visible.toJson());
+                    reply.set("toolResults", Json.MAPPER.valueToTree(brainResult.toolResults()));
+                    com.mccompanion.runtime.conversation.ConversationEvent brainReply = null;
+                    if (!brainResult.response().isBlank()) {
+                        brainReply = conversations.recordDirectReply(companionId, null,
+                                brainResult.kind() == BrainTurnResult.Kind.ASK_USER ? "QUESTION" : "CHAT",
+                                brainResult.response(), Json.object().put("channel", "GAME")
+                                        .put("source", "external-brain")
+                                        .put("brainSessionId", brainResult.sessionId()));
+                        reply.put("conversationEventId", brainReply.eventId());
+                    }
+                    ObjectNode brainMessage = envelope(session, "player_reply");
+                    brainMessage.set("payload", reply);
+                    if (session.peer().isOpen()) {
+                        session.peer().send(Json.write(brainMessage));
+                        if (brainReply != null) conversations.markDirectReplyDelivered(brainReply.eventId());
+                    }
+                    return;
+                }
                 var result = providers.plan(text, context);
                 reply.put("accepted", result.accepted()).put("source", result.source())
                         .put("reply", result.decision().reply()).put("decision", result.decision().kind().name());

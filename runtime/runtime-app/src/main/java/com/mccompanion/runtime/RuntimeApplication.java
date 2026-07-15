@@ -210,6 +210,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     capabilityVisibility,
                     memories,
                     conversations,
+                    externalBrain,
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,

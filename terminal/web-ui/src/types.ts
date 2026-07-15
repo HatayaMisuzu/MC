@@ -138,6 +138,24 @@ export interface WaitingQuestion {
   options: ConversationOption[]; freeTextAllowed: boolean; state: string; createdAt: number; updatedAt: number
 }
 
+export interface BrainStatus {
+  activeControllerId: string
+  health: { status: string; adapter: string; detail: string; checkedAt: string }
+}
+export interface BrainToolAudit {
+  callId: string; toolName: string; success: boolean; code: string; terminal: boolean
+  observation?: Record<string, unknown>
+}
+export interface BrainSessionAudit {
+  sessionId: string; controllerId: string; provider: string; state: string; lastCode: string
+  createdAt: string; updatedAt: string; toolCalls: BrainToolAudit[]
+}
+export interface MemoryFact {
+  memoryId: string; kind: string; key: string; value: unknown; verified: boolean
+  confidence: number; source: string; expiresAt?: string; createdAt: string; updatedAt: string
+}
+export interface MemorySnapshot { companionId: string; byKind: Record<string, MemoryFact[]> }
+
 export interface OperationPlan {
   planId: string
   category: string

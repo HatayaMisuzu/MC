@@ -8,7 +8,7 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `EXTERNAL_BRAIN_DURABLE_AUDIT_REPLAY_VERIFIED`
+Current milestone: `EXTERNAL_BRAIN_GAME_AND_WEB_INGRESS_REPLAY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
 the complete generic Minecraft tool set, External Brain persistence/reconnect,
@@ -63,6 +63,18 @@ product UI controls, and release/install verification remain incomplete.
   `RUNTIME_RESTARTED`; it does not pretend a remote session survived a process restart.
 - Normal cancellation and tool-budget exhaustion are durably recorded.
 - Added authenticated `/brain/audit` inspection for UI/diagnostics and Replay coverage.
+
+## Game and Web ingress slice
+
+- When an External Brain adapter is configured, Fabric `player_request` chat now enters
+  the same bounded `runtime-primary` Brain controller used by the authenticated Runtime
+  HTTP ingress. The Replay integration verifies that the game reply is sourced from
+  `external-brain` and that no internal plan or task is created.
+- The Web Terminal's companion request route now calls Runtime `/brain`, not `/agent`.
+- Added an External Brain page showing adapter health, active controller, durable tool
+  observations, typed-memory provenance, and the companion chat entry point.
+- Web UI tests cover tool-audit rendering, memory provenance, and chat submission.
+- This is Replay automation evidence only; no Live provider or human-playtest claim is made.
 
 ## Verification boundary
 

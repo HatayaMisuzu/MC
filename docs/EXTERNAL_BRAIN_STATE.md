@@ -8,7 +8,7 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `EXTERNAL_BRAIN_AND_SEARCH_REPLAY_VERIFIED`
+Current milestone: `EXTERNAL_BRAIN_SEARCH_MEMORY_REPLAY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
 the complete generic Minecraft tool set, External Brain persistence/reconnect,
@@ -43,6 +43,16 @@ product UI controls, and release/install verification remain incomplete.
   `UNTRUSTED_EXTERNAL_CONTENT` trust label. Prompt-injection-shaped page text is flagged.
 - Replay integration now verifies Runtime -> Brain -> world observation -> search query
   -> source open -> Brain final response in one bounded turn.
+
+## Typed memory management slice
+
+- All four memory categories carry durable provenance in schema migration 7.
+- External Brain tools can list/search typed memories and submit only unverified,
+  expiring preference suggestions. They cannot write verified World facts or delete memory.
+- Body observations remain the trusted source for verified container World memory;
+  user edits are stored with `USER` provenance and take precedence over inference.
+- Added authenticated loopback memory list/search/export, user correction, delete, and
+  per-category clear operations. Secret-shaped values are rejected from Brain suggestions.
 
 ## Verification boundary
 

@@ -458,12 +458,15 @@ public final class RuntimeDatabase implements AutoCloseable {
                 """,
                 "CREATE UNIQUE INDEX waiting_question_one_active_idx ON waiting_question(plan_id) WHERE state='WAITING'",
                 "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
+        List<String> memoryProvenance = List.of(
+                "ALTER TABLE memory_fact ADD COLUMN source TEXT NOT NULL DEFAULT 'LEGACY'");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
                 new Migration(3, "persist task control epochs", epochTracking),
                 new Migration(4, "durable agent plans, steps, observations, and typed memory", agentKernel),
                 new Migration(5, "persist replan budgets, semantic revisions, and loop fingerprints", replanning),
-                new Migration(6, "persist companion conversation and waiting questions", companionInteraction));
+                new Migration(6, "persist companion conversation and waiting questions", companionInteraction),
+                new Migration(7, "record typed memory provenance", memoryProvenance));
     }
 }

@@ -19,6 +19,7 @@ import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.memory.MemoryRepository;
+import com.mccompanion.runtime.memory.MemoryToolGateway;
 import com.mccompanion.runtime.conversation.ConversationRepository;
 import com.mccompanion.runtime.conversation.ConversationService;
 import com.mccompanion.runtime.provider.IntentProvider;
@@ -171,7 +172,8 @@ public final class RuntimeApplication implements AutoCloseable {
                 }
             });
             SearchProvider searchProvider = searchOverride == null ? createSearchProvider(config, redactor, log) : searchOverride;
-            toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools, new SearchToolGateway(searchProvider,
+            toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools,
+                    new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains)));
             externalBrain = brainOverride == null
                     ? createExternalBrain(config, redactor, log, toolGateway)

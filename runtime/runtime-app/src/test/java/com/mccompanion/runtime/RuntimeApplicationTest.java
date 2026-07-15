@@ -195,6 +195,24 @@ class RuntimeApplicationTest {
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 
+            URI memoryUri = new URI("http://127.0.0.1:" + config.server.managementPort
+                    + "/memories?companionId=brain-companion");
+            HttpResponse<String> savedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(memoryUri)
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"kind":"PREFERENCE","key":"reply_style","value":"concise"}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, savedMemory.statusCode(), savedMemory.body());
+            String memoryId = Json.parse(savedMemory.body()).path("memoryId").asText();
+            HttpResponse<String> listedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(memoryUri)
+                    .header("Authorization", "Bearer " + token).GET().build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals("USER", Json.parse(listedMemory.body()).path("byKind").path("PREFERENCE")
+                    .path(0).path("source").asText());
+            HttpResponse<String> deletedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(new URI(
+                            memoryUri + "&memoryId=" + memoryId)).header("Authorization", "Bearer " + token)
+                    .DELETE().build(), HttpResponse.BodyHandlers.ofString());
+            assertTrue(Json.parse(deletedMemory.body()).path("deleted").asBoolean());
+
             var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(
                     new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())).list("brain-companion", 10);
             assertEquals(List.of("MESSAGE", "CHAT"), transcript.stream().map(

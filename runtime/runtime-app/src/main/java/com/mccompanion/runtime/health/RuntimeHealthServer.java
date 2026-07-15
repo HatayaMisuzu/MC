@@ -19,6 +19,7 @@ import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.memory.MemoryRepository;
+import com.mccompanion.runtime.memory.MemoryKind;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
@@ -93,11 +94,76 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/tasks", this::tasks);
         server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
+        server.createContext("/memories", this::memoryManagement);
         server.setExecutor(Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-health");
             thread.setDaemon(true);
             return thread;
         }));
+    }
+
+    private void memoryManagement(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            try {
+                String companionId = queryParameter(exchange, "companionId");
+                if (companionId == null || companionId.isBlank()) {
+                    sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED")); return;
+                }
+                if ("GET".equals(exchange.getRequestMethod())) {
+                    ObjectNode body = Json.object().put("companionId", companionId);
+                    String search = queryParameter(exchange, "query");
+                    if (search != null && !search.isBlank()) {
+                        body.set("memories", Json.MAPPER.valueToTree(memories.search(companionId, search, 100)));
+                    } else {
+                        String kindValue = queryParameter(exchange, "kind");
+                        if (kindValue != null && !kindValue.isBlank()) {
+                            body.set("memories", Json.MAPPER.valueToTree(memories.list(companionId,
+                                    MemoryKind.valueOf(kindValue.toUpperCase(java.util.Locale.ROOT)), 100)));
+                        } else {
+                            ObjectNode byKind = body.putObject("byKind");
+                            for (MemoryKind kind : MemoryKind.values()) byKind.set(kind.name(),
+                                    Json.MAPPER.valueToTree(memories.list(companionId, kind, 100)));
+                        }
+                    }
+                    sendJson(exchange, 200, body); return;
+                }
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    MemoryKind kind = MemoryKind.valueOf(required(request, "kind").toUpperCase(java.util.Locale.ROOT));
+                    String key = requiredText(request, "key", 256);
+                    JsonNode value = request.path("value");
+                    if (value.isMissingNode() || Json.write(value).length() > 16_384) {
+                        throw new IllegalArgumentException("memory value is required and bounded");
+                    }
+                    long ttlSeconds = request.path("ttlSeconds").asLong(0);
+                    if (ttlSeconds < 0 || ttlSeconds > 31_536_000L) throw new IllegalArgumentException("ttlSeconds is invalid");
+                    var fact = memories.remember(companionId, kind, key, value, true, 1.0,
+                            ttlSeconds == 0 ? null : java.time.Duration.ofSeconds(ttlSeconds), "USER");
+                    sendJson(exchange, 200, Json.MAPPER.valueToTree(fact)); return;
+                }
+                if ("DELETE".equals(exchange.getRequestMethod())) {
+                    String memoryId = queryParameter(exchange, "memoryId");
+                    String kindValue = queryParameter(exchange, "kind");
+                    if (memoryId != null && !memoryId.isBlank()) {
+                        sendJson(exchange, 200, Json.object().put("deleted", memories.delete(companionId, memoryId))); return;
+                    }
+                    if (kindValue != null && !kindValue.isBlank()) {
+                        int deleted = memories.clear(companionId,
+                                MemoryKind.valueOf(kindValue.toUpperCase(java.util.Locale.ROOT)));
+                        sendJson(exchange, 200, Json.object().put("deleted", deleted)); return;
+                    }
+                    sendJson(exchange, 400, Json.object().put("code", "MEMORY_ID_OR_KIND_REQUIRED")); return;
+                }
+                exchange.sendResponseHeaders(405, -1);
+            } catch (IllegalArgumentException failure) {
+                sendJson(exchange, 400, Json.object().put("code", "INVALID_MEMORY_REQUEST")
+                        .put("message", failure.getMessage()));
+            } catch (java.sql.SQLException failure) {
+                log.error("Memory management failed", failure);
+                sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+            }
+        }
     }
 
     private void brain(HttpExchange exchange) throws IOException {

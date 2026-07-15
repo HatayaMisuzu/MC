@@ -25,7 +25,7 @@ class RuntimeDatabaseTest {
         try (RuntimeDatabase database = new RuntimeDatabase(path)) {
             database.initialize();
             database.initialize();
-            assertEquals(6, database.currentVersion());
+            assertEquals(7, database.currentVersion());
             assertEquals("wal", database.journalMode().toLowerCase());
             Set<String> tables = new HashSet<>();
             try (var connection = database.open(); Statement statement = connection.createStatement();

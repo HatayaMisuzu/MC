@@ -81,4 +81,20 @@ class MemoryRepositoryTest {
             assertFalse(context.path(0).path("updatedAt").asText().isBlank());
         }
     }
+
+    @Test
+    void supportsProvenanceSearchDeleteAndClear() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("crud.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            MemoryFact first = repository.remember("c1", MemoryKind.EPISODIC, "trip:first",
+                    Json.object().put("summary", "found a village"), true, 1.0, null, "USER");
+            repository.remember("c1", MemoryKind.PREFERENCE, "style", Json.object().put("value", "quiet"),
+                    false, 0.5, null, "EXTERNAL_BRAIN_SUGGESTION");
+            assertEquals("USER", repository.search("c1", "village", 10).getFirst().source());
+            assertTrue(repository.delete("c1", first.memoryId()));
+            assertEquals(1, repository.clear("c1", MemoryKind.PREFERENCE));
+            assertTrue(repository.search("c1", "quiet", 10).isEmpty());
+        }
+    }
 }

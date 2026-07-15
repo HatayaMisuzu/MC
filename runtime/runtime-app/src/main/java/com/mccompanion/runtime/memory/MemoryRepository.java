@@ -25,6 +25,12 @@ public final class MemoryRepository {
 
     public MemoryFact remember(String companionId, MemoryKind kind, String key, JsonNode value,
                                boolean verified, double confidence, Duration ttl) throws SQLException {
+        return remember(companionId, kind, key, value, verified, confidence, ttl,
+                verified ? "VERIFIED_RUNTIME" : "INFERENCE");
+    }
+
+    public MemoryFact remember(String companionId, MemoryKind kind, String key, JsonNode value,
+                               boolean verified, double confidence, Duration ttl, String source) throws SQLException {
         if (confidence < 0 || confidence > 1 || Double.isNaN(confidence)) throw new IllegalArgumentException("confidence must be 0..1");
         long now = clock.millis();
         Long expires = ttl == null ? null : Math.addExact(now, ttl.toMillis());
@@ -33,19 +39,54 @@ public final class MemoryRepository {
             if (existing != null && existing.verified() && !verified) return existing;
             String id = existing == null ? UUID.randomUUID().toString() : existing.memoryId();
             try (PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO memory_fact(memory_id,companion_id,kind,fact_key,value_json,verified,confidence,expires_at,created_at,updated_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?)
+                    INSERT INTO memory_fact(memory_id,companion_id,kind,fact_key,value_json,verified,confidence,source,expires_at,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(companion_id,kind,fact_key) DO UPDATE SET value_json=excluded.value_json,
-                    verified=excluded.verified,confidence=excluded.confidence,expires_at=excluded.expires_at,updated_at=excluded.updated_at
+                    verified=excluded.verified,confidence=excluded.confidence,source=excluded.source,
+                    expires_at=excluded.expires_at,updated_at=excluded.updated_at
                     """)) {
                 statement.setString(1, id); statement.setString(2, required(companionId)); statement.setString(3, kind.name());
                 statement.setString(4, required(key)); statement.setString(5, Json.write(value == null ? Json.object() : value));
                 statement.setInt(6, verified ? 1 : 0); statement.setDouble(7, confidence);
-                if (expires == null) statement.setNull(8, java.sql.Types.BIGINT); else statement.setLong(8, expires);
-                statement.setLong(9, existing == null ? now : existing.createdAt().toEpochMilli()); statement.setLong(10, now);
+                statement.setString(8, required(source));
+                if (expires == null) statement.setNull(9, java.sql.Types.BIGINT); else statement.setLong(9, expires);
+                statement.setLong(10, existing == null ? now : existing.createdAt().toEpochMilli()); statement.setLong(11, now);
                 statement.executeUpdate();
             }
             return find(connection, companionId, kind, key, now);
+        }
+    }
+
+    public List<MemoryFact> list(String companionId, MemoryKind kind, int limit) throws SQLException {
+        return relevant(companionId, kind, limit);
+    }
+
+    public List<MemoryFact> search(String companionId, String text, int limit) throws SQLException {
+        String query = required(text).toLowerCase(java.util.Locale.ROOT);
+        List<MemoryFact> values = new ArrayList<>();
+        for (MemoryKind kind : MemoryKind.values()) {
+            for (MemoryFact fact : relevant(companionId, kind, 100)) {
+                if (fact.key().toLowerCase(java.util.Locale.ROOT).contains(query)
+                        || Json.write(fact.value()).toLowerCase(java.util.Locale.ROOT).contains(query)) values.add(fact);
+            }
+        }
+        return values.stream().sorted(java.util.Comparator.comparing(MemoryFact::updatedAt).reversed())
+                .limit(Math.max(1, Math.min(limit, 100))).toList();
+    }
+
+    public boolean delete(String companionId, String memoryId) throws SQLException {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM memory_fact WHERE companion_id=? AND memory_id=?")) {
+            statement.setString(1, required(companionId)); statement.setString(2, required(memoryId));
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    public int clear(String companionId, MemoryKind kind) throws SQLException {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM memory_fact WHERE companion_id=? AND kind=?")) {
+            statement.setString(1, required(companionId)); statement.setString(2, kind.name());
+            return statement.executeUpdate();
         }
     }
 
@@ -83,7 +124,7 @@ public final class MemoryRepository {
             if (dimension.isBlank()) continue;
             String key = "container:" + dimension + ':' + container.path("x").asInt() + ':'
                     + container.path("y").asInt() + ':' + container.path("z").asInt();
-            remember(companionId, MemoryKind.WORLD, key, container, true, 1.0D, null);
+            remember(companionId, MemoryKind.WORLD, key, container, true, 1.0D, null, "BODY_OBSERVATION");
         }
     }
 
@@ -130,7 +171,8 @@ public final class MemoryRepository {
         return new MemoryFact(result.getString("memory_id"), result.getString("companion_id"),
                 MemoryKind.valueOf(result.getString("kind")), result.getString("fact_key"),
                 Json.parse(result.getString("value_json")), result.getInt("verified") != 0,
-                result.getDouble("confidence"), noExpiry ? null : Instant.ofEpochMilli(expires),
+                result.getDouble("confidence"), result.getString("source"),
+                noExpiry ? null : Instant.ofEpochMilli(expires),
                 Instant.ofEpochMilli(result.getLong("created_at")), Instant.ofEpochMilli(result.getLong("updated_at")));
     }
 

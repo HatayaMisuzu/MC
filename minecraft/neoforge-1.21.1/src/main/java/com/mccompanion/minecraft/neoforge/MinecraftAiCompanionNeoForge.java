@@ -50,7 +50,8 @@ public final class MinecraftAiCompanionNeoForge {
     }
 
     private void onRegisterCommands(RegisterCommandsEvent event) {
-        CompanionCommands.register(event.getDispatcher(), source -> registryFor(source.getServer()), CAPABILITIES.toJson());
+        CompanionCommands.register(event.getDispatcher(), source -> registryFor(source.getServer()), CAPABILITIES.toJson(),
+                (owner, text) -> new CompanionCommands.TextRequestResult(false, "NeoForge 当前为 LOCAL_ONLY，智能文本 Runtime Bridge 尚不可用。"));
     }
 
     private void onServerStarted(ServerStartedEvent event) {

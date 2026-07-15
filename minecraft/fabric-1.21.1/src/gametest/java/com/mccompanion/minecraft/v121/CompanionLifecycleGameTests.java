@@ -17,6 +17,91 @@ import org.slf4j.LoggerFactory;
 /** Headless integration tests that exercise the real ServerPlayer body and fake connection. */
 public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600)
+    public void runtimeSkillsUseVanillaActionsAndVerifyWorldDeltas(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        owner.setGameMode(GameType.SURVIVAL);
+        helper.assertTrue(registry.create(owner, "SkillCompanion").success(), "skill test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "skill test created no live body");
+        // Stand just outside the owner's collision box so the normal forward toss
+        // lands inside the owner's vanilla pickup radius.
+        body.moveTo(owner.getX(), owner.getY(), owner.getZ() - 1.25D, 0.0F, 0.0F);
+        body.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 2));
+
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-skills";
+        long epoch = 1L;
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, leaseId, epoch, System.currentTimeMillis() + 30_000L).success(),
+                "skill test lease acquisition failed");
+        int ownerDiamondsBefore = count(owner, Items.DIAMOND);
+        helper.assertTrue(registry.runtimeStart(
+                        companionId,
+                        leaseId,
+                        epoch,
+                        "deliver-diamond",
+                        "skill",
+                        null,
+                        null,
+                        null,
+                        new SkillParameters("DeliverItem", "minecraft:diamond", 2, false)).success(),
+                "delivery skill failed to start");
+
+        helper.runAfterDelay(120, () -> {
+            helper.assertValueEqual(count(owner, Items.DIAMOND), ownerDiamondsBefore + 2,
+                    "delivery did not produce the verified owner inventory delta");
+            helper.assertValueEqual(count(body, Items.DIAMOND), 0,
+                    "delivery left duplicate diamonds in companion inventory");
+            helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                            .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                    && snapshot.behaviorState().equals("IDLE")
+                                    && snapshot.evidenceSummary().contains("success=true")),
+                    "delivery did not report an idle state with successful world evidence");
+
+            body.getFoodData().setFoodLevel(6);
+            body.getInventory().setItem(0, new ItemStack(Items.BREAD));
+            int foodBefore = body.getFoodData().getFoodLevel();
+            helper.assertTrue(registry.runtimeStart(
+                            companionId,
+                            leaseId,
+                            epoch,
+                            "eat-bread",
+                            "skill",
+                            null,
+                            null,
+                            null,
+                            new SkillParameters("EatAndRecover", "minecraft:bread", 1, false)).success(),
+                    "eating skill failed to start");
+            helper.runAfterDelay(80, () -> {
+                helper.assertTrue(body.getFoodData().getFoodLevel() > foodBefore,
+                        "eating did not change the companion's vanilla food state");
+                helper.assertValueEqual(count(body, Items.BREAD), 0,
+                        "eating did not consume the selected food stack");
+                helper.assertTrue(registry.remove(owner).success(), "skill test cleanup failed");
+                helper.succeed();
+            });
+        });
+    }
+
+    private static int count(ServerPlayer player, net.minecraft.world.item.Item item) {
+        int total = 0;
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = player.getInventory().getItem(slot);
+            if (stack.is(item)) total += stack.getCount();
+        }
+        return total;
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000)
     public void blockedGotoStopsWithBoundedStuckFailure(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")

@@ -106,7 +106,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .command-row { margin-bottom: 14px; }
 
 .overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; margin-bottom: 12px; }
-.main-panel, .detail-panel, .evidence-panel, .session-state, .flow-explanation, .control-panel, .companion-detail, .runtime-details, .form-panel, .provider-test, .doctor-summary, .support-panel, .shutdown-panel, .settings-grid > section, .smoke-grid > section { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.main-panel, .detail-panel, .evidence-panel, .session-state, .flow-explanation, .control-panel, .companion-detail, .companion-chat, .runtime-details, .form-panel, .provider-test, .doctor-summary, .support-panel, .shutdown-panel, .settings-grid > section, .smoke-grid > section { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .panel-header { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 13px; border-bottom: 1px solid var(--border); }
 .panel-header h2, .event-stream h2 { margin: 0; font-size: 13.5px; }
 .panel-header span, .event-stream header > span { color: var(--muted); font-size: 11px; }
@@ -181,6 +181,11 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .control-panel h3 { margin: 14px 0 8px; font-size: 12px; }
 .coordinate-row { display: flex; align-items: flex-end; gap: 8px; }
 .companion-grid { margin-bottom: 12px; }
+.companion-chat { padding: 16px; margin-bottom: 12px; }
+.companion-chat h2 { margin: 0 0 4px; font-size: 15px; }
+.companion-chat p, .companion-chat small { color: var(--muted); }
+.companion-chat-row { display: flex; align-items: flex-end; gap: 10px; margin: 10px 0 6px; }
+.companion-chat-row textarea { flex: 1; min-height: 72px; resize: vertical; padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-2); font: inherit; }
 .companion-detail dd { font-size: 11px; }
 
 .smoke-flow { display: flex; align-items: center; justify-content: center; gap: 0; padding: 25px 10px; margin-bottom: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow-x: auto; }

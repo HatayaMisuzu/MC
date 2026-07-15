@@ -9,6 +9,11 @@ import com.mccompanion.protocol.CommandAccepted;
 import com.mccompanion.protocol.CompanionStatus;
 import com.mccompanion.protocol.ErrorEnvelope;
 import com.mccompanion.runtime.command.CommandService;
+import com.mccompanion.runtime.agent.AgentContext;
+import com.mccompanion.runtime.agent.AgentKernel;
+import com.mccompanion.runtime.agent.AgentPlanRepository;
+import com.mccompanion.runtime.agent.DecisionKind;
+import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.security.PairingTokenStore;
@@ -16,6 +21,8 @@ import com.mccompanion.runtime.session.Handshake;
 import com.mccompanion.runtime.session.RuntimeSession;
 import com.mccompanion.runtime.session.SessionPeer;
 import com.mccompanion.runtime.session.SessionRegistry;
+import com.mccompanion.runtime.session.CompanionRepository;
+import com.mccompanion.runtime.provider.ProviderRouter;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
@@ -30,6 +37,8 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class RuntimeWebSocketServer extends WebSocketServer implements AutoCloseable {
     public static final String PROTOCOL = "mc-companion/1";
@@ -38,6 +47,11 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final String pairingToken;
     private final SessionRegistry sessions;
     private final CommandService commands;
+    private final CompanionRepository companions;
+    private final ProviderRouter providers;
+    private final AgentPlanRepository plans;
+    private final AgentKernel kernel;
+    private final ExecutorService planningExecutor;
     private final RuntimeLog log;
     private final Clock clock;
     private final CountDownLatch started = new CountDownLatch(1);
@@ -46,18 +60,27 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final Map<WebSocket, String> headerTokens = new ConcurrentHashMap<>();
 
     public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
-                                  CommandService commands, RuntimeLog log) {
-        this(address, pairingToken, sessions, commands, log, Clock.systemUTC());
+                                  CommandService commands, CompanionRepository companions, ProviderRouter providers,
+                                  AgentPlanRepository plans, AgentKernel kernel, RuntimeLog log) {
+        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel, log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
-                           CommandService commands, RuntimeLog log, Clock clock) {
+                           CommandService commands, CompanionRepository companions, ProviderRouter providers,
+                           AgentPlanRepository plans, AgentKernel kernel, RuntimeLog log, Clock clock) {
         super(address);
         this.pairingToken = pairingToken;
         this.sessions = sessions;
         this.commands = commands;
+        this.companions = companions;
+        this.providers = providers;
+        this.plans = plans;
+        this.kernel = kernel;
         this.log = log;
         this.clock = clock;
+        this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-player-planner"); thread.setDaemon(true); return thread;
+        });
         setConnectionLostTimeout(30);
         setReuseAddr(true);
     }
@@ -180,9 +203,51 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             case "command_accepted" -> commands.onCommandAccepted(convert(payload, CommandAccepted.class));
             case "behavior_event", "event" -> commands.onBehaviorEvent(convert(payload, BehaviorEvent.class));
             case "protocol_error", "error" -> commands.onProtocolError(convert(payload, ErrorEnvelope.class));
+            case "player_request" -> handlePlayerRequest(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }
             default -> sendError(session.peer(), session, "UNKNOWN_MESSAGE_TYPE", "Unsupported message type");
         }
+    }
+
+    private void handlePlayerRequest(RuntimeSession session, JsonNode payload) {
+        String requestId = required(payload, "requestId");
+        String companionId = required(payload, "companionId");
+        String ownerId = required(payload, "ownerId");
+        String text = payload.path("text").asText("").strip();
+        if (text.isEmpty() || text.length() > 512) throw new IllegalArgumentException("player request text must be 1..512 characters");
+        planningExecutor.execute(() -> {
+            ObjectNode reply = Json.object().put("requestId", requestId).put("companionId", companionId);
+            try {
+                var companion = companions.get(companionId).orElseThrow(() -> new IllegalArgumentException("COMPANION_NOT_FOUND"));
+                if (!session.companionIds().contains(companionId) || !ownerId.equals(companion.ownerId())) {
+                    throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
+                }
+                var active = commands.activeTaskFor(companionId);
+                AgentContext context = new AgentContext(companionId, companion.status(), java.util.List.of(),
+                        active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object), java.util.List.of(),
+                        CapabilityRegistry.standard().names(), 5);
+                var result = providers.plan(text, context);
+                reply.put("accepted", result.accepted()).put("source", result.source())
+                        .put("reply", result.decision().reply()).put("decision", result.decision().kind().name());
+                if (!result.accepted()) reply.put("code", result.errorCode()).put("reply", result.userMessage());
+                else if (result.executableIntent().isPresent()) {
+                    var execution = commands.execute("game-" + requestId, companionId, result.executableIntent().get());
+                    reply.put("accepted", execution.accepted()).put("code", execution.code()).put("taskId", execution.taskId());
+                    if (!execution.accepted()) reply.put("reply", execution.message());
+                } else if (result.decision().kind() == DecisionKind.CREATE_PLAN || result.decision().kind() == DecisionKind.REPLAN) {
+                    var plan = plans.create(companionId, text, result.decision());
+                    plan = kernel.start(plan.planId());
+                    reply.put("planId", plan.planId()).put("planState", plan.state().name());
+                }
+            } catch (Exception failure) {
+                log.warn("Game text request stopped safely: " + failure.getClass().getSimpleName());
+                reply.put("accepted", false).put("code", "REQUEST_BLOCKED")
+                        .put("reply", "我现在无法安全开始这个任务；当前状态已保留，请稍后重试或取消。");
+            }
+            ObjectNode message = envelope(session, "player_reply");
+            message.set("payload", reply);
+            if (session.peer().isOpen()) session.peer().send(Json.write(message));
+        });
     }
 
     private void registerCompanionList(RuntimeSession session, JsonNode payload) throws SQLException {
@@ -199,7 +264,13 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         if (!normalized.hasNonNull("worldId")) {
             normalized.put("worldId", session.handshake().worldId());
         }
-        CompanionStatus status = convert(normalized, CompanionStatus.class);
+        ObjectNode protocolView = Json.object();
+        for (String field : java.util.List.of("companionId", "ownerId", "displayName", "worldId", "dimension",
+                "position", "bodyState", "behaviorId", "behaviorState", "behaviorRevision", "controlEpoch",
+                "runtimeConnected", "capabilities", "observedAt")) {
+            if (normalized.has(field)) protocolView.set(field, normalized.get(field));
+        }
+        CompanionStatus status = convert(protocolView, CompanionStatus.class);
         sessions.registerCompanion(session, status, normalized);
     }
 
@@ -273,6 +344,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
 
     @Override
     public void close() {
+        planningExecutor.shutdownNow();
         try {
             stop(3_000);
         } catch (InterruptedException interrupted) {

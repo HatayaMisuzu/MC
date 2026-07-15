@@ -3,6 +3,8 @@ package com.mccompanion.runtime.provider;
 import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.intent.RuleIntentParser;
 import com.mccompanion.runtime.logging.RuntimeLog;
+import com.mccompanion.runtime.agent.AgentContext;
+import com.mccompanion.runtime.agent.HybridAgentPlanner;
 
 import java.util.Optional;
 
@@ -10,11 +12,19 @@ public final class ProviderRouter {
     private final RuleIntentParser rules;
     private final IntentProvider provider;
     private final RuntimeLog log;
+    private final HybridAgentPlanner planner;
 
     public ProviderRouter(RuleIntentParser rules, IntentProvider provider, RuntimeLog log) {
         this.rules = rules;
         this.provider = provider;
         this.log = log;
+        this.planner = new HybridAgentPlanner(provider instanceof DecisionProvider decisions ? decisions : null);
+    }
+
+    public HybridAgentPlanner.PlanningResult plan(String text, AgentContext context) {
+        HybridAgentPlanner.PlanningResult result = planner.decide(text, context);
+        if (!result.accepted()) log.warn("Agent planning stopped safely: code=" + result.errorCode());
+        return result;
     }
 
     public Resolution resolve(String text) {

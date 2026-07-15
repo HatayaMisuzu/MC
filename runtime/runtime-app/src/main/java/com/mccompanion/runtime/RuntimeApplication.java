@@ -3,6 +3,8 @@ package com.mccompanion.runtime;
 import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.command.IdempotencyStore;
 import com.mccompanion.runtime.command.ProtocolCommandSender;
+import com.mccompanion.runtime.agent.AgentPlanRepository;
+import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.intent.RuleIntentParser;
@@ -13,6 +15,7 @@ import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.provider.IntentProvider;
 import com.mccompanion.runtime.provider.OpenAiCompatibleProvider;
 import com.mccompanion.runtime.provider.ProviderRouter;
+import com.mccompanion.runtime.provider.BudgetedProvider;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.session.SessionRegistry;
@@ -39,6 +42,8 @@ public final class RuntimeApplication implements AutoCloseable {
     private final CompanionRepository companions;
     private final SessionRegistry sessions;
     private final CommandService commands;
+    private final AgentPlanRepository plans;
+    private final AgentKernel kernel;
     private final IntentProvider provider;
     private final ProviderRouter providerRouter;
     private final RuntimeWebSocketServer webSocket;
@@ -55,6 +60,8 @@ public final class RuntimeApplication implements AutoCloseable {
             CompanionRepository companions,
             SessionRegistry sessions,
             CommandService commands,
+            AgentPlanRepository plans,
+            AgentKernel kernel,
             IntentProvider provider,
             ProviderRouter providerRouter,
             RuntimeWebSocketServer webSocket,
@@ -67,6 +74,8 @@ public final class RuntimeApplication implements AutoCloseable {
         this.companions = companions;
         this.sessions = sessions;
         this.commands = commands;
+        this.plans = plans;
+        this.kernel = kernel;
         this.provider = provider;
         this.providerRouter = providerRouter;
         this.webSocket = webSocket;
@@ -94,6 +103,7 @@ public final class RuntimeApplication implements AutoCloseable {
             CompanionRepository companions = new CompanionRepository(database);
             TaskEventStore events = new TaskEventStore(database);
             TaskRepository tasks = new TaskRepository(database, events);
+            AgentPlanRepository plans = new AgentPlanRepository(database);
             LeaseService leases = new LeaseService(database);
             int invalidatedLeases = leases.invalidateRecoveredLeases();
             sessions = new SessionRegistry(database, companions, log);
@@ -105,14 +115,17 @@ public final class RuntimeApplication implements AutoCloseable {
                     new IdempotencyStore(database),
                     new ProtocolCommandSender(),
                     log);
+            AgentKernel kernel = new AgentKernel(plans, commands, log);
+            commands.setTaskLifecycleListener(kernel);
             sessions.setListener(commands);
 
             int staleSessions = sessions.recoverStaleSessions();
             int reconciliationTasks = tasks.markUnfinishedForReconciliation().size();
-            if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0) {
+            int recoveryPlans = plans.pauseRunningForRecovery();
+            if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0 || recoveryPlans > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
-                        + ", invalidatedLeases=" + invalidatedLeases);
+                        + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans);
             }
 
             provider = createProvider(config, redactor, log);
@@ -122,9 +135,13 @@ public final class RuntimeApplication implements AutoCloseable {
                     pairingToken,
                     sessions,
                     commands,
+                    companions,
+                    providerRouter,
+                    plans,
+                    kernel,
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
-            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, log);
+            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans, kernel, providerRouter, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;
@@ -155,7 +172,7 @@ public final class RuntimeApplication implements AutoCloseable {
                 }, System.in, System.out);
             }
             RuntimeApplication application = new RuntimeApplication(config, log, database, companions, sessions,
-                    commands, provider, providerRouter, webSocket, healthServer, maintenance, cli);
+                    commands, plans, kernel, provider, providerRouter, webSocket, healthServer, maintenance, cli);
             holder[0] = application;
             log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, provider="
                     + (provider == null ? "rules" : "openai-compatible")
@@ -188,11 +205,14 @@ public final class RuntimeApplication implements AutoCloseable {
         }
         redactor.registerSecret(key);
         try {
-            return new OpenAiCompatibleProvider(
+            OpenAiCompatibleProvider remote = new OpenAiCompatibleProvider(
                     config.provider.baseUrl,
                     key,
                     config.provider.model,
-                    config.provider.timeout());
+                    config.provider.timeout(),
+                    config.provider.maxOutputTokens);
+            return new BudgetedProvider(remote, config.provider.maxConcurrent,
+                    config.provider.maxCallsPerMinute, config.provider.maxRetries);
         } catch (RuntimeException invalidProvider) {
             log.error("Provider configuration was rejected; Runtime is using rules fallback", invalidProvider);
             return null;
@@ -214,6 +234,8 @@ public final class RuntimeApplication implements AutoCloseable {
     public CommandService commands() {
         return commands;
     }
+
+    public AgentPlanRepository plans() { return plans; }
 
     public ProviderRouter providerRouter() {
         return providerRouter;

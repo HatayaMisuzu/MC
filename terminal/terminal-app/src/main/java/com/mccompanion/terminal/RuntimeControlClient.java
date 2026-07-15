@@ -33,6 +33,14 @@ final class RuntimeControlClient {
         return request(profile, "GET", "/tasks/" + safe, null, timeout);
     }
 
+    JsonNode agent(RuntimeProfile profile, String commandId, String companionId, String text,
+                   boolean execute, Duration timeout) throws IOException {
+        if (text == null || text.isBlank() || text.length() > 4096) throw new IllegalArgumentException("自然语言输入必须为 1..4096 字符");
+        ObjectNode body = JSON.createObjectNode().put("commandId", commandId).put("companionId", companionId)
+                .put("text", text).put("execute", execute);
+        return request(profile, "POST", "/agent", body.toString(), timeout);
+    }
+
     private JsonNode request(RuntimeProfile profile, String method, String path, String body, Duration timeout)
             throws IOException {
         String token = Files.readString(profile.profileDirectory().resolve("pairing.token"),

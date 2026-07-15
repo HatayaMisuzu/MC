@@ -39,7 +39,8 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
     @Override
     public void onInitialize() {
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-                CompanionCommands.register(dispatcher, source -> registryFor(source.getServer()), CAPABILITIES.toJson()));
+                CompanionCommands.register(dispatcher, source -> registryFor(source.getServer()), CAPABILITIES.toJson(),
+                        MinecraftAiCompanionFabric::submitPlayerText));
         ServerLifecycleEvents.SERVER_STARTED.register(MinecraftAiCompanionFabric::onServerStarted);
         ServerTickEvents.END_SERVER_TICK.register(MinecraftAiCompanionFabric::onServerTick);
         ServerLifecycleEvents.SERVER_STOPPING.register(MinecraftAiCompanionFabric::onServerStopping);
@@ -83,5 +84,12 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
     /** Package-scoped access for the isolated headless integration-test mod. */
     public static CompanionRegistry integrationRegistryFor(MinecraftServer server) {
         return registryFor(server);
+    }
+
+    private static CompanionCommands.TextRequestResult submitPlayerText(net.minecraft.server.level.ServerPlayer owner, String text) {
+        RuntimeBridge bridge = runtimeBridge;
+        return bridge == null
+                ? new CompanionCommands.TextRequestResult(false, "Runtime 未连接；状态、暂停、继续和取消仍可使用本地命令。")
+                : bridge.submitPlayerText(owner, text);
     }
 }

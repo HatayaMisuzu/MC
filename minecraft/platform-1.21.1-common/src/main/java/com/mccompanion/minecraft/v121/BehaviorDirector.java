@@ -1,10 +1,19 @@
 package com.mccompanion.minecraft.v121;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import net.minecraft.core.component.DataComponents;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.InteractionHand;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 
@@ -24,6 +33,7 @@ final class BehaviorDirector {
     private final PlayerActionGateway actionGateway = new PlayerActionGateway();
     private final ReflexController reflexController = new ReflexController();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
+    private final Map<UUID, SkillProgress> skills = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
         this.server = server;
@@ -36,15 +46,31 @@ final class BehaviorDirector {
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
+    void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
+        skills.put(entry.companionId, createSkill(body, entry, parameters));
+        actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+    }
+
+    void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
+        if (!skills.containsKey(entry.companionId)) {
+            pauseSafely(entry, body, "RECOVERY_REQUIRED");
+            return;
+        }
+        actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+    }
+
     void stop(CompanionEntry entry, CompanionPlayer body, boolean success, String code) {
         actionGateway.stopInput(body);
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
         navigation.remove(entry.companionId);
+        if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
+                || code.equals("LEASE_EXPIRED"))) skills.remove(entry.companionId);
     }
 
     void forget(UUID companionId) {
         navigation.remove(companionId);
         actionGateway.discard(companionId);
+        skills.remove(companionId);
     }
 
     String evidenceSummary(UUID companionId) {
@@ -53,6 +79,10 @@ final class BehaviorDirector {
 
     void tick(CompanionEntry entry, CompanionPlayer body) {
         if (entry.mode == CompanionEntry.Mode.IDLE || entry.mode == CompanionEntry.Mode.PAUSED) {
+            return;
+        }
+        if (entry.mode == CompanionEntry.Mode.SKILL) {
+            tickSkill(entry, body);
             return;
         }
         var reflex = reflexController.blockingReason(body);
@@ -134,6 +164,128 @@ final class BehaviorDirector {
         actionGateway.applyMoveInput(body, yaw, jumpRequested);
     }
 
+    private SkillProgress createSkill(CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (parameters.capability().equals("DeliverItem")) {
+            Item item = resolveItem(parameters.itemId());
+            if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
+            int available = count(body, item);
+            if (available < parameters.quantity() && !parameters.allowPartial()) {
+                return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            }
+            int target = Math.min(available, parameters.quantity());
+            if (target == 0) return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            return new SkillProgress(parameters, item, target, owner == null ? 0 : count(owner, item),
+                    body.getFoodData().getFoodLevel(), available, server.getTickCount(), null);
+        }
+        if (parameters.capability().equals("EatAndRecover")) {
+            Item item = parameters.itemId().isBlank() ? firstFood(body) : resolveItem(parameters.itemId());
+            if (item == null || !new ItemStack(item).has(DataComponents.FOOD)) return SkillProgress.failed(parameters, "FOOD_MISSING");
+            return new SkillProgress(parameters, item, 1, 0, body.getFoodData().getFoodLevel(),
+                    count(body, item), server.getTickCount(), null);
+        }
+        return SkillProgress.failed(parameters, "CAPABILITY_UNAVAILABLE");
+    }
+
+    private void tickSkill(CompanionEntry entry, CompanionPlayer body) {
+        SkillProgress progress = skills.get(entry.companionId);
+        if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
+        if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
+        if (server.getTickCount() - progress.startedTick > 20 * 20) {
+            pauseSafely(entry, body, "SKILL_TIMEOUT"); return;
+        }
+        if (progress.parameters.capability().equals("DeliverItem")) tickDelivery(entry, body, progress);
+        else tickEating(entry, body, progress);
+    }
+
+    private void tickDelivery(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (owner == null) { pauseSafely(entry, body, "OWNER_OFFLINE"); return; }
+        if (owner.serverLevel() != body.serverLevel()) { pauseSafely(entry, body, "WORLD_CHANGED"); return; }
+        if (owner.distanceToSqr(body) > 16.0D) { pauseSafely(entry, body, "OWNER_OUT_OF_REACH"); return; }
+        // A handoff is an explicit pickup interaction: keep asking only the
+        // ItemEntities created by this skill to touch the nearby recipient.
+        // ItemEntity still enforces its vanilla pickup delay and inventory rules.
+        body.serverLevel().getEntitiesOfClass(
+                        ItemEntity.class,
+                        owner.getBoundingBox().inflate(3.0D),
+                        entity -> progress.droppedEntities.contains(entity.getUUID()))
+                .forEach(entity -> entity.playerTouch(owner));
+        if (count(owner, progress.item) - progress.ownerBaseline >= progress.target) {
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE; entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed(); return;
+        }
+        if (progress.actions >= progress.target) return;
+        if (server.getTickCount() - progress.lastActionTick < 4) return;
+        int slot = findSlot(body, progress.item);
+        if (slot < 0 || slot > 8) { pauseSafely(entry, body, "ITEM_NOT_IN_HOTBAR"); return; }
+        body.getInventory().selected = slot;
+        Vec3 delta = owner.position().subtract(body.position());
+        body.setYRot((float) Math.toDegrees(Math.atan2(-delta.x, delta.z)));
+        body.setXRot(0.0F);
+        if (!body.drop(false)) { pauseSafely(entry, body, "DROP_FAILED"); return; }
+        // ServerPlayer#drop creates the real vanilla ItemEntity and initially
+        // associates it with the thrower. Mark only that freshly tossed item for
+        // the intended recipient; pickup and inventory mutation remain vanilla.
+        body.serverLevel().getEntitiesOfClass(
+                        ItemEntity.class,
+                        body.getBoundingBox().inflate(2.5D),
+                        entity -> entity.getAge() <= 1 && entity.getItem().is(progress.item))
+                .stream()
+                .min(java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(body)))
+                .ifPresent(entity -> {
+                    entity.setTarget(owner.getUUID());
+                    progress.droppedEntities.add(entity.getUUID());
+                });
+        progress.actions++; progress.lastActionTick = server.getTickCount();
+    }
+
+    private void tickEating(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        boolean consumed = count(body, progress.item) < progress.itemBaseline;
+        boolean recovered = body.getFoodData().getFoodLevel() > progress.foodBaseline || !body.canEat(false);
+        if (consumed && recovered) {
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE; entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed(); return;
+        }
+        if (!body.canEat(false)) {
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE; entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed(); return;
+        }
+        if (body.isUsingItem()) return;
+        int slot = findSlot(body, progress.item);
+        if (slot < 0 || slot > 8) { pauseSafely(entry, body, "FOOD_NOT_IN_HOTBAR"); return; }
+        body.getInventory().selected = slot;
+        body.gameMode.useItem(body, body.serverLevel(), body.getInventory().getSelected(), InteractionHand.MAIN_HAND);
+        progress.actions++; progress.lastActionTick = server.getTickCount();
+    }
+
+    private static Item resolveItem(String id) {
+        ResourceLocation key = ResourceLocation.tryParse(id);
+        return key == null || !BuiltInRegistries.ITEM.containsKey(key) ? null : BuiltInRegistries.ITEM.get(key);
+    }
+
+    private static Item firstFood(CompanionPlayer body) {
+        for (int slot = 0; slot < 9; slot++) {
+            ItemStack stack = body.getInventory().getItem(slot);
+            if (!stack.isEmpty() && stack.has(DataComponents.FOOD)) return stack.getItem();
+        }
+        return null;
+    }
+
+    private static int findSlot(ServerPlayer player, Item item) {
+        for (int slot = 0; slot < 9; slot++) if (player.getInventory().getItem(slot).is(item)) return slot;
+        return -1;
+    }
+
+    private static int count(ServerPlayer player, Item item) {
+        int total = 0;
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = player.getInventory().getItem(slot);
+            if (stack.is(item)) total += stack.getCount();
+        }
+        return total;
+    }
+
     private void pauseSafely(CompanionEntry entry, CompanionPlayer body, String code) {
         entry.resumeMode = entry.mode;
         entry.mode = CompanionEntry.Mode.PAUSED;
@@ -152,6 +304,30 @@ final class BehaviorDirector {
 
         private NavigationProgress(int startedTick) {
             this.startedTick = startedTick;
+        }
+    }
+
+    private static final class SkillProgress {
+        private final SkillParameters parameters;
+        private final Item item;
+        private final int target;
+        private final int ownerBaseline;
+        private final int foodBaseline;
+        private final int itemBaseline;
+        private final int startedTick;
+        private final String failureCode;
+        private final Set<UUID> droppedEntities = new HashSet<>();
+        private int actions;
+        private int lastActionTick;
+
+        private SkillProgress(SkillParameters parameters, Item item, int target, int ownerBaseline,
+                              int foodBaseline, int itemBaseline, int startedTick, String failureCode) {
+            this.parameters = parameters; this.item = item; this.target = target; this.ownerBaseline = ownerBaseline;
+            this.foodBaseline = foodBaseline; this.itemBaseline = itemBaseline;
+            this.startedTick = startedTick; this.failureCode = failureCode;
+        }
+        private static SkillProgress failed(SkillParameters parameters, String code) {
+            return new SkillProgress(parameters, null, 0, 0, 0, 0, 0, code);
         }
     }
 }

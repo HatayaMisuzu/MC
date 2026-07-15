@@ -18,7 +18,8 @@ public final class CompanionCommands {
     public static void register(
             CommandDispatcher<CommandSourceStack> dispatcher,
             Function<CommandSourceStack, CompanionRegistry> registryLookup,
-            String capabilityJson) {
+            String capabilityJson,
+            PlayerTextGateway playerTextGateway) {
         dispatcher.register(Commands.literal("companion")
                 .then(Commands.literal("status")
                         .executes(context -> status(context, registryLookup)))
@@ -60,6 +61,26 @@ public final class CompanionCommands {
                         .executes(context -> ownerCommand(context, registryLookup, CompanionRegistry::pause)))
                 .then(Commands.literal("resume")
                         .executes(context -> ownerCommand(context, registryLookup, CompanionRegistry::resume))));
+        dispatcher.register(Commands.literal("mcac")
+                .then(Commands.argument("request", StringArgumentType.greedyString())
+                        .executes(context -> playerText(context, playerTextGateway))));
+    }
+
+    private static int playerText(CommandContext<CommandSourceStack> context, PlayerTextGateway gateway)
+            throws CommandSyntaxException {
+        ServerPlayer owner = context.getSource().getPlayerOrException();
+        String text = StringArgumentType.getString(context, "request").strip();
+        if (text.isEmpty() || text.length() > 512) {
+            context.getSource().sendFailure(Component.literal("请输入 1..512 字符的伙伴请求。"));
+            return 0;
+        }
+        TextRequestResult result = gateway.submit(owner, text);
+        if (result.accepted()) {
+            context.getSource().sendSuccess(() -> Component.literal(result.message()), false);
+            return 1;
+        }
+        context.getSource().sendFailure(Component.literal(result.message()));
+        return 0;
     }
 
     private static int status(
@@ -116,4 +137,8 @@ public final class CompanionCommands {
     private interface OwnerOperation {
         CompanionRegistry.Result apply(CompanionRegistry registry, ServerPlayer owner);
     }
+
+    @FunctionalInterface
+    public interface PlayerTextGateway { TextRequestResult submit(ServerPlayer owner, String text); }
+    public record TextRequestResult(boolean accepted, String message) { }
 }

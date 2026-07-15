@@ -56,6 +56,15 @@ class RuntimeApplicationTest {
                 Thread.sleep(20);
             }
             assertEquals("Test Companion", application.companions().get("companion-1").orElseThrow().displayName());
+            client.send("""
+                    {"type":"player_request","sessionId":"%s","sequence":1,"payload":{
+                      "requestId":"request-1","companionId":"companion-1","ownerId":"owner-1",
+                      "text":"状态"}}
+                    """.formatted(sessionId));
+            JsonNode playerReply = client.awaitType("player_reply", 5);
+            assertTrue(playerReply.path("payload").path("accepted").asBoolean());
+            assertEquals("RESPOND", playerReply.path("payload").path("decision").asText());
+            assertFalse(playerReply.path("payload").path("reply").asText().isBlank());
             client.closeBlocking();
         }
         assertTrue(Files.isRegularFile(config.databasePath()));
@@ -111,4 +120,3 @@ class RuntimeApplicationTest {
         }
     }
 }
-

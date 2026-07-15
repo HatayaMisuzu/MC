@@ -324,6 +324,7 @@ final class WebTerminalApi {
           case "provider" -> providerPlan(request);
           case "session" -> sessionPlan(request);
           case "companions" -> companionPlan(request);
+          case "agent" -> agentPlan(request);
           case "smoke" -> smokePlan(request);
           case "support-bundle" -> supportPlan(request);
           case "doctor/repair" -> doctorRepairPlan(request);
@@ -587,6 +588,29 @@ final class WebTerminalApi {
                       Duration.ofSeconds(8));
           if (!result.path("accepted").asBoolean())
             throw new IOException("命令被拒绝: " + result.path("code").asText("UNKNOWN"));
+          return result;
+        });
+  }
+
+  private OperationManager.Plan agentPlan(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String companionId = required(request, "companionId");
+    String text = request.path("text").asText("").strip();
+    if (text.isEmpty() || text.length() > 4096) throw new IllegalArgumentException("请输入 1..4096 字符的伙伴请求");
+    MinecraftInstance instance = root.instance(instanceId);
+    if (instance.loader() != LoaderType.FABRIC) throw new IOException("LOCAL_ONLY 不支持智能伙伴任务");
+    ObjectNode details = JSON.createObjectNode().put("summary", "让伙伴理解并处理自然语言目标")
+        .put("companionId", companionId).put("request", text).put("modelMayBeCalled", true)
+        .put("completionRequiresWorldEvidence", true);
+    return operations.create(
+        "agent", "request", instanceId, false, details,
+        progress -> {
+          progress.update(20, "正在规范化输入并构建有限世界上下文");
+          JsonNode result = new RuntimeControlClient().agent(root.profile(instance), "web-agent-" + UUID.randomUUID(),
+              companionId, text, true, Duration.ofSeconds(35));
+          progress.update(85, "正在校验计划、权限和能力参数");
+          if (!result.path("accepted").asBoolean())
+            throw new IOException(result.path("message").asText("伙伴请求被安全拒绝"));
           return result;
         });
   }

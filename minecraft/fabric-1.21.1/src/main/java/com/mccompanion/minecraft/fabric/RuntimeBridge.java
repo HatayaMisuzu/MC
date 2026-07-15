@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
+import com.mccompanion.minecraft.v121.SkillParameters;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -15,6 +16,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executors;
@@ -22,7 +25,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.network.chat.Component;
+import com.mccompanion.minecraft.v121.CompanionCommands;
 import org.slf4j.Logger;
 
 /** Optional, reconnecting local WebSocket bridge. All game mutations are re-entered on the server thread. */
@@ -43,6 +50,9 @@ final class RuntimeBridge implements AutoCloseable {
     private final HttpClient client;
     private final AtomicLong outgoingSequence = new AtomicLong();
     private final AtomicBoolean connecting = new AtomicBoolean();
+    private final Map<String, String> observedBehaviorStates = new HashMap<>();
+    private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> playerRequestTimes = new HashMap<>();
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -128,6 +138,12 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("server_player_body", true)
                 .put("follow", true)
                 .put("travel", true)
+                .put("bounded_world_snapshot", true)
+                .put("inventory_observation", true)
+                .put("primitive_lifecycle", true)
+                .put("NavigateTo", true)
+                .put("FollowOwner", true)
+                .put("RetreatFromDanger", true)
                 .put("runtime_safe_idle", true);
         ObjectNode hello = JSON.createObjectNode().put("protocol", PROTOCOL).put("type", "hello");
         hello.set("payload", payload);
@@ -160,9 +176,42 @@ final class RuntimeBridge implements AutoCloseable {
             publishStatus();
         } else if (type.equals("command")) {
             server.execute(() -> processCommand(message.path("payload")));
+        } else if (type.equals("player_reply")) {
+            deliverPlayerReply(message.path("payload"));
         } else if (type.equals("heartbeat_ack") || type.equals("subscription")) {
             // Subscription is fulfilled by the periodic status publisher.
         }
+    }
+
+    CompanionCommands.TextRequestResult submitPlayerText(ServerPlayer owner, String text) {
+        if (socket == null || sessionId == null) return new CompanionCommands.TextRequestResult(false,
+                "Runtime 未连接；复杂任务不会被静默猜测执行。");
+        long now = System.currentTimeMillis();
+        Long previous = playerRequestTimes.put(owner.getUUID(), now);
+        if (previous != null && now - previous < 1500) return new CompanionCommands.TextRequestResult(false, "请求过快，请稍等片刻。");
+        String companionId = registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElse(null);
+        if (companionId == null) return new CompanionCommands.TextRequestResult(false, "你还没有可用的 Companion。");
+        String requestId = UUID.randomUUID().toString();
+        pendingPlayerRequests.put(requestId, owner.getUUID());
+        ObjectNode payload = JSON.createObjectNode().put("requestId", requestId).put("companionId", companionId)
+                .put("ownerId", owner.getUUID().toString()).put("text", text);
+        sendEnvelope("player_request", payload);
+        return new CompanionCommands.TextRequestResult(true, "收到，我先结合当前世界状态理解这个目标。");
+    }
+
+    private void deliverPlayerReply(JsonNode payload) {
+        String requestId = payload.path("requestId").asText("");
+        UUID ownerId = pendingPlayerRequests.remove(requestId);
+        if (ownerId == null) return;
+        String reply = payload.path("reply").asText("请求已处理。");
+        if (reply.length() > 512) reply = reply.substring(0, 512);
+        String finalReply = reply;
+        server.execute(() -> {
+            ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
+            if (owner != null) owner.sendSystemMessage(Component.literal("[伙伴] " + finalReply));
+        });
     }
 
     private void processCommand(JsonNode command) {
@@ -191,7 +240,8 @@ final class RuntimeBridge implements AutoCloseable {
                         arguments.path("behaviorType").asText(),
                         target.has("x") ? target.path("x").asDouble() : null,
                         target.has("y") ? target.path("y").asDouble() : null,
-                        target.has("z") ? target.path("z").asDouble() : null);
+                        target.has("z") ? target.path("z").asDouble() : null,
+                        skillParameters(parameters));
             }
             case "PAUSE_BEHAVIOR" -> result = registry.runtimePause(companionId, leaseId, epoch);
             case "RESUME_BEHAVIOR" -> result = registry.runtimeResume(companionId, leaseId, epoch);
@@ -211,8 +261,19 @@ final class RuntimeBridge implements AutoCloseable {
         if (result.behaviorId() != null && !commandType.equals("ACQUIRE_LEASE")
                 && !commandType.equals("RENEW_LEASE") && !commandType.equals("RELEASE_LEASE")) {
             sendBehaviorEvent(commandId, companionId, result, commandType);
+            observedBehaviorStates.put(companionId + ':' + result.behaviorId(), result.state().toUpperCase(Locale.ROOT));
         }
         publishStatusOnServerThread();
+    }
+
+    private static SkillParameters skillParameters(JsonNode parameters) {
+        if (!parameters.path("capability").isTextual()) return null;
+        JsonNode values = parameters.path("parameters");
+        String item = values.path("item").asText(values.path("itemId").asText(""));
+        int quantity = values.path("quantity").asInt(1);
+        try { return new SkillParameters(parameters.path("capability").asText(), item, quantity,
+                values.path("allowPartial").asBoolean(false)); }
+        catch (IllegalArgumentException invalid) { return null; }
     }
 
     private void sendCommandAccepted(String commandId, CompanionRegistry.RuntimeResult result) {
@@ -291,15 +352,60 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("runtimeConnected", true)
                     .put("observedAt", Instant.now().toString());
             status.putObject("position").put("x", snapshot.x()).put("y", snapshot.y()).put("z", snapshot.z());
+            status.putObject("vitals").put("health", snapshot.health()).put("maxHealth", snapshot.maxHealth())
+                    .put("food", snapshot.foodLevel()).put("air", snapshot.airSupply())
+                    .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava());
+            ObjectNode inventory = status.putObject("inventory").put("freeSlots", snapshot.freeInventorySlots());
+            ObjectNode counts = inventory.putObject("counts");
+            snapshot.inventory().forEach(counts::put);
             status.putObject("capabilities");
             if (snapshot.behaviorId() != null) {
                 status.put("behaviorId", snapshot.behaviorId());
                 status.put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT));
+                publishObservedLifecycle(snapshot);
             }
         }
         ObjectNode payload = JSON.createObjectNode();
         payload.set("companions", companions);
         sendEnvelope("companion_list", payload);
+    }
+
+    private void publishObservedLifecycle(CompanionRegistry.RuntimeSnapshot snapshot) {
+        String key = snapshot.companionId() + ':' + snapshot.behaviorId();
+        String current = snapshot.behaviorState().toUpperCase(Locale.ROOT);
+        String previous = observedBehaviorStates.put(key, current);
+        if (previous == null || previous.equals(current)) return;
+        if (current.equals("IDLE")) {
+            ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
+                    .put("positionX", snapshot.x()).put("positionY", snapshot.y()).put("positionZ", snapshot.z())
+                    .put("evidence", snapshot.evidenceSummary());
+            sendObservedBehaviorEvent(snapshot, "completed", "completed", 1.0D, null, evidence);
+        } else if (current.equals("PAUSED") && previous.equals("RUNNING")) {
+            String failure = failureCode(snapshot.evidenceSummary());
+            ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
+                    .put("failureCode", failure).put("evidence", snapshot.evidenceSummary());
+            sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, null, evidence);
+        }
+    }
+
+    private void sendObservedBehaviorEvent(CompanionRegistry.RuntimeSnapshot snapshot, String event, String state,
+                                           double progress, String failureCode, ObjectNode evidence) {
+        ObjectNode payload = JSON.createObjectNode().put("eventId", UUID.randomUUID().toString())
+                .put("behaviorId", snapshot.behaviorId()).put("companionId", snapshot.companionId())
+                .put("event", event).put("state", state).put("revision", snapshot.behaviorRevision() + 1)
+                .put("tick", server.getTickCount()).put("progress", progress).put("occurredAt", Instant.now().toString());
+        if (failureCode != null) payload.put("failureCode", failureCode).put("message", "行为已安全停止：" + failureCode);
+        payload.set("snapshot", evidence);
+        sendEnvelope("behavior_event", payload);
+    }
+
+    private static String failureCode(String evidence) {
+        if (evidence == null) return "ACTION_BLOCKED";
+        int start = evidence.indexOf("failure=");
+        if (start < 0) return "ACTION_BLOCKED";
+        start += "failure=".length();
+        int end = evidence.indexOf(' ', start);
+        return evidence.substring(start, end < 0 ? evidence.length() : end);
     }
 
     private void sendEnvelope(String type, JsonNode payload) {

@@ -3,6 +3,8 @@ package com.mccompanion.runtime;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.command.CommandReply;
 import com.mccompanion.runtime.command.CommandService;
+import com.mccompanion.runtime.agent.AgentContext;
+import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.provider.ProviderRouter;
@@ -150,14 +152,32 @@ public final class RuntimeCli implements AutoCloseable {
         if (words.length < 3 || words[2].isBlank()) {
             throw new IllegalArgumentException("ask requires: ask <companion> <request>");
         }
-        ProviderRouter.Resolution resolution = providers.resolve(words[2]);
-        if (resolution.intent().isEmpty()) {
-            output.println((resolution.errorCode() == null ? "UNKNOWN_COMMAND" : resolution.errorCode())
-                    + ": " + (resolution.userMessage() == null ? "Request was not recognized" : resolution.userMessage()));
+        String companionId = resolveCompanionId(words[1]);
+        AgentContext context = agentContext(companionId);
+        var planning = providers.plan(words[2], context);
+        if (!planning.accepted()) {
+            output.println(planning.errorCode() + ": " + planning.userMessage());
             return true;
         }
-        printReply(commands.execute(commandId(), resolveCompanionId(words[1]), resolution.intent().get()));
+        if (planning.executableIntent().isPresent()) {
+            printReply(commands.execute(commandId(), companionId, planning.executableIntent().get()));
+        } else {
+            output.println(Json.write(Json.MAPPER.valueToTree(planning.decision())));
+        }
         return true;
+    }
+
+    private AgentContext agentContext(String companionId) {
+        try {
+            CompanionRecord companion = companions.get(companionId)
+                    .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
+            var active = commands.activeTaskFor(companionId);
+            return new AgentContext(companionId, companion.status(), List.of(),
+                    active.<com.fasterxml.jackson.databind.JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
+                    List.of(), CapabilityRegistry.standard().names(), 5);
+        } catch (SQLException failure) {
+            throw new IllegalArgumentException("Unable to build verified companion context", failure);
+        }
     }
 
     private String resolveCompanionId(String value) {

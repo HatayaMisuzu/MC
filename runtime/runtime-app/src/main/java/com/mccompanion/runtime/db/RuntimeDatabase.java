@@ -18,7 +18,7 @@ import java.util.Set;
 public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
-            "behavior_run", "action_evidence", "schema_migration");
+            "behavior_run", "action_evidence", "agent_plan", "agent_step", "memory_fact", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -337,9 +337,60 @@ public final class RuntimeDatabase implements AutoCloseable {
                 """);
         List<String> epochTracking = List.of(
                 "ALTER TABLE task ADD COLUMN control_epoch INTEGER NOT NULL DEFAULT 0");
+        List<String> agentKernel = List.of(
+                """
+                CREATE TABLE agent_plan (
+                  plan_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  request_text TEXT NOT NULL,
+                  decision_json TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  current_step INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                """
+                CREATE UNIQUE INDEX agent_plan_one_active_idx ON agent_plan(companion_id)
+                WHERE state NOT IN ('SUCCEEDED','FAILED','CANCELLED')
+                """,
+                """
+                CREATE TABLE agent_step (
+                  plan_id TEXT NOT NULL,
+                  step_index INTEGER NOT NULL,
+                  state TEXT NOT NULL,
+                  definition_json TEXT NOT NULL,
+                  attempt INTEGER NOT NULL DEFAULT 0,
+                  task_id TEXT,
+                  failure_code TEXT,
+                  observation_json TEXT NOT NULL DEFAULT '{}',
+                  updated_at INTEGER NOT NULL,
+                  PRIMARY KEY(plan_id, step_index),
+                  FOREIGN KEY(plan_id) REFERENCES agent_plan(plan_id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE UNIQUE INDEX agent_step_task_idx ON agent_step(task_id) WHERE task_id IS NOT NULL",
+                """
+                CREATE TABLE memory_fact (
+                  memory_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  fact_key TEXT NOT NULL,
+                  value_json TEXT NOT NULL,
+                  verified INTEGER NOT NULL,
+                  confidence REAL NOT NULL,
+                  expires_at INTEGER,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  UNIQUE(companion_id, kind, fact_key)
+                )
+                """,
+                "CREATE INDEX memory_fact_lookup_idx ON memory_fact(companion_id, kind, expires_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
-                new Migration(3, "persist task control epochs", epochTracking));
+                new Migration(3, "persist task control epochs", epochTracking),
+                new Migration(4, "durable agent plans, steps, observations, and typed memory", agentKernel));
     }
 }

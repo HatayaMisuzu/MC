@@ -42,6 +42,7 @@ public final class CommandService implements SessionRegistry.Listener {
     private final IdempotencyStore idempotency;
     private final ProtocolCommandSender sender;
     private final RuntimeLog log;
+    private volatile TaskLifecycleListener taskLifecycleListener = (task, observation) -> { };
 
     public CommandService(SessionRegistry sessions, CompanionRepository companions, TaskRepository tasks,
                           LeaseService leases, IdempotencyStore idempotency, ProtocolCommandSender sender,
@@ -291,6 +292,7 @@ public final class CommandService implements SessionRegistry.Listener {
             if (updated.state().terminal()) {
                 releaseAfterTerminal(updated);
             }
+            taskLifecycleListener.onTaskUpdated(updated, payload);
         } catch (PersistenceLookupException wrapped) {
             log.error("Unable to look up behavior task", wrapped.getCause());
         } catch (SQLException | RuntimeException failure) {
@@ -501,6 +503,19 @@ public final class CommandService implements SessionRegistry.Listener {
 
     public Optional<TaskRecord> task(String taskId) throws SQLException {
         return tasks.get(taskId);
+    }
+
+    public Optional<TaskRecord> activeTaskFor(String companionId) throws SQLException {
+        return tasks.activeForCompanion(companionId);
+    }
+
+    public void setTaskLifecycleListener(TaskLifecycleListener listener) {
+        taskLifecycleListener = listener == null ? (task, observation) -> { } : listener;
+    }
+
+    @FunctionalInterface
+    public interface TaskLifecycleListener {
+        void onTaskUpdated(TaskRecord task, JsonNode observation);
     }
 
     public List<com.mccompanion.runtime.task.TaskEvent> taskEvents(String taskId) throws SQLException {

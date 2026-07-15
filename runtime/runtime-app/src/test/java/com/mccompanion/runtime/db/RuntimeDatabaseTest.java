@@ -25,7 +25,7 @@ class RuntimeDatabaseTest {
         try (RuntimeDatabase database = new RuntimeDatabase(path)) {
             database.initialize();
             database.initialize();
-            assertEquals(3, database.currentVersion());
+            assertEquals(4, database.currentVersion());
             assertEquals("wal", database.journalMode().toLowerCase());
             Set<String> tables = new HashSet<>();
             try (var connection = database.open(); Statement statement = connection.createStatement();
@@ -33,7 +33,8 @@ class RuntimeDatabaseTest {
                 while (result.next()) tables.add(result.getString(1));
             }
             assertTrue(tables.containsAll(Set.of("runtime_session", "companion", "control_lease", "task",
-                    "task_event", "behavior_run", "action_evidence", "schema_migration")));
+                    "task_event", "behavior_run", "action_evidence", "agent_plan", "agent_step",
+                    "memory_fact", "schema_migration")));
         }
     }
 

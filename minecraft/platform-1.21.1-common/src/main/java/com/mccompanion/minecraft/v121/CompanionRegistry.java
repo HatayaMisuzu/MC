@@ -11,6 +11,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.GameType;
 import net.minecraft.server.network.CommonListenerCookie;
 import org.slf4j.Logger;
 
@@ -247,6 +248,16 @@ public final class CompanionRegistry {
         for (CompanionEntry entry : savedData.entries()) {
             CompanionPlayer body = liveBodies.get(entry.companionId);
             RuntimeControl control = runtimeControls.get(entry.companionId);
+            java.util.Map<String, Integer> inventory = new java.util.TreeMap<>();
+            int freeSlots = 0;
+            if (body != null) {
+                for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+                    var stack = body.getInventory().getItem(slot);
+                    if (stack.isEmpty()) freeSlots++;
+                    else inventory.merge(net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).toString(),
+                            stack.getCount(), Integer::sum);
+                }
+            }
             snapshots.add(new RuntimeSnapshot(
                     entry.companionId.toString(),
                     entry.ownerId.toString(),
@@ -260,7 +271,16 @@ public final class CompanionRegistry {
                     behaviorState(entry),
                     control == null || control.behaviorId == null ? 0L : control.behaviorRevision,
                     control == null ? 0L : control.epoch,
-                    runtimeConnected));
+                    runtimeConnected,
+                    body == null ? 0.0F : body.getHealth(),
+                    body == null ? 0.0F : body.getMaxHealth(),
+                    body == null ? 0 : body.getFoodData().getFoodLevel(),
+                    body == null ? 0 : body.getAirSupply(),
+                    body != null && body.isOnFire(),
+                    body != null && body.isInLava(),
+                    freeSlots,
+                    java.util.Map.copyOf(inventory),
+                    behaviorDirector.evidenceSummary(entry.companionId)));
         }
         return java.util.List.copyOf(snapshots);
     }
@@ -301,7 +321,8 @@ public final class CompanionRegistry {
             String behaviorType,
             Double x,
             Double y,
-            Double z) {
+            Double z,
+            SkillParameters skill) {
         CompanionEntry entry = entryByCompanion(companionId);
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
@@ -334,13 +355,21 @@ public final class CompanionRegistry {
             entry.targetX = owner.getX();
             entry.targetY = owner.getY();
             entry.targetZ = owner.getZ();
+        } else if (normalized.equals("skill") && skill != null) {
+            if (!skill.capability().equals("DeliverItem") && !skill.capability().equals("EatAndRecover")) {
+                return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
+            }
+            entry.mode = CompanionEntry.Mode.SKILL;
+            entry.resumeMode = CompanionEntry.Mode.SKILL;
+            entry.hasTarget = false;
         } else {
             return RuntimeResult.failure("UNSUPPORTED_BEHAVIOR");
         }
         control.behaviorId = behaviorId;
         control.behaviorRevision++;
         savedData.changed();
-        behaviorDirector.start(entry, body);
+        if (entry.mode == CompanionEntry.Mode.SKILL) behaviorDirector.startSkill(entry, body, skill);
+        else behaviorDirector.start(entry, body);
         return RuntimeResult.success(behaviorId, control.behaviorRevision, "RUNNING");
     }
 
@@ -372,7 +401,8 @@ public final class CompanionRegistry {
         entry.mode = entry.resumeMode == CompanionEntry.Mode.PAUSED ? CompanionEntry.Mode.IDLE : entry.resumeMode;
         control.behaviorRevision++;
         savedData.changed();
-        if (entry.mode != CompanionEntry.Mode.IDLE) behaviorDirector.start(entry, body);
+        if (entry.mode == CompanionEntry.Mode.SKILL) behaviorDirector.resumeSkill(entry, body);
+        else if (entry.mode != CompanionEntry.Mode.IDLE) behaviorDirector.start(entry, body);
         return RuntimeResult.success(control.behaviorId, control.behaviorRevision, behaviorState(entry));
     }
 
@@ -448,7 +478,7 @@ public final class CompanionRegistry {
     private static String behaviorState(CompanionEntry entry) {
         return switch (entry.mode) {
             case IDLE -> "IDLE";
-            case FOLLOW, GOTO -> "RUNNING";
+            case FOLLOW, GOTO, SKILL -> "RUNNING";
             case PAUSED -> "PAUSED";
         };
     }
@@ -456,7 +486,9 @@ public final class CompanionRegistry {
     public record RuntimeSnapshot(
             String companionId, String ownerId, String displayName, String dimension,
             double x, double y, double z, String bodyState, String behaviorId,
-            String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected) { }
+            String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
+            float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
+            int freeInventorySlots, java.util.Map<String, Integer> inventory, String evidenceSummary) { }
 
     public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {
         static RuntimeResult success(String behaviorId, long revision, String state) {
@@ -539,6 +571,9 @@ public final class CompanionRegistry {
             }
             CommonListenerCookie cookie = CommonListenerCookie.createInitial(body.getGameProfile(), false);
             server.getPlayerList().placeNewPlayer(connection, body, cookie);
+            // Companion bodies always participate under ordinary survival rules;
+            // creative item retention would invalidate action verification.
+            body.setGameMode(GameType.SURVIVAL);
             if (entry.deathPendingRecovery) {
                 // Lifecycle-only recovery: vanilla already performed drops and saved that inventory before this load.
                 // Restore health and place the newly constructed ServerPlayer body beside its owner; behaviors never

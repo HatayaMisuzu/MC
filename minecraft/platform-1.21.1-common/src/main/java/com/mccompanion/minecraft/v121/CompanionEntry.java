@@ -10,6 +10,7 @@ final class CompanionEntry {
         IDLE,
         FOLLOW,
         GOTO,
+        SKILL,
         PAUSED
     }
 

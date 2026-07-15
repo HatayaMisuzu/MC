@@ -89,6 +89,10 @@ public final class RuntimeConfig {
         if (provider.timeoutSeconds < 1 || provider.timeoutSeconds > 300) {
             throw new IllegalArgumentException("provider.timeout_seconds must be between 1 and 300");
         }
+        if (provider.maxOutputTokens < 128 || provider.maxOutputTokens > 4096) throw new IllegalArgumentException("provider.max_output_tokens must be 128..4096");
+        if (provider.maxCallsPerMinute < 1 || provider.maxCallsPerMinute > 600) throw new IllegalArgumentException("provider.max_calls_per_minute must be 1..600");
+        if (provider.maxConcurrent < 1 || provider.maxConcurrent > 16) throw new IllegalArgumentException("provider.max_concurrent must be 1..16");
+        if (provider.maxRetries < 0 || provider.maxRetries > 3) throw new IllegalArgumentException("provider.max_retries must be 0..3");
         provider.apiKeyEnv = requireText(provider.apiKeyEnv, "provider.api_key_env");
         if (!ENVIRONMENT_NAME.matcher(provider.apiKeyEnv).matches()) {
             throw new IllegalArgumentException("provider.api_key_env must be a valid environment variable name");
@@ -146,6 +150,10 @@ public final class RuntimeConfig {
                   api_key_env: MC_COMPANION_API_KEY
                   model: deepseek-v4-flash
                   timeout_seconds: 60
+                  max_output_tokens: 1400
+                  max_calls_per_minute: 30
+                  max_concurrent: 2
+                  max_retries: 2
 
                 logging:
                   file: ./logs/runtime.log
@@ -191,6 +199,14 @@ public final class RuntimeConfig {
         public String model = "deepseek-v4-flash";
         @JsonProperty("timeout_seconds")
         public int timeoutSeconds = 60;
+        @JsonProperty("max_output_tokens")
+        public int maxOutputTokens = 1400;
+        @JsonProperty("max_calls_per_minute")
+        public int maxCallsPerMinute = 30;
+        @JsonProperty("max_concurrent")
+        public int maxConcurrent = 2;
+        @JsonProperty("max_retries")
+        public int maxRetries = 2;
 
         @JsonIgnore
         public Optional<String> resolveApiKey() {

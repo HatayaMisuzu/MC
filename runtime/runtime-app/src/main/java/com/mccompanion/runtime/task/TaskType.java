@@ -4,6 +4,7 @@ public enum TaskType {
     FOLLOW,
     TRAVEL,
     RETURN,
+    SKILL,
     STOP,
     STATUS
 }

@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.health;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.command.CommandReply;
@@ -10,6 +11,8 @@ import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.agent.AgentDecision;
 import com.mccompanion.runtime.agent.DecisionKind;
 import com.mccompanion.runtime.agent.StepState;
+import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
+import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
@@ -48,6 +51,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final CapabilityVisibility capabilityVisibility;
     private final ConversationService conversations;
     private final MemoryRepository memories;
+    private final ExternalBrainCoordinator externalBrain;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -65,6 +69,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             CapabilityVisibility capabilityVisibility,
             ConversationService conversations,
             MemoryRepository memories,
+            ExternalBrainCoordinator externalBrain,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -77,12 +82,14 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.capabilityVisibility = capabilityVisibility;
         this.conversations = conversations;
         this.memories = memories;
+        this.externalBrain = externalBrain;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
         server.createContext("/health", this::health);
         server.createContext("/commands", this::commands);
         server.createContext("/agent", this::agent);
+        server.createContext("/brain", this::brain);
         server.createContext("/tasks", this::tasks);
         server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
@@ -91,6 +98,72 @@ public final class RuntimeHealthServer implements AutoCloseable {
             thread.setDaemon(true);
             return thread;
         }));
+    }
+
+    private void brain(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (externalBrain == null) {
+                sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
+                return;
+            }
+            if ("GET".equals(exchange.getRequestMethod())) {
+                ObjectNode body = Json.object().put("activeControllerId",
+                        externalBrain.activeControllerId() == null ? "" : externalBrain.activeControllerId());
+                body.set("health", Json.MAPPER.valueToTree(externalBrain.health()));
+                sendJson(exchange, 200, body);
+                return;
+            }
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+            try {
+                JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                String controllerId = required(request, "controllerId");
+                String companionId = required(request, "companionId");
+                String text = requiredText(request, "text", 4096);
+                var companion = companions.get(companionId)
+                        .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
+                var activeTask = commands.activeTaskFor(companionId);
+                var activePlan = plans.activeForCompanion(companionId);
+                var waiting = conversations.repository().activeForCompanion(companionId);
+                var recent = conversations.recentTranscript(companionId, 12);
+                conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                        "MESSAGE", text, Json.object().put("channel", "EXTERNAL_BRAIN"));
+                var session = sessions.forCompanion(companionId).orElse(null);
+                var visible = capabilityVisibility.resolve(session == null ? null : session.handshake(), companion.status());
+                JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
+                ObjectNode taskContext = activeTask
+                        .<ObjectNode>map(value -> (ObjectNode) Json.MAPPER.valueToTree(value)).orElseGet(Json::object);
+                waiting.ifPresent(value -> taskContext.set("waitingQuestion", Json.MAPPER.valueToTree(value)));
+                AgentContext context = new AgentContext(companionId, verifiedWorld, recent, taskContext,
+                        memories.verifiedLandmarkKeys(companionId), visible.availableNames(),
+                        memories.preferenceContext(companionId, 24), 5);
+                var result = externalBrain.continueTurn(controllerId, companionId, text, context);
+                if ((result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE
+                        || result.kind() == BrainTurnResult.Kind.ASK_USER) && !result.response().isBlank()) {
+                    conversations.say(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                            result.kind() == BrainTurnResult.Kind.ASK_USER ? "QUESTION" : "CHAT",
+                            result.response(), Json.object().put("channel", "EXTERNAL_BRAIN")
+                                    .put("brainSessionId", result.sessionId()));
+                }
+                ObjectNode body = Json.object().put("accepted", true).put("code", result.code());
+                body.set("result", Json.MAPPER.valueToTree(result));
+                body.set("capabilityStates", visible.toJson());
+                sendJson(exchange, 200, body);
+            } catch (IllegalArgumentException failure) {
+                sendJson(exchange, 400, Json.object().put("accepted", false)
+                        .put("code", "INVALID_REQUEST").put("message", failure.getMessage()));
+            } catch (IllegalStateException failure) {
+                int status = "BRAIN_CONTROLLER_ALREADY_ACTIVE".equals(failure.getMessage()) ? 409 : 502;
+                sendJson(exchange, status, Json.object().put("accepted", false)
+                        .put("code", failure.getMessage() == null ? "EXTERNAL_BRAIN_ERROR" : failure.getMessage()));
+            } catch (java.sql.SQLException failure) {
+                log.error("Unable to build external Brain context", failure);
+                sendJson(exchange, 500, Json.object().put("accepted", false).put("code", "PERSISTENCE_ERROR"));
+            }
+        }
     }
 
     private void conversations(HttpExchange exchange) throws IOException {

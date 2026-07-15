@@ -5,6 +5,10 @@ import com.mccompanion.runtime.command.IdempotencyStore;
 import com.mccompanion.runtime.command.ProtocolCommandSender;
 import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.AgentKernel;
+import com.mccompanion.runtime.brain.ExternalBrainAdapter;
+import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
+import com.mccompanion.runtime.brain.HermesBrainAdapter;
+import com.mccompanion.runtime.brain.OpenAiCompatibleBrainAdapter;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
@@ -26,6 +30,7 @@ import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
 import com.mccompanion.runtime.task.TaskRepository;
+import com.mccompanion.runtime.tool.RuntimeToolGateway;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
 
 import java.io.IOException;
@@ -51,6 +56,7 @@ public final class RuntimeApplication implements AutoCloseable {
     private final AgentKernel kernel;
     private final IntentProvider provider;
     private final ProviderRouter providerRouter;
+    private final ExternalBrainCoordinator externalBrain;
     private final RuntimeWebSocketServer webSocket;
     private final RuntimeHealthServer healthServer;
     private final ScheduledExecutorService maintenance;
@@ -69,6 +75,7 @@ public final class RuntimeApplication implements AutoCloseable {
             AgentKernel kernel,
             IntentProvider provider,
             ProviderRouter providerRouter,
+            ExternalBrainCoordinator externalBrain,
             RuntimeWebSocketServer webSocket,
             RuntimeHealthServer healthServer,
             ScheduledExecutorService maintenance,
@@ -83,6 +90,7 @@ public final class RuntimeApplication implements AutoCloseable {
         this.kernel = kernel;
         this.provider = provider;
         this.providerRouter = providerRouter;
+        this.externalBrain = externalBrain;
         this.webSocket = webSocket;
         this.healthServer = healthServer;
         this.maintenance = maintenance;
@@ -90,6 +98,12 @@ public final class RuntimeApplication implements AutoCloseable {
     }
 
     public static RuntimeApplication start(RuntimeConfig config, boolean enableCli)
+            throws IOException, SQLException, InterruptedException {
+        return start(config, enableCli, null);
+    }
+
+    /** Package-private dependency injection for deterministic protocol tests; production selects from config. */
+    static RuntimeApplication start(RuntimeConfig config, boolean enableCli, ExternalBrainAdapter brainOverride)
             throws IOException, SQLException, InterruptedException {
         Objects.requireNonNull(config, "config").normalizeAndValidate();
         Redactor redactor = new Redactor();
@@ -104,6 +118,7 @@ public final class RuntimeApplication implements AutoCloseable {
         ScheduledExecutorService maintenance = null;
         RuntimeCli cli = null;
         AgentKernel kernel = null;
+        ExternalBrainCoordinator externalBrain = null;
         try {
             database.initialize();
             CompanionRepository companions = new CompanionRepository(database);
@@ -127,6 +142,21 @@ public final class RuntimeApplication implements AutoCloseable {
             provider = createProvider(config, redactor, log);
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
             CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
+            SessionRegistry activeSessionRegistry = sessions;
+            RuntimeToolGateway toolGateway = new RuntimeToolGateway(commands, companions, companionId -> {
+                try {
+                    var companion = companions.get(companionId).orElse(null);
+                    if (companion == null) return java.util.List.of();
+                    var session = activeSessionRegistry.forCompanion(companionId).orElse(null);
+                    return capabilityVisibility.resolve(session == null ? null : session.handshake(),
+                            companion.status()).availableNames();
+                } catch (java.sql.SQLException failure) {
+                    return java.util.List.of();
+                }
+            });
+            externalBrain = brainOverride == null
+                    ? createExternalBrain(config, redactor, log, toolGateway)
+                    : new ExternalBrainCoordinator(brainOverride, toolGateway, config.brain.maxToolCallsPerTurn);
             kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
                     capabilityVisibility, memories, conversations);
             commands.setTaskLifecycleListener(kernel);
@@ -156,7 +186,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
-                    kernel, providerRouter, capabilityVisibility, conversations, memories, log);
+                    kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;
@@ -187,10 +217,13 @@ public final class RuntimeApplication implements AutoCloseable {
                 }, System.in, System.out);
             }
             RuntimeApplication application = new RuntimeApplication(config, log, database, companions, sessions,
-                    commands, plans, kernel, provider, providerRouter, webSocket, healthServer, maintenance, cli);
+                    commands, plans, kernel, provider, providerRouter, externalBrain,
+                    webSocket, healthServer, maintenance, cli);
             holder[0] = application;
             log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, provider="
                     + (provider == null ? "rules" : "openai-compatible")
+                    + ", externalBrain=" + (externalBrain == null ? "disabled"
+                    : brainOverride == null ? config.brain.mode : "injected-replay")
                     + ", database=WAL, bind=" + config.server.bind + ':' + webSocket.getPort());
             if (cli != null) {
                 cli.start();
@@ -202,6 +235,7 @@ public final class RuntimeApplication implements AutoCloseable {
             closeQuietly(webSocket);
             closeQuietly(healthServer);
             closeQuietly(kernel);
+            closeQuietly(externalBrain);
             closeQuietly(sessions);
             closeQuietly(provider);
             closeQuietly(database);
@@ -235,6 +269,24 @@ public final class RuntimeApplication implements AutoCloseable {
         }
     }
 
+    private static ExternalBrainCoordinator createExternalBrain(RuntimeConfig config, Redactor redactor,
+                                                                 RuntimeLog log, RuntimeToolGateway tools) {
+        if ("disabled".equals(config.brain.mode)) return null;
+        String token = config.brain.resolveToken().orElse(null);
+        if (token == null) {
+            log.warn("External Brain token environment variable is absent; Brain Bridge is disabled");
+            return null;
+        }
+        redactor.registerSecret(token);
+        ExternalBrainAdapter adapter = switch (config.brain.mode) {
+            case "hermes" -> new HermesBrainAdapter(config.brain.endpoint, token, config.brain.timeout());
+            case "openai-compatible" -> new OpenAiCompatibleBrainAdapter(config.brain.endpoint, token,
+                    config.brain.model, config.brain.timeout(), config.brain.maxOutputTokens);
+            default -> throw new IllegalArgumentException("Unsupported external Brain mode");
+        };
+        return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn);
+    }
+
     public RuntimeConfig config() {
         return config;
     }
@@ -255,6 +307,10 @@ public final class RuntimeApplication implements AutoCloseable {
 
     public ProviderRouter providerRouter() {
         return providerRouter;
+    }
+
+    public java.util.Optional<ExternalBrainCoordinator> externalBrain() {
+        return java.util.Optional.ofNullable(externalBrain);
     }
 
     public int port() {
@@ -281,6 +337,7 @@ public final class RuntimeApplication implements AutoCloseable {
         closeQuietly(webSocket);
         closeQuietly(healthServer);
         closeQuietly(kernel);
+        closeQuietly(externalBrain);
         closeQuietly(sessions);
         closeQuietly(provider);
         closeQuietly(database);

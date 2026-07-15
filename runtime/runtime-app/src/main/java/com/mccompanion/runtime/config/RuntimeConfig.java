@@ -26,6 +26,7 @@ public final class RuntimeConfig {
     public Server server = new Server();
     public Database database = new Database();
     public Provider provider = new Provider();
+    public Brain brain = new Brain();
     public Logging logging = new Logging();
 
     @JsonIgnore
@@ -56,6 +57,7 @@ public final class RuntimeConfig {
         server = Objects.requireNonNullElseGet(server, Server::new);
         database = Objects.requireNonNullElseGet(database, Database::new);
         provider = Objects.requireNonNullElseGet(provider, Provider::new);
+        brain = Objects.requireNonNullElseGet(brain, Brain::new);
         logging = Objects.requireNonNullElseGet(logging, Logging::new);
         server.bind = requireText(server.bind, "server.bind");
         if (server.port < 0 || server.port > 65_535) {
@@ -101,6 +103,26 @@ public final class RuntimeConfig {
             provider.baseUrl = requireText(provider.baseUrl, "provider.base_url");
             provider.model = requireText(provider.model, "provider.model");
         }
+        brain.mode = requireText(brain.mode, "brain.mode").toLowerCase(Locale.ROOT);
+        if (!brain.mode.equals("disabled") && !brain.mode.equals("hermes")
+                && !brain.mode.equals("openai-compatible")) {
+            throw new IllegalArgumentException("brain.mode must be disabled, hermes, or openai-compatible");
+        }
+        if (brain.maxToolCallsPerTurn < 1 || brain.maxToolCallsPerTurn > 32) {
+            throw new IllegalArgumentException("brain.max_tool_calls_per_turn must be 1..32");
+        }
+        if (brain.timeoutSeconds < 1 || brain.timeoutSeconds > 300) {
+            throw new IllegalArgumentException("brain.timeout_seconds must be 1..300");
+        }
+        if (brain.maxOutputTokens < 128 || brain.maxOutputTokens > 4096) {
+            throw new IllegalArgumentException("brain.max_output_tokens must be 128..4096");
+        }
+        brain.tokenEnv = requireText(brain.tokenEnv, "brain.token_env");
+        if (!ENVIRONMENT_NAME.matcher(brain.tokenEnv).matches()) {
+            throw new IllegalArgumentException("brain.token_env must be a valid environment variable name");
+        }
+        if (!brain.mode.equals("disabled")) brain.endpoint = requireText(brain.endpoint, "brain.endpoint");
+        if (brain.mode.equals("openai-compatible")) brain.model = requireText(brain.model, "brain.model");
     }
 
     private static String requireText(String value, String name) {
@@ -154,6 +176,16 @@ public final class RuntimeConfig {
                   max_calls_per_minute: 30
                   max_concurrent: 2
                   max_retries: 2
+
+                # External Brain First. Configure a token only through the named environment variable.
+                brain:
+                  mode: disabled
+                  endpoint: http://127.0.0.1:18888
+                  token_env: MC_COMPANION_BRAIN_TOKEN
+                  model: deepseek-v4-flash
+                  timeout_seconds: 60
+                  max_output_tokens: 1400
+                  max_tool_calls_per_turn: 8
 
                 logging:
                   file: ./logs/runtime.log
@@ -227,5 +259,26 @@ public final class RuntimeConfig {
     public static final class Logging {
         public String file = "./logs/runtime.log";
         public boolean console = true;
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = false)
+    public static final class Brain {
+        public String mode = "disabled";
+        public String endpoint = "http://127.0.0.1:18888";
+        @JsonProperty("token_env")
+        public String tokenEnv = "MC_COMPANION_BRAIN_TOKEN";
+        public String model = "deepseek-v4-flash";
+        @JsonProperty("timeout_seconds")
+        public int timeoutSeconds = 60;
+        @JsonProperty("max_output_tokens")
+        public int maxOutputTokens = 1400;
+        @JsonProperty("max_tool_calls_per_turn")
+        public int maxToolCallsPerTurn = 8;
+
+        @JsonIgnore public Optional<String> resolveToken() {
+            String value = System.getenv(tokenEnv);
+            return value == null || value.isBlank() ? Optional.empty() : Optional.of(value.strip());
+        }
+        @JsonIgnore public Duration timeout() { return Duration.ofSeconds(timeoutSeconds); }
     }
 }

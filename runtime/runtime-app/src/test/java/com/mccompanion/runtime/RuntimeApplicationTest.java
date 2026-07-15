@@ -1,14 +1,21 @@
 package com.mccompanion.runtime;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.mccompanion.runtime.brain.BrainTurnResult;
+import com.mccompanion.runtime.brain.ReplayBrainAdapter;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.tool.ToolCall;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
+import java.net.ServerSocket;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -105,6 +112,74 @@ class RuntimeApplicationTest {
             assertFalse(response.path("accepted").asBoolean());
             assertEquals("AUTH_FAILED", response.path("code").asText());
             client.closeBlocking();
+        }
+    }
+
+    @Test
+    void externalBrainEndpointRunsReplayToolLoopAndPersistsFinalReply() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("external-brain"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> request.toolResults().isEmpty()
+                ? BrainTurnResult.tools(List.of(new ToolCall("observe-1", "world.observe", Json.object())))
+                : BrainTurnResult.finalResponse("Replay verified the observed world state."));
+
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"brain-world","capabilities":{"NavigateTo":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"brain-companion","ownerId":"owner-1","displayName":"Brain Companion",
+                      "worldId":"brain-world","dimension":"minecraft:overworld",
+                      "position":{"x":3,"y":70,"z":5},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("brain-companion").isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+
+            String requestBody = """
+                    {"controllerId":"desktop-controller","companionId":"brain-companion",
+                     "text":"What do you see?"}
+                    """;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                    .build();
+            HttpResponse<String> response = HttpClient.newHttpClient()
+                    .send(request, HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, response.statusCode(), response.body());
+            JsonNode body = Json.parse(response.body());
+            assertEquals("FINAL_RESPONSE", body.path("result").path("kind").asText());
+            assertEquals("Replay verified the observed world state.", body.path("result").path("response").asText());
+            assertEquals("world.observe", body.path("result").path("toolResults").path(0).path("toolName").asText());
+            assertTrue(body.path("result").path("toolResults").path(0).path("success").asBoolean());
+            assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
+            assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
+
+            var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())).list("brain-companion", 10);
+            assertEquals(List.of("MESSAGE", "CHAT"), transcript.stream().map(
+                    com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
+            client.closeBlocking();
+        }
+    }
+
+    private static int freePort() throws Exception {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
         }
     }
 

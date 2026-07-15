@@ -8,8 +8,12 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.security.SecureRandom;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -81,5 +85,32 @@ class LeaseServiceTest {
         assertTrue(leases.processLease("companion-expired").isEmpty());
         assertTrue(leases.processLease("companion-live").isPresent());
         assertTrue(leases.expireDue().isEmpty(), "an expired lease must be returned only once");
+    }
+
+    @Test
+    void acquisitionWaitsForConcurrentWriterBeforeReadingEpoch() throws Exception {
+        try (Connection writer = database.open()) {
+            writer.setAutoCommit(false);
+            try (PreparedStatement statement = writer.prepareStatement(
+                    "INSERT INTO control_epoch(companion_id,last_epoch) VALUES (?,?)")) {
+                statement.setString(1, "companion-contended");
+                statement.setLong(2, 4);
+                statement.executeUpdate();
+            }
+
+            CompletableFuture<ControlLease> acquisition = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return leases.acquire("companion-contended", "runtime-main", Duration.ofMinutes(1),
+                            ControlLease.ControlMode.EXTERNAL_RUNTIME);
+                } catch (Exception failure) {
+                    throw new java.util.concurrent.CompletionException(failure);
+                }
+            });
+            Thread.sleep(100);
+            writer.commit();
+            writer.setAutoCommit(true);
+
+            assertEquals(5, acquisition.get(5, TimeUnit.SECONDS).epoch());
+        }
     }
 }

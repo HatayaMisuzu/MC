@@ -254,6 +254,11 @@ try {
     $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'NavigateTo'
     $probeTaskId = @($probeRunning.plan.steps | Where-Object { $_.index -eq $probeRunning.plan.currentStep })[0].taskId
     $null = Wait-RuntimeTaskState $pairingToken $probeTaskId 'RUNNING'
+    # Freeze the unfinished probe through the real control path. This removes the accelerated
+    # GameTest tick rate from the goal-modification race while preserving an active original task.
+    $pauseProbe = Invoke-RuntimeCommand $pairingToken $companionId 'STOP' @{ action = 'pause' } 'pause modification probe'
+    if (-not $pauseProbe.accepted) { throw "Goal-modification probe could not be paused: $($pauseProbe.code)" }
+    $probePaused = Wait-RuntimeTaskState $pairingToken $probeTaskId 'PAUSED'
     $modified = Invoke-AgentRequest $pairingToken $companionId 'Change goal and follow owner instead'
     if (-not $modified.accepted -or -not $modified.goalModified -or $modified.planId -ne $probePlan.planId) {
         throw 'Owner goal modification did not revise the original plan id.'
@@ -263,7 +268,8 @@ try {
     if (-not $cancelModified.accepted) { throw 'Modified follow plan could not be cancelled before shortage scenario.' }
     $modifiedCancelled = Wait-AgentPlan $pairingToken $probePlan.planId 'CANCELLED' 1 ''
     $goalModificationEvidence = [pscustomobject]@{
-        initial = $probePlan; modification = $modified; running = $modifiedRunning; cancelled = $modifiedCancelled
+        initial = $probePlan; paused = $probePaused; modification = $modified
+        running = $modifiedRunning; cancelled = $modifiedCancelled
     }
     Write-Output '[runtime-e2e] same-plan target modification activated and cancelled safely'
 

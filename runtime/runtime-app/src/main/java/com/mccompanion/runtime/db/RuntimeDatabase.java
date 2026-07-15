@@ -1,5 +1,7 @@
 package com.mccompanion.runtime.db;
 
+import org.sqlite.SQLiteConfig;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -13,6 +15,7 @@ import java.sql.Statement;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 
 public final class RuntimeDatabase implements AutoCloseable {
@@ -26,6 +29,7 @@ public final class RuntimeDatabase implements AutoCloseable {
     private final List<Migration> migrations;
     private final boolean validateRuntimeSchema;
     private final Clock clock;
+    private final Properties connectionProperties;
 
     public RuntimeDatabase(Path path) {
         this(path, defaultMigrations(), true, Clock.systemUTC());
@@ -41,6 +45,12 @@ public final class RuntimeDatabase implements AutoCloseable {
         this.migrations = List.copyOf(migrations);
         this.validateRuntimeSchema = validateRuntimeSchema;
         this.clock = clock;
+        SQLiteConfig config = new SQLiteConfig();
+        // Runtime repositories commonly validate a row before updating related durable state.
+        // Reserve SQLite's single WAL writer before those reads so concurrent writers wait via
+        // busy_timeout instead of failing during a deferred read-to-write lock upgrade.
+        config.setTransactionMode(SQLiteConfig.TransactionMode.IMMEDIATE);
+        this.connectionProperties = config.toProperties();
     }
 
     public synchronized void initialize() throws SQLException, IOException {
@@ -126,7 +136,9 @@ public final class RuntimeDatabase implements AutoCloseable {
     }
 
     public Connection open() throws SQLException {
-        Connection connection = DriverManager.getConnection(jdbcUrl);
+        Properties properties = new Properties();
+        properties.putAll(connectionProperties);
+        Connection connection = DriverManager.getConnection(jdbcUrl, properties);
         try (Statement statement = connection.createStatement()) {
             statement.execute("PRAGMA foreign_keys=ON");
             statement.execute("PRAGMA busy_timeout=5000");

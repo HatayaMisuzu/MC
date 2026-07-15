@@ -61,7 +61,7 @@
 - 真实取物进入主背包后，DeliverItem 通过原版 `InventoryMenu` PICKUP 交互整理到快捷栏，再通过原版丢出/拾取交付；不直接编辑库存。
 - GameTest 最终断言：主人铁锭 `+6`、箱子 `0`、伙伴铁锭 `0`，从而同时证明部分交付、无重复取物和无复制。
 - E2E 证据落盘到 `build/e2e-runtime/evidence/shortage-conversation.json` 及配套 Runtime/Fabric/Replay 日志；Replay 明确不是 Live Provider。
-- 同一 E2E 还覆盖执行中目标修改：临时导航 plan 收到“改为跟随主人”后保持原 `planId`，旧导航先取消，`planningRevision` 增加，新 `FollowOwner` 步骤进入 RUNNING，随后可安全取消。
+- 同一 E2E 还覆盖未完成目标修改：远距离临时导航经真实 Runtime 控制进入 `RUNNING→PAUSED` 后，收到“改为跟随主人”并保持原 `planId`；旧导航取消，`planningRevision` 增加，新 `FollowOwner` 步骤进入 RUNNING，随后可安全取消。连续三轮本地 Runtime/Fabric E2E 均通过。
 - Runtime 新增认证只读 `/plans/{planId}` 观察端点，E2E 根据持久 plan/step 状态验证目标修订，而不是仅信任一次 HTTP 回复；证据写入 `build/e2e-runtime/evidence/goal-modification.json`。
 
 ### HTML 对话真实浏览器证据
@@ -70,7 +70,7 @@
 - Playwright 真实 Chrome 会话读取 Runtime↔Fabric E2E 数据库副本，验证问题文本、`WAITING_FOR_USER`、三个稳定选项、游戏投递状态和自由文本入口可见。
 - 自由文本“不要铁锭了，改为跟随我”生成二次确认的 `agent/request` 计划，确认详情保留完整目标；稳定选项“先把现有的拿来”生成 request=`deliver_partial`，两条路径均未绕过确认直接执行。
 - 浏览器证据保存在本地忽略目录 `output/playwright`；Web 单元测试新增自由文本/目标替换提交断言，当前 Web 8 项及生产构建为 `LOCAL_PASS`。
-- 浏览器复盘追溯到提交 `08b4344` 的一次远端 heavy 抖动：租约清理在 SQLite deferred read→write 升级时遇到 `SQLITE_BUSY`。清理现改为单条 `DELETE ... RETURNING` 原子写，避免 busy timeout 无法解除的锁升级死锁，并新增租约过期回归测试；后续仍需重复 heavy/E2E 验证稳定性。
+- 浏览器复盘追溯到提交 `08b4344` 的一次远端 heavy 抖动：Runtime 多个 SQLite deferred read→write 事务在并发状态写入时会遇到 `SQLITE_BUSY`。租约清理改为单条 `DELETE ... RETURNING`，所有显式事务统一使用 `IMMEDIATE` 模式在读取前排队取得 WAL 写保留锁，并新增租约过期与并发写锁回归测试。
 
 ## Observation → Replan 切片（2026-07-15）
 

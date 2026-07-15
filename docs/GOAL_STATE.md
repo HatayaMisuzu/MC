@@ -64,6 +64,14 @@
 - 同一 E2E 还覆盖执行中目标修改：临时导航 plan 收到“改为跟随主人”后保持原 `planId`，旧导航先取消，`planningRevision` 增加，新 `FollowOwner` 步骤进入 RUNNING，随后可安全取消。
 - Runtime 新增认证只读 `/plans/{planId}` 观察端点，E2E 根据持久 plan/step 状态验证目标修订，而不是仅信任一次 HTTP 回复；证据写入 `build/e2e-runtime/evidence/goal-modification.json`。
 
+### HTML 对话真实浏览器证据
+
+- 使用独立 `LOCALAPPDATA` 和最小 PCL2/Fabric 1.21.1 高置信度夹具启动真实 Web Terminal；所有 profile、SQLite 副本、Cookie、CSRF 与服务锁均位于 `build/browser-e2e`，未触碰测试根目录中的 Vanilla 26.2 实例。
+- Playwright 真实 Chrome 会话读取 Runtime↔Fabric E2E 数据库副本，验证问题文本、`WAITING_FOR_USER`、三个稳定选项、游戏投递状态和自由文本入口可见。
+- 自由文本“不要铁锭了，改为跟随我”生成二次确认的 `agent/request` 计划，确认详情保留完整目标；稳定选项“先把现有的拿来”生成 request=`deliver_partial`，两条路径均未绕过确认直接执行。
+- 浏览器证据保存在本地忽略目录 `output/playwright`；Web 单元测试新增自由文本/目标替换提交断言，当前 Web 8 项及生产构建为 `LOCAL_PASS`。
+- 浏览器复盘追溯到提交 `08b4344` 的一次远端 heavy 抖动：租约清理在 SQLite deferred read→write 升级时遇到 `SQLITE_BUSY`。清理现改为单条 `DELETE ... RETURNING` 原子写，避免 busy timeout 无法解除的锁升级死锁，并新增租约过期回归测试；后续仍需重复 heavy/E2E 验证稳定性。
+
 ## Observation → Replan 切片（2026-07-15）
 
 - `agent_plan` 现在持久化语义修订号、模型调用预算、无进展计数与计划指纹；`agent_plan_revision` 保存每次触发 Observation、失败码、决定和结果。

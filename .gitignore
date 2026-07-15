@@ -23,6 +23,8 @@ terminal/web-ui/node_modules/
 terminal/web-ui/dist/
 terminal/web-ui/test-results/
 terminal/web-ui/playwright-report/
+.playwright-cli/
+output/playwright/
 terminal/web-ui/*.tsbuildinfo
 terminal/web-ui/vite.config.js
 terminal/web-ui/vite.config.d.ts

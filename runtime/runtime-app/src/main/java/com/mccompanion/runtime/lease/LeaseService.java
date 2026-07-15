@@ -155,23 +155,18 @@ public final class LeaseService {
     public synchronized List<ExpiredLease> expireDue() throws SQLException {
         long now = clock.millis();
         List<ExpiredLease> expired = new ArrayList<>();
-        try (Connection connection = database.open()) {
-            connection.setAutoCommit(false);
-            try (PreparedStatement select = connection.prepareStatement(
-                    "SELECT companion_id, controller_id, epoch, mode FROM control_lease WHERE expires_at<=?")) {
-                select.setLong(1, now);
-                try (ResultSet result = select.executeQuery()) {
-                    while (result.next()) {
-                        expired.add(new ExpiredLease(result.getString(1), result.getString(2), result.getLong(3),
-                                ControlLease.ControlMode.valueOf(result.getString(4))));
-                    }
+        // Keep expiry as one write statement. A deferred SQLite transaction that SELECTs and
+        // then DELETEs can fail immediately while upgrading its read lock if another Runtime
+        // writer commits between both statements; busy_timeout cannot resolve that deadlock.
+        try (Connection connection = database.open(); PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM control_lease WHERE expires_at<=? RETURNING companion_id,controller_id,epoch,mode")) {
+            delete.setLong(1, now);
+            try (ResultSet result = delete.executeQuery()) {
+                while (result.next()) {
+                    expired.add(new ExpiredLease(result.getString(1), result.getString(2), result.getLong(3),
+                            ControlLease.ControlMode.valueOf(result.getString(4))));
                 }
             }
-            try (PreparedStatement delete = connection.prepareStatement("DELETE FROM control_lease WHERE expires_at<=?")) {
-                delete.setLong(1, now);
-                delete.executeUpdate();
-            }
-            connection.commit();
         }
         expired.forEach(lease -> processLeases.remove(lease.companionId()));
         return expired;

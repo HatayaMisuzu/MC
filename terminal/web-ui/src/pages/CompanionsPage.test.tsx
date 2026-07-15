@@ -63,4 +63,17 @@ describe('CompanionsPage text companion input', () => {
       text: 'partial',
     })
   })
+
+  it('submits a free-text answer or replacement goal for a waiting question', () => {
+    requestPlan.mockClear()
+    render(<CompanionsPage />)
+    const input = screen.getByRole('textbox', { name: '回答问题：你想怎么做？' })
+    fireEvent.change(input, { target: { value: '不要铁锭了，改为跟随我' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送回答' }))
+    expect(requestPlan).toHaveBeenCalledWith('agent', {
+      instanceId: 'instance-1',
+      companionId: 'companion-1',
+      text: '不要铁锭了，改为跟随我',
+    })
+  })
 })

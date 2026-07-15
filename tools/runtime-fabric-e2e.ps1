@@ -140,6 +140,7 @@ function Wait-AgentPlan(
         $plan = $snapshot.plan
         $current = @($plan.steps | Where-Object { $_.index -eq $plan.currentStep })[0]
         if ($plan.state -eq $expectedState -and $plan.planningRevision -ge $minimumPlanningRevision -and
+            ($expectedState -ne 'RUNNING' -or $current.taskId) -and
             (-not $expectedCapability -or $current.definition.capability -eq $expectedCapability)) {
             return $snapshot
         }
@@ -250,9 +251,9 @@ try {
     Write-Output '[runtime-e2e] exercising in-flight owner goal modification'
     $probePlan = Invoke-AgentRequest $pairingToken $companionId 'Start the modification probe target'
     if (-not $probePlan.accepted -or -not $probePlan.planId) { throw 'Goal-modification probe plan was rejected.' }
-    $null = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'NavigateTo'
-    # Wait for the asynchronous Fabric command acceptance write, while the navigation itself remains in flight.
-    Start-Sleep -Milliseconds 300
+    $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'NavigateTo'
+    $probeTaskId = @($probeRunning.plan.steps | Where-Object { $_.index -eq $probeRunning.plan.currentStep })[0].taskId
+    $null = Wait-RuntimeTaskState $pairingToken $probeTaskId 'RUNNING'
     $modified = Invoke-AgentRequest $pairingToken $companionId 'Change goal and follow owner instead'
     if (-not $modified.accepted -or -not $modified.goalModified -or $modified.planId -ne $probePlan.planId) {
         throw 'Owner goal modification did not revise the original plan id.'

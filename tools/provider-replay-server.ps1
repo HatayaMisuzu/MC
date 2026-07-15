@@ -86,7 +86,10 @@ function New-DecisionContent([string]$requestBody) {
         } | ConvertTo-Json -Compress -Depth 20
     }
     if ($text -match 'modification probe') {
-        $probeTarget = @{ dimension = 'minecraft:overworld'; x = $X + 20; y = $Y; z = $Z }
+        # Keep the navigation observably in flight even when GameTest advances ticks faster than
+        # wall time, so the goal-modification test cannot accidentally create a second plan after
+        # the short probe already completed.
+        $probeTarget = @{ dimension = 'minecraft:overworld'; x = $X + 200; y = $Y; z = $Z }
         return @{
             kind = 'CREATE_PLAN'; understoodGoal = 'travel to the temporary probe target'
             constraints = @(); assumptions = @(); reply = 'I will start toward the temporary target.'

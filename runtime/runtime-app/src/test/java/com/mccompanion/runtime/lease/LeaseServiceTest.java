@@ -67,4 +67,19 @@ class LeaseServiceTest {
                 ControlLease.ControlMode.EXTERNAL_RUNTIME);
         assertEquals(2, next.epoch());
     }
+
+    @Test
+    void expiryAtomicallyReturnsRemovedLeasesAndClearsProcessBearer() throws Exception {
+        ControlLease expired = leases.acquire("companion-expired", "runtime-main", Duration.ofSeconds(1),
+                ControlLease.ControlMode.EXTERNAL_RUNTIME);
+        leases.acquire("companion-live", "runtime-main", Duration.ofMinutes(1),
+                ControlLease.ControlMode.EXTERNAL_RUNTIME);
+        clock.advance(Duration.ofSeconds(2));
+
+        assertEquals(java.util.List.of(new LeaseService.ExpiredLease(expired.companionId(),
+                expired.controllerId(), expired.epoch(), expired.mode())), leases.expireDue());
+        assertTrue(leases.processLease("companion-expired").isEmpty());
+        assertTrue(leases.processLease("companion-live").isPresent());
+        assertTrue(leases.expireDue().isEmpty(), "an expired lease must be returned only once");
+    }
 }

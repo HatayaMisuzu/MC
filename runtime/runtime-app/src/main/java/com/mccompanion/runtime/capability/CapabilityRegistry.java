@@ -21,20 +21,26 @@ public final class CapabilityRegistry {
 
     public static CapabilityRegistry standard() {
         return new CapabilityRegistry(List.of(
-                capability("NavigateTo", RiskLevel.LOW), capability("FollowOwner", RiskLevel.LOW),
+                implemented("NavigateTo", RiskLevel.LOW), implemented("FollowOwner", RiskLevel.LOW),
                 capability("ExploreArea", RiskLevel.MEDIUM), capability("LocateKnownContainer", RiskLevel.LOW),
                 capability("WithdrawFromStorage", RiskLevel.LOW), capability("DepositToStorage", RiskLevel.LOW),
                 capability("CollectResource", RiskLevel.MEDIUM), capability("MineResourceVein", RiskLevel.MEDIUM),
                 capability("CraftItem", RiskLevel.LOW), capability("SmeltItem", RiskLevel.LOW),
-                capability("DeliverItem", RiskLevel.LOW), capability("EatAndRecover", RiskLevel.LOW),
+                implemented("DeliverItem", RiskLevel.LOW), implemented("EatAndRecover", RiskLevel.LOW),
                 capability("DefendOwner", RiskLevel.MEDIUM), capability("RetreatFromDanger", RiskLevel.LOW),
                 capability("BuildSmallBlueprint", RiskLevel.HIGH)));
     }
 
     private static CapabilityDefinition capability(String name, RiskLevel risk) {
-        return new CapabilityDefinition(name, "Reusable Minecraft survival capability", Json.object(), risk, true, true);
+        return new CapabilityDefinition(name, "Reusable Minecraft survival capability", Json.object(), risk, true, true, false);
+    }
+
+    private static CapabilityDefinition implemented(String name, RiskLevel risk) {
+        return new CapabilityDefinition(name, "Reusable Minecraft survival capability", Json.object(), risk, true, true, true);
     }
 
     public Optional<CapabilityDefinition> find(String name) { return Optional.ofNullable(definitions.get(name)); }
     public List<String> names() { return definitions.keySet().stream().sorted().toList(); }
+    public List<CapabilityDefinition> definitions() { return definitions.values().stream()
+            .sorted(java.util.Comparator.comparing(CapabilityDefinition::name)).toList(); }
 }

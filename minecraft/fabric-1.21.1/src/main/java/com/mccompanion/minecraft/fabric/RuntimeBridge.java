@@ -143,7 +143,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("primitive_lifecycle", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
-                .put("RetreatFromDanger", true)
+                .put("DeliverItem", true)
+                .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);
         ObjectNode hello = JSON.createObjectNode().put("protocol", PROTOCOL).put("type", "hello");
         hello.set("payload", payload);

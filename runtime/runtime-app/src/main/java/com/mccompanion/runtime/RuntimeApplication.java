@@ -6,6 +6,8 @@ import com.mccompanion.runtime.command.ProtocolCommandSender;
 import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.config.RuntimeConfig;
+import com.mccompanion.runtime.capability.CapabilityRegistry;
+import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.intent.RuleIntentParser;
 import com.mccompanion.runtime.health.RuntimeHealthServer;
@@ -130,6 +132,7 @@ public final class RuntimeApplication implements AutoCloseable {
 
             provider = createProvider(config, redactor, log);
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
+            CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
             webSocket = new RuntimeWebSocketServer(
                     new InetSocketAddress(config.server.bind, config.server.port),
                     pairingToken,
@@ -139,9 +142,11 @@ public final class RuntimeApplication implements AutoCloseable {
                     providerRouter,
                     plans,
                     kernel,
+                    capabilityVisibility,
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
-            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans, kernel, providerRouter, log);
+            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
+                    kernel, providerRouter, capabilityVisibility, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;
@@ -164,7 +169,7 @@ public final class RuntimeApplication implements AutoCloseable {
 
             final RuntimeApplication[] holder = new RuntimeApplication[1];
             if (enableCli) {
-                cli = new RuntimeCli(companions, commands, providerRouter, () -> {
+                cli = new RuntimeCli(companions, sessions, commands, providerRouter, capabilityVisibility, () -> {
                     RuntimeApplication application = holder[0];
                     if (application != null) {
                         application.close();

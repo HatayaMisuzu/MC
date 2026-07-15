@@ -4,12 +4,13 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.command.CommandReply;
 import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.agent.AgentContext;
-import com.mccompanion.runtime.capability.CapabilityRegistry;
+import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.session.CompanionRecord;
 import com.mccompanion.runtime.session.CompanionRepository;
+import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskType;
 
 import java.io.BufferedReader;
@@ -27,19 +28,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Small local control surface. It never receives or prints API keys or pairing tokens. */
 public final class RuntimeCli implements AutoCloseable {
     private final CompanionRepository companions;
+    private final SessionRegistry sessions;
     private final CommandService commands;
     private final ProviderRouter providers;
+    private final CapabilityVisibility capabilityVisibility;
     private final Runnable shutdown;
     private final BufferedReader input;
     private final PrintStream output;
     private final AtomicBoolean running = new AtomicBoolean();
     private Thread thread;
 
-    RuntimeCli(CompanionRepository companions, CommandService commands, ProviderRouter providers,
+    RuntimeCli(CompanionRepository companions, SessionRegistry sessions, CommandService commands,
+               ProviderRouter providers, CapabilityVisibility capabilityVisibility,
                Runnable shutdown, InputStream input, PrintStream output) {
         this.companions = Objects.requireNonNull(companions, "companions");
+        this.sessions = Objects.requireNonNull(sessions, "sessions");
         this.commands = Objects.requireNonNull(commands, "commands");
         this.providers = Objects.requireNonNull(providers, "providers");
+        this.capabilityVisibility = Objects.requireNonNull(capabilityVisibility, "capabilityVisibility");
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown");
         this.input = new BufferedReader(new InputStreamReader(Objects.requireNonNull(input, "input"),
                 StandardCharsets.UTF_8));
@@ -172,9 +178,12 @@ public final class RuntimeCli implements AutoCloseable {
             CompanionRecord companion = companions.get(companionId)
                     .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
             var active = commands.activeTaskFor(companionId);
+            var visible = capabilityVisibility.resolve(
+                    sessions.forCompanion(companionId).map(value -> value.handshake()).orElse(null),
+                    companion.status());
             return new AgentContext(companionId, companion.status(), List.of(),
                     active.<com.fasterxml.jackson.databind.JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
-                    List.of(), CapabilityRegistry.standard().names(), 5);
+                    List.of(), visible.availableNames(), 5);
         } catch (SQLException failure) {
             throw new IllegalArgumentException("Unable to build verified companion context", failure);
         }

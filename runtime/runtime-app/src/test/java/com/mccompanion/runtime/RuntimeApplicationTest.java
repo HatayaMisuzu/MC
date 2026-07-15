@@ -38,7 +38,8 @@ class RuntimeApplicationTest {
             client.send("""
                     {"type":"hello","protocol":"mc-companion/1","token":"%s",
                      "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"world-test","capabilities":{}}
+                     "worldId":"world-test","capabilities":{"NavigateTo":true,"FollowOwner":true,
+                     "DeliverItem":true,"EatAndRecover":true,"CraftItem":true}}
                     """.formatted(token));
             JsonNode hello = client.awaitType("hello_ack", 5);
             assertTrue(hello.path("accepted").asBoolean());
@@ -65,6 +66,10 @@ class RuntimeApplicationTest {
             assertTrue(playerReply.path("payload").path("accepted").asBoolean());
             assertEquals("RESPOND", playerReply.path("payload").path("decision").asText());
             assertFalse(playerReply.path("payload").path("reply").asText().isBlank());
+            assertEquals("AVAILABLE_NOW", playerReply.path("payload").path("capabilityStates")
+                    .path("NavigateTo").path("state").asText());
+            assertEquals("DECLARED", playerReply.path("payload").path("capabilityStates")
+                    .path("CraftItem").path("state").asText());
             client.closeBlocking();
         }
         assertTrue(Files.isRegularFile(config.databasePath()));

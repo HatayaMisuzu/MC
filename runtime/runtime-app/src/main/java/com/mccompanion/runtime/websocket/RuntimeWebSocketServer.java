@@ -14,6 +14,7 @@ import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.DecisionKind;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
+import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.security.PairingTokenStore;
@@ -51,6 +52,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final ProviderRouter providers;
     private final AgentPlanRepository plans;
     private final AgentKernel kernel;
+    private final CapabilityVisibility capabilityVisibility;
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
     private final Clock clock;
@@ -61,13 +63,16 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
 
     public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                                   CommandService commands, CompanionRepository companions, ProviderRouter providers,
-                                  AgentPlanRepository plans, AgentKernel kernel, RuntimeLog log) {
-        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel, log, Clock.systemUTC());
+                                  AgentPlanRepository plans, AgentKernel kernel,
+                                  CapabilityVisibility capabilityVisibility, RuntimeLog log) {
+        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
+                capabilityVisibility, log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                            CommandService commands, CompanionRepository companions, ProviderRouter providers,
-                           AgentPlanRepository plans, AgentKernel kernel, RuntimeLog log, Clock clock) {
+                           AgentPlanRepository plans, AgentKernel kernel,
+                           CapabilityVisibility capabilityVisibility, RuntimeLog log, Clock clock) {
         super(address);
         this.pairingToken = pairingToken;
         this.sessions = sessions;
@@ -76,6 +81,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.providers = providers;
         this.plans = plans;
         this.kernel = kernel;
+        this.capabilityVisibility = capabilityVisibility;
         this.log = log;
         this.clock = clock;
         this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
@@ -223,12 +229,14 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
                 }
                 var active = commands.activeTaskFor(companionId);
+                var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
                 AgentContext context = new AgentContext(companionId, companion.status(), java.util.List.of(),
                         active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object), java.util.List.of(),
-                        CapabilityRegistry.standard().names(), 5);
+                        visible.availableNames(), 5);
                 var result = providers.plan(text, context);
                 reply.put("accepted", result.accepted()).put("source", result.source())
                         .put("reply", result.decision().reply()).put("decision", result.decision().kind().name());
+                reply.set("capabilityStates", visible.toJson());
                 if (!result.accepted()) reply.put("code", result.errorCode()).put("reply", result.userMessage());
                 else if (result.executableIntent().isPresent()) {
                     var execution = commands.execute("game-" + requestId, companionId, result.executableIntent().get());

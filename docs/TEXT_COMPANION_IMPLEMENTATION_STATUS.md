@@ -14,6 +14,7 @@
 - 世界快照：生命、饥饿、空气、火/岩浆状态、背包数量和空槽、最近动作证据。
 - 已验收的真实能力：`NavigateTo`、`FollowOwner`、`DeliverItem`、`EatAndRecover`。交付通过原版掉落/拾取链并验证双方库存差分；进食通过原版 use-item 路径并同时验证食物消耗与饥饿值变化。
 - 安全失败：未实现 Capability 进入 `BLOCKED/CAPABILITY_UNAVAILABLE`，不会调用命令、脚本、传送或直接世界/库存写入来伪造成功。
+- Capability 可见性：Planner 只接收 Runtime 注册、Fabric 1.21.1 身体声明、正式实现、连接与当前身体状态交集得到的 `AVAILABLE_NOW`；路线图能力不再作为可执行能力暴露。
 
 ## 本轮验证结果
 

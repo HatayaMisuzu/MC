@@ -8,6 +8,7 @@ import com.mccompanion.runtime.agent.AgentContext;
 import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
+import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
@@ -37,6 +38,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final AgentPlanRepository plans;
     private final AgentKernel kernel;
     private final ProviderRouter providers;
+    private final CapabilityVisibility capabilityVisibility;
     private final RuntimeLog log;
     private final Instant startedAt;
     private final HttpServer server;
@@ -50,6 +52,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             AgentPlanRepository plans,
             AgentKernel kernel,
             ProviderRouter providers,
+            CapabilityVisibility capabilityVisibility,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -59,6 +62,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.plans = plans;
         this.kernel = kernel;
         this.providers = providers;
+        this.capabilityVisibility = capabilityVisibility;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -88,13 +92,18 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 var companion = companions.get(companionId)
                         .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
                 var active = commands.activeTaskFor(companionId);
+                var visible = capabilityVisibility.resolve(
+                        sessions.forCompanion(companionId).map(value -> value.handshake()).orElse(null),
+                        companion.status());
                 AgentContext context = new AgentContext(companionId, companion.status(), java.util.List.of(),
                         active.<com.fasterxml.jackson.databind.JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
-                        strings(request.path("knownLandmarks"), 64), CapabilityRegistry.standard().names(), 5);
+                        strings(request.path("knownLandmarks"), 64), visible.availableNames(), 5);
                 var result = providers.plan(text, context);
                 ObjectNode body = Json.object().put("accepted", result.accepted())
                         .put("source", result.source());
                 body.set("decision", Json.MAPPER.valueToTree(result.decision()));
+                body.set("capabilityStates", visible.toJson());
+                visible.availableNames().forEach(body.putArray("availableCapabilities")::add);
                 if (result.errorCode() != null) body.put("code", result.errorCode()).put("message", result.userMessage());
                 if (result.accepted() && result.executableIntent().isPresent() && request.path("execute").asBoolean(true)) {
                     body.set("execution", commands.execute(commandId, companionId, result.executableIntent().get()).toJson());

@@ -26,11 +26,17 @@ import com.mccompanion.runtime.provider.OpenAiCompatibleProvider;
 import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.provider.BudgetedProvider;
 import com.mccompanion.runtime.security.PairingTokenStore;
+import com.mccompanion.runtime.search.DisabledSearchProvider;
+import com.mccompanion.runtime.search.HttpSearchProvider;
+import com.mccompanion.runtime.search.SearchProvider;
+import com.mccompanion.runtime.search.SearchToolGateway;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
 import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.tool.RuntimeToolGateway;
+import com.mccompanion.runtime.tool.CompositeToolGateway;
+import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
 
 import java.io.IOException;
@@ -57,6 +63,7 @@ public final class RuntimeApplication implements AutoCloseable {
     private final IntentProvider provider;
     private final ProviderRouter providerRouter;
     private final ExternalBrainCoordinator externalBrain;
+    private final CompositeToolGateway toolGateway;
     private final RuntimeWebSocketServer webSocket;
     private final RuntimeHealthServer healthServer;
     private final ScheduledExecutorService maintenance;
@@ -76,6 +83,7 @@ public final class RuntimeApplication implements AutoCloseable {
             IntentProvider provider,
             ProviderRouter providerRouter,
             ExternalBrainCoordinator externalBrain,
+            CompositeToolGateway toolGateway,
             RuntimeWebSocketServer webSocket,
             RuntimeHealthServer healthServer,
             ScheduledExecutorService maintenance,
@@ -91,6 +99,7 @@ public final class RuntimeApplication implements AutoCloseable {
         this.provider = provider;
         this.providerRouter = providerRouter;
         this.externalBrain = externalBrain;
+        this.toolGateway = toolGateway;
         this.webSocket = webSocket;
         this.healthServer = healthServer;
         this.maintenance = maintenance;
@@ -99,11 +108,17 @@ public final class RuntimeApplication implements AutoCloseable {
 
     public static RuntimeApplication start(RuntimeConfig config, boolean enableCli)
             throws IOException, SQLException, InterruptedException {
-        return start(config, enableCli, null);
+        return start(config, enableCli, null, null);
     }
 
     /** Package-private dependency injection for deterministic protocol tests; production selects from config. */
     static RuntimeApplication start(RuntimeConfig config, boolean enableCli, ExternalBrainAdapter brainOverride)
+            throws IOException, SQLException, InterruptedException {
+        return start(config, enableCli, brainOverride, null);
+    }
+
+    static RuntimeApplication start(RuntimeConfig config, boolean enableCli, ExternalBrainAdapter brainOverride,
+                                    SearchProvider searchOverride)
             throws IOException, SQLException, InterruptedException {
         Objects.requireNonNull(config, "config").normalizeAndValidate();
         Redactor redactor = new Redactor();
@@ -119,6 +134,7 @@ public final class RuntimeApplication implements AutoCloseable {
         RuntimeCli cli = null;
         AgentKernel kernel = null;
         ExternalBrainCoordinator externalBrain = null;
+        CompositeToolGateway toolGateway = null;
         try {
             database.initialize();
             CompanionRepository companions = new CompanionRepository(database);
@@ -143,7 +159,7 @@ public final class RuntimeApplication implements AutoCloseable {
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
             CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
             SessionRegistry activeSessionRegistry = sessions;
-            RuntimeToolGateway toolGateway = new RuntimeToolGateway(commands, companions, companionId -> {
+            RuntimeToolGateway minecraftTools = new RuntimeToolGateway(commands, companions, companionId -> {
                 try {
                     var companion = companions.get(companionId).orElse(null);
                     if (companion == null) return java.util.List.of();
@@ -154,6 +170,9 @@ public final class RuntimeApplication implements AutoCloseable {
                     return java.util.List.of();
                 }
             });
+            SearchProvider searchProvider = searchOverride == null ? createSearchProvider(config, redactor, log) : searchOverride;
+            toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools, new SearchToolGateway(searchProvider,
+                    config.search.allowedDomains, config.search.deniedDomains)));
             externalBrain = brainOverride == null
                     ? createExternalBrain(config, redactor, log, toolGateway)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway, config.brain.maxToolCallsPerTurn);
@@ -217,7 +236,7 @@ public final class RuntimeApplication implements AutoCloseable {
                 }, System.in, System.out);
             }
             RuntimeApplication application = new RuntimeApplication(config, log, database, companions, sessions,
-                    commands, plans, kernel, provider, providerRouter, externalBrain,
+                    commands, plans, kernel, provider, providerRouter, externalBrain, toolGateway,
                     webSocket, healthServer, maintenance, cli);
             holder[0] = application;
             log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, provider="
@@ -236,6 +255,7 @@ public final class RuntimeApplication implements AutoCloseable {
             closeQuietly(healthServer);
             closeQuietly(kernel);
             closeQuietly(externalBrain);
+            closeQuietly(toolGateway);
             closeQuietly(sessions);
             closeQuietly(provider);
             closeQuietly(database);
@@ -270,7 +290,7 @@ public final class RuntimeApplication implements AutoCloseable {
     }
 
     private static ExternalBrainCoordinator createExternalBrain(RuntimeConfig config, Redactor redactor,
-                                                                 RuntimeLog log, RuntimeToolGateway tools) {
+                                                                 RuntimeLog log, ToolGateway tools) {
         if ("disabled".equals(config.brain.mode)) return null;
         String token = config.brain.resolveToken().orElse(null);
         if (token == null) {
@@ -285,6 +305,17 @@ public final class RuntimeApplication implements AutoCloseable {
             default -> throw new IllegalArgumentException("Unsupported external Brain mode");
         };
         return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn);
+    }
+
+    private static SearchProvider createSearchProvider(RuntimeConfig config, Redactor redactor, RuntimeLog log) {
+        if ("disabled".equals(config.search.mode)) return new DisabledSearchProvider();
+        String token = config.search.resolveToken().orElse(null);
+        if (token == null) {
+            log.warn("Search token environment variable is absent; Search Gateway is disabled");
+            return new DisabledSearchProvider();
+        }
+        redactor.registerSecret(token);
+        return new HttpSearchProvider(config.search.endpoint, token, config.search.timeout());
     }
 
     public RuntimeConfig config() {
@@ -338,6 +369,7 @@ public final class RuntimeApplication implements AutoCloseable {
         closeQuietly(healthServer);
         closeQuietly(kernel);
         closeQuietly(externalBrain);
+        closeQuietly(toolGateway);
         closeQuietly(sessions);
         closeQuietly(provider);
         closeQuietly(database);

@@ -18,12 +18,14 @@ class RuntimeConfigTest {
         assertEquals("127.0.0.1", config.server.bind);
         assertEquals("rules", config.provider.mode);
         assertEquals("disabled", config.brain.mode);
+        assertEquals("disabled", config.search.mode);
         assertEquals("https://api.deepseek.com", config.provider.baseUrl);
         assertEquals("deepseek-v4-flash", config.provider.model);
         assertTrue(config.tokenPath().startsWith(configPath.getParent()));
         String yaml = Files.readString(configPath);
         assertTrue(yaml.contains("api_key_env: MC_COMPANION_API_KEY"));
         assertTrue(yaml.contains("token_env: MC_COMPANION_BRAIN_TOKEN"));
+        assertTrue(yaml.contains("token_env: MC_COMPANION_SEARCH_TOKEN"));
         assertFalse(yaml.matches("(?s).*api[_-]?key\\s*:\\s*sk-.*"));
         assertFalse(yaml.matches("(?s).*token\\s*:\\s*[^#\\s].*"));
     }

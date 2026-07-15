@@ -5,6 +5,9 @@ import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.brain.ReplayBrainAdapter;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.search.ReplaySearchProvider;
+import com.mccompanion.runtime.search.SearchPage;
+import com.mccompanion.runtime.search.SearchSource;
 import com.mccompanion.runtime.tool.ToolCall;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -20,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -121,11 +125,29 @@ class RuntimeApplicationTest {
         config.server.port = 0;
         config.server.managementPort = freePort();
         config.logging.console = false;
-        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> request.toolResults().isEmpty()
-                ? BrainTurnResult.tools(List.of(new ToolCall("observe-1", "world.observe", Json.object())))
-                : BrainTurnResult.finalResponse("Replay verified the observed world state."));
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            if (request.toolResults().isEmpty()) {
+                return BrainTurnResult.tools(List.of(new ToolCall("observe-1", "world.observe", Json.object())));
+            }
+            String lastTool = request.toolResults().getLast().toolName();
+            if (lastTool.equals("world.observe")) {
+                return BrainTurnResult.tools(List.of(new ToolCall("search-1", "search.query",
+                        Json.object().put("query", "Fabric supported versions"))));
+            }
+            if (lastTool.equals("search.query")) {
+                return BrainTurnResult.tools(List.of(new ToolCall("open-1", "search.open",
+                        Json.object().put("sourceId", "fabric-docs"))));
+            }
+            return BrainTurnResult.finalResponse("Replay verified world state and cited documentation.");
+        });
+        SearchSource searchSource = new SearchSource("fabric-docs", "Fabric documentation",
+                "https://docs.fabricmc.net/", "docs.fabricmc.net", "Fabric", null, Instant.now(),
+                "Supported versions", "OFFICIAL", "text/html");
+        ReplaySearchProvider search = new ReplaySearchProvider(List.of(searchSource), Map.of("fabric-docs",
+                new SearchPage("fabric-docs", searchSource.title(), searchSource.url(), searchSource.domain(),
+                        "UNTRUSTED_EXTERNAL_CONTENT\nVersion documentation", "text/html", false, Instant.now())));
 
-        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay, search)) {
             String token = Files.readString(config.tokenPath()).trim();
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
@@ -163,9 +185,13 @@ class RuntimeApplicationTest {
             assertEquals(200, response.statusCode(), response.body());
             JsonNode body = Json.parse(response.body());
             assertEquals("FINAL_RESPONSE", body.path("result").path("kind").asText());
-            assertEquals("Replay verified the observed world state.", body.path("result").path("response").asText());
+            assertEquals("Replay verified world state and cited documentation.", body.path("result").path("response").asText());
             assertEquals("world.observe", body.path("result").path("toolResults").path(0).path("toolName").asText());
             assertTrue(body.path("result").path("toolResults").path(0).path("success").asBoolean());
+            assertEquals("search.query", body.path("result").path("toolResults").path(1).path("toolName").asText());
+            assertEquals("search.open", body.path("result").path("toolResults").path(2).path("toolName").asText());
+            assertTrue(body.path("result").path("toolResults").path(2).path("observation")
+                    .path("content").asText().startsWith("UNTRUSTED_EXTERNAL_CONTENT"));
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 

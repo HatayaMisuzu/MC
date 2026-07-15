@@ -27,6 +27,7 @@ public final class RuntimeConfig {
     public Database database = new Database();
     public Provider provider = new Provider();
     public Brain brain = new Brain();
+    public Search search = new Search();
     public Logging logging = new Logging();
 
     @JsonIgnore
@@ -58,6 +59,7 @@ public final class RuntimeConfig {
         database = Objects.requireNonNullElseGet(database, Database::new);
         provider = Objects.requireNonNullElseGet(provider, Provider::new);
         brain = Objects.requireNonNullElseGet(brain, Brain::new);
+        search = Objects.requireNonNullElseGet(search, Search::new);
         logging = Objects.requireNonNullElseGet(logging, Logging::new);
         server.bind = requireText(server.bind, "server.bind");
         if (server.port < 0 || server.port > 65_535) {
@@ -123,6 +125,20 @@ public final class RuntimeConfig {
         }
         if (!brain.mode.equals("disabled")) brain.endpoint = requireText(brain.endpoint, "brain.endpoint");
         if (brain.mode.equals("openai-compatible")) brain.model = requireText(brain.model, "brain.model");
+        search.mode = requireText(search.mode, "search.mode").toLowerCase(Locale.ROOT);
+        if (!search.mode.equals("disabled") && !search.mode.equals("http")) {
+            throw new IllegalArgumentException("search.mode must be disabled or http");
+        }
+        search.tokenEnv = requireText(search.tokenEnv, "search.token_env");
+        if (!ENVIRONMENT_NAME.matcher(search.tokenEnv).matches()) {
+            throw new IllegalArgumentException("search.token_env must be a valid environment variable name");
+        }
+        if (search.timeoutSeconds < 1 || search.timeoutSeconds > 30) {
+            throw new IllegalArgumentException("search.timeout_seconds must be 1..30");
+        }
+        search.allowedDomains = validateDomains(search.allowedDomains, "search.allowed_domains");
+        search.deniedDomains = validateDomains(search.deniedDomains, "search.denied_domains");
+        if (search.mode.equals("http")) search.endpoint = requireText(search.endpoint, "search.endpoint");
     }
 
     private static String requireText(String value, String name) {
@@ -130,6 +146,15 @@ public final class RuntimeConfig {
             throw new IllegalArgumentException(name + " must not be blank");
         }
         return value.trim();
+    }
+
+    private static java.util.List<String> validateDomains(java.util.List<String> values, String name) {
+        if (values == null) return java.util.List.of();
+        if (values.size() > 64) throw new IllegalArgumentException(name + " supports at most 64 entries");
+        return values.stream().map(value -> requireText(value, name))
+                .peek(value -> { if (!value.matches("(?i)[a-z0-9.-]{1,253}"))
+                    throw new IllegalArgumentException(name + " contains an invalid domain"); })
+                .map(value -> value.toLowerCase(Locale.ROOT)).distinct().toList();
     }
 
     public Path resolve(String value) {
@@ -186,6 +211,15 @@ public final class RuntimeConfig {
                   timeout_seconds: 60
                   max_output_tokens: 1400
                   max_tool_calls_per_turn: 8
+
+                # Search is disabled until an explicit provider and environment-only token are configured.
+                search:
+                  mode: disabled
+                  endpoint: https://search-provider.invalid/v1/search
+                  token_env: MC_COMPANION_SEARCH_TOKEN
+                  timeout_seconds: 15
+                  allowed_domains: []
+                  denied_domains: []
 
                 logging:
                   file: ./logs/runtime.log
@@ -274,6 +308,26 @@ public final class RuntimeConfig {
         public int maxOutputTokens = 1400;
         @JsonProperty("max_tool_calls_per_turn")
         public int maxToolCallsPerTurn = 8;
+
+        @JsonIgnore public Optional<String> resolveToken() {
+            String value = System.getenv(tokenEnv);
+            return value == null || value.isBlank() ? Optional.empty() : Optional.of(value.strip());
+        }
+        @JsonIgnore public Duration timeout() { return Duration.ofSeconds(timeoutSeconds); }
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = false)
+    public static final class Search {
+        public String mode = "disabled";
+        public String endpoint = "https://search-provider.invalid/v1/search";
+        @JsonProperty("token_env")
+        public String tokenEnv = "MC_COMPANION_SEARCH_TOKEN";
+        @JsonProperty("timeout_seconds")
+        public int timeoutSeconds = 15;
+        @JsonProperty("allowed_domains")
+        public java.util.List<String> allowedDomains = java.util.List.of();
+        @JsonProperty("denied_domains")
+        public java.util.List<String> deniedDomains = java.util.List.of();
 
         @JsonIgnore public Optional<String> resolveToken() {
             String value = System.getenv(tokenEnv);

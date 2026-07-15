@@ -21,9 +21,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -125,7 +127,21 @@ class RuntimeApplicationTest {
         config.server.port = 0;
         config.server.managementPort = freePort();
         config.logging.console = false;
+        CountDownLatch blockedBrainEntered = new CountDownLatch(1);
+        CountDownLatch releaseBlockedBrain = new CountDownLatch(1);
         ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            if (request.userMessage().equals("Hold this Brain request")) {
+                blockedBrainEntered.countDown();
+                try {
+                    if (!releaseBlockedBrain.await(5, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("test Brain request was not released");
+                    }
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("test Brain request was interrupted", interrupted);
+                }
+                return BrainTurnResult.finalResponse("Released.");
+            }
             if (request.toolResults().isEmpty()) {
                 return BrainTurnResult.tools(List.of(new ToolCall("observe-1", "world.observe", Json.object())));
             }
@@ -201,6 +217,34 @@ class RuntimeApplicationTest {
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 
+            HttpRequest blockedRequest = HttpRequest.newBuilder()
+                    .uri(new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"controllerId":"runtime-primary","companionId":"brain-companion",
+                             "text":"Hold this Brain request"}
+                            """))
+                    .build();
+            var blockedResponse = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return HttpClient.newHttpClient().send(blockedRequest, HttpResponse.BodyHandlers.ofString());
+                } catch (Exception failure) {
+                    throw new java.util.concurrent.CompletionException(failure);
+                }
+            });
+            assertTrue(blockedBrainEntered.await(2, TimeUnit.SECONDS));
+            try {
+                HttpResponse<String> healthWhileBrainBlocked = HttpClient.newHttpClient().send(
+                        HttpRequest.newBuilder(new URI("http://127.0.0.1:" + config.server.managementPort + "/health"))
+                                .header("Authorization", "Bearer " + token).timeout(Duration.ofSeconds(2)).GET().build(),
+                        HttpResponse.BodyHandlers.ofString());
+                assertEquals(200, healthWhileBrainBlocked.statusCode(), healthWhileBrainBlocked.body());
+            } finally {
+                releaseBlockedBrain.countDown();
+            }
+            assertEquals(200, blockedResponse.get(3, TimeUnit.SECONDS).statusCode());
+
             client.send("""
                     {"type":"player_request","sessionId":"%s","sequence":1,"payload":{
                       "requestId":"brain-game-1","companionId":"brain-companion","ownerId":"owner-1",
@@ -231,7 +275,7 @@ class RuntimeApplicationTest {
 
             var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(
                     new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())).list("brain-companion", 10);
-            assertEquals(List.of("MESSAGE", "CHAT", "MESSAGE", "CHAT"), transcript.stream().map(
+            assertEquals(List.of("MESSAGE", "CHAT", "MESSAGE", "CHAT", "MESSAGE", "CHAT"), transcript.stream().map(
                     com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
             client.closeBlocking();
         }

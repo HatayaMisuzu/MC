@@ -38,7 +38,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 /** Loopback-only authenticated management endpoint used to prove Runtime identity and readiness. */
 public final class RuntimeHealthServer implements AutoCloseable {
@@ -59,6 +61,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final RuntimeLog log;
     private final Instant startedAt;
     private final HttpServer server;
+    private final ExecutorService executor;
+    private final ExecutorService planningExecutor;
 
     public RuntimeHealthServer(
             RuntimeConfig config,
@@ -93,17 +97,53 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
         server.createContext("/health", this::health);
         server.createContext("/commands", this::commands);
-        server.createContext("/agent", this::agent);
-        server.createContext("/brain", this::brain);
+        server.createContext("/agent", exchange -> dispatchPlanning(exchange, this::agent));
+        server.createContext("/brain", this::brainDispatch);
         server.createContext("/tasks", this::tasks);
         server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
         server.createContext("/memories", this::memoryManagement);
-        server.setExecutor(Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-runtime-health");
+        executor = Executors.newFixedThreadPool(2, runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-runtime-management");
             thread.setDaemon(true);
             return thread;
-        }));
+        });
+        planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-runtime-planning");
+            thread.setDaemon(true);
+            return thread;
+        });
+        server.setExecutor(executor);
+    }
+
+    private void brainDispatch(HttpExchange exchange) throws IOException {
+        if ("POST".equals(exchange.getRequestMethod()) && "/brain".equals(exchange.getRequestURI().getPath())) {
+            dispatchPlanning(exchange, this::brain);
+        } else {
+            brain(exchange);
+        }
+    }
+
+    private void dispatchPlanning(HttpExchange exchange, ExchangeHandler handler) throws IOException {
+        try {
+            planningExecutor.execute(() -> {
+                try {
+                    handler.handle(exchange);
+                } catch (IOException failure) {
+                    log.error("Management planning request failed", failure);
+                    exchange.close();
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            try (exchange) {
+                sendJson(exchange, 503, Json.object().put("code", "RUNTIME_STOPPING"));
+            }
+        }
+    }
+
+    @FunctionalInterface
+    private interface ExchangeHandler {
+        void handle(HttpExchange exchange) throws IOException;
     }
 
     private void memoryManagement(HttpExchange exchange) throws IOException {
@@ -543,5 +583,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
+        planningExecutor.shutdownNow();
+        executor.shutdownNow();
     }
 }

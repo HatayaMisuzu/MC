@@ -74,6 +74,9 @@ product UI controls, and release/install verification remain incomplete.
 - Added an External Brain page showing adapter health, active controller, durable tool
   observations, typed-memory provenance, and the companion chat entry point.
 - Web UI tests cover tool-audit rendering, memory provenance, and chat submission.
+- Slow `/brain` and migration-only `/agent` calls run on a dedicated bounded executor;
+  authenticated health, task inspection, cancellation, and diagnostics remain responsive
+  while an external provider call is blocked.
 - This is Replay automation evidence only; no Live provider or human-playtest claim is made.
 
 ## Verification boundary

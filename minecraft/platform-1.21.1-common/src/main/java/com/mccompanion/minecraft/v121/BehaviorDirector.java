@@ -310,7 +310,7 @@ final class BehaviorDirector {
         }
         if (progress.actions >= progress.target) return;
         if (server.getTickCount() - progress.lastActionTick < 4) return;
-        int slot = findSlot(body, progress.item);
+        int slot = ensureHotbarItem(body, progress.item);
         if (slot < 0 || slot > 8) { pauseSafely(entry, body, "ITEM_NOT_IN_HOTBAR"); return; }
         body.getInventory().selected = slot;
         Vec3 delta = owner.position().subtract(body.position());
@@ -374,6 +374,31 @@ final class BehaviorDirector {
     private static int findSlot(ServerPlayer player, Item item) {
         for (int slot = 0; slot < 9; slot++) if (player.getInventory().getItem(slot).is(item)) return slot;
         return -1;
+    }
+
+    /** Moves an existing main-inventory stack through the vanilla InventoryMenu before handoff. */
+    private static int ensureHotbarItem(CompanionPlayer body, Item item) {
+        int existing = findSlot(body, item);
+        if (existing >= 0) return existing;
+        int sourceInventory = -1;
+        for (int slot = 9; slot < 36; slot++) {
+            if (body.getInventory().getItem(slot).is(item)) { sourceInventory = slot; break; }
+        }
+        if (sourceInventory < 0 || !body.inventoryMenu.getCarried().isEmpty()) return -1;
+        int targetHotbar = -1;
+        for (int slot = 0; slot < 9; slot++) {
+            if (body.getInventory().getItem(slot).isEmpty()) { targetHotbar = slot; break; }
+        }
+        if (targetHotbar < 0) return -1;
+        // InventoryMenu ids 9..35 are the player's main inventory and 36..44 are the hotbar.
+        // PICKUP is the same validated menu transaction a real player uses; no stack is edited directly.
+        body.inventoryMenu.clicked(sourceInventory, 0, ClickType.PICKUP, body);
+        body.inventoryMenu.clicked(36 + targetHotbar, 0, ClickType.PICKUP, body);
+        if (!body.inventoryMenu.getCarried().isEmpty()) {
+            body.inventoryMenu.clicked(sourceInventory, 0, ClickType.PICKUP, body);
+            return -1;
+        }
+        return findSlot(body, item);
     }
 
     private static int count(ServerPlayer player, Item item) {

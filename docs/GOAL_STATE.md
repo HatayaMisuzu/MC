@@ -50,8 +50,17 @@
 - 用户选择部分交付时保留原 `planId`，只修订未完成步骤的数量；6/16 场景变为“取 6 → 返回/交付 6”，不会创建竞争计划或再次调用 Provider。
 - 用户明确修改目标时，旧行为先取消、旧未执行步骤明确标为 superseded，再激活同一 plan 的新语义修订；不会把目标修改误吞为缺货回答。
 - Fabric 缺货 Observation 新增结构化 `failureCode/item/requested/available`，并在 STARTED 时登记观测状态，避免快速暂停发生在首次状态轮询前而漏发 BLOCKED。
-- 当前本地证据：Runtime 全量 75 项、terminal 测试、Web 7 项、Fabric 编译和隔离 Fabric 1.21.1 GameTest 4/4 通过；完整 Runtime↔Fabric 对话 E2E、Playwright 浏览器 E2E 和远程 CI 尚待本轮后续验证。
+- 当前本地证据：Runtime 全量 75 项、terminal 测试、Web 7 项、Fabric 编译、隔离 Fabric 1.21.1 GameTest 4/4，以及 Runtime↔Fabric 缺货对话纵向 E2E 通过；Playwright 浏览器 E2E 仍待后续验证。
 - Goal 保持 `ACTIVE`；该切片不是 `READY_FOR_HUMAN_TEST`，制作、采集、熔炼、钻石替代策略、隔离真人实例和长稳等门槛仍未完成。
+
+### 缺货对话真实纵向证据
+
+- `runtimeFabricE2E` 使用明确标注的本地 Replay Provider（不记作 Live）在隔离 Fabric GameTest 世界生成“导航到箱子→取 16→返回→交付”的计划。
+- 世界中的真实箱子只有 6 个铁锭；第一次取物保持零库存变化并上报 `requested=16/available=6`，Runtime 将问题持久化并通过 Conversation Event 投递到游戏。
+- 回答 `deliver_partial` 后保持同一 `planId`；旧 BLOCKED task 先经真实取消终态，再激活“取 6→返回→交付 6”，避免 `TASK_ALREADY_ACTIVE` 竞态。
+- 真实取物进入主背包后，DeliverItem 通过原版 `InventoryMenu` PICKUP 交互整理到快捷栏，再通过原版丢出/拾取交付；不直接编辑库存。
+- GameTest 最终断言：主人铁锭 `+6`、箱子 `0`、伙伴铁锭 `0`，从而同时证明部分交付、无重复取物和无复制。
+- E2E 证据落盘到 `build/e2e-runtime/evidence/shortage-conversation.json` 及配套 Runtime/Fabric/Replay 日志；Replay 明确不是 Live Provider。
 
 ## Observation → Replan 切片（2026-07-15）
 

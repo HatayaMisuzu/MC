@@ -122,6 +122,17 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
                 .put("selectedOption", answer.optionId() == null ? "free_text" : answer.optionId());
         DurablePlan queued = plans.queueGoalModification(plan.planId(), plan.revision(), plan.requestText(), revision,
                 answerObservation);
+        if (commands != null && commands.activeTaskFor(plan.companionId()).isPresent()) {
+            CommandReply cancellation = commands.execute("answer-change-" + activeQuestion.questionId(),
+                    plan.companionId(), new Intent(com.mccompanion.runtime.task.TaskType.STOP,
+                            Json.object().put("action", "cancel"), answer.text()));
+            if (!cancellation.accepted()) throw new IllegalStateException("WAITING_TASK_CANCEL_REJECTED");
+            conversations.say(plan.companionId(), plan.planId(), "ANSWER_ACCEPTED",
+                    "收到，我会按你的选择继续原来的任务。", Json.object()
+                            .put("questionId", activeQuestion.questionId())
+                            .put("selectedOption", answer.optionId() == null ? "free_text" : answer.optionId()));
+            return queued;
+        }
         DurablePlan activated = plans.activateGoalModification(queued.planId(), queued.revision(), failedStep.index(),
                 StepState.FAILED, answerObservation, "RESUMED_FROM_USER_ANSWER");
         conversations.say(plan.companionId(), plan.planId(), "ANSWER_ACCEPTED",

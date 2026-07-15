@@ -18,6 +18,33 @@ if (Test-Path -LiteralPath $runtimeHome) {
     Remove-Item -LiteralPath $runtimeHome -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $runtimeHome | Out-Null
+$env:MCAC_E2E_REPLAY_TOKEN = 'local-replay-fixture'
+@"
+server:
+  bind: 127.0.0.1
+  port: 8766
+  management_port: 18766
+  profile_id: e2e
+  instance_id: fabric-e2e
+  token_file: ./data/pairing.token
+  heartbeat_seconds: 15
+  allow_remote: false
+database:
+  path: ./data/companion.db
+provider:
+  mode: openai-compatible
+  base_url: http://127.0.0.1:18767/v1
+  api_key_env: MCAC_E2E_REPLAY_TOKEN
+  model: local-replay
+  timeout_seconds: 10
+  max_output_tokens: 1400
+  max_calls_per_minute: 30
+  max_concurrent: 2
+  max_retries: 0
+logging:
+  file: ./logs/runtime.log
+  console: true
+"@ | Set-Content -LiteralPath $config -Encoding UTF8
 
 function Start-TestProcess([string]$file, [string]$arguments, [string]$workingDirectory, [bool]$captureOutput) {
     $start = [Diagnostics.ProcessStartInfo]::new()
@@ -74,9 +101,35 @@ function Wait-RuntimeTaskState([string]$pairingToken, [string]$taskId, [string]$
     throw "Runtime task did not reach $expected in time (last=$($snapshot.task.state))."
 }
 
+function Invoke-AgentRequest([string]$pairingToken, [string]$companionId, [string]$text) {
+    $body = @{
+        commandId = "e2e-agent-$([Guid]::NewGuid())"
+        companionId = $companionId
+        text = $text
+        execute = $true
+    } | ConvertTo-Json -Compress -Depth 10
+    return Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18766/agent' -Headers @{
+        Authorization = "Bearer $pairingToken"
+    } -ContentType 'application/json' -Body $body -TimeoutSec 15
+}
+
+function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $conversation = Invoke-RestMethod -Uri "http://127.0.0.1:18766/conversations?companionId=$companionId" -Headers @{
+            Authorization = "Bearer $pairingToken"
+        } -TimeoutSec 3
+        if ($conversation.waitingQuestion) { return $conversation }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'Runtime did not persist a waiting question after the verified shortage.'
+}
+
 $runtime = $null
 $game = $null
+$provider = $null
 $commandEvidence = @()
+$conversationEvidence = $null
 try {
     Write-Output '[runtime-e2e] starting Runtime'
     $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
@@ -134,9 +187,12 @@ try {
     Write-Output '[runtime-e2e] Fabric companion registered; exercising behavior controls'
 
     $readyMatch = [regex]::Match((Get-Content -Raw -LiteralPath $gameLog),
-        'runtime_e2e_ready companion=([0-9a-f-]{36})')
+        'runtime_e2e_ready companion=([0-9a-f-]{36}) chest=(-?\d+),(-?\d+),(-?\d+)')
     if (-not $readyMatch.Success) { throw 'Runtime E2E readiness marker has no companion id.' }
     $companionId = $readyMatch.Groups[1].Value
+    $chestX = [int]$readyMatch.Groups[2].Value
+    $chestY = [int]$readyMatch.Groups[3].Value
+    $chestZ = [int]$readyMatch.Groups[4].Value
 
     $follow = Invoke-RuntimeCommand $pairingToken $companionId 'FOLLOW' @{} 'follow'
     if (-not $follow.accepted -or -not $follow.taskId) { throw "FOLLOW was rejected: $($follow.code)" }
@@ -158,13 +214,57 @@ try {
     $cancelled = Wait-RuntimeTaskState $pairingToken $follow.taskId 'CANCELLED'
     $commandEvidence += [pscustomobject]@{ command = 'STOP'; reply = $stop; snapshot = $cancelled }
 
-    Write-Output '[runtime-e2e] behavior controls passed; waiting for Fabric GameTest shutdown'
+    Write-Output '[runtime-e2e] behavior controls passed; starting replay-backed shortage conversation'
+    $providerScript = Join-Path $root 'tools\provider-replay-server.ps1'
+    $providerArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$providerScript`" -X $chestX -Y $chestY -Z $chestZ"
+    $provider = Start-TestProcess 'powershell.exe' $providerArgs $root $true
+    $providerOut = $provider.StandardOutput.ReadToEndAsync()
+    $providerErr = $provider.StandardError.ReadToEndAsync()
+    Start-Sleep -Milliseconds 500
+    if ($provider.HasExited) { throw "Replay provider exited before planning ($($provider.ExitCode))." }
+
+    $initialPlan = Invoke-AgentRequest $pairingToken $companionId 'Get 16 iron from the specified chest and tell me if not enough'
+    if (-not $initialPlan.accepted -or -not $initialPlan.planId) {
+        throw "Replay-backed agent plan was rejected: $($initialPlan.code) $($initialPlan.message)"
+    }
+    $conversation = Wait-WaitingQuestion $pairingToken $companionId
+    $question = $conversation.waitingQuestion
+    Write-Output "[runtime-e2e] durable question observed: $($question.questionId)"
+    if ($question.planId -ne $initialPlan.planId) { throw 'Waiting question was not associated with the original plan.' }
+    if ($question.prompt -notmatch '6' -or $question.prompt -notmatch '10') {
+        throw "Shortage prompt did not expose available quantity and gap: $($question.prompt)"
+    }
+    $optionIds = @($question.options | ForEach-Object { $_.id })
+    if ('deliver_partial' -notin $optionIds -or $optionIds.Count -gt 3) {
+        throw 'Shortage question did not expose the bounded stable partial-delivery option.'
+    }
+    Write-Output '[runtime-e2e] shortage quantities and stable options verified'
+    $deliveryDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    while ((Get-Content -Raw -LiteralPath $gameLog) -notmatch 'conversation_delivered_to_game' -and
+           [DateTime]::UtcNow -lt $deliveryDeadline) { Start-Sleep -Milliseconds 100 }
+    if ((Get-Content -Raw -LiteralPath $gameLog) -notmatch 'conversation_delivered_to_game') {
+        throw 'The persisted shortage question was not delivered to the game owner.'
+    }
+
+    Write-Output '[runtime-e2e] game delivery verified; submitting partial answer'
+    $answer = Invoke-AgentRequest $pairingToken $companionId 'deliver_partial'
+    Write-Output "[runtime-e2e] partial answer response: accepted=$($answer.accepted) plan=$($answer.planId) state=$($answer.planState)"
+    if (-not $answer.accepted -or -not $answer.resumedOriginalPlan -or $answer.planId -ne $initialPlan.planId) {
+        throw 'Partial answer did not resume the original durable plan.'
+    }
+    $conversationEvidence = [pscustomobject]@{
+        initialPlan = $initialPlan
+        waitingConversation = $conversation
+        answer = $answer
+    }
+
+    Write-Output '[runtime-e2e] shortage answer resumed original plan; waiting for verified delivery'
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     Write-Output '[runtime-e2e] Fabric GameTest exited; stopping Runtime'
     $runtime.StandardInput.WriteLine('quit')
     $runtime.StandardInput.Flush()
     if (-not $runtime.WaitForExit(15000)) {
-        $runtime.Kill($true)
+        $runtime.Kill()
         if (-not $runtime.WaitForExit(5000)) { throw 'Runtime process tree did not stop after forced shutdown.' }
         throw 'Runtime did not shut down after quit.'
     }
@@ -181,6 +281,18 @@ try {
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\runtime-cli.err.log'), $runtimeStderr, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\runtime-commands.json'),
         ($commandEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\shortage-conversation.json'),
+        ($conversationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+    if ($provider) {
+        if (-not $provider.HasExited) {
+            $provider.Kill()
+            $null = $provider.WaitForExit(5000)
+        }
+        [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\provider-replay.out.log'),
+            $providerOut.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\provider-replay.err.log'),
+            $providerErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
 
     if ($game.ExitCode -ne 0) { throw "Fabric GameTest failed with exit code $($game.ExitCode)." }
     if ($runtime.ExitCode -ne 0) { throw "Runtime failed with exit code $($runtime.ExitCode)." }
@@ -188,6 +300,12 @@ try {
     if ($gameStdout -notmatch 'All [0-9]+ required tests passed') { throw 'Fabric lifecycle GameTest did not pass.' }
     if ($commandEvidence.Count -ne 4 -or $commandEvidence[-1].snapshot.task.state -ne 'CANCELLED') {
         throw 'Runtime command evidence did not complete the safe cancellation path.'
+    }
+    if ($gameStdout -notmatch 'runtime_e2e_conversation_complete.*delivered=6') {
+        throw 'Fabric did not verify the final six-item partial delivery.'
+    }
+    if (-not $conversationEvidence -or $conversationEvidence.answer.planId -ne $conversationEvidence.initialPlan.planId) {
+        throw 'Conversation evidence did not retain one durable plan id.'
     }
     if ($runtimeStderr -match 'Invalid CompanionStatus payload' -or $runtimeStdout -match 'Invalid CompanionStatus payload') {
         throw 'Runtime rejected a CompanionStatus payload during E2E.'
@@ -198,9 +316,15 @@ try {
     if ($runtimeStderr -match '(?m)^.*SEVERE.*$') {
         throw 'Runtime emitted a SEVERE error during E2E.'
     }
-    Write-Output 'Runtime/Fabric E2E passed: handshake, companion registration, lease, follow, pause, resume, stop, safe shutdown.'
+    Write-Output 'Runtime/Fabric E2E passed: controls plus shortage question, game delivery, original-plan resume, and verified partial handoff.'
+} catch {
+    $failurePath = Join-Path $runtimeHome 'e2e-failure.txt'
+    $failureText = $_.Exception.ToString() + [Environment]::NewLine + $_.ScriptStackTrace
+    [IO.File]::WriteAllText($failurePath, $failureText, [Text.UTF8Encoding]::new($false))
+    throw
 } finally {
-    if ($game -and -not $game.HasExited) { $game.Kill($true) }
-    if ($runtime -and -not $runtime.HasExited) { $runtime.Kill($true) }
+    if ($game -and -not $game.HasExited) { $game.Kill() }
+    if ($provider -and -not $provider.HasExited) { $provider.Kill() }
+    if ($runtime -and -not $runtime.HasExited) { $runtime.Kill() }
     Remove-Item -LiteralPath $gameToken -Force -ErrorAction SilentlyContinue
 }

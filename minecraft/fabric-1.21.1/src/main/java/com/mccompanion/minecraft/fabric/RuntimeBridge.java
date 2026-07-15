@@ -227,7 +227,11 @@ final class RuntimeBridge implements AutoCloseable {
         server.execute(() -> registry.runtimeSnapshots(true).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().ifPresent(snapshot -> {
                     ServerPlayer owner = server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
-                    if (owner != null) owner.sendSystemMessage(Component.literal("[伙伴] " + finalReply));
+                    if (owner != null) {
+                        owner.sendSystemMessage(Component.literal("[伙伴] " + finalReply));
+                        logger.info("conversation_delivered_to_game event={} kind={} companion={}",
+                                payload.path("eventId").asText("unknown"), payload.path("kind").asText("MESSAGE"), companionId);
+                    }
                 }));
     }
 
@@ -365,6 +369,8 @@ final class RuntimeBridge implements AutoCloseable {
         if (socket == null || sessionId == null) return;
         ArrayNode companions = JSON.createArrayNode();
         for (CompanionRegistry.RuntimeSnapshot snapshot : registry.runtimeSnapshots(true)) {
+            boolean activeBehavior = snapshot.behaviorId() != null
+                    && !snapshot.behaviorState().equalsIgnoreCase("IDLE");
             ObjectNode status = companions.addObject()
                     .put("companionId", snapshot.companionId())
                     .put("ownerId", snapshot.ownerId())
@@ -372,7 +378,7 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("worldId", worldId())
                     .put("dimension", snapshot.dimension())
                     .put("bodyState", snapshot.bodyState().toLowerCase(Locale.ROOT))
-                    .put("behaviorRevision", snapshot.behaviorRevision())
+                    .put("behaviorRevision", activeBehavior ? snapshot.behaviorRevision() : 0L)
                     .put("controlEpoch", snapshot.controlEpoch())
                     .put("runtimeConnected", true)
                     .put("observedAt", Instant.now().toString());
@@ -389,11 +395,11 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("x", container.x()).put("y", container.y()).put("z", container.z())
                     .put("verified", true));
             status.putObject("capabilities");
-            if (snapshot.behaviorId() != null) {
+            if (activeBehavior) {
                 status.put("behaviorId", snapshot.behaviorId());
                 status.put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT));
-                publishObservedLifecycle(snapshot);
             }
+            if (snapshot.behaviorId() != null) publishObservedLifecycle(snapshot);
         }
         ObjectNode payload = JSON.createObjectNode();
         payload.set("companions", companions);

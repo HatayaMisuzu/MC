@@ -37,7 +37,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         // Stand just outside the owner's collision box so the normal forward toss
         // lands inside the owner's vanilla pickup radius.
         body.moveTo(owner.getX(), owner.getY(), owner.getZ() - 1.25D, 0.0F, 0.0F);
-        body.getInventory().setItem(0, new ItemStack(Items.DIAMOND, 2));
+        // Start outside the hotbar to prove DeliverItem uses a real InventoryMenu rearrangement.
+        body.getInventory().setItem(9, new ItemStack(Items.DIAMOND, 2));
 
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-skills";
@@ -341,10 +342,24 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                             "death recovery duplicated the dropped inventory item");
 
                     if (Boolean.getBoolean("mccompanion.runtime.e2e")) {
-                        LOGGER.info("runtime_e2e_ready companion={}", recovered.getUUID());
+                        BlockPos shortageChestPos = recovered.blockPosition().offset(1, 0, 0);
+                        recovered.serverLevel().setBlockAndUpdate(shortageChestPos, Blocks.CHEST.defaultBlockState());
+                        Container shortageChest = (Container) recovered.serverLevel().getBlockEntity(shortageChestPos);
+                        shortageChest.setItem(0, new ItemStack(Items.IRON_INGOT, 6));
+                        int ownerIronBaseline = count(owner, Items.IRON_INGOT);
+                        LOGGER.info("runtime_e2e_ready companion={} chest={},{},{}",
+                                recovered.getUUID(), shortageChestPos.getX(), shortageChestPos.getY(), shortageChestPos.getZ());
                         helper.succeedWhen(() -> {
                             helper.assertTrue(registry.runtimeCommandCount() >= 5,
                                     "waiting for Runtime lease/follow/pause/resume/stop commands");
+                            helper.assertValueEqual(count(owner, Items.IRON_INGOT) - ownerIronBaseline, 6,
+                                    "waiting for partial shortage delivery to reach the owner");
+                            helper.assertValueEqual(count(shortageChest, Items.IRON_INGOT), 0,
+                                    "partial shortage delivery did not consume exactly the verified chest quantity");
+                            helper.assertValueEqual(count(recovered, Items.IRON_INGOT), 0,
+                                    "partial shortage delivery left duplicate iron in companion inventory");
+                            LOGGER.info("runtime_e2e_conversation_complete companion={} delivered=6",
+                                    recovered.getUUID());
                             CompanionRegistry.Result removed = registry.remove(owner);
                             helper.assertTrue(removed.success(), "remove failed: " + removed.code());
                         });

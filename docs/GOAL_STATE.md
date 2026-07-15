@@ -49,3 +49,12 @@
 - Replan 只接受 `REPLAN/ASK_CLARIFICATION/REPORT_BLOCKED/PAUSE/CANCEL`，不能把失败 Observation 偷换成无关的新任务，也不能把失败写成成功。
 - 本切片本地证据：仓储状态机测试、Planner Replan 测试、Kernel→Provider 异步集成测试，以及 `gradlew check buildPlatforms runtimeFabricE2E` 均为 `LOCAL_PASS`。
 - Goal 仍为 `ACTIVE`；下一切片是已知容器取物→返回→交付闭环及不足、不可达、目标修改时重规划，尚未达到 `READY_FOR_HUMAN_TEST`。
+
+## 已知容器与真实取物切片（2026-07-15）
+
+- Fabric 身体新增正式 `WithdrawFromStorage`：必须给出维度与方块坐标、必须在真实交互距离内、必须由假玩家打开原版容器菜单。
+- 物品通过原版菜单 `PICKUP`/右键放置交互逐个精确转移，不直接编辑容器或身体库存；成功同时验证容器减少量和身体库存增加量。
+- 不足、容器缺失、距离不可达、世界变化、库存已满和菜单事务失败均安全暂停并返回结构化失败码，不会伪报成功。
+- Fabric 只上报假玩家视线实际命中的附近容器类型与坐标，不读取箱内物品；Runtime 将这些坐标持久化为 verified world memory，供后续 Planner 的 `knownContainers` 使用。
+- 本切片证据：Runtime 单元测试、Fabric 编译、4 项真实 Fabric GameTest、Runtime↔Fabric E2E 均为 `LOCAL_PASS`。
+- 仍未完成：目标修改的排队重规划，以及端到端“导航到已知容器→取物→返回→交付”计划级验证；Goal 保持 `ACTIVE`。

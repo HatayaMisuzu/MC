@@ -7,6 +7,7 @@ import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
+import com.mccompanion.runtime.memory.MemoryRepository;
 import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.session.CompanionRecord;
 import com.mccompanion.runtime.session.CompanionRepository;
@@ -30,18 +31,26 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
     private final CompanionRepository companions;
     private final SessionRegistry sessions;
     private final CapabilityVisibility capabilityVisibility;
+    private final MemoryRepository memories;
     private final ExecutorService replanner;
     private final CapabilityIntentTranslator translator = new CapabilityIntentTranslator();
 
     public AgentKernel(AgentPlanRepository plans, CommandService commands, RuntimeLog log) {
-        this(plans, commands, log, null, null, null, null);
+        this(plans, commands, log, null, null, null, null, null);
     }
 
     public AgentKernel(AgentPlanRepository plans, CommandService commands, RuntimeLog log,
                        ProviderRouter providers, CompanionRepository companions, SessionRegistry sessions,
                        CapabilityVisibility capabilityVisibility) {
+        this(plans, commands, log, providers, companions, sessions, capabilityVisibility, null);
+    }
+
+    public AgentKernel(AgentPlanRepository plans, CommandService commands, RuntimeLog log,
+                       ProviderRouter providers, CompanionRepository companions, SessionRegistry sessions,
+                       CapabilityVisibility capabilityVisibility, MemoryRepository memories) {
         this.plans = plans; this.commands = commands; this.log = log; this.providers = providers;
         this.companions = companions; this.sessions = sessions; this.capabilityVisibility = capabilityVisibility;
+        this.memories = memories;
         this.replanner = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-agent-replanner");
             thread.setDaemon(false);
@@ -145,6 +154,7 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
     private AgentContext context(DurablePlan plan, DurablePlan.DurableStep failedStep) throws SQLException {
         CompanionRecord companion = companions.get(plan.companionId()).orElse(null);
         JsonNode status = companion == null ? Json.object() : companion.status();
+        JsonNode verifiedWorld = memories == null ? status : memories.enrichVerifiedWorld(plan.companionId(), status);
         var session = sessions.forCompanion(plan.companionId()).orElse(null);
         List<String> landmarks = new ArrayList<>();
         status.path("knownLandmarks").forEach(value -> {
@@ -164,7 +174,8 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
         active.put("instruction", "Revise the remaining short-horizon plan from this verified observation; do not claim success.");
         List<String> available = capabilityVisibility.resolve(
                 session == null ? null : session.handshake(), status).availableNames();
-        return new AgentContext(plan.companionId(), status, List.of(), active, landmarks, available, 5);
+        if (memories != null) landmarks.addAll(memories.verifiedLandmarkKeys(plan.companionId()));
+        return new AgentContext(plan.companionId(), verifiedWorld, List.of(), active, landmarks, available, 5);
     }
 
     @Override public void close() {

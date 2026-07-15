@@ -1,6 +1,7 @@
 package com.mccompanion.runtime.memory;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.json.Json;
 
@@ -67,6 +68,38 @@ public final class MemoryRepository {
                 "DELETE FROM memory_fact WHERE expires_at IS NOT NULL AND expires_at<=?")) {
             statement.setLong(1, clock.millis()); return statement.executeUpdate();
         }
+    }
+
+    /** Persists only body-verified visible container positions; item contents are never inferred or scanned. */
+    public void rememberObservedContainers(String companionId, JsonNode status) throws SQLException {
+        JsonNode observed = status == null ? null : status.path("observedContainers");
+        if (observed == null || !observed.isArray()) return;
+        for (JsonNode container : observed) {
+            if (!container.path("verified").asBoolean(false)
+                    || !container.path("x").canConvertToInt()
+                    || !container.path("y").canConvertToInt()
+                    || !container.path("z").canConvertToInt()) continue;
+            String dimension = container.path("dimension").asText("");
+            if (dimension.isBlank()) continue;
+            String key = "container:" + dimension + ':' + container.path("x").asInt() + ':'
+                    + container.path("y").asInt() + ':' + container.path("z").asInt();
+            remember(companionId, MemoryKind.WORLD, key, container, true, 1.0D, null);
+        }
+    }
+
+    public JsonNode enrichVerifiedWorld(String companionId, JsonNode currentStatus) throws SQLException {
+        ObjectNode world = currentStatus != null && currentStatus.isObject()
+                ? (ObjectNode) currentStatus.deepCopy() : Json.object();
+        var containers = world.putArray("knownContainers");
+        for (MemoryFact fact : relevant(companionId, MemoryKind.WORLD, 100)) {
+            if (fact.verified() && fact.key().startsWith("container:")) containers.add(fact.value());
+        }
+        return world;
+    }
+
+    public List<String> verifiedLandmarkKeys(String companionId) throws SQLException {
+        return relevant(companionId, MemoryKind.WORLD, 100).stream()
+                .filter(MemoryFact::verified).map(MemoryFact::key).toList();
     }
 
     private static MemoryFact find(java.sql.Connection connection, String companionId, MemoryKind kind, String key, long now) throws SQLException {

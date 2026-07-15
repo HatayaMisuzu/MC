@@ -5,16 +5,22 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.Container;
+import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.phys.BlockHitResult;
 import org.slf4j.Logger;
 
 /** Starts, ticks, pauses, resumes and terminates the local Alpha movement behaviors. */
@@ -63,6 +69,8 @@ final class BehaviorDirector {
         actionGateway.stopInput(body);
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
         navigation.remove(entry.companionId);
+        SkillProgress skill = skills.get(entry.companionId);
+        if (skill != null && skill.parameters.capability().equals("WithdrawFromStorage")) body.closeContainer();
         if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
                 || code.equals("LEASE_EXPIRED"))) skills.remove(entry.companionId);
     }
@@ -184,6 +192,36 @@ final class BehaviorDirector {
             return new SkillProgress(parameters, item, 1, 0, body.getFoodData().getFoodLevel(),
                     count(body, item), server.getTickCount(), null);
         }
+        if (parameters.capability().equals("WithdrawFromStorage")) {
+            Item item = resolveItem(parameters.itemId());
+            if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
+            if (!parameters.hasBlockTarget()) return SkillProgress.failed(parameters, "CONTAINER_TARGET_MISSING");
+            if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+                return SkillProgress.failed(parameters, "WORLD_CHANGED");
+            }
+            BlockPos position = new BlockPos(parameters.x(), parameters.y(), parameters.z());
+            if (body.distanceToSqr(Vec3.atCenterOf(position)) > 25.0D) {
+                return SkillProgress.failed(parameters, "CONTAINER_OUT_OF_REACH");
+            }
+            if (!(body.serverLevel().getBlockEntity(position) instanceof Container)) {
+                return SkillProgress.failed(parameters, "CONTAINER_MISSING");
+            }
+            BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(position), Direction.UP, position, false);
+            body.gameMode.useItemOn(body, body.serverLevel(), body.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+            if (body.containerMenu == body.inventoryMenu) return SkillProgress.failed(parameters, "CONTAINER_OPEN_FAILED");
+            int available = countStorageMenu(body, item);
+            if (available < parameters.quantity() && !parameters.allowPartial()) {
+                body.closeContainer();
+                return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            }
+            int target = Math.min(available, parameters.quantity());
+            if (target == 0) {
+                body.closeContainer();
+                return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            }
+            return new SkillProgress(parameters, item, target, 0, body.getFoodData().getFoodLevel(),
+                    count(body, item), server.getTickCount(), null, position, available);
+        }
         return SkillProgress.failed(parameters, "CAPABILITY_UNAVAILABLE");
     }
 
@@ -195,7 +233,44 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "SKILL_TIMEOUT"); return;
         }
         if (progress.parameters.capability().equals("DeliverItem")) tickDelivery(entry, body, progress);
+        else if (progress.parameters.capability().equals("WithdrawFromStorage")) tickWithdrawal(entry, body, progress);
         else tickEating(entry, body, progress);
+    }
+
+    private void tickWithdrawal(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        if (!body.serverLevel().dimension().location().toString().equals(progress.parameters.dimension())) {
+            pauseSafely(entry, body, "WORLD_CHANGED"); return;
+        }
+        if (progress.containerPosition == null
+                || body.distanceToSqr(Vec3.atCenterOf(progress.containerPosition)) > 25.0D) {
+            pauseSafely(entry, body, "CONTAINER_OUT_OF_REACH"); return;
+        }
+        if (!(body.serverLevel().getBlockEntity(progress.containerPosition) instanceof Container)) {
+            pauseSafely(entry, body, "CONTAINER_MISSING"); return;
+        }
+        if (body.containerMenu == body.inventoryMenu) {
+            pauseSafely(entry, body, "CONTAINER_CLOSED"); return;
+        }
+        int bodyDelta = count(body, progress.item) - progress.itemBaseline;
+        int storageDelta = progress.containerBaseline - countStorageMenu(body, progress.item);
+        if (bodyDelta >= progress.target && storageDelta >= progress.target) {
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE; savedData.changed(); return;
+        }
+        if (server.getTickCount() - progress.lastActionTick < 2) return;
+        int source = findStorageSlot(body, progress.item);
+        int target = findInventorySlot(body, progress.item);
+        if (source < 0) { pauseSafely(entry, body, "ITEM_INSUFFICIENT"); return; }
+        if (target < 0) { pauseSafely(entry, body, "INVENTORY_FULL"); return; }
+        // One item is moved through the same PICKUP/right-click menu sequence a real player uses.
+        // This preserves slot validation, stack limits and container bookkeeping without editing either inventory.
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        body.containerMenu.clicked(target, 1, ClickType.PICKUP, body);
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        if (!body.containerMenu.getCarried().isEmpty()) {
+            pauseSafely(entry, body, "CONTAINER_TRANSACTION_FAILED"); return;
+        }
+        progress.actions++; progress.lastActionTick = server.getTickCount();
     }
 
     private void tickDelivery(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -292,6 +367,33 @@ final class BehaviorDirector {
         return total;
     }
 
+    private static int countStorageMenu(CompanionPlayer body, Item item) {
+        int total = 0;
+        for (Slot slot : body.containerMenu.slots) {
+            if (slot.container != body.getInventory() && slot.getItem().is(item)) total += slot.getItem().getCount();
+        }
+        return total;
+    }
+
+    private static int findStorageSlot(CompanionPlayer body, Item item) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container != body.getInventory() && slot.mayPickup(body) && slot.getItem().is(item)) return index;
+        }
+        return -1;
+    }
+
+    private static int findInventorySlot(CompanionPlayer body, Item item) {
+        ItemStack single = new ItemStack(item);
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container != body.getInventory() || !slot.mayPlace(single)) continue;
+            ItemStack existing = slot.getItem();
+            if (existing.isEmpty() || existing.is(item) && existing.getCount() < slot.getMaxStackSize(existing)) return index;
+        }
+        return -1;
+    }
+
     private void pauseSafely(CompanionEntry entry, CompanionPlayer body, String code) {
         entry.resumeMode = entry.mode;
         entry.mode = CompanionEntry.Mode.PAUSED;
@@ -322,15 +424,23 @@ final class BehaviorDirector {
         private final int itemBaseline;
         private final int startedTick;
         private final String failureCode;
+        private final BlockPos containerPosition;
+        private final int containerBaseline;
         private final Set<UUID> droppedEntities = new HashSet<>();
         private int actions;
         private int lastActionTick;
 
         private SkillProgress(SkillParameters parameters, Item item, int target, int ownerBaseline,
                               int foodBaseline, int itemBaseline, int startedTick, String failureCode) {
+            this(parameters, item, target, ownerBaseline, foodBaseline, itemBaseline, startedTick, failureCode, null, 0);
+        }
+        private SkillProgress(SkillParameters parameters, Item item, int target, int ownerBaseline,
+                              int foodBaseline, int itemBaseline, int startedTick, String failureCode,
+                              BlockPos containerPosition, int containerBaseline) {
             this.parameters = parameters; this.item = item; this.target = target; this.ownerBaseline = ownerBaseline;
             this.foodBaseline = foodBaseline; this.itemBaseline = itemBaseline;
             this.startedTick = startedTick; this.failureCode = failureCode;
+            this.containerPosition = containerPosition; this.containerBaseline = containerBaseline;
         }
         private static SkillProgress failed(SkillParameters parameters, String code) {
             return new SkillProgress(parameters, null, 0, 0, 0, 0, 0, code);

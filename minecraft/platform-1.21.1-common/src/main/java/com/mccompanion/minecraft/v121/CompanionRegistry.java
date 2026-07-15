@@ -8,10 +8,16 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import net.minecraft.network.chat.Component;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.Container;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.server.network.CommonListenerCookie;
 import org.slf4j.Logger;
 
@@ -280,9 +286,28 @@ public final class CompanionRegistry {
                     body != null && body.isInLava(),
                     freeSlots,
                     java.util.Map.copyOf(inventory),
+                    body == null ? java.util.List.of() : visibleContainers(body),
                     behaviorDirector.evidenceSummary(entry.companionId)));
         }
         return java.util.List.copyOf(snapshots);
+    }
+
+    private static java.util.List<ContainerSnapshot> visibleContainers(CompanionPlayer body) {
+        java.util.List<ContainerSnapshot> visible = new ArrayList<>();
+        BlockPos origin = body.blockPosition();
+        for (BlockPos position : BlockPos.betweenClosed(origin.offset(-5, -3, -5), origin.offset(5, 3, 5))) {
+            if (visible.size() >= 16 || !body.serverLevel().hasChunkAt(position)) continue;
+            var blockEntity = body.serverLevel().getBlockEntity(position);
+            if (!(blockEntity instanceof Container)) continue;
+            Vec3 target = Vec3.atCenterOf(position);
+            var hit = body.serverLevel().clip(new ClipContext(body.getEyePosition(), target,
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, body));
+            if (hit.getType() != HitResult.Type.BLOCK || !hit.getBlockPos().equals(position)) continue;
+            var key = BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(blockEntity.getType());
+            visible.add(new ContainerSnapshot(key.toString(), body.serverLevel().dimension().location().toString(),
+                    position.getX(), position.getY(), position.getZ()));
+        }
+        return java.util.List.copyOf(visible);
     }
 
     public RuntimeResult runtimeAcquireLease(
@@ -356,7 +381,8 @@ public final class CompanionRegistry {
             entry.targetY = owner.getY();
             entry.targetZ = owner.getZ();
         } else if (normalized.equals("skill") && skill != null) {
-            if (!skill.capability().equals("DeliverItem") && !skill.capability().equals("EatAndRecover")) {
+            if (!skill.capability().equals("DeliverItem") && !skill.capability().equals("EatAndRecover")
+                    && !skill.capability().equals("WithdrawFromStorage")) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }
             entry.mode = CompanionEntry.Mode.SKILL;
@@ -488,7 +514,10 @@ public final class CompanionRegistry {
             double x, double y, double z, String bodyState, String behaviorId,
             String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
             float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
-            int freeInventorySlots, java.util.Map<String, Integer> inventory, String evidenceSummary) { }
+            int freeInventorySlots, java.util.Map<String, Integer> inventory,
+            java.util.List<ContainerSnapshot> visibleContainers, String evidenceSummary) { }
+
+    public record ContainerSnapshot(String type, String dimension, int x, int y, int z) { }
 
     public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {
         static RuntimeResult success(String behaviorId, long revision, String state) {

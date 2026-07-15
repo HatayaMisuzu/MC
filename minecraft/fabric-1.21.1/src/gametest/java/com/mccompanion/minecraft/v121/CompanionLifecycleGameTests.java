@@ -6,6 +6,7 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Container;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
@@ -93,10 +94,83 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
+    public void withdrawUsesVanillaContainerMenuAndReportsInsufficientStock(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        owner.setGameMode(GameType.SURVIVAL);
+        helper.assertTrue(registry.create(owner, "StorageCompanion").success(), "storage test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "storage test created no live body");
+        BlockPos chestPos = body.blockPosition().offset(1, 0, 0);
+        body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+        Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+        chest.setItem(0, new ItemStack(Items.IRON_INGOT, 5));
+
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-storage";
+        long epoch = 1L;
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, leaseId, epoch, System.currentTimeMillis() + 30_000L).success(),
+                "storage test lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "withdraw-iron", "skill",
+                        null, null, null, new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 3,
+                                false, body.serverLevel().dimension().location().toString(),
+                                chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
+                "withdraw skill failed to start");
+
+        helper.runAfterDelay(30, () -> {
+            helper.assertValueEqual(count(body, Items.IRON_INGOT), 3,
+                    "withdraw did not produce the verified companion inventory delta");
+            helper.assertValueEqual(count(chest, Items.IRON_INGOT), 2,
+                    "withdraw did not produce the verified container inventory delta");
+            helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                            .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                    && snapshot.behaviorState().equals("IDLE")
+                                    && snapshot.evidenceSummary().contains("success=true")),
+                    "withdraw did not report successful evidence");
+
+            helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "withdraw-too-many", "skill",
+                            null, null, null, new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 4,
+                                    false, body.serverLevel().dimension().location().toString(),
+                                    chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
+                    "insufficient withdrawal was not accepted for observable execution");
+            helper.runAfterDelay(8, () -> {
+                helper.assertValueEqual(count(body, Items.IRON_INGOT), 3,
+                        "insufficient withdrawal changed companion inventory");
+                helper.assertValueEqual(count(chest, Items.IRON_INGOT), 2,
+                        "insufficient withdrawal changed container inventory");
+                helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                                .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                        && snapshot.behaviorState().equals("PAUSED")
+                                        && snapshot.evidenceSummary().contains("failure=ITEM_INSUFFICIENT")),
+                        "insufficient withdrawal did not expose ITEM_INSUFFICIENT evidence");
+                helper.assertTrue(registry.remove(owner).success(), "storage test cleanup failed");
+                helper.succeed();
+            });
+        });
+    }
+
     private static int count(ServerPlayer player, net.minecraft.world.item.Item item) {
         int total = 0;
         for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
             ItemStack stack = player.getInventory().getItem(slot);
+            if (stack.is(item)) total += stack.getCount();
+        }
+        return total;
+    }
+
+    private static int count(Container container, net.minecraft.world.item.Item item) {
+        int total = 0;
+        for (int slot = 0; slot < container.getContainerSize(); slot++) {
+            ItemStack stack = container.getItem(slot);
             if (stack.is(item)) total += stack.getCount();
         }
         return total;

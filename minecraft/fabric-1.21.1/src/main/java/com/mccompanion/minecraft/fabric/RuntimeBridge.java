@@ -143,6 +143,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("primitive_lifecycle", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
+                .put("WithdrawFromStorage", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);
@@ -272,8 +273,13 @@ final class RuntimeBridge implements AutoCloseable {
         JsonNode values = parameters.path("parameters");
         String item = values.path("item").asText(values.path("itemId").asText(""));
         int quantity = values.path("quantity").asInt(1);
+        JsonNode target = values.path("container").isObject() ? values.path("container") : values.path("target");
+        Integer x = target.path("x").canConvertToInt() ? target.path("x").asInt() : null;
+        Integer y = target.path("y").canConvertToInt() ? target.path("y").asInt() : null;
+        Integer z = target.path("z").canConvertToInt() ? target.path("z").asInt() : null;
         try { return new SkillParameters(parameters.path("capability").asText(), item, quantity,
-                values.path("allowPartial").asBoolean(false)); }
+                values.path("allowPartial").asBoolean(false),
+                target.path("dimension").asText("minecraft:overworld"), x, y, z); }
         catch (IllegalArgumentException invalid) { return null; }
     }
 
@@ -359,6 +365,11 @@ final class RuntimeBridge implements AutoCloseable {
             ObjectNode inventory = status.putObject("inventory").put("freeSlots", snapshot.freeInventorySlots());
             ObjectNode counts = inventory.putObject("counts");
             snapshot.inventory().forEach(counts::put);
+            ArrayNode knownContainers = status.putArray("observedContainers");
+            snapshot.visibleContainers().forEach(container -> knownContainers.addObject()
+                    .put("type", container.type()).put("dimension", container.dimension())
+                    .put("x", container.x()).put("y", container.y()).put("z", container.z())
+                    .put("verified", true));
             status.putObject("capabilities");
             if (snapshot.behaviorId() != null) {
                 status.put("behaviorId", snapshot.behaviorId());

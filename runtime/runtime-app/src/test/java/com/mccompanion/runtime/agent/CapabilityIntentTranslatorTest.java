@@ -17,6 +17,12 @@ class CapabilityIntentTranslatorTest {
                 .put("x", 8).put("y", 64).put("z", -3)), "去那里").orElseThrow();
         assertEquals(TaskType.TRAVEL, navigate.type());
         assertEquals(-3, navigate.arguments().path("target").path("z").asInt());
+        var withdrawParameters = Json.object().put("item", "minecraft:iron_ingot").put("quantity", 3);
+        withdrawParameters.set("container", Json.object().put("dimension", "minecraft:overworld")
+                .put("x", 8).put("y", 64).put("z", -3));
+        var withdraw = translator.translate(step("WithdrawFromStorage", withdrawParameters), "take iron").orElseThrow();
+        assertEquals(TaskType.SKILL, withdraw.type());
+        assertEquals("WithdrawFromStorage", withdraw.arguments().path("capability").asText());
         assertTrue(translator.translate(step("CraftItem", Json.object()), "做铁镐").isEmpty());
     }
 

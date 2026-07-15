@@ -17,6 +17,7 @@ import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
+import com.mccompanion.runtime.memory.MemoryRepository;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.session.Handshake;
 import com.mccompanion.runtime.session.RuntimeSession;
@@ -53,6 +54,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final AgentPlanRepository plans;
     private final AgentKernel kernel;
     private final CapabilityVisibility capabilityVisibility;
+    private final MemoryRepository memories;
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
     private final Clock clock;
@@ -64,15 +66,16 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                                   CommandService commands, CompanionRepository companions, ProviderRouter providers,
                                   AgentPlanRepository plans, AgentKernel kernel,
-                                  CapabilityVisibility capabilityVisibility, RuntimeLog log) {
+                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories, RuntimeLog log) {
         this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, log, Clock.systemUTC());
+                capabilityVisibility, memories, log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                            CommandService commands, CompanionRepository companions, ProviderRouter providers,
                            AgentPlanRepository plans, AgentKernel kernel,
-                           CapabilityVisibility capabilityVisibility, RuntimeLog log, Clock clock) {
+                           CapabilityVisibility capabilityVisibility, MemoryRepository memories,
+                           RuntimeLog log, Clock clock) {
         super(address);
         this.pairingToken = pairingToken;
         this.sessions = sessions;
@@ -82,6 +85,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.plans = plans;
         this.kernel = kernel;
         this.capabilityVisibility = capabilityVisibility;
+        this.memories = memories;
         this.log = log;
         this.clock = clock;
         this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
@@ -230,8 +234,10 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 }
                 var active = commands.activeTaskFor(companionId);
                 var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
-                AgentContext context = new AgentContext(companionId, companion.status(), java.util.List.of(),
-                        active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object), java.util.List.of(),
+                JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
+                AgentContext context = new AgentContext(companionId, verifiedWorld, java.util.List.of(),
+                        active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
+                        memories.verifiedLandmarkKeys(companionId),
                         visible.availableNames(), 5);
                 var result = providers.plan(text, context);
                 reply.put("accepted", result.accepted()).put("source", result.source())
@@ -280,6 +286,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         }
         CompanionStatus status = convert(protocolView, CompanionStatus.class);
         sessions.registerCompanion(session, status, normalized);
+        memories.rememberObservedContainers(status.companionId(), normalized);
     }
 
     private void sendSubscription(RuntimeSession session) {

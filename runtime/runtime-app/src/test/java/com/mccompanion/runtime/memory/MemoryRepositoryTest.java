@@ -43,4 +43,24 @@ class MemoryRepositoryTest {
             assertEquals(1, later.expire());
         }
     }
+
+    @Test
+    void bodyVerifiedContainersBecomeDurablePlanningContextWithoutInventingContents() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("containers.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            var status = Json.object().put("bodyState", "spawned");
+            status.putArray("observedContainers").addObject().put("type", "minecraft:chest")
+                    .put("dimension", "minecraft:overworld").put("x", 12).put("y", 64).put("z", -4)
+                    .put("verified", true);
+
+            repository.rememberObservedContainers("c1", status);
+            var world = repository.enrichVerifiedWorld("c1", Json.object().put("bodyState", "spawned"));
+
+            assertEquals(1, world.path("knownContainers").size());
+            assertEquals(12, world.path("knownContainers").get(0).path("x").asInt());
+            assertFalse(world.path("knownContainers").get(0).has("contents"));
+            assertEquals(1, repository.verifiedLandmarkKeys("c1").size());
+        }
+    }
 }

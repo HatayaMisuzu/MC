@@ -316,8 +316,10 @@ public final class CommandService implements SessionRegistry.Listener {
                     .put("commandType", link.commandType());
             if (CommandType.START_BEHAVIOR.name().equals(link.commandType())
                     || CommandType.ACQUIRE_LEASE.name().equals(link.commandType())) {
-                tasks.transition(task.taskId(), task.revision(), TaskState.FAILED, "CommandRejected", payload);
-                releaseAfterTerminal(task);
+                TaskRecord updated = tasks.transition(task.taskId(), task.revision(), TaskState.FAILED,
+                        "CommandRejected", payload);
+                releaseAfterTerminal(updated);
+                taskLifecycleListener.onTaskUpdated(updated, payload);
             } else if (task.state() != TaskState.RECONCILIATION_REQUIRED) {
                 tasks.transition(task.taskId(), task.revision(), task.state(), "CommandRejected", payload);
             }

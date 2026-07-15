@@ -236,6 +236,12 @@ final class BehaviorDirector {
                 .ifPresent(entity -> {
                     entity.setTarget(owner.getUUID());
                     progress.droppedEntities.add(entity.getUUID());
+                    // This is an intentional handoff, not an unattended world
+                    // drop. Remove the normal toss pickup delay and immediately
+                    // exercise ItemEntity's vanilla pickup path while both
+                    // players are still within the validated interaction range.
+                    entity.setNoPickUpDelay();
+                    entity.playerTouch(owner);
                 });
         progress.actions++; progress.lastActionTick = server.getTickCount();
     }

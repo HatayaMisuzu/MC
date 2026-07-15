@@ -70,6 +70,18 @@ class RuntimeApplicationTest {
                     .path("NavigateTo").path("state").asText());
             assertEquals("DECLARED", playerReply.path("payload").path("capabilityStates")
                     .path("CraftItem").path("state").asText());
+            assertTrue(application.plans().activeForCompanion("companion-1").isEmpty(),
+                    "a conversational status response must not create an agent plan");
+            assertTrue(application.commands().activeTaskFor("companion-1").isEmpty(),
+                    "a conversational status response must not start a Minecraft task");
+            var conversationDatabase = new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath());
+            var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(conversationDatabase)
+                    .list("companion-1", 10);
+            assertEquals(List.of("MESSAGE", "CHAT"), transcript.stream()
+                    .map(com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
+            assertEquals("USER", transcript.getFirst().direction());
+            assertEquals("ASSISTANT", transcript.getLast().direction());
+            assertTrue(transcript.getLast().gameDelivered());
             client.closeBlocking();
         }
         assertTrue(Files.isRegularFile(config.databasePath()));

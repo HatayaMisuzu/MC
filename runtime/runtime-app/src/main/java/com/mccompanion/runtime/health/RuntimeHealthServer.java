@@ -15,6 +15,7 @@ import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.RuntimeLog;
+import com.mccompanion.runtime.memory.MemoryRepository;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
@@ -46,6 +47,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final ProviderRouter providers;
     private final CapabilityVisibility capabilityVisibility;
     private final ConversationService conversations;
+    private final MemoryRepository memories;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -62,6 +64,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             ProviderRouter providers,
             CapabilityVisibility capabilityVisibility,
             ConversationService conversations,
+            MemoryRepository memories,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -73,6 +76,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.providers = providers;
         this.capabilityVisibility = capabilityVisibility;
         this.conversations = conversations;
+        this.memories = memories;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -139,12 +143,16 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     sendJson(exchange, 200, body);
                     return;
                 }
+                var recentConversation = conversations.recentTranscript(companionId, 12);
+                conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                        "MESSAGE", text, Json.object().put("channel", "HTTP"));
                 var visible = capabilityVisibility.resolve(
                         sessions.forCompanion(companionId).map(value -> value.handshake()).orElse(null),
                         companion.status());
-                AgentContext context = new AgentContext(companionId, companion.status(), java.util.List.of(),
+                AgentContext context = new AgentContext(companionId, companion.status(), recentConversation,
                         active.<com.fasterxml.jackson.databind.JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
-                        strings(request.path("knownLandmarks"), 64), visible.availableNames(), 5);
+                        strings(request.path("knownLandmarks"), 64), visible.availableNames(),
+                        memories.preferenceContext(companionId, 24), 5);
                 var result = providers.plan(text, context);
                 ObjectNode body = Json.object().put("accepted", result.accepted())
                         .put("source", result.source());
@@ -195,6 +203,14 @@ public final class RuntimeHealthServer implements AutoCloseable {
                             .put("planState", plan.state().name());
                 } else if (result.accepted()) {
                     body.put("executionState", "NO_ACTION");
+                }
+                String assistantReply = result.accepted() ? result.decision().reply() : result.userMessage();
+                if (assistantReply != null && !assistantReply.isBlank()) {
+                    String replyPlanId = body.path("planId").asText(null);
+                    conversations.say(companionId, replyPlanId,
+                            ConversationService.kindForDecision(result.decision().kind()), assistantReply,
+                            Json.object().put("channel", "HTTP").put("source", result.source())
+                                    .put("decision", result.decision().kind().name()));
                 }
                 sendJson(exchange, result.accepted() ? 200 : 422, body);
             } catch (IllegalArgumentException invalid) {

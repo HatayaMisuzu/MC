@@ -156,7 +156,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
-                    kernel, providerRouter, capabilityVisibility, conversations, log);
+                    kernel, providerRouter, capabilityVisibility, conversations, memories, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;

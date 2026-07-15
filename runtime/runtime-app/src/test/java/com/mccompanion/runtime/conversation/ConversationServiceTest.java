@@ -66,6 +66,32 @@ class ConversationServiceTest {
         }
     }
 
+    @Test
+    void ordinaryChatIsDurableBoundedAndKeepsNaturalOrder() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("chat.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("chat.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                ConversationRepository repository = new ConversationRepository(database);
+                ConversationService service = new ConversationService(repository, sessions, log);
+
+                service.hear("c1", null, "MESSAGE", "今天有点累，不想冒险。",
+                        Json.object().put("channel", "GAME"));
+                ConversationEvent reply = service.recordDirectReply("c1", null, "CHAT",
+                        "那我们今天轻松一点，可以整理箱子或在家附近看看。",
+                        Json.object().put("decision", "RESPOND"));
+                service.markDirectReplyDelivered(reply.eventId());
+
+                assertEquals(List.of(
+                        "USER: 今天有点累，不想冒险。",
+                        "ASSISTANT: 那我们今天轻松一点，可以整理箱子或在家附近看看。"),
+                        service.recentTranscript("c1", 12));
+                assertTrue(repository.list("c1", 12).getLast().gameDelivered());
+            }
+        }
+    }
+
     private static final class CapturingPeer implements SessionPeer {
         private final List<String> messages = new ArrayList<>();
         @Override public String id() { return "peer"; }

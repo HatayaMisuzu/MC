@@ -106,7 +106,7 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
             active.set("waitingQuestionContext", activeQuestion.context());
             var result = providers.replan(plan.requestText(), new AgentContext(base.companionId(),
                     base.verifiedWorld(), base.recentConversation(), active, base.knownLandmarks(),
-                    base.availableCapabilities(), base.maxPlanSteps()));
+                    base.availableCapabilities(), base.preferences(), base.maxPlanSteps()));
             if (!result.accepted() || result.decision().kind() != DecisionKind.REPLAN
                     || result.decision().steps().isEmpty()) {
                 throw new IllegalStateException(result.errorCode() == null ? "ANSWER_REPLAN_REJECTED" : result.errorCode());
@@ -374,7 +374,10 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
             recent = conversations.repository().list(plan.companionId(), 12).stream()
                     .map(event -> event.direction() + ": " + event.content()).toList();
         }
-        return new AgentContext(plan.companionId(), verifiedWorld, recent, active, landmarks, available, 5);
+        JsonNode preferences = memories == null ? Json.MAPPER.createArrayNode()
+                : memories.preferenceContext(plan.companionId(), 24);
+        return new AgentContext(plan.companionId(), verifiedWorld, recent, active, landmarks, available,
+                preferences, 5);
     }
 
     @Override public void close() {

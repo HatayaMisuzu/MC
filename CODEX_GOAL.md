@@ -1,115 +1,151 @@
-# CODEX_GOAL.md — 陪伴型 Minecraft AI 助手长期 Goal（完整主线）
+# CODEX_GOAL.md — Minecraft AI Companion 产品化长期 Goal
 
 ## Goal
 
-持续将 Minecraft AI Companion 完善为一个可以进行真人测试的纯文本陪伴型 AI 助手。
+持续把 Minecraft AI Companion 完善为真正可产品化、可真人测试的纯文本 AI 陪伴助手。
 
-它不是执行机器。它必须：
+它必须同时具备：
 
-- 理解用户真正的目标；
-- 根据真实世界状态行动；
-- 一种方法失败时分析原因并尝试合理替代方案；
-- 缺前置条件时先准备或请求授权；
-- 资源不足时根据用户约束决定部分交付、其他来源、自动补齐或与用户商量；
-- 需要用户选择时给自然、真实、可执行的选项；
-- 持久等待用户回答；
-- 将回答应用到原任务；
-- 支持目标修改、暂停、继续、取消和恢复；
-- 保持人格、对话和记忆连续；
-- 不伪造完成、不作弊、不为了完成目标擅自扩大任务。
+- 自然聊天；
+- 思考、判断和联想；
+- 结合世界、任务、记忆和用户偏好；
+- 自主行动；
+- 失败后换方法；
+- 必要时和用户商量；
+- 普通聊天与行动任务的区分；
+- 联网搜索和工具调用；
+- 来源与不确定性；
+- 安全、隐私、可取消、可恢复；
+- 完整基础生存能力；
+- 安装、升级、卸载、回退和支持体验。
 
-## 当前远端起点
+它不能退化成：
 
-最新已知切片：
+- 固定关键词机器人；
+- JSON 生成器；
+- 命令翻译器；
+- 任务专用 Handler 集合；
+- 只会执行、不聊天的工具人；
+- 只会聊天、不能行动的聊天机器人。
 
-- `29014d4`：Capability 与连接身体真实能力交集；
-- `73c4f85`：Observation 驱动 Replan、预算和循环检测；
-- `877e790`：真实 Fabric 容器取物与世界差分验证。
+## 当前基线
+
+最新已知远端：
+
+`d82e308`
+
+已完成：
+
+- 动态 Capability 可见性；
+- Observation → Replan；
+- 容器真实取物；
+- Conversation Event；
+- WAITING_FOR_USER；
+- 用户回答续接；
+- 目标修改；
+- 缺货部分交付真实 E2E；
+- HTML 对话；
+- SQLite/E2E 竞态修复。
+
+仍缺：
+
+- 真正 Chat Mode；
+- LLM 原生自然对话；
+- 联想与主动建议；
+- 最近对话和长期记忆；
+- Search Tool；
+- 来源；
+- 搜索权限和隐私；
+- LocateKnownContainer；
+- Deposit；
+- 制作；
+- 采集；
+- 熔炼；
+- 钻石换策略；
+- 危险；
+- 长稳；
+- 产品化发布；
+- 隔离真人测试实例；
+- Live Provider 验收。
 
 ## 第一阶段
 
-完成陪伴交互核心：
+完成认知与工具层：
 
 ```text
-真实 Observation
-→ 失败分类
-→ 自主 Replan 或提出选项
-→ Conversation Event
-→ WAITING_FOR_USER
-→ 用户回答关联
-→ 原计划修订
-→ 继续执行
+用户消息
+→ Chat / Think / Search / Action / Answer / Goal Modification 分类
+→ LLM 结合世界、记忆和偏好思考
+→ 必要时调用安全 Search Tool
+→ 产生自然回复、建议或行动计划
+→ 来源和权限校验
 ```
 
-代表场景：
+必须证明：
 
-1. 箱子只有 6 个、用户要 16 个并说“不够就告诉我”：
-   - 报告 6/16；
-   - 给部分交付/其他箱子/采集选项；
-   - 等待用户；
-   - 回答后续接原任务；
-   - 不重复取物和交付。
+1. 普通聊天不会创建任务。
+2. 模糊建议会结合世界和记忆。
+3. 最新模组/版本问题会调用 Search Tool 并给来源。
+4. 搜索不会泄漏本地世界、坐标、聊天或凭据。
+5. 搜索网页不能 Prompt Injection。
+6. 用户可关闭搜索和主动建议。
+7. LLM 不只是固定 JSON 和模板。
 
-2. 用户要求挖钻石：
-   - 一种路线或矿点失败时换策略；
-   - 缺工具时补前置条件；
-   - 风险、时间或权限变化明显时商量；
-   - 不机械重试，不一次失败就放弃。
+## 第二阶段
 
-## 后续完整主线
+继续完整行动主线：
 
-陪伴层完成后，继续全部旧执行目标：
+1. LocateKnownContainer；
+2. 多容器；
+3. Deposit；
+4. 容器完整链；
+5. CraftItem；
+6. CollectResource；
+7. MineResourceVein；
+8. SmeltItem；
+9. 钻石代表任务；
+10. RetreatFromDanger；
+11. DefendOwner；
+12. 记忆、偏好和世界事实失效；
+13. 长稳和性能。
 
-1. 容器导航→取物→返回→交付。
-2. Deposit、多容器、部分结果和恢复。
-3. 真实制作与材料差额。
-4. 资源发现、工具、采集、掉落验证、矿脉边界。
-5. 熔炉、燃料、等待和输出验证。
-6. 危险、撤退、防御和恢复。
-7. Working/Episodic/World/Preference Memory。
-8. 多轮目标修改和世界事实失效。
-9. HTML 与游戏内一致体验。
-10. Replay Provider、Live Provider 外部验收。
-11. 性能、长稳、发布包。
-12. 在 `F:\wodeshijie\ceshi\mcac-human-test-fabric-1.21.1` 建立隔离实例。
-13. 自动化实机冒烟、测试指南、反馈模板和回退。
-14. 达到 `READY_FOR_HUMAN_TEST`。
+## 第三阶段
 
-## 持续执行
+产品化：
 
-每个稳定纵向切片：
+1. 隔离 Fabric 1.21.1 真人实例；
+2. 安装/卸载；
+3. Provider/Search 配置；
+4. 隐私和数据管理；
+5. 日志与支持包；
+6. 发布包；
+7. Migration；
+8. 自动化实机冒烟；
+9. 真人测试指南和反馈；
+10. Live Provider 验收；
+11. 达到 `READY_FOR_HUMAN_PRODUCT_TEST`。
+
+## 持续循环
 
 ```text
 审计
 → 实现
-→ 测试
-→ 体验审查
+→ 自动化测试
+→ 真人体验审查
+→ 安全/隐私/性能审查
 → 修复
 → commit
 → push
-→ 核对远端/CI
-→ 下一切片
+→ CI
+→ 下一轮
 ```
 
-一次 commit、push、测试通过、工作区干净或 Goal UI 完成均不代表最终结束。
-
-## 不可牺牲
-
-- 用户信任和陪伴感；
-- 真实世界证据；
-- 不作弊；
-- 不伪成功；
-- 不擅自扩大任务；
-- 用户随时可中断；
-- 失败分支不污染成功记忆；
-- Replay 不等于 Live；
-- API Key 不进入仓库；
-- 不得只完成新陪伴层而遗忘旧执行主线。
+一次 commit、测试通过、版本提升或 Goal UI 完成都不代表长期 Goal 结束。
 
 ## 出口
 
-仅在 `AGENTS.md` 第 18 节全部满足时结束。
+仅在 `AGENTS.md` 第 17 节全部满足时结束。
 
-缺少真实 Provider Key 时只能报告：
+无 Live Provider 时只能报告：
 
-`READY_FOR_HUMAN_TEST_EXCEPT_LIVE_PROVIDER`
+`READY_FOR_HUMAN_PRODUCT_TEST_EXCEPT_LIVE_PROVIDER`

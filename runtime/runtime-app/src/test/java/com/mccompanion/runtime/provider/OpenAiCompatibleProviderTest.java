@@ -2,6 +2,10 @@ package com.mccompanion.runtime.provider;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.intent.Intent;
+import com.mccompanion.runtime.agent.AgentContext;
+import com.mccompanion.runtime.agent.DecisionKind;
+import com.mccompanion.runtime.input.HintExtractor;
+import com.mccompanion.runtime.input.TextNormalizer;
 import com.mccompanion.runtime.intent.RuleIntentParser;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.logging.Redactor;
@@ -20,6 +24,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Locale;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -56,6 +61,39 @@ class OpenAiCompatibleProviderTest {
                      stub.baseUrl(), "test-secret-value", "deepseek-v4-flash", Duration.ofSeconds(5))) {
             ProviderException failure = assertThrows(ProviderException.class, () -> provider.parse("do something"));
             assertEquals("PROVIDER_INVALID_OUTPUT", failure.code());
+        }
+    }
+
+    @Test
+    void chatDecisionReceivesBoundedConversationAndPreferenceContext() throws Exception {
+        ObjectNode decision = Json.object().put("kind", "RESPOND").put("understoodGoal", "轻松聊天")
+                .put("reply", "那我们轻松聊会儿。").put("reason", "owner wants companionship");
+        decision.putArray("constraints");
+        decision.putArray("assumptions");
+        decision.putArray("steps");
+        ObjectNode response = Json.object();
+        response.putArray("choices").addObject().putObject("message").put("content", Json.write(decision));
+        try (HttpStub stub = new HttpStub(200, Json.write(response));
+             OpenAiCompatibleProvider provider = new OpenAiCompatibleProvider(
+                     stub.baseUrl(), "test-secret-value", "deepseek-v4-flash", Duration.ofSeconds(5))) {
+            var preferences = Json.MAPPER.createArrayNode();
+            preferences.addObject().put("key", "risk").set("value", Json.object().put("level", "LOW"));
+            AgentContext context = new AgentContext("c1", Json.object().put("timeOfDay", "night"),
+                    List.of("USER: I am tired today", "ASSISTANT: We can take it easy"), Json.object(),
+                    List.of("基地"), List.of("FollowOwner"), preferences, 5);
+            var input = new TextNormalizer().normalize("chat with me for a while");
+
+            var result = provider.decide(new AgentRequest(input, new HintExtractor().extract(input), context));
+
+            assertEquals(DecisionKind.RESPOND, result.kind());
+            HttpRequestCapture capture = stub.capture().get(5, TimeUnit.SECONDS);
+            var request = Json.parse(capture.body());
+            String suppliedText = request.path("messages").path(1).path("content").asText();
+            var supplied = Json.parse(suppliedText);
+            assertEquals("USER: I am tired today", supplied.path("recentConversation").path(0).asText());
+            assertEquals("LOW", supplied.path("preferences").path(0).path("value").path("level").asText());
+            assertTrue(request.path("messages").path(0).path("content").asText()
+                    .contains("Ordinary conversation"));
         }
     }
 
@@ -157,4 +195,3 @@ class OpenAiCompatibleProviderTest {
         }
     }
 }
-

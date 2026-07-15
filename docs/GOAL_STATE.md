@@ -10,11 +10,11 @@
 
 ## 基线
 
-- 本地与远端 `main`：`877e790954a99a962cf951d901c85ae5f984cccd`。
+- 本地与远端 `main` 起点：`d82e308`；已确认它是 `877e790` 之后的 SQLite/E2E 竞态修复提交。
 - 新执行包基线已核验：`29014d4` 动态 Capability、`73c4f85` Observation→Replan、`877e790` 真实容器取物均存在，不重复实现。
-- 当前工作区包含新版根 Goal 文件，以及被中断的目标修改排队草稿；草稿须按 P0 的 Conversation/WAITING 语义整合后才可提交。
+- 仓库根 `AGENTS.md` 与 `CODEX_GOAL.md` 已更新为 2026-07-15 产品化执行包版本；长期 Goal 保持激活。
 - 当前有真实世界证据的能力：`NavigateTo`、`FollowOwner`、`DeliverItem`、`EatAndRecover`、`WithdrawFromStorage`。
-- 当前最高优先级：失败分类、Conversation Event、持久 `WAITING_FOR_USER`、回答关联与原计划修订、目标修改。
+- 当前最高优先级：完整消息路由、Chat Mode、最近对话/偏好、Search Tool Gateway、搜索权限/来源/隐私。
 
 ## 第一轮审计发现
 
@@ -89,3 +89,13 @@
 - Fabric 只上报假玩家视线实际命中的附近容器类型与坐标，不读取箱内物品；Runtime 将这些坐标持久化为 verified world memory，供后续 Planner 的 `knownContainers` 使用。
 - 本切片证据：Runtime 单元测试、Fabric 编译、4 项真实 Fabric GameTest、Runtime↔Fabric E2E 均为 `LOCAL_PASS`。
 - 仍未完成：目标修改的排队重规划，以及端到端“导航到已知容器→取物→返回→交付”计划级验证；Goal 保持 `ACTIVE`。
+
+## Chat Mode 最近对话与偏好上下文切片（2026-07-15）
+
+- 游戏 WebSocket 与认证 HTTP `/agent` 入口不再把 `recentConversation` 固定为空：规划前读取有界、按时间排序的持久对话，用户消息和伙伴回复进入统一 Conversation 存储。
+- 普通对话由模型返回 `RESPOND` 且步骤为空时，不创建 Agent Plan 或 Minecraft Task；自然回复仍处于结构化安全边界内，但 `reply` 明确是完整用户可见内容，不是机械状态模板。
+- `AgentContext` 新增有界 Preference Memory 视图，包含值、置信度、更新时间和可选失效时间；OpenAI-compatible 请求会把最近对话、已验证世界状态和偏好分别提供给模型。
+- 游戏直达回复写入持久对话后复用原 `player_reply` 投递，成功发送才标记为已送达，避免额外 `conversation_event` 造成重复显示；HTTP 入口继续通过持久 outbox 向在线游戏投递。
+- 新增测试证明：自然聊天读取最近对话和偏好、不会产生步骤/可执行 Intent；游戏状态对话不会创建 Plan/Task；用户/伙伴消息顺序和投递状态可从 SQLite 恢复；实际 Provider 请求包含对话与偏好上下文。
+- 本地证据：Runtime 83 项测试、`gradlew check buildPlatforms`、`gradlew runtimeFabricE2E` 均为 `LOCAL_PASS`；后者重新通过真实缺货提问、游戏投递、原计划续接、部分交付和执行中目标修改。
+- Goal 仍为 `ACTIVE`。尚未实现完整 `CHAT/QUESTION/THINK_WITH_USER/SEARCH_REQUEST/...` 路由、Search Tool Gateway、搜索权限/来源/隐私、主动建议和用户可管理记忆，因此当前不是 `READY_FOR_HUMAN_PRODUCT_TEST`。

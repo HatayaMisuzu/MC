@@ -238,6 +238,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         if (text.isEmpty() || text.length() > 512) throw new IllegalArgumentException("player request text must be 1..512 characters");
         planningExecutor.execute(() -> {
             ObjectNode reply = Json.object().put("requestId", requestId).put("companionId", companionId);
+            com.mccompanion.runtime.conversation.ConversationEvent directReply = null;
             try {
                 var companion = companions.get(companionId).orElseThrow(() -> new IllegalArgumentException("COMPANION_NOT_FOUND"));
                 if (!session.companionIds().contains(companionId) || !ownerId.equals(companion.ownerId())) {
@@ -260,12 +261,15 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     if (session.peer().isOpen()) session.peer().send(Json.write(message));
                     return;
                 }
+                var recentConversation = conversations.recentTranscript(companionId, 12);
+                conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                        "MESSAGE", text, Json.object().put("channel", "GAME"));
                 var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
                 JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
-                AgentContext context = new AgentContext(companionId, verifiedWorld, java.util.List.of(),
+                AgentContext context = new AgentContext(companionId, verifiedWorld, recentConversation,
                         active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
                         memories.verifiedLandmarkKeys(companionId),
-                        visible.availableNames(), 5);
+                        visible.availableNames(), memories.preferenceContext(companionId, 24), 5);
                 var result = providers.plan(text, context);
                 reply.put("accepted", result.accepted()).put("source", result.source())
                         .put("reply", result.decision().reply()).put("decision", result.decision().kind().name());
@@ -310,6 +314,14 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     plan = kernel.start(plan.planId());
                     reply.put("planId", plan.planId()).put("planState", plan.state().name());
                 }
+                String assistantReply = reply.path("reply").asText("");
+                if (!assistantReply.isBlank()) {
+                    directReply = conversations.recordDirectReply(companionId, reply.path("planId").asText(null),
+                            ConversationService.kindForDecision(result.decision().kind()), assistantReply,
+                            Json.object().put("channel", "GAME").put("source", result.source())
+                                    .put("decision", result.decision().kind().name()));
+                    reply.put("conversationEventId", directReply.eventId());
+                }
             } catch (Exception failure) {
                 log.warn("Game text request stopped safely: " + failure.getClass().getSimpleName());
                 reply.put("accepted", false).put("code", "REQUEST_BLOCKED")
@@ -317,7 +329,15 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             }
             ObjectNode message = envelope(session, "player_reply");
             message.set("payload", reply);
-            if (session.peer().isOpen()) session.peer().send(Json.write(message));
+            if (session.peer().isOpen()) {
+                session.peer().send(Json.write(message));
+                if (directReply != null) {
+                    try { conversations.markDirectReplyDelivered(directReply.eventId()); }
+                    catch (java.sql.SQLException failure) {
+                        log.error("Unable to mark direct conversation reply delivered", failure);
+                    }
+                }
+            }
         });
     }
 

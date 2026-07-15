@@ -102,6 +102,19 @@ public final class MemoryRepository {
                 .filter(MemoryFact::verified).map(MemoryFact::key).toList();
     }
 
+    /** Bounded preference context with confidence and freshness metadata. */
+    public JsonNode preferenceContext(String companionId, int limit) throws SQLException {
+        var values = Json.MAPPER.createArrayNode();
+        for (MemoryFact fact : relevant(companionId, MemoryKind.PREFERENCE, limit)) {
+            var entry = values.addObject().put("key", fact.key())
+                    .put("verified", fact.verified()).put("confidence", fact.confidence())
+                    .put("updatedAt", fact.updatedAt().toString());
+            if (fact.expiresAt() != null) entry.put("expiresAt", fact.expiresAt().toString());
+            entry.set("value", fact.value());
+        }
+        return values;
+    }
+
     private static MemoryFact find(java.sql.Connection connection, String companionId, MemoryKind kind, String key, long now) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT * FROM memory_fact WHERE companion_id=? AND kind=? AND fact_key=? AND (expires_at IS NULL OR expires_at>?)

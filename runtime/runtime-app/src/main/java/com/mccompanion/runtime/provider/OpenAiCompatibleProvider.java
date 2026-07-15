@@ -143,6 +143,11 @@ public final class OpenAiCompatibleProvider implements IntentProvider, DecisionP
                 Use natural concise Chinese in reply. Ask clarification when targets, authorization, or
                 risky scope are ambiguous. COMPLETE_CANDIDATE is only a request for deterministic
                 verification and must reference observed evidence in reason.
+                Ordinary conversation, sharing, questions, and requests for advice are first-class: use
+                RESPOND with no steps, answer naturally from verifiedWorld, recentConversation, and
+                preferences, and never create a Minecraft task merely because a related action is possible.
+                Keep facts, memories, inferences, and suggestions distinct. The JSON envelope is a control
+                boundary; reply is the complete natural user-facing response, not a status template.
                 """);
         ObjectNode supplied = Json.object().put("rawText", request.input().original())
                 .put("normalizedText", request.input().normalized())
@@ -158,6 +163,7 @@ public final class OpenAiCompatibleProvider implements IntentProvider, DecisionP
         request.hints().items().forEach(item -> itemHints.addObject().put("id", item.id()).put("confidence", item.confidence()));
         supplied.set("verifiedWorld", request.context().verifiedWorld());
         supplied.set("activeTask", request.context().activeTask());
+        supplied.set("preferences", request.context().preferences());
         ArrayNode conversation = supplied.putArray("recentConversation");
         request.context().recentConversation().forEach(conversation::add);
         ArrayNode landmarks = supplied.putArray("knownLandmarks");

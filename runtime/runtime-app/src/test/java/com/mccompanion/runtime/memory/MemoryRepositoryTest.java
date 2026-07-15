@@ -63,4 +63,22 @@ class MemoryRepositoryTest {
             assertEquals(1, repository.verifiedLandmarkKeys("c1").size());
         }
     }
+
+    @Test
+    void preferenceContextCarriesValueAndFreshnessMetadata() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("preference.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            repository.remember("c1", MemoryKind.PREFERENCE, "risk",
+                    Json.object().put("riskPreference", "LOW"), true, 1.0, null);
+
+            var context = repository.preferenceContext("c1", 10);
+
+            assertEquals(1, context.size());
+            assertEquals("risk", context.path(0).path("key").asText());
+            assertEquals("LOW", context.path(0).path("value").path("riskPreference").asText());
+            assertTrue(context.path(0).path("verified").asBoolean());
+            assertFalse(context.path(0).path("updatedAt").asText().isBlank());
+        }
+    }
 }

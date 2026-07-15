@@ -42,6 +42,29 @@ class HybridAgentPlannerTest {
     }
 
     @Test
+    void naturalChatUsesConversationAndPreferencesWithoutCreatingMinecraftTask() {
+        DecisionProvider provider = request -> {
+            assertEquals(List.of("USER: 我今天有点累", "ASSISTANT: 那就轻松玩"),
+                    request.context().recentConversation());
+            assertEquals("LOW", request.context().preferences().path(0).path("value")
+                    .path("riskPreference").asText());
+            return AgentDecision.respond("那我们就在基地附近做点轻松的，不去冒险。");
+        };
+        var preferences = Json.MAPPER.createArrayNode();
+        preferences.addObject().set("value", Json.object().put("riskPreference", "LOW"));
+        AgentContext chatContext = new AgentContext("c1", Json.object().put("timeOfDay", "night"),
+                List.of("USER: 我今天有点累", "ASSISTANT: 那就轻松玩"), Json.object(), List.of("基地"),
+                capabilities.names(), preferences, 3);
+
+        var result = new HybridAgentPlanner(provider).decide("今晚不想冒险，陪我聊会儿", chatContext);
+
+        assertTrue(result.accepted(), result.userMessage());
+        assertEquals(DecisionKind.RESPOND, result.decision().kind());
+        assertTrue(result.decision().steps().isEmpty());
+        assertTrue(result.executableIntent().isEmpty());
+    }
+
+    @Test
     void missingOrFailingProviderNeverTurnsComplexRequestIntoRuleGuess() {
         var missing = new HybridAgentPlanner(null).decide("去那边看看", context());
         assertEquals("PROVIDER_UNAVAILABLE", missing.errorCode());

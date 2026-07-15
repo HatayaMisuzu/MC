@@ -3,6 +3,7 @@ package com.mccompanion.runtime.conversation;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.agent.DecisionKind;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.session.RuntimeSession;
 import com.mccompanion.runtime.session.SessionRegistry;
@@ -37,6 +38,39 @@ public final class ConversationService {
                 "ASSISTANT", kind, content, payload);
         deliverPending(companionId);
         return event;
+    }
+
+    /** Records owner speech before any action is taken so chat history survives Runtime restarts. */
+    public ConversationEvent hear(String companionId, String planId, String kind, String content,
+                                  com.fasterxml.jackson.databind.JsonNode payload) throws SQLException {
+        return repository.append(companionId, planId, null, "USER", kind, content, payload);
+    }
+
+    /** Records a direct reply without sending a second game message. */
+    public ConversationEvent recordDirectReply(String companionId, String planId, String kind, String content,
+                                               com.fasterxml.jackson.databind.JsonNode payload) throws SQLException {
+        return repository.append(companionId, planId, null, "ASSISTANT", kind, content, payload);
+    }
+
+    public void markDirectReplyDelivered(String eventId) throws SQLException {
+        repository.markGameDelivered(eventId);
+    }
+
+    /** Oldest-to-newest, bounded transcript suitable for model context. */
+    public List<String> recentTranscript(String companionId, int limit) throws SQLException {
+        return repository.list(companionId, limit).stream()
+                .map(event -> event.direction() + ": " + event.content())
+                .toList();
+    }
+
+    public static String kindForDecision(DecisionKind kind) {
+        return switch (kind) {
+            case RESPOND -> "CHAT";
+            case ASK_CLARIFICATION -> "QUESTION";
+            case CREATE_PLAN, CONTINUE, REPLAN, COMPLETE_CANDIDATE -> "ACTION";
+            case PAUSE, RESUME, CANCEL -> "CONTROL";
+            case REPORT_BLOCKED -> "BLOCKED";
+        };
     }
 
     public void deliverPending(String companionId) {

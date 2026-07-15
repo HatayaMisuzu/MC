@@ -125,11 +125,35 @@ function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
     throw 'Runtime did not persist a waiting question after the verified shortage.'
 }
 
+function Wait-AgentPlan(
+    [string]$pairingToken,
+    [string]$planId,
+    [string]$expectedState,
+    [int]$minimumPlanningRevision,
+    [string]$expectedCapability
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:18766/plans/$planId" -Headers @{
+            Authorization = "Bearer $pairingToken"
+        } -TimeoutSec 3
+        $plan = $snapshot.plan
+        $current = @($plan.steps | Where-Object { $_.index -eq $plan.currentStep })[0]
+        if ($plan.state -eq $expectedState -and $plan.planningRevision -ge $minimumPlanningRevision -and
+            (-not $expectedCapability -or $current.definition.capability -eq $expectedCapability)) {
+            return $snapshot
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Plan $planId did not reach state=$expectedState revision>=$minimumPlanningRevision capability=$expectedCapability."
+}
+
 $runtime = $null
 $game = $null
 $provider = $null
 $commandEvidence = @()
 $conversationEvidence = $null
+$goalModificationEvidence = $null
 try {
     Write-Output '[runtime-e2e] starting Runtime'
     $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
@@ -223,6 +247,25 @@ try {
     Start-Sleep -Milliseconds 500
     if ($provider.HasExited) { throw "Replay provider exited before planning ($($provider.ExitCode))." }
 
+    Write-Output '[runtime-e2e] exercising in-flight owner goal modification'
+    $probePlan = Invoke-AgentRequest $pairingToken $companionId 'Start the modification probe target'
+    if (-not $probePlan.accepted -or -not $probePlan.planId) { throw 'Goal-modification probe plan was rejected.' }
+    $null = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'NavigateTo'
+    # Wait for the asynchronous Fabric command acceptance write, while the navigation itself remains in flight.
+    Start-Sleep -Milliseconds 300
+    $modified = Invoke-AgentRequest $pairingToken $companionId 'Change goal and follow owner instead'
+    if (-not $modified.accepted -or -not $modified.goalModified -or $modified.planId -ne $probePlan.planId) {
+        throw 'Owner goal modification did not revise the original plan id.'
+    }
+    $modifiedRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 1 'FollowOwner'
+    $cancelModified = Invoke-RuntimeCommand $pairingToken $companionId 'STOP' @{ action = 'cancel' } 'cancel modified probe'
+    if (-not $cancelModified.accepted) { throw 'Modified follow plan could not be cancelled before shortage scenario.' }
+    $modifiedCancelled = Wait-AgentPlan $pairingToken $probePlan.planId 'CANCELLED' 1 ''
+    $goalModificationEvidence = [pscustomobject]@{
+        initial = $probePlan; modification = $modified; running = $modifiedRunning; cancelled = $modifiedCancelled
+    }
+    Write-Output '[runtime-e2e] same-plan target modification activated and cancelled safely'
+
     $initialPlan = Invoke-AgentRequest $pairingToken $companionId 'Get 16 iron from the specified chest and tell me if not enough'
     if (-not $initialPlan.accepted -or -not $initialPlan.planId) {
         throw "Replay-backed agent plan was rejected: $($initialPlan.code) $($initialPlan.message)"
@@ -283,6 +326,8 @@ try {
         ($commandEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\shortage-conversation.json'),
         ($conversationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\goal-modification.json'),
+        ($goalModificationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
     if ($provider) {
         if (-not $provider.HasExited) {
             $provider.Kill()
@@ -306,6 +351,11 @@ try {
     }
     if (-not $conversationEvidence -or $conversationEvidence.answer.planId -ne $conversationEvidence.initialPlan.planId) {
         throw 'Conversation evidence did not retain one durable plan id.'
+    }
+    if (-not $goalModificationEvidence -or
+        $goalModificationEvidence.modification.planId -ne $goalModificationEvidence.initial.planId -or
+        $goalModificationEvidence.running.plan.steps[$goalModificationEvidence.running.plan.currentStep].definition.capability -ne 'FollowOwner') {
+        throw 'Goal modification evidence did not activate the revised capability on the original plan.'
     }
     if ($runtimeStderr -match 'Invalid CompanionStatus payload' -or $runtimeStdout -match 'Invalid CompanionStatus payload') {
         throw 'Runtime rejected a CompanionStatus payload during E2E.'

@@ -80,6 +80,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/commands", this::commands);
         server.createContext("/agent", this::agent);
         server.createContext("/tasks", this::tasks);
+        server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
         server.setExecutor(Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-health");
@@ -258,6 +259,28 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 sendJson(exchange, 200, body);
             } catch (Exception failure) {
                 log.error("Unable to inspect Runtime task", failure);
+                sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+            }
+        }
+    }
+
+    private void plans(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (!"GET".equals(exchange.getRequestMethod())) { exchange.sendResponseHeaders(405, -1); return; }
+            String prefix = "/plans/";
+            String path = exchange.getRequestURI().getPath();
+            if (!path.startsWith(prefix) || path.length() <= prefix.length()) {
+                sendJson(exchange, 400, Json.object().put("code", "PLAN_ID_REQUIRED")); return;
+            }
+            try {
+                var plan = plans.get(path.substring(prefix.length()));
+                if (plan.isEmpty()) { sendJson(exchange, 404, Json.object().put("code", "PLAN_NOT_FOUND")); return; }
+                ObjectNode body = Json.object();
+                body.set("plan", Json.MAPPER.valueToTree(plan.orElseThrow()));
+                sendJson(exchange, 200, body);
+            } catch (java.sql.SQLException failure) {
+                log.error("Unable to inspect agent plan", failure);
                 sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
             }
         }

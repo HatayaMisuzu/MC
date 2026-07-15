@@ -69,15 +69,42 @@ $steps = @(
         failurePolicy = 'retain items and report failed handoff'; opportunistic = $false; risk = 'LOW'
     }
 )
-$decision = @{
-    kind = 'CREATE_PLAN'; understoodGoal = 'withdraw 16 iron from the verified chest and deliver it to the owner'
-    constraints = @('ask the owner before expanding resource sources when the chest is short')
-    assumptions = @(); steps = $steps; reply = 'I will use the verified chest and report any shortage first.'
-    reason = 'REPLAY_FIXTURE_VERIFIED_CONTAINER_PLAN'
-} | ConvertTo-Json -Compress -Depth 20
-$envelope = @{ choices = @(@{ message = @{ content = $decision } }) } | ConvertTo-Json -Compress -Depth 20
-$responseBody = $utf8.GetBytes($envelope)
-$responseHeader = $ascii.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json; charset=utf-8`r`nContent-Length: $($responseBody.Length)`r`nConnection: close`r`n`r`n")
+function New-DecisionContent([string]$requestBody) {
+    $request = $requestBody | ConvertFrom-Json
+    $plannerContext = $request.messages[1].content | ConvertFrom-Json
+    $text = [string]$plannerContext.normalizedText
+    if ($text -match 'follow owner') {
+        return @{
+            kind = 'CREATE_PLAN'; understoodGoal = 'follow the owner instead of continuing the old target'
+            constraints = @(); assumptions = @(); reply = 'I will stop the old target and follow you.'
+            reason = 'REPLAY_FIXTURE_OWNER_GOAL_MODIFICATION'
+            steps = @(@{
+                goalState = 'stay near owner'; capability = 'FollowOwner'; parameters = @{}
+                expectedResult = 'distance to owner remains bounded'; completionCriteria = @{ ownerDistanceVerified = $true }
+                failurePolicy = 'report if following is blocked'; opportunistic = $false; risk = 'LOW'
+            })
+        } | ConvertTo-Json -Compress -Depth 20
+    }
+    if ($text -match 'modification probe') {
+        $probeTarget = @{ dimension = 'minecraft:overworld'; x = $X + 20; y = $Y; z = $Z }
+        return @{
+            kind = 'CREATE_PLAN'; understoodGoal = 'travel to the temporary probe target'
+            constraints = @(); assumptions = @(); reply = 'I will start toward the temporary target.'
+            reason = 'REPLAY_FIXTURE_GOAL_MODIFICATION_PROBE'
+            steps = @(@{
+                goalState = 'reach temporary target'; capability = 'NavigateTo'; parameters = @{ target = $probeTarget }
+                expectedResult = 'body reaches temporary target'; completionCriteria = @{ positionVerified = $true }
+                failurePolicy = 'report and replan when unreachable'; opportunistic = $false; risk = 'LOW'
+            })
+        } | ConvertTo-Json -Compress -Depth 20
+    }
+    return @{
+        kind = 'CREATE_PLAN'; understoodGoal = 'withdraw 16 iron from the verified chest and deliver it to the owner'
+        constraints = @('ask the owner before expanding resource sources when the chest is short')
+        assumptions = @(); steps = $steps; reply = 'I will use the verified chest and report any shortage first.'
+        reason = 'REPLAY_FIXTURE_VERIFIED_CONTAINER_PLAN'
+    } | ConvertTo-Json -Compress -Depth 20
+}
 
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
 $listener.Start()
@@ -87,7 +114,11 @@ try {
         $client = $listener.AcceptTcpClient()
         try {
             $stream = $client.GetStream()
-            $null = Read-HttpRequest $stream
+            $requestBody = Read-HttpRequest $stream
+            $decision = New-DecisionContent $requestBody
+            $envelope = @{ choices = @(@{ message = @{ content = $decision } }) } | ConvertTo-Json -Compress -Depth 20
+            $responseBody = $utf8.GetBytes($envelope)
+            $responseHeader = $ascii.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json; charset=utf-8`r`nContent-Length: $($responseBody.Length)`r`nConnection: close`r`n`r`n")
             $stream.Write($responseHeader, 0, $responseHeader.Length)
             $stream.Write($responseBody, 0, $responseBody.Length)
             $stream.Flush()

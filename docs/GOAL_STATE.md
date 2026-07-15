@@ -61,6 +61,8 @@
 - 真实取物进入主背包后，DeliverItem 通过原版 `InventoryMenu` PICKUP 交互整理到快捷栏，再通过原版丢出/拾取交付；不直接编辑库存。
 - GameTest 最终断言：主人铁锭 `+6`、箱子 `0`、伙伴铁锭 `0`，从而同时证明部分交付、无重复取物和无复制。
 - E2E 证据落盘到 `build/e2e-runtime/evidence/shortage-conversation.json` 及配套 Runtime/Fabric/Replay 日志；Replay 明确不是 Live Provider。
+- 同一 E2E 还覆盖执行中目标修改：临时导航 plan 收到“改为跟随主人”后保持原 `planId`，旧导航先取消，`planningRevision` 增加，新 `FollowOwner` 步骤进入 RUNNING，随后可安全取消。
+- Runtime 新增认证只读 `/plans/{planId}` 观察端点，E2E 根据持久 plan/step 状态验证目标修订，而不是仅信任一次 HTTP 回复；证据写入 `build/e2e-runtime/evidence/goal-modification.json`。
 
 ## Observation → Replan 切片（2026-07-15）
 

@@ -40,6 +40,7 @@ final class BehaviorDirector {
     private final ReflexController reflexController = new ReflexController();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, SkillProgress> skills = new HashMap<>();
+    private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
         this.server = server;
@@ -53,6 +54,7 @@ final class BehaviorDirector {
     }
 
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
+        observations.remove(entry.companionId);
         skills.put(entry.companionId, createSkill(body, entry, parameters));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
@@ -79,10 +81,15 @@ final class BehaviorDirector {
         navigation.remove(companionId);
         actionGateway.discard(companionId);
         skills.remove(companionId);
+        observations.remove(companionId);
     }
 
     String evidenceSummary(UUID companionId) {
         return actionGateway.evidenceSummary(companionId);
+    }
+
+    CompanionRegistry.BehaviorObservation behaviorObservation(UUID companionId) {
+        return observations.get(companionId);
     }
 
     void tick(CompanionEntry entry, CompanionPlayer body) {
@@ -179,10 +186,14 @@ final class BehaviorDirector {
             if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
             int available = count(body, item);
             if (available < parameters.quantity() && !parameters.allowPartial()) {
+                recordShortage(entry, parameters, available);
                 return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
             }
             int target = Math.min(available, parameters.quantity());
-            if (target == 0) return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            if (target == 0) {
+                recordShortage(entry, parameters, available);
+                return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            }
             return new SkillProgress(parameters, item, target, owner == null ? 0 : count(owner, item),
                     body.getFoodData().getFoodLevel(), available, server.getTickCount(), null);
         }
@@ -212,17 +223,24 @@ final class BehaviorDirector {
             int available = countStorageMenu(body, item);
             if (available < parameters.quantity() && !parameters.allowPartial()) {
                 body.closeContainer();
+                recordShortage(entry, parameters, available);
                 return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
             }
             int target = Math.min(available, parameters.quantity());
             if (target == 0) {
                 body.closeContainer();
+                recordShortage(entry, parameters, available);
                 return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
             }
             return new SkillProgress(parameters, item, target, 0, body.getFoodData().getFoodLevel(),
                     count(body, item), server.getTickCount(), null, position, available);
         }
         return SkillProgress.failed(parameters, "CAPABILITY_UNAVAILABLE");
+    }
+
+    private void recordShortage(CompanionEntry entry, SkillParameters parameters, int available) {
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                "ITEM_INSUFFICIENT", parameters.itemId(), parameters.quantity(), Math.max(0, available)));
     }
 
     private void tickSkill(CompanionEntry entry, CompanionPlayer body) {

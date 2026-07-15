@@ -151,6 +151,37 @@ class AgentPlanRepositoryTest {
         }
     }
 
+    @Test
+    void goalModificationWaitsForOldBehaviorTerminationBeforeNewStepsBecomeReady() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("goal-change.db"))) {
+            database.initialize();
+            AgentPlanRepository repository = new AgentPlanRepository(database);
+            DurablePlan plan = repository.create("c1", "deliver 8 iron", decision());
+            plan = repository.transitionStep(plan.planId(), plan.revision(), 0, StepState.RUNNING, Json.object(), null);
+            plan = repository.linkTask(plan.planId(), plan.revision(), 0, "old-task");
+            plan = repository.transitionStep(plan.planId(), plan.revision(), 0, StepState.BLOCKED,
+                    Json.object().put("available", 3), "ITEM_INSUFFICIENT");
+            AgentDecision changed = replan("NavigateTo", "WithdrawFromStorage", "DeliverItem");
+
+            plan = repository.queueGoalModification(plan.planId(), plan.revision(), "deliver 2 iron", changed,
+                    Json.object().put("ownerModifiedGoal", true));
+
+            assertEquals(StepState.PAUSED, plan.state());
+            assertEquals("deliver 2 iron", plan.requestText());
+            assertEquals(StepState.BLOCKED, plan.steps().getFirst().state());
+            assertEquals(StepState.PENDING, plan.steps().get(2).state());
+            assertEquals(plan.planId(), repository.activeForCompanion("c1").orElseThrow().planId());
+
+            plan = repository.activateGoalModification(plan.planId(), plan.revision(), 0, StepState.CANCELLED,
+                    Json.object().put("oldBehaviorCancelled", true), "GOAL_MODIFIED");
+
+            assertEquals(StepState.READY, plan.state());
+            assertEquals(StepState.CANCELLED, plan.steps().getFirst().state());
+            assertEquals(StepState.READY, plan.steps().get(2).state());
+            assertTrue(plan.steps().getFirst().observation().path("oldBehaviorCancelled").asBoolean());
+        }
+    }
+
     private static AgentDecision decision() {
         return new AgentDecision(DecisionKind.CREATE_PLAN, "准备铁镐", List.of(), List.of(), List.of(
                 step("WithdrawFromStorage"), step("CraftItem")), "我先核对材料。", "");

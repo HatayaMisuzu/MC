@@ -11,7 +11,7 @@ import type { CompanionSnapshot } from '../types'
 
 export function CompanionsPage() {
   const { selected, selectedId, requestPlan, companionSnapshot } = useTerminal()
-  const snapshot = useResource(() => selectedId ? api<CompanionSnapshot>(`/api/companions?instanceId=${encodeURIComponent(selectedId)}`) : Promise.resolve({ companions: [], tasks: [], events: [], mode: 'SAFE_IDLE', instanceId: '' }), [selectedId])
+  const snapshot = useResource(() => selectedId ? api<CompanionSnapshot>(`/api/companions?instanceId=${encodeURIComponent(selectedId)}`) : Promise.resolve({ companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [], mode: 'SAFE_IDLE', instanceId: '' }), [selectedId])
   const [companionId, setCompanionId] = useState('')
   const [coordinates, setCoordinates] = useState({ x: '0', y: '64', z: '0' })
   const [requestText, setRequestText] = useState('')
@@ -28,6 +28,9 @@ export function CompanionsPage() {
     if (!text) return
     void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text })
   }
+  const answerQuestion = (optionId: string) => {
+    void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text: optionId })
+  }
   return (
     <div className="page">
       <PageHeader title="Companion 控制" description="命令经过 Runtime 身份认证，任务、Lease、Behavior 和事件均来自持久化状态。" actions={<ActionButton icon={<RefreshCw size={15} />} onClick={() => void snapshot.refresh()}>刷新状态</ActionButton>} />
@@ -39,6 +42,7 @@ export function CompanionsPage() {
           <section className="companion-detail"><h2>在线状态</h2>{companions.filter((value) => value.id === activeId).map((companion) => <dl className="detail-list" key={companion.id}><div><dt>名称</dt><dd>{companion.displayName}</dd></div><div><dt>在线</dt><dd><StatusBadge value={companion.online ? 'CONNECTED' : 'WAITING'} /></dd></div><div><dt>Lease</dt><dd><StatusBadge value={companion.leaseActive ? 'ONLINE' : 'WAITING'} /></dd></div><div><dt>Epoch</dt><dd>{companion.controlEpoch ?? '—'}</dd></div><div><dt>最近状态</dt><dd>{JSON.stringify(companion.status ?? {})}</dd></div></dl>)}</section>
         </div>
         <section className="main-panel"><header className="panel-header"><h2>任务与 Behavior</h2><span>{snapshot.data?.tasks.length ?? 0} 个任务</span></header><div className="table-scroll"><table className="data-table"><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>Lease Epoch</th><th>Behavior</th><th>Revision</th></tr></thead><tbody>{(snapshot.data?.tasks ?? []).map((task) => <tr key={task.taskId}><td>{task.taskId.slice(0, 12)}</td><td>{task.type}</td><td><StatusBadge value={task.state} /></td><td>{task.controlEpoch}</td><td>{task.behaviorId?.slice(0, 12) ?? '—'}</td><td>{task.behaviorRevision}</td></tr>)}</tbody></table></div></section>
+        <section className="companion-chat" aria-label="伙伴对话记录"><h2>伙伴对话</h2>{(snapshot.data?.waitingQuestions ?? []).filter((question) => question.companionId === activeId).map((question) => <div className="conversation-question" key={question.questionId}><StatusBadge value="WAITING_FOR_USER" /><p>{question.prompt}</p><div className="control-buttons">{question.options.map((option) => <ActionButton key={option.id} onClick={() => answerQuestion(option.id)}><strong>{option.label}</strong><small>{option.description}</small></ActionButton>)}</div></div>)}<div className="event-rows">{(snapshot.data?.conversations ?? []).filter((event) => event.companionId === activeId).map((event) => <div className="event-row" key={event.eventId}><time>{new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour12: false })}</time><strong>{event.direction === 'USER' ? '你' : '伙伴'}</strong><span>{event.kind}</span><StatusBadge value={event.gameDelivered ? 'DELIVERED' : 'OFFLINE'} /><p>{event.content}</p></div>)}</div></section>
         <section className="event-stream"><header><h2>Behavior 事件</h2><span>按数据库序列倒序</span></header><div className="event-rows">{(snapshot.data?.events ?? []).map((event) => <div className="event-row" key={event.sequence}><time>{new Date(event.createdAt).toLocaleTimeString('zh-CN', { hour12: false })}</time><strong>{event.eventType}</strong><span>{event.taskId.slice(0, 10)}</span><StatusBadge value="ONLINE" /><p>revision {event.revision}</p></div>)}</div></section>
       </>}
     </div>

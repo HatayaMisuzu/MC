@@ -7,6 +7,9 @@ import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.agent.AgentContext;
 import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.AgentKernel;
+import com.mccompanion.runtime.agent.AgentDecision;
+import com.mccompanion.runtime.agent.DecisionKind;
+import com.mccompanion.runtime.agent.StepState;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
@@ -17,6 +20,9 @@ import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
+import com.mccompanion.runtime.conversation.ConversationService;
+import com.mccompanion.runtime.conversation.IncomingMessageClassifier;
+import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.task.TaskType;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -39,6 +45,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final AgentKernel kernel;
     private final ProviderRouter providers;
     private final CapabilityVisibility capabilityVisibility;
+    private final ConversationService conversations;
+    private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
     private final HttpServer server;
@@ -53,6 +61,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             AgentKernel kernel,
             ProviderRouter providers,
             CapabilityVisibility capabilityVisibility,
+            ConversationService conversations,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -63,6 +72,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.kernel = kernel;
         this.providers = providers;
         this.capabilityVisibility = capabilityVisibility;
+        this.conversations = conversations;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -70,11 +80,33 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/commands", this::commands);
         server.createContext("/agent", this::agent);
         server.createContext("/tasks", this::tasks);
+        server.createContext("/conversations", this::conversations);
         server.setExecutor(Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-health");
             thread.setDaemon(true);
             return thread;
         }));
+    }
+
+    private void conversations(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (!"GET".equals(exchange.getRequestMethod())) { exchange.sendResponseHeaders(405, -1); return; }
+            String companionId = queryParameter(exchange, "companionId");
+            if (companionId == null || companionId.isBlank()) {
+                sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED")); return;
+            }
+            try {
+                ObjectNode body = Json.object().put("companionId", companionId);
+                body.set("events", Json.MAPPER.valueToTree(conversations.repository().list(companionId, 100)));
+                conversations.repository().activeForCompanion(companionId)
+                        .ifPresent(value -> body.set("waitingQuestion", Json.MAPPER.valueToTree(value)));
+                sendJson(exchange, 200, body);
+            } catch (java.sql.SQLException failure) {
+                log.error("Unable to inspect conversations", failure);
+                sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+            }
+        }
     }
 
     private void agent(HttpExchange exchange) throws IOException {
@@ -92,6 +124,20 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 var companion = companions.get(companionId)
                         .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
                 var active = commands.activeTaskFor(companionId);
+                var activePlan = plans.activeForCompanion(companionId);
+                var waiting = conversations.repository().activeForCompanion(companionId);
+                var incoming = incomingMessages.classify(text, waiting.orElse(null));
+                if (waiting.isPresent() && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
+                    var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
+                    ObjectNode body = Json.object().put("accepted", true).put("source", "waiting-answer")
+                            .put("message", "已收到你的回答，并继续原来的任务。")
+                            .put("questionId", waiting.orElseThrow().questionId())
+                            .put("planId", resumed.planId()).put("planState", resumed.state().name())
+                            .put("planRevision", resumed.revision()).put("currentStep", resumed.currentStep())
+                            .put("resumedOriginalPlan", true);
+                    sendJson(exchange, 200, body);
+                    return;
+                }
                 var visible = capabilityVisibility.resolve(
                         sessions.forCompanion(companionId).map(value -> value.handshake()).orElse(null),
                         companion.status());
@@ -105,7 +151,39 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 body.set("capabilityStates", visible.toJson());
                 visible.availableNames().forEach(body.putArray("availableCapabilities")::add);
                 if (result.errorCode() != null) body.put("code", result.errorCode()).put("message", result.userMessage());
-                if (result.accepted() && result.executableIntent().isPresent() && request.path("execute").asBoolean(true)) {
+                if (result.accepted() && activePlan.isPresent()
+                        && (result.decision().kind() == DecisionKind.CREATE_PLAN
+                        || result.decision().kind() == DecisionKind.REPLAN)
+                        && !result.decision().steps().isEmpty()) {
+                    AgentDecision value = result.decision();
+                    AgentDecision revision = new AgentDecision(DecisionKind.REPLAN, value.understoodGoal(),
+                            value.constraints(), value.assumptions(), value.steps(), value.reply(),
+                            "OWNER_MODIFIED_GOAL: " + value.reason());
+                    var previous = activePlan.orElseThrow();
+                    var queued = plans.queueGoalModification(previous.planId(), previous.revision(), text, revision,
+                            Json.object().put("ownerModifiedGoal", true)
+                                    .put("previousRequest", previous.requestText()));
+                    if (waiting.isPresent()) {
+                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_MODIFIED_GOAL");
+                    }
+                    if (active.isPresent()) {
+                        var cancellation = commands.execute("goal-change-" + commandId, companionId,
+                                new Intent(TaskType.STOP, Json.object().put("action", "cancel"), text));
+                        body.set("execution", cancellation.toJson());
+                    } else {
+                        int queuedStep = queued.currentStep();
+                        var old = queued.steps().stream().filter(step -> step.index() != queuedStep)
+                                .filter(step -> step.state() == StepState.RUNNING || step.state() == StepState.BLOCKED
+                                        || step.state() == StepState.PAUSED || step.state() == StepState.CANCELLED)
+                                .max(java.util.Comparator.comparingInt(candidate -> candidate.index())).orElseThrow();
+                        queued = plans.activateGoalModification(queued.planId(), queued.revision(), old.index(),
+                                StepState.CANCELLED, Json.object().put("noActiveBehavior", true), "GOAL_MODIFIED");
+                        if (request.path("execute").asBoolean(true)) queued = kernel.start(queued.planId());
+                    }
+                    body.put("executionState", queued.state().name()).put("planId", queued.planId())
+                            .put("planRevision", queued.revision()).put("currentStep", queued.currentStep())
+                            .put("planState", queued.state().name()).put("goalModified", true);
+                } else if (result.accepted() && result.executableIntent().isPresent() && request.path("execute").asBoolean(true)) {
                     body.set("execution", commands.execute(commandId, companionId, result.executableIntent().get()).toJson());
                 } else if (result.accepted() && (result.decision().kind() == com.mccompanion.runtime.agent.DecisionKind.CREATE_PLAN
                         || result.decision().kind() == com.mccompanion.runtime.agent.DecisionKind.REPLAN)) {
@@ -253,6 +331,18 @@ public final class RuntimeHealthServer implements AutoCloseable {
             if (item.isTextual() && !item.asText().isBlank() && item.asText().length() <= 128) result.add(item.asText());
         }
         return java.util.List.copyOf(result);
+    }
+
+    private static String queryParameter(HttpExchange exchange, String name) {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null) return null;
+        for (String pair : query.split("&")) {
+            String[] parts = pair.split("=", 2);
+            if (java.net.URLDecoder.decode(parts[0], StandardCharsets.UTF_8).equals(name)) {
+                return parts.length == 1 ? "" : java.net.URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
+            }
+        }
+        return null;
     }
 
     @Override

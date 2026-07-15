@@ -123,7 +123,8 @@ public final class AgentPlanRepository {
                     insertSteps(connection, planId, firstIndex, decision.steps(), now);
                     try (PreparedStatement update = connection.prepareStatement("""
                             UPDATE agent_plan SET decision_json=?,state='READY',revision=revision+1,
-                              planning_revision=?,no_progress_count=0,plan_fingerprint=?,current_step=?,updated_at=?
+                              planning_revision=?,no_progress_count=0,plan_fingerprint=?,interaction_state='ACTIVE',
+                              current_step=?,updated_at=?
                             WHERE plan_id=? AND revision=?
                             """)) {
                         update.setString(1, encode(decision)); update.setInt(2, semanticRevision);
@@ -169,6 +170,103 @@ public final class AgentPlanRepository {
         return get(planId).orElseThrow();
     }
 
+    public Optional<DurablePlan> activeForCompanion(String companionId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT plan_id FROM agent_plan WHERE companion_id=?
+                  AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED') ORDER BY updated_at DESC LIMIT 1
+                """)) {
+            statement.setString(1, required(companionId));
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? get(result.getString(1)) : Optional.empty();
+            }
+        }
+    }
+
+    /** Queues an owner-requested semantic revision; new work cannot run before the old behavior terminates. */
+    public DurablePlan queueGoalModification(String planId, long expectedRevision, String newRequest,
+                                             AgentDecision decision, JsonNode observation) throws SQLException {
+        if (decision.kind() != DecisionKind.REPLAN || decision.steps().isEmpty()) {
+            throw new IllegalArgumentException("A goal modification must be a REPLAN with steps");
+        }
+        long now = clock.millis();
+        String fingerprint = PlanFingerprint.of(decision);
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                PlanHeader header = header(connection, planId);
+                if (header.revision != expectedRevision) throw new IllegalStateException("STALE_PLAN_REVISION");
+                if (header.state.terminal() || header.state == StepState.PAUSED) {
+                    throw new IllegalStateException("PLAN_NOT_MODIFIABLE");
+                }
+                try (PreparedStatement cancel = connection.prepareStatement("""
+                        UPDATE agent_step SET state='CANCELLED',failure_code='SUPERSEDED_BY_GOAL_MODIFICATION',updated_at=?
+                        WHERE plan_id=? AND state IN ('PENDING','READY')
+                        """)) {
+                    cancel.setLong(1, now); cancel.setString(2, planId); cancel.executeUpdate();
+                }
+                int firstIndex = header.stepCount;
+                insertSteps(connection, planId, firstIndex, decision.steps(), now, StepState.PENDING);
+                int semanticRevision = header.planningRevision + 1;
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE agent_plan SET request_text=?,decision_json=?,state='PAUSED',interaction_state='REPLANNING',revision=revision+1,
+                          planning_revision=?,no_progress_count=0,plan_fingerprint=?,current_step=?,updated_at=?
+                        WHERE plan_id=? AND revision=?
+                        """)) {
+                    update.setString(1, required(newRequest)); update.setString(2, encode(decision));
+                    update.setInt(3, semanticRevision); update.setString(4, fingerprint);
+                    update.setInt(5, firstIndex); update.setLong(6, now);
+                    update.setString(7, planId); update.setLong(8, expectedRevision);
+                    if (update.executeUpdate() != 1) throw new IllegalStateException("STALE_PLAN_REVISION");
+                }
+                insertPlanRevision(connection, planId, semanticRevision, decision, observation,
+                        "GOAL_MODIFIED", fingerprint, "WAITING_FOR_SUPERSEDED_TASK", now);
+                connection.commit();
+            } catch (SQLException | RuntimeException failure) { connection.rollback(); throw failure; }
+            finally { connection.setAutoCommit(true); }
+        }
+        return get(planId).orElseThrow();
+    }
+
+    /** Records the old behavior terminal observation and atomically releases the queued revision. */
+    public DurablePlan activateGoalModification(String planId, long expectedRevision, int supersededStep,
+                                                StepState terminalState, JsonNode observation,
+                                                String failureCode) throws SQLException {
+        if (!terminalState.terminal()) throw new IllegalArgumentException("Superseded step must be terminal");
+        long now = clock.millis();
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                PlanHeader header = header(connection, planId);
+                if (header.revision != expectedRevision) throw new IllegalStateException("STALE_PLAN_REVISION");
+                if (header.state != StepState.PAUSED) throw new IllegalStateException("GOAL_MODIFICATION_NOT_QUEUED");
+                try (PreparedStatement old = connection.prepareStatement("""
+                        UPDATE agent_step SET state=?,failure_code=?,observation_json=?,updated_at=?
+                        WHERE plan_id=? AND step_index=? AND state IN ('RUNNING','BLOCKED','PAUSED','CANCELLED')
+                        """); PreparedStatement next = connection.prepareStatement("""
+                        UPDATE agent_step SET state='READY',updated_at=?
+                        WHERE plan_id=? AND step_index=? AND state='PENDING'
+                        """)) {
+                    old.setString(1, terminalState.name()); old.setString(2, failureCode);
+                    old.setString(3, Json.write(observation == null ? Json.object() : observation));
+                    old.setLong(4, now); old.setString(5, planId); old.setInt(6, supersededStep);
+                    if (old.executeUpdate() != 1) throw new IllegalStateException("SUPERSEDED_STEP_NOT_ACTIVE");
+                    next.setLong(1, now); next.setString(2, planId); next.setInt(3, header.currentStep);
+                    if (next.executeUpdate() != 1) throw new IllegalStateException("QUEUED_STEP_NOT_PENDING");
+                }
+                try (PreparedStatement update = connection.prepareStatement("""
+                        UPDATE agent_plan SET state='READY',interaction_state='ACTIVE',revision=revision+1,updated_at=?
+                        WHERE plan_id=? AND revision=?
+                        """)) {
+                    update.setLong(1, now); update.setString(2, planId); update.setLong(3, expectedRevision);
+                    if (update.executeUpdate() != 1) throw new IllegalStateException("STALE_PLAN_REVISION");
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException failure) { connection.rollback(); throw failure; }
+            finally { connection.setAutoCommit(true); }
+        }
+        return get(planId).orElseThrow();
+    }
+
     public DurablePlan transitionStep(String planId, long expectedRevision, int index, StepState next,
                                       JsonNode observation, String failureCode) throws SQLException {
         long now = clock.millis();
@@ -207,6 +305,17 @@ public final class AgentPlanRepository {
                 connection.commit();
             } catch (SQLException | RuntimeException failure) { connection.rollback(); throw failure; }
             finally { connection.setAutoCommit(true); }
+        }
+        return get(planId).orElseThrow();
+    }
+
+    public DurablePlan markWaitingForUser(String planId, long expectedRevision) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                UPDATE agent_plan SET interaction_state='WAITING_FOR_USER',revision=revision+1,updated_at=?
+                WHERE plan_id=? AND revision=? AND state='BLOCKED'
+                """)) {
+            statement.setLong(1, clock.millis()); statement.setString(2, planId); statement.setLong(3, expectedRevision);
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("PLAN_NOT_BLOCKED_OR_STALE");
         }
         return get(planId).orElseThrow();
     }
@@ -270,6 +379,7 @@ public final class AgentPlanRepository {
                         decision, StepState.valueOf(result.getString("state")), result.getLong("revision"),
                         result.getInt("planning_revision"), result.getInt("replan_count"),
                         result.getInt("no_progress_count"), result.getString("plan_fingerprint"),
+                        result.getString("interaction_state"),
                         result.getInt("current_step"), List.copyOf(steps), Instant.ofEpochMilli(result.getLong("created_at")),
                         Instant.ofEpochMilli(result.getLong("updated_at"))));
             }
@@ -279,7 +389,7 @@ public final class AgentPlanRepository {
     private static PlanHeader header(Connection connection, String id) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
                 SELECT p.revision,p.planning_revision,p.replan_count,p.no_progress_count,p.plan_fingerprint,
-                  p.state,(SELECT COUNT(*) FROM agent_step s WHERE s.plan_id=p.plan_id) step_count
+                  p.state,p.current_step,(SELECT COUNT(*) FROM agent_step s WHERE s.plan_id=p.plan_id) step_count
                 FROM agent_plan p WHERE p.plan_id=?
                 """)) {
             statement.setString(1, id);
@@ -288,19 +398,24 @@ public final class AgentPlanRepository {
                 return new PlanHeader(result.getLong("revision"), result.getInt("planning_revision"),
                         result.getInt("replan_count"), result.getInt("no_progress_count"),
                         result.getString("plan_fingerprint"), StepState.valueOf(result.getString("state")),
-                        result.getInt("step_count"));
+                        result.getInt("current_step"), result.getInt("step_count"));
             }
         }
     }
 
     private static void insertSteps(Connection connection, String planId, int firstIndex,
                                     List<PlanStep> steps, long now) throws SQLException {
+        insertSteps(connection, planId, firstIndex, steps, now, StepState.READY);
+    }
+
+    private static void insertSteps(Connection connection, String planId, int firstIndex,
+                                    List<PlanStep> steps, long now, StepState firstState) throws SQLException {
         try (PreparedStatement step = connection.prepareStatement("""
                 INSERT INTO agent_step(plan_id,step_index,state,definition_json,updated_at) VALUES(?,?,?,?,?)
                 """)) {
             for (int offset = 0; offset < steps.size(); offset++) {
                 step.setString(1, planId); step.setInt(2, firstIndex + offset);
-                step.setString(3, offset == 0 ? StepState.READY.name() : StepState.PENDING.name());
+                step.setString(3, offset == 0 ? firstState.name() : StepState.PENDING.name());
                 step.setString(4, encode(steps.get(offset))); step.setLong(5, now); step.addBatch();
             }
             step.executeBatch();
@@ -360,5 +475,5 @@ public final class AgentPlanRepository {
     private static String encode(Object value) { try { return Json.MAPPER.writeValueAsString(value); } catch (JsonProcessingException e) { throw new IllegalArgumentException(e); } }
     private static <T> T decode(String value, Class<T> type) { try { return Json.MAPPER.readValue(value, type); } catch (JsonProcessingException e) { throw new IllegalStateException(e); } }
     private record PlanHeader(long revision, int planningRevision, int replanCount, int noProgressCount,
-                              String fingerprint, StepState state, int stepCount) { }
+                              String fingerprint, StepState state, int currentStep, int stepCount) { }
 }

@@ -180,6 +180,8 @@ final class RuntimeBridge implements AutoCloseable {
             server.execute(() -> processCommand(message.path("payload")));
         } else if (type.equals("player_reply")) {
             deliverPlayerReply(message.path("payload"));
+        } else if (type.equals("conversation_event")) {
+            deliverConversationEvent(message.path("payload"));
         } else if (type.equals("heartbeat_ack") || type.equals("subscription")) {
             // Subscription is fulfilled by the periodic status publisher.
         }
@@ -214,6 +216,19 @@ final class RuntimeBridge implements AutoCloseable {
             ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
             if (owner != null) owner.sendSystemMessage(Component.literal("[伙伴] " + finalReply));
         });
+    }
+
+    private void deliverConversationEvent(JsonNode payload) {
+        String companionId = payload.path("companionId").asText("");
+        String reply = payload.path("reply").asText("").strip();
+        if (reply.isEmpty()) return;
+        if (reply.length() > 512) reply = reply.substring(0, 512);
+        String finalReply = reply;
+        server.execute(() -> registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().ifPresent(snapshot -> {
+                    ServerPlayer owner = server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
+                    if (owner != null) owner.sendSystemMessage(Component.literal("[伙伴] " + finalReply));
+                }));
     }
 
     private void processCommand(JsonNode command) {
@@ -318,6 +333,9 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("occurredAt", Instant.now().toString());
         payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
         sendEnvelope("behavior_event", payload);
+        if (result.behaviorId() != null) {
+            observedBehaviorStates.put(companionId + ':' + result.behaviorId(), result.state().toUpperCase(Locale.ROOT));
+        }
     }
 
     private long currentEpoch(String companionId) {
@@ -396,6 +414,12 @@ final class RuntimeBridge implements AutoCloseable {
             String failure = failureCode(snapshot.evidenceSummary());
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("failureCode", failure).put("evidence", snapshot.evidenceSummary());
+            if (snapshot.behaviorObservation() != null) {
+                evidence.put("failureCode", snapshot.behaviorObservation().failureCode())
+                        .put("item", snapshot.behaviorObservation().itemId())
+                        .put("requested", snapshot.behaviorObservation().requested())
+                        .put("available", snapshot.behaviorObservation().available());
+            }
             sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, null, evidence);
         }
     }

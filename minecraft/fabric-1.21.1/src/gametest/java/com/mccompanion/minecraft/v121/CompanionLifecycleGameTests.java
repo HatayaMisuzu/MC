@@ -150,8 +150,12 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 helper.assertTrue(registry.runtimeSnapshots(false).stream()
                                 .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
                                         && snapshot.behaviorState().equals("PAUSED")
-                                        && snapshot.evidenceSummary().contains("failure=ITEM_INSUFFICIENT")),
-                        "insufficient withdrawal did not expose ITEM_INSUFFICIENT evidence");
+                                        && snapshot.evidenceSummary().contains("failure=ITEM_INSUFFICIENT")
+                                        && snapshot.behaviorObservation() != null
+                                        && snapshot.behaviorObservation().failureCode().equals("ITEM_INSUFFICIENT")
+                                        && snapshot.behaviorObservation().requested() == 4
+                                        && snapshot.behaviorObservation().available() == 2),
+                        "insufficient withdrawal did not expose structured shortage evidence");
                 helper.assertTrue(registry.remove(owner).success(), "storage test cleanup failed");
                 helper.succeed();
             });

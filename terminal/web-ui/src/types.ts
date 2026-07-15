@@ -122,7 +122,20 @@ export interface CompanionSnapshot {
   companions: Companion[]
   tasks: Task[]
   events: BehaviorEvent[]
+  conversations: ConversationEvent[]
+  waitingQuestions: WaitingQuestion[]
   error?: string
+}
+
+export interface ConversationOption { id: string; label: string; description: string }
+export interface ConversationEvent {
+  eventId: string; companionId: string; planId?: string; questionId?: string
+  direction: string; kind: string; content: string; gameDelivered: boolean; createdAt: number
+  payload?: Record<string, unknown>
+}
+export interface WaitingQuestion {
+  questionId: string; planId: string; companionId: string; prompt: string; reason: string
+  options: ConversationOption[]; freeTextAllowed: boolean; state: string; createdAt: number; updatedAt: number
 }
 
 export interface OperationPlan {

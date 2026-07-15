@@ -15,6 +15,8 @@ import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.memory.MemoryRepository;
+import com.mccompanion.runtime.conversation.ConversationRepository;
+import com.mccompanion.runtime.conversation.ConversationService;
 import com.mccompanion.runtime.provider.IntentProvider;
 import com.mccompanion.runtime.provider.OpenAiCompatibleProvider;
 import com.mccompanion.runtime.provider.ProviderRouter;
@@ -112,6 +114,8 @@ public final class RuntimeApplication implements AutoCloseable {
             LeaseService leases = new LeaseService(database);
             int invalidatedLeases = leases.invalidateRecoveredLeases();
             sessions = new SessionRegistry(database, companions, log);
+            ConversationRepository conversationRepository = new ConversationRepository(database);
+            ConversationService conversations = new ConversationService(conversationRepository, sessions, log);
             CommandService commands = new CommandService(
                     sessions,
                     companions,
@@ -124,7 +128,7 @@ public final class RuntimeApplication implements AutoCloseable {
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
             CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
             kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
-                    capabilityVisibility, memories);
+                    capabilityVisibility, memories, conversations);
             commands.setTaskLifecycleListener(kernel);
             sessions.setListener(commands);
 
@@ -148,10 +152,11 @@ public final class RuntimeApplication implements AutoCloseable {
                     kernel,
                     capabilityVisibility,
                     memories,
+                    conversations,
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
-                    kernel, providerRouter, capabilityVisibility, log);
+                    kernel, providerRouter, capabilityVisibility, conversations, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;

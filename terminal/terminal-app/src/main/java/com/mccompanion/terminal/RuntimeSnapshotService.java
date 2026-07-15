@@ -19,12 +19,16 @@ final class RuntimeSnapshotService {
     root.set("companions", JSON.createArrayNode());
     root.set("tasks", JSON.createArrayNode());
     root.set("events", JSON.createArrayNode());
+    root.set("conversations", JSON.createArrayNode());
+    root.set("waitingQuestions", JSON.createArrayNode());
     Path database = profile.profileDirectory().resolve("companion.db");
     if (!Files.isRegularFile(database)) return root;
     try (Connection connection = DriverManager.getConnection("jdbc:sqlite:" + database)) {
       companions(connection, (ArrayNode) root.get("companions"));
       tasks(connection, (ArrayNode) root.get("tasks"));
       events(connection, (ArrayNode) root.get("events"));
+      conversations(connection, (ArrayNode) root.get("conversations"));
+      waitingQuestions(connection, (ArrayNode) root.get("waitingQuestions"));
     } catch (Exception failure) {
       root.put("error", "Runtime 状态暂时不可读: " + failure.getClass().getSimpleName());
     }
@@ -114,6 +118,42 @@ final class RuntimeSnapshotService {
                 .put("createdAt", rows.getLong("created_at"));
         String payload = rows.getString("payload_json");
         if (payload != null && !payload.isBlank()) value.set("payload", JSON.readTree(payload));
+      }
+    }
+  }
+
+  private static void conversations(Connection connection, ArrayNode values) throws Exception {
+    try (var statement = connection.prepareStatement("""
+            SELECT event_id,companion_id,plan_id,question_id,direction,kind,content,payload_json,
+                   game_delivered,created_at FROM conversation_event ORDER BY created_at DESC LIMIT 200
+            """); var rows = statement.executeQuery()) {
+      while (rows.next()) {
+        ObjectNode value = values.addObject().put("eventId", rows.getString("event_id"))
+            .put("companionId", rows.getString("companion_id")).put("direction", rows.getString("direction"))
+            .put("kind", rows.getString("kind")).put("content", rows.getString("content"))
+            .put("gameDelivered", rows.getInt("game_delivered") != 0).put("createdAt", rows.getLong("created_at"));
+        String plan = rows.getString("plan_id"); if (plan != null) value.put("planId", plan);
+        String question = rows.getString("question_id"); if (question != null) value.put("questionId", question);
+        value.set("payload", JSON.readTree(rows.getString("payload_json")));
+      }
+    }
+  }
+
+  private static void waitingQuestions(Connection connection, ArrayNode values) throws Exception {
+    try (var statement = connection.prepareStatement("""
+            SELECT question_id,plan_id,companion_id,prompt,reason,options_json,free_text_allowed,state,
+                   context_json,created_at,updated_at,expires_at FROM waiting_question
+            WHERE state='WAITING' ORDER BY updated_at DESC LIMIT 100
+            """); var rows = statement.executeQuery()) {
+      while (rows.next()) {
+        ObjectNode value = values.addObject().put("questionId", rows.getString("question_id"))
+            .put("planId", rows.getString("plan_id")).put("companionId", rows.getString("companion_id"))
+            .put("prompt", rows.getString("prompt")).put("reason", rows.getString("reason"))
+            .put("freeTextAllowed", rows.getInt("free_text_allowed") != 0).put("state", rows.getString("state"))
+            .put("createdAt", rows.getLong("created_at")).put("updatedAt", rows.getLong("updated_at"));
+        value.set("options", JSON.readTree(rows.getString("options_json")));
+        value.set("context", JSON.readTree(rows.getString("context_json")));
+        long expires = rows.getLong("expires_at"); if (!rows.wasNull()) value.put("expiresAt", expires);
       }
     }
   }

@@ -4,16 +4,17 @@
 
 ## 当前长期 Goal
 
-持续完善 Minecraft AI Companion，直到它成为可在隔离 Fabric 1.21.1 实例中进行真人测试的纯文本 LLM AI 伙伴候选版本。它必须会理解、判断、行动、观察、修正和诚实反馈，而不是固定宏、任务专用脚本集合或只会输出计划的聊天层。
+持续将 Minecraft AI Companion 完善为可在隔离 Fabric 1.21.1 实例中进行真人测试的纯文本陪伴型 AI 助手候选版本。它必须理解真实目标，结合世界、任务、对话、记忆和偏好判断何时行动、换方法、补前置、给建议或等待用户，并把回答续接到原任务；不得作弊、伪成功或擅自扩大目标。
 
-状态：`ACTIVE`。只有 `F:\AGENTS.md` 第 14 节全部满足时才允许结束。
+状态：`ACTIVE`。权威文件为仓库根 `AGENTS.md` 与 `CODEX_GOAL.md`；只有新版 `AGENTS.md` 第 18 节全部满足时才允许结束。
 
 ## 基线
 
-- 本地与远端 `main`：`b7d14ea0d3d24cc4637520012ba51c850e9157dc`。
-- 工作区：第一轮开始时干净。
-- 最近远端检查：PR fast checks、Windows terminal validation、Minecraft heavy validation 均为 `REMOTE_PASS`。
-- 当前有真实世界证据的能力：`NavigateTo`、`FollowOwner`、`DeliverItem`、`EatAndRecover`。
+- 本地与远端 `main`：`877e790954a99a962cf951d901c85ae5f984cccd`。
+- 新执行包基线已核验：`29014d4` 动态 Capability、`73c4f85` Observation→Replan、`877e790` 真实容器取物均存在，不重复实现。
+- 当前工作区包含新版根 Goal 文件，以及被中断的目标修改排队草稿；草稿须按 P0 的 Conversation/WAITING 语义整合后才可提交。
+- 当前有真实世界证据的能力：`NavigateTo`、`FollowOwner`、`DeliverItem`、`EatAndRecover`、`WithdrawFromStorage`。
+- 当前最高优先级：失败分类、Conversation Event、持久 `WAITING_FOR_USER`、回答关联与原计划修订、目标修改。
 
 ## 第一轮审计发现
 
@@ -40,6 +41,17 @@
 ## 出口门槛
 
 当前不是 `READY_FOR_HUMAN_TEST`。容器闭环、制作、资源/熔炼、重规划、目标修改、隔离实例冒烟、长稳、发布资产与真人测试材料仍未完成。
+
+## Companion Conversation / WAITING_FOR_USER 切片（2026-07-15）
+
+- 新增失败分类信任边界：能从 Fabric `BLOCKED` Observation 的 snapshot 还原具体失败码，并区分缺货、能力缺失、路径失败、前置不足、安全阻断、外部服务等类别；“不够就告诉我”和“自动补齐”具有不同自主边界。
+- Conversation Event、等待问题、稳定 option id、回答与游戏投递状态均持久化；Runtime 重启后仍可恢复等待，离线消息在 Companion 重连后补投。
+- 后台 Replan 可进入持久 `WAITING_FOR_USER`，问题同时出现在游戏内和 HTML；HTML 选项与游戏内自然语言回答都通过同一消息分类入口关联原 question/plan。
+- 用户选择部分交付时保留原 `planId`，只修订未完成步骤的数量；6/16 场景变为“取 6 → 返回/交付 6”，不会创建竞争计划或再次调用 Provider。
+- 用户明确修改目标时，旧行为先取消、旧未执行步骤明确标为 superseded，再激活同一 plan 的新语义修订；不会把目标修改误吞为缺货回答。
+- Fabric 缺货 Observation 新增结构化 `failureCode/item/requested/available`，并在 STARTED 时登记观测状态，避免快速暂停发生在首次状态轮询前而漏发 BLOCKED。
+- 当前本地证据：Runtime 全量 75 项、terminal 测试、Web 7 项、Fabric 编译和隔离 Fabric 1.21.1 GameTest 4/4 通过；完整 Runtime↔Fabric 对话 E2E、Playwright 浏览器 E2E 和远程 CI 尚待本轮后续验证。
+- Goal 保持 `ACTIVE`；该切片不是 `READY_FOR_HUMAN_TEST`，制作、采集、熔炼、钻石替代策略、隔离真人实例和长稳等门槛仍未完成。
 
 ## Observation → Replan 切片（2026-07-15）
 

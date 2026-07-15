@@ -13,11 +13,18 @@ import com.mccompanion.runtime.agent.AgentContext;
 import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.agent.AgentPlanRepository;
 import com.mccompanion.runtime.agent.DecisionKind;
+import com.mccompanion.runtime.agent.AgentDecision;
+import com.mccompanion.runtime.agent.StepState;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.intent.Intent;
+import com.mccompanion.runtime.task.TaskType;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.memory.MemoryRepository;
+import com.mccompanion.runtime.conversation.ConversationService;
+import com.mccompanion.runtime.conversation.IncomingMessageClassifier;
+import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.session.Handshake;
 import com.mccompanion.runtime.session.RuntimeSession;
@@ -55,6 +62,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final AgentKernel kernel;
     private final CapabilityVisibility capabilityVisibility;
     private final MemoryRepository memories;
+    private final ConversationService conversations;
+    private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
     private final Clock clock;
@@ -66,16 +75,17 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                                   CommandService commands, CompanionRepository companions, ProviderRouter providers,
                                   AgentPlanRepository plans, AgentKernel kernel,
-                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories, RuntimeLog log) {
+                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories,
+                                  ConversationService conversations, RuntimeLog log) {
         this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, memories, log, Clock.systemUTC());
+                capabilityVisibility, memories, conversations, log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
                            CommandService commands, CompanionRepository companions, ProviderRouter providers,
                            AgentPlanRepository plans, AgentKernel kernel,
                            CapabilityVisibility capabilityVisibility, MemoryRepository memories,
-                           RuntimeLog log, Clock clock) {
+                           ConversationService conversations, RuntimeLog log, Clock clock) {
         super(address);
         this.pairingToken = pairingToken;
         this.sessions = sessions;
@@ -86,6 +96,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.kernel = kernel;
         this.capabilityVisibility = capabilityVisibility;
         this.memories = memories;
+        this.conversations = conversations;
         this.log = log;
         this.clock = clock;
         this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
@@ -233,6 +244,22 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
                 }
                 var active = commands.activeTaskFor(companionId);
+                var activePlan = plans.activeForCompanion(companionId);
+                var waiting = conversations.repository().activeForCompanion(companionId);
+                var incoming = incomingMessages.classify(text, waiting.orElse(null));
+                if (waiting.isPresent() && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
+                    var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
+                    reply.put("accepted", true).put("source", "waiting-answer")
+                            .put("reply", "已收到你的回答，并继续原来的任务。")
+                            .put("decision", DecisionKind.REPLAN.name())
+                            .put("questionId", waiting.orElseThrow().questionId())
+                            .put("planId", resumed.planId()).put("planState", resumed.state().name())
+                            .put("resumedOriginalPlan", true);
+                    ObjectNode message = envelope(session, "player_reply");
+                    message.set("payload", reply);
+                    if (session.peer().isOpen()) session.peer().send(Json.write(message));
+                    return;
+                }
                 var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
                 JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
                 AgentContext context = new AgentContext(companionId, verifiedWorld, java.util.List.of(),
@@ -244,7 +271,37 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         .put("reply", result.decision().reply()).put("decision", result.decision().kind().name());
                 reply.set("capabilityStates", visible.toJson());
                 if (!result.accepted()) reply.put("code", result.errorCode()).put("reply", result.userMessage());
-                else if (result.executableIntent().isPresent()) {
+                else if (activePlan.isPresent() && (result.decision().kind() == DecisionKind.CREATE_PLAN
+                        || result.decision().kind() == DecisionKind.REPLAN) && !result.decision().steps().isEmpty()) {
+                    AgentDecision value = result.decision();
+                    AgentDecision revision = new AgentDecision(DecisionKind.REPLAN, value.understoodGoal(),
+                            value.constraints(), value.assumptions(), value.steps(), value.reply(),
+                            "OWNER_MODIFIED_GOAL: " + value.reason());
+                    var previous = activePlan.orElseThrow();
+                    var queued = plans.queueGoalModification(previous.planId(), previous.revision(), text, revision,
+                            Json.object().put("ownerModifiedGoal", true)
+                                    .put("previousRequest", previous.requestText()));
+                    if (waiting.isPresent()) {
+                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_MODIFIED_GOAL");
+                    }
+                    if (active.isPresent()) {
+                        var cancellation = commands.execute("goal-change-" + requestId, companionId,
+                                new Intent(TaskType.STOP, Json.object().put("action", "cancel"), text));
+                        reply.put("accepted", cancellation.accepted()).put("code", cancellation.code());
+                        if (!cancellation.accepted()) reply.put("reply", cancellation.message());
+                    } else {
+                        int queuedStep = queued.currentStep();
+                        var old = queued.steps().stream().filter(step -> step.index() != queuedStep)
+                                .filter(step -> step.state() == StepState.RUNNING || step.state() == StepState.BLOCKED
+                                        || step.state() == StepState.PAUSED || step.state() == StepState.CANCELLED)
+                                .max(java.util.Comparator.comparingInt(candidate -> candidate.index())).orElseThrow();
+                        queued = plans.activateGoalModification(queued.planId(), queued.revision(), old.index(),
+                                StepState.CANCELLED, Json.object().put("noActiveBehavior", true), "GOAL_MODIFIED");
+                        queued = kernel.start(queued.planId());
+                    }
+                    reply.put("planId", queued.planId()).put("planState", queued.state().name())
+                            .put("goalModified", true);
+                } else if (result.executableIntent().isPresent()) {
                     var execution = commands.execute("game-" + requestId, companionId, result.executableIntent().get());
                     reply.put("accepted", execution.accepted()).put("code", execution.code()).put("taskId", execution.taskId());
                     if (!execution.accepted()) reply.put("reply", execution.message());
@@ -287,6 +344,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         CompanionStatus status = convert(protocolView, CompanionStatus.class);
         sessions.registerCompanion(session, status, normalized);
         memories.rememberObservedContainers(status.companionId(), normalized);
+        conversations.deliverPending(status.companionId());
     }
 
     private void sendSubscription(RuntimeSession session) {

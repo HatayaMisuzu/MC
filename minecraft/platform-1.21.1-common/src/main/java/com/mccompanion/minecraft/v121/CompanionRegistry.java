@@ -287,7 +287,8 @@ public final class CompanionRegistry {
                     freeSlots,
                     java.util.Map.copyOf(inventory),
                     body == null ? java.util.List.of() : visibleContainers(body),
-                    behaviorDirector.evidenceSummary(entry.companionId)));
+                    behaviorDirector.evidenceSummary(entry.companionId),
+                    behaviorDirector.behaviorObservation(entry.companionId)));
         }
         return java.util.List.copyOf(snapshots);
     }
@@ -515,7 +516,10 @@ public final class CompanionRegistry {
             String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
             float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
             int freeInventorySlots, java.util.Map<String, Integer> inventory,
-            java.util.List<ContainerSnapshot> visibleContainers, String evidenceSummary) { }
+            java.util.List<ContainerSnapshot> visibleContainers, String evidenceSummary,
+            BehaviorObservation behaviorObservation) { }
+
+    public record BehaviorObservation(String failureCode, String itemId, int requested, int available) { }
 
     public record ContainerSnapshot(String type, String dimension, int x, int y, int z) { }
 

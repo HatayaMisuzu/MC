@@ -19,7 +19,7 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "schema_migration");
+            "memory_fact", "conversation_event", "waiting_question", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -408,11 +408,50 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX agent_plan_revision_lookup_idx ON agent_plan_revision(plan_id, planning_revision)");
+        List<String> companionInteraction = List.of(
+                "ALTER TABLE agent_plan ADD COLUMN interaction_state TEXT NOT NULL DEFAULT 'ACTIVE'",
+                """
+                CREATE TABLE conversation_event (
+                  event_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  plan_id TEXT,
+                  question_id TEXT,
+                  direction TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  content TEXT NOT NULL,
+                  payload_json TEXT NOT NULL,
+                  game_delivered INTEGER NOT NULL DEFAULT 0,
+                  created_at INTEGER NOT NULL,
+                  FOREIGN KEY(plan_id) REFERENCES agent_plan(plan_id) ON DELETE SET NULL
+                )
+                """,
+                "CREATE INDEX conversation_event_companion_idx ON conversation_event(companion_id,created_at)",
+                """
+                CREATE TABLE waiting_question (
+                  question_id TEXT PRIMARY KEY,
+                  plan_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  prompt TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  options_json TEXT NOT NULL,
+                  free_text_allowed INTEGER NOT NULL,
+                  state TEXT NOT NULL,
+                  context_json TEXT NOT NULL,
+                  answer_json TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  expires_at INTEGER,
+                  FOREIGN KEY(plan_id) REFERENCES agent_plan(plan_id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE UNIQUE INDEX waiting_question_one_active_idx ON waiting_question(plan_id) WHERE state='WAITING'",
+                "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
                 new Migration(3, "persist task control epochs", epochTracking),
                 new Migration(4, "durable agent plans, steps, observations, and typed memory", agentKernel),
-                new Migration(5, "persist replan budgets, semantic revisions, and loop fingerprints", replanning));
+                new Migration(5, "persist replan budgets, semantic revisions, and loop fingerprints", replanning),
+                new Migration(6, "persist companion conversation and waiting questions", companionInteraction));
     }
 }

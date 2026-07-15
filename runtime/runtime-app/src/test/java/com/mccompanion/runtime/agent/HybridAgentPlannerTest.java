@@ -48,6 +48,39 @@ class HybridAgentPlannerTest {
         assertEquals(DecisionKind.ASK_CLARIFICATION, missing.decision().kind());
     }
 
+    @Test
+    void replanBypassesFreshCommandFastPathAndRequiresRevisionDecision() {
+        AtomicInteger calls = new AtomicInteger();
+        DecisionProvider provider = request -> {
+            calls.incrementAndGet();
+            assertEquals("CONTAINER_UNREACHABLE",
+                    request.context().activeTask().path("failureCode").asText());
+            return new AgentDecision(DecisionKind.REPLAN, "deliver iron", List.of(), List.of(),
+                    List.of(step("NavigateTo")), "改走另一条路", "container unreachable");
+        };
+        AgentContext blocked = new AgentContext("c1", Json.object(), List.of(),
+                Json.object().put("failureCode", "CONTAINER_UNREACHABLE"), List.of(),
+                capabilities.names(), 3);
+
+        var result = new HybridAgentPlanner(provider).replan("暂停", blocked);
+
+        assertTrue(result.accepted(), result.userMessage());
+        assertEquals(DecisionKind.REPLAN, result.decision().kind());
+        assertEquals("provider_replan", result.source());
+        assertEquals(1, calls.get());
+    }
+
+    @Test
+    void replanRejectsProviderAttemptToStartAnUnrelatedFreshPlan() {
+        DecisionProvider provider = request -> new AgentDecision(DecisionKind.CREATE_PLAN, "other goal",
+                List.of(), List.of(), List.of(step("NavigateTo")), "", "");
+
+        var result = new HybridAgentPlanner(provider).replan("deliver iron", context());
+
+        assertFalse(result.accepted());
+        assertEquals("REPLAN_DECISION_REQUIRED", result.errorCode());
+    }
+
     private AgentContext context() {
         return new AgentContext("c1", Json.object().put("health", 20), List.of(), Json.object(),
                 List.of("基地"), capabilities.names(), 3);

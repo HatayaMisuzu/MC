@@ -18,7 +18,8 @@ import java.util.Set;
 public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
-            "behavior_run", "action_evidence", "agent_plan", "agent_step", "memory_fact", "schema_migration");
+            "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
+            "memory_fact", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -387,10 +388,31 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX memory_fact_lookup_idx ON memory_fact(companion_id, kind, expires_at)");
+        List<String> replanning = List.of(
+                "ALTER TABLE agent_plan ADD COLUMN planning_revision INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE agent_plan ADD COLUMN replan_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE agent_plan ADD COLUMN no_progress_count INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE agent_plan ADD COLUMN plan_fingerprint TEXT NOT NULL DEFAULT ''",
+                """
+                CREATE TABLE agent_plan_revision (
+                  plan_id TEXT NOT NULL,
+                  planning_revision INTEGER NOT NULL,
+                  decision_json TEXT NOT NULL,
+                  trigger_observation_json TEXT NOT NULL,
+                  failure_code TEXT,
+                  fingerprint TEXT NOT NULL,
+                  outcome TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(plan_id, planning_revision),
+                  FOREIGN KEY(plan_id) REFERENCES agent_plan(plan_id) ON DELETE CASCADE
+                )
+                """,
+                "CREATE INDEX agent_plan_revision_lookup_idx ON agent_plan_revision(plan_id, planning_revision)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
                 new Migration(3, "persist task control epochs", epochTracking),
-                new Migration(4, "durable agent plans, steps, observations, and typed memory", agentKernel));
+                new Migration(4, "durable agent plans, steps, observations, and typed memory", agentKernel),
+                new Migration(5, "persist replan budgets, semantic revisions, and loop fingerprints", replanning));
     }
 }

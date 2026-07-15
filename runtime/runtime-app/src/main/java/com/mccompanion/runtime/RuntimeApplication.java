@@ -100,6 +100,7 @@ public final class RuntimeApplication implements AutoCloseable {
         RuntimeHealthServer healthServer = null;
         ScheduledExecutorService maintenance = null;
         RuntimeCli cli = null;
+        AgentKernel kernel = null;
         try {
             database.initialize();
             CompanionRepository companions = new CompanionRepository(database);
@@ -117,7 +118,10 @@ public final class RuntimeApplication implements AutoCloseable {
                     new IdempotencyStore(database),
                     new ProtocolCommandSender(),
                     log);
-            AgentKernel kernel = new AgentKernel(plans, commands, log);
+            provider = createProvider(config, redactor, log);
+            ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
+            CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
+            kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions, capabilityVisibility);
             commands.setTaskLifecycleListener(kernel);
             sessions.setListener(commands);
 
@@ -130,9 +134,6 @@ public final class RuntimeApplication implements AutoCloseable {
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans);
             }
 
-            provider = createProvider(config, redactor, log);
-            ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
-            CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
             webSocket = new RuntimeWebSocketServer(
                     new InetSocketAddress(config.server.bind, config.server.port),
                     pairingToken,
@@ -191,6 +192,7 @@ public final class RuntimeApplication implements AutoCloseable {
             shutdownExecutor(maintenance);
             closeQuietly(webSocket);
             closeQuietly(healthServer);
+            closeQuietly(kernel);
             closeQuietly(sessions);
             closeQuietly(provider);
             closeQuietly(database);
@@ -269,6 +271,7 @@ public final class RuntimeApplication implements AutoCloseable {
         }
         closeQuietly(webSocket);
         closeQuietly(healthServer);
+        closeQuietly(kernel);
         closeQuietly(sessions);
         closeQuietly(provider);
         closeQuietly(database);

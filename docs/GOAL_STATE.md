@@ -40,3 +40,12 @@
 ## 出口门槛
 
 当前不是 `READY_FOR_HUMAN_TEST`。容器闭环、制作、资源/熔炼、重规划、目标修改、隔离实例冒烟、长稳、发布资产与真人测试材料仍未完成。
+
+## Observation → Replan 切片（2026-07-15）
+
+- `agent_plan` 现在持久化语义修订号、模型调用预算、无进展计数与计划指纹；`agent_plan_revision` 保存每次触发 Observation、失败码、决定和结果。
+- `AgentKernel` 将 Fabric 任务的 `FAILED/BLOCKED` 终态连同真实 Observation 转成计划 `BLOCKED`，并在专用可取消执行器中调用 Provider 重规划，不阻塞协议回调线程。
+- 每个计划最多预占 3 次重规划调用；预占在外部调用前原子持久化。相同计划指纹被拒绝为 `REPLAN_LOOP_DETECTED`，旧的未执行步骤会被明确标成 `SUPERSEDED_BY_REPLAN`。
+- Replan 只接受 `REPLAN/ASK_CLARIFICATION/REPORT_BLOCKED/PAUSE/CANCEL`，不能把失败 Observation 偷换成无关的新任务，也不能把失败写成成功。
+- 本切片本地证据：仓储状态机测试、Planner Replan 测试、Kernel→Provider 异步集成测试，以及 `gradlew check buildPlatforms runtimeFabricE2E` 均为 `LOCAL_PASS`。
+- Goal 仍为 `ACTIVE`；下一切片是已知容器取物→返回→交付闭环及不足、不可达、目标修改时重规划，尚未达到 `READY_FOR_HUMAN_TEST`。

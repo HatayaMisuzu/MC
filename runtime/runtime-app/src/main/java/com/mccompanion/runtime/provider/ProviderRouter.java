@@ -27,6 +27,12 @@ public final class ProviderRouter {
         return result;
     }
 
+    public HybridAgentPlanner.PlanningResult replan(String originalRequest, AgentContext context) {
+        HybridAgentPlanner.PlanningResult result = planner.replan(originalRequest, context);
+        if (!result.accepted()) log.warn("Agent replanning stopped safely: code=" + result.errorCode());
+        return result;
+    }
+
     public Resolution resolve(String text) {
         Optional<Intent> rule = rules.parse(text);
         if (rule.isPresent()) {

@@ -59,6 +59,33 @@ public final class HybridAgentPlanner {
         }
     }
 
+    /** Provider-only revision path: observations must not be mistaken for a fresh fast-path command. */
+    public PlanningResult replan(String originalRequest, AgentContext suppliedContext) {
+        final NormalizedInput input;
+        try { input = normalizer.normalize(originalRequest); }
+        catch (IllegalArgumentException invalid) { return PlanningResult.rejected("INVALID_REQUEST", invalid.getMessage()); }
+        if (provider == null) return PlanningResult.rejected("PROVIDER_UNAVAILABLE",
+                "模型尚未配置；任务保持阻塞，未执行替代动作。");
+        AgentContext context = suppliedContext == null
+                ? AgentContext.empty("", capabilities.names()) : suppliedContext;
+        try {
+            AgentDecision decision = provider.decide(new AgentRequest(input, hints.extract(input), context));
+            if (decision.kind() != DecisionKind.REPLAN
+                    && decision.kind() != DecisionKind.ASK_CLARIFICATION
+                    && decision.kind() != DecisionKind.REPORT_BLOCKED
+                    && decision.kind() != DecisionKind.PAUSE
+                    && decision.kind() != DecisionKind.CANCEL) {
+                return PlanningResult.rejected("REPLAN_DECISION_REQUIRED",
+                        "模型未返回可执行的重规划决定；任务保持阻塞。");
+            }
+            DecisionValidator.Validation validation = validator.validate(decision, context);
+            if (!validation.valid()) return PlanningResult.rejected("DECISION_REJECTED", String.join("; ", validation.errors()));
+            return new PlanningResult(decision, Optional.empty(), "provider_replan", null, null);
+        } catch (ProviderException failure) {
+            return PlanningResult.rejected(failure.code(), "模型暂时不可用；任务保持阻塞，可稍后重试或取消。");
+        }
+    }
+
     private static AgentDecision controlDecision(Intent intent) {
         DecisionKind kind = switch (intent.type()) {
             case STOP -> switch (intent.arguments().path("action").asText("cancel")) {

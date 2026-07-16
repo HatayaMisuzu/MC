@@ -14,6 +14,8 @@ import com.mccompanion.runtime.task.TaskEventStore;
 import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.task.TaskState;
 import com.mccompanion.runtime.task.TaskType;
+import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -77,6 +79,8 @@ class RuntimeToolGatewayTest {
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
                         ignored -> List.of("NavigateTo"));
+                gateway.attachTaskGraphRuntime(new TaskGraphRuntime(gateway,
+                        new TaskGraphExecutionRepository(database)));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
                 var graph = Json.parse("""
                         {"version":"mcac-task-graph/1","id":"navigate-after-observe",
@@ -99,20 +103,45 @@ class RuntimeToolGatewayTest {
                 assertFalse(invalid.success());
                 assertEquals("TASK_GRAPH_INVALID", invalid.code());
 
-                var executable = Json.parse("""
-                        {"version":"mcac-task-graph/1","id":"observe-only","permissions":["READ_WORLD"],
-                         "root":{"id":"root","type":"sequence","nodes":[
-                           {"id":"observe","type":"call_tool","tool":"world.observe"},
-                           {"id":"done","type":"return","value":"observed"}
-                         ]}}
-                        """);
                 companions.upsert("c1", "session", "world", "owner", "Misuzu",
                         Json.object().put("health", 20));
-                ToolResult executed = gateway.execute(context, new ToolCall("graph-3", "task_graph.execute",
-                        Json.object().set("graph", executable)));
+                ToolCall executeCall = new ToolCall("graph-3", "task_graph.execute",
+                        Json.object().put("format", "yaml").put("document", """
+                                version: mcac-task-graph/1
+                                id: observe-only
+                                permissions: [READ_WORLD]
+                                root:
+                                  id: root
+                                  type: sequence
+                                  nodes:
+                                    - {id: observe, type: call_tool, tool: world.observe}
+                                    - {id: done, type: return, value: observed}
+                                """));
+                ToolResult accepted = gateway.execute(context, executeCall);
+                assertFalse(accepted.terminal());
+                ToolResult executed = gateway.awaitTerminal(context, executeCall, accepted,
+                        Duration.ofSeconds(2), ignored -> { });
                 assertTrue(executed.success(), executed.observation().toString());
-                assertEquals(1, executed.observation().path("toolCalls").asInt());
                 assertEquals(20, executed.observation().path("outputs").path("observe").path("health").asInt());
+
+                ToolResult unsupported = gateway.execute(context, new ToolCall("graph-4", "task_graph.validate",
+                        Json.object().set("graph", Json.parse("""
+                                {"version":"mcac-task-graph/1","id":"future-node","permissions":[],
+                                 "root":{"id":"condition","type":"if","condition":"${state.ready == true}",
+                                  "then":{"id":"done","type":"return"}}}
+                                """))));
+                assertFalse(unsupported.success());
+                assertTrue(unsupported.observation().path("issues").toString().contains("NODE_NOT_EXECUTABLE"));
+
+                ToolResult missingPermission = gateway.execute(context, new ToolCall("graph-5", "task_graph.validate",
+                        Json.object().set("graph", Json.parse("""
+                                {"version":"mcac-task-graph/1","id":"missing-permission","permissions":[],
+                                 "root":{"id":"observe","type":"call_tool","tool":"world.observe"}}
+                                """))));
+                assertFalse(missingPermission.success());
+                assertTrue(missingPermission.observation().path("issues").toString()
+                        .contains("TOOL_PERMISSION_NOT_DECLARED"));
+                gateway.close();
             }
         }
     }

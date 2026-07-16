@@ -24,7 +24,7 @@ public final class TaskGraphExecutionRepository {
     }
 
     public TaskGraphExecutionRecord create(String executionId, ToolContext context, JsonNode graph,
-                                           TaskGraphLimits limits, JsonNode provenance) throws SQLException {
+                                           TaskGraphLimits limits, JsonNode inputs, JsonNode provenance) throws SQLException {
         String canonical = Json.canonical(graph);
         String hash = Digests.sha256(canonical);
         long now = clock.millis();
@@ -32,8 +32,8 @@ public final class TaskGraphExecutionRepository {
                 INSERT INTO task_graph_execution(execution_id,controller_id,brain_session_id,companion_id,
                 graph_id,graph_version,graph_hash,graph_json,state,current_node_id,completed_nodes_json,
                 tool_results_json,variables_json,checkpoints_json,waiting_question_json,permissions_json,
-                limits_json,provenance_json,revision,result_code,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,'CREATED',?,?)
+                limits_json,provenance_json,inputs_json,evidence_json,revision,result_code,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '[]',0,'CREATED',?,?)
                 """)) {
             statement.setString(1, required(executionId)); statement.setString(2, context.controllerId());
             statement.setString(3, context.brainSessionId()); statement.setString(4, context.companionId());
@@ -44,26 +44,29 @@ public final class TaskGraphExecutionRepository {
             statement.setString(16, Json.write(graph.path("permissions")));
             statement.setString(17, Json.write(limits.toJson()));
             statement.setString(18, Json.write(provenance == null ? Json.object() : provenance));
-            statement.setLong(19, now); statement.setLong(20, now); statement.executeUpdate();
+            statement.setString(19, Json.write(inputs == null ? Json.object() : inputs));
+            statement.setLong(20, now); statement.setLong(21, now); statement.executeUpdate();
         }
         return get(executionId).orElseThrow();
     }
 
     public TaskGraphExecutionRecord save(String executionId, long expectedRevision, String state,
                                          String currentNodeId, JsonNode completedNodes, JsonNode toolResults,
-                                         JsonNode variables, JsonNode checkpoints, JsonNode waitingQuestion,
+                                         JsonNode variables, JsonNode checkpoints, JsonNode evidence,
+                                         JsonNode waitingQuestion,
                                          String resultCode) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 UPDATE task_graph_execution SET state=?,current_node_id=?,completed_nodes_json=?,
                 tool_results_json=?,variables_json=?,checkpoints_json=?,waiting_question_json=?,
-                result_code=?,revision=revision+1,updated_at=? WHERE execution_id=? AND revision=?
+                evidence_json=?,result_code=?,revision=revision+1,updated_at=? WHERE execution_id=? AND revision=?
                 """)) {
             statement.setString(1, required(state)); statement.setString(2, blankToNull(currentNodeId));
             statement.setString(3, Json.write(completedNodes)); statement.setString(4, Json.write(toolResults));
             statement.setString(5, Json.write(variables)); statement.setString(6, Json.write(checkpoints));
             statement.setString(7, waitingQuestion == null || waitingQuestion.isNull() ? null : Json.write(waitingQuestion));
-            statement.setString(8, required(resultCode)); statement.setLong(9, clock.millis());
-            statement.setString(10, required(executionId)); statement.setLong(11, expectedRevision);
+            statement.setString(8, Json.write(evidence)); statement.setString(9, required(resultCode));
+            statement.setLong(10, clock.millis());
+            statement.setString(11, required(executionId)); statement.setLong(12, expectedRevision);
             if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_TASK_GRAPH_REVISION");
         }
         return get(executionId).orElseThrow();
@@ -93,8 +96,9 @@ public final class TaskGraphExecutionRepository {
                         row.getString("graph_version"), row.getString("graph_hash"),
                         Json.parse(row.getString("graph_json")), row.getString("state"),
                         row.getString("current_node_id"), Json.parse(row.getString("completed_nodes_json")),
-                        Json.parse(row.getString("tool_results_json")), Json.parse(row.getString("variables_json")),
-                        Json.parse(row.getString("checkpoints_json")),
+                        Json.parse(row.getString("tool_results_json")), Json.parse(row.getString("inputs_json")),
+                        Json.parse(row.getString("variables_json")), Json.parse(row.getString("checkpoints_json")),
+                        Json.parse(row.getString("evidence_json")),
                         waiting == null ? Json.MAPPER.nullNode() : Json.parse(waiting),
                         Json.parse(row.getString("permissions_json")), Json.parse(row.getString("limits_json")),
                         Json.parse(row.getString("provenance_json")), row.getLong("revision"),

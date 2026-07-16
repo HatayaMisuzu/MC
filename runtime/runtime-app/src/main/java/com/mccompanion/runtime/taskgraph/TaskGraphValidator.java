@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -24,6 +25,19 @@ public final class TaskGraphValidator {
             "registry_item", "registry_block", "registry_entity", "position", "json");
 
     public TaskGraphValidationResult validate(JsonNode graph, Set<String> availableTools) {
+        Map<String, String> definitions = availableTools == null ? Map.of()
+                : availableTools.stream().collect(java.util.stream.Collectors.toMap(value -> value, value -> ""));
+        return validate(graph, definitions, NODE_TYPES);
+    }
+
+    public TaskGraphValidationResult validateExecutable(JsonNode graph, Map<String, String> availableTools,
+                                                        Set<String> executableNodeTypes) {
+        return validate(graph, availableTools == null ? Map.of() : Map.copyOf(availableTools),
+                executableNodeTypes == null ? Set.of() : Set.copyOf(executableNodeTypes));
+    }
+
+    private TaskGraphValidationResult validate(JsonNode graph, Map<String, String> availableTools,
+                                               Set<String> executableNodeTypes) {
         List<TaskGraphValidationIssue> issues = new ArrayList<>();
         if (graph == null || !graph.isObject()) {
             issues.add(issue("$", "INVALID_TYPE", "task graph must be an object"));
@@ -43,8 +57,7 @@ public final class TaskGraphValidator {
         validateInputs(graph.path("inputs"), issues);
         Set<String> permissions = validatePermissions(graph.path("permissions"), issues);
         TaskGraphLimits limits = TaskGraphLimits.parse(graph.path("limits"), issues);
-        State state = new State(limits, availableTools == null ? Set.of() : Set.copyOf(availableTools),
-                permissions, issues);
+        State state = new State(limits, availableTools, executableNodeTypes, permissions, issues);
         validateNode(graph.path("root"), "$.root", 1, state);
         if (state.nodeCount > limits.maxNodes()) {
             issues.add(issue("$.root", "NODE_LIMIT_EXCEEDED", "graph exceeds maxNodes"));
@@ -75,6 +88,10 @@ public final class TaskGraphValidator {
             state.issues.add(issue(path + ".type", "UNKNOWN_NODE_TYPE", "unsupported node type"));
             return;
         }
+        if (!state.executableNodeTypes.contains(type)) {
+            state.issues.add(issue(path + ".type", "NODE_NOT_EXECUTABLE",
+                    "node type is valid in the DSL but unavailable in this Runtime"));
+        }
         switch (type) {
             case "sequence", "fallback" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "nodes"), state.issues);
@@ -90,14 +107,22 @@ public final class TaskGraphValidator {
                 state.toolCalls++;
                 String tool = node.path("tool").asText("");
                 if (!TOOL.matcher(tool).matches()) state.issues.add(issue(path + ".tool", "INVALID_TOOL", "tool name is invalid"));
-                else if (!state.availableTools.isEmpty() && !state.availableTools.contains(tool)) {
+                else if (!state.availableTools.isEmpty() && !state.availableTools.containsKey(tool)) {
                     state.issues.add(issue(path + ".tool", "TOOL_UNAVAILABLE", "tool is not exposed in this context"));
                 }
                 if (node.has("arguments") && !node.path("arguments").isObject()) {
                     state.issues.add(issue(path + ".arguments", "INVALID_TYPE", "arguments must be an object"));
                 }
                 String permission = node.path("permission").asText("");
-                if (!permission.isBlank() && !state.permissions.contains(permission)) {
+                String requiredPermission = state.availableTools.getOrDefault(tool, "");
+                if (!requiredPermission.isBlank() && !state.permissions.contains(requiredPermission)) {
+                    state.issues.add(issue(path + ".tool", "TOOL_PERMISSION_NOT_DECLARED",
+                            "graph permissions do not include Tool permission " + requiredPermission));
+                }
+                if (!permission.isBlank() && !permission.equals(requiredPermission)) {
+                    state.issues.add(issue(path + ".permission", "TOOL_PERMISSION_MISMATCH",
+                            "node permission must match the Tool definition"));
+                } else if (!permission.isBlank() && !state.permissions.contains(permission)) {
                     state.issues.add(issue(path + ".permission", "PERMISSION_NOT_DECLARED",
                             "node permission is absent from graph permissions"));
                 }
@@ -308,7 +333,8 @@ public final class TaskGraphValidator {
 
     private static final class State {
         private final TaskGraphLimits limits;
-        private final Set<String> availableTools;
+        private final Map<String, String> availableTools;
+        private final Set<String> executableNodeTypes;
         private final Set<String> permissions;
         private final List<TaskGraphValidationIssue> issues;
         private final Set<String> nodeIds = new HashSet<>();
@@ -316,10 +342,12 @@ public final class TaskGraphValidator {
         private int toolCalls;
         private int maxDepth;
 
-        private State(TaskGraphLimits limits, Set<String> availableTools, Set<String> permissions,
+        private State(TaskGraphLimits limits, Map<String, String> availableTools,
+                      Set<String> executableNodeTypes, Set<String> permissions,
                       List<TaskGraphValidationIssue> issues) {
             this.limits = limits;
             this.availableTools = availableTools;
+            this.executableNodeTypes = executableNodeTypes;
             this.permissions = permissions;
             this.issues = issues;
         }

@@ -66,16 +66,15 @@ $currentDocs = @(
     'docs/RC_COMPLETION_MATRIX.md',
     'docs/EXTERNAL_BRAIN_STATE.md'
 )
-$forbiddenLabels = @(
-    'READY_FOR_HUMAN_PRODUCT_TEST',
-    'READY_FOR_HUMAN_PRODUCT_TEST_EXCEPT_LIVE_PROVIDER',
-    'READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST`'
+$forbiddenPatterns = @(
+    'READY_FOR_HUMAN_PRODUCT_TEST(?:_EXCEPT_LIVE_PROVIDER)?',
+    'READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST(?!_RC)'
 )
 foreach ($relative in $currentDocs) {
     $text = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root $relative)
-    foreach ($label in $forbiddenLabels) {
-        if ($text.Contains($label)) {
-            $errors.Add("$relative contains obsolete readiness label: $label")
+    foreach ($pattern in $forbiddenPatterns) {
+        if ([regex]::IsMatch($text, $pattern)) {
+            $errors.Add("$relative contains obsolete readiness label matching: $pattern")
         }
     }
 }

@@ -76,8 +76,9 @@ class TaskGraphExecutorTest {
                 new ToolContext("hermes", "brain-1", "companion-1"), graph);
 
         assertFalse(result.success());
-        assertEquals("NODE_TYPE_NOT_EXECUTABLE", result.code());
+        assertEquals("TASK_GRAPH_INVALID", result.code());
         assertEquals(0, result.toolCalls());
+        assertTrue(result.evidence().toString().contains("NODE_NOT_EXECUTABLE"));
     }
 
     private static final class FakeGateway implements ToolGateway {

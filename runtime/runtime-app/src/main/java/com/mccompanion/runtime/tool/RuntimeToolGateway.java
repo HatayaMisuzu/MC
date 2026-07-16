@@ -13,6 +13,8 @@ import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.task.TaskState;
 import com.mccompanion.runtime.taskgraph.TaskGraphValidator;
 import com.mccompanion.runtime.taskgraph.TaskGraphExecutor;
+import com.mccompanion.runtime.taskgraph.TaskGraphCodec;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -21,12 +23,13 @@ import java.util.Set;
 import java.util.function.Function;
 
 /** Production gateway: exposes only bounded MCAC operations, never shell/files/arbitrary URLs. */
-public final class RuntimeToolGateway implements ToolGateway {
+public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private final CommandService commands;
     private final CompanionRepository companions;
     private final TaskRepository tasks;
     private final Function<String, List<String>> availableCapabilities;
     private final TaskGraphValidator taskGraphs = new TaskGraphValidator();
+    private volatile TaskGraphRuntime taskGraphRuntime;
     private final java.util.concurrent.ConcurrentMap<String, String> activeTasks =
             new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -43,8 +46,16 @@ public final class RuntimeToolGateway implements ToolGateway {
         this.availableCapabilities = java.util.Objects.requireNonNull(availableCapabilities, "availableCapabilities");
     }
 
+    public void attachTaskGraphRuntime(TaskGraphRuntime runtime) {
+        if (taskGraphRuntime != null) throw new IllegalStateException("Task Graph Runtime is already attached");
+        taskGraphRuntime = java.util.Objects.requireNonNull(runtime, "runtime");
+    }
+
     @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
                                               Duration timeout, java.util.function.Consumer<ToolResult> progress) {
+        if (call.name().equals("task_graph.execute") && taskGraphRuntime != null && !accepted.terminal()) {
+            return taskGraphRuntime.await(context, call, timeout, progress);
+        }
         if (accepted.terminal() || !accepted.success() || tasks == null) return accepted;
         String taskId = accepted.observation().path("taskId").asText("");
         if (taskId.isBlank()) return ToolResult.rejected(call, "TOOL_BINDING_MISSING",
@@ -145,8 +156,18 @@ public final class RuntimeToolGateway implements ToolGateway {
                 "Statically validate a bounded declarative task graph without executing it",
                 taskGraphSchema(), "LOW", "VALIDATE_TASK_GRAPH", true));
         values.add(definition("task_graph.execute",
-                "Deterministically execute the currently supported nodes of a validated task graph",
+                "Start a persistent asynchronous deterministic task graph execution",
                 taskGraphSchema(), "MEDIUM", "EXECUTE_TASK_GRAPH", false));
+        if (taskGraphRuntime != null) {
+            values.add(definition("task_graph.inspect", "Inspect a session-owned task graph execution",
+                    executionIdSchema(), "LOW", "CONTROL_TASK", true));
+            values.add(definition("task_graph.pause", "Pause a session-owned task graph execution",
+                    executionIdSchema(), "LOW", "CONTROL_TASK", false));
+            values.add(definition("task_graph.resume", "Resume a safely paused task graph execution",
+                    executionIdSchema(), "LOW", "CONTROL_TASK", false));
+            values.add(definition("task_graph.cancel", "Cancel a session-owned task graph execution",
+                    executionIdSchema(), "LOW", "CONTROL_TASK", false));
+        }
         if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
@@ -177,22 +198,39 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (!exposed) return ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Tool is not AVAILABLE_NOW");
         try {
             if (call.name().equals("task_graph.validate")) {
-                rejectUnexpected(call.arguments(), Set.of("graph"));
-                JsonNode graph = call.arguments().path("graph");
-                if (!graph.isObject()) throw new IllegalArgumentException("graph must be an object");
-                Set<String> tools = definitions(context).stream().map(ToolDefinition::name)
-                        .filter(name -> !name.equals("task_graph.validate")).collect(java.util.stream.Collectors.toSet());
-                var validation = taskGraphs.validate(graph, tools);
+                JsonNode graph = parsedTaskGraph(call.arguments());
+                var tools = definitions(context).stream()
+                        .filter(value -> !value.name().startsWith("task_graph."))
+                        .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
+                var validation = taskGraphs.validateExecutable(graph, tools,
+                        TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
                 return new ToolResult(call.callId(), call.name(), validation.valid(),
                         validation.valid() ? "OK" : "TASK_GRAPH_INVALID", validation.toJson(), true);
             }
             if (call.name().equals("task_graph.execute")) {
-                rejectUnexpected(call.arguments(), Set.of("graph"));
-                JsonNode graph = call.arguments().path("graph");
-                if (!graph.isObject()) throw new IllegalArgumentException("graph must be an object");
-                var execution = new TaskGraphExecutor(this).execute(call.callId(), context, graph);
-                return new ToolResult(call.callId(), call.name(), execution.success(), execution.code(),
-                        execution.toJson(), true);
+                JsonNode graph = parsedTaskGraph(call.arguments());
+                if (taskGraphRuntime == null) {
+                    return ToolResult.rejected(call, "TASK_GRAPH_RUNTIME_UNAVAILABLE",
+                            "persistent Task Graph Runtime is unavailable");
+                }
+                return taskGraphRuntime.start(context, call, graph, call.arguments().path("inputs"),
+                        call.arguments().path("provenance"));
+            }
+            if (call.name().startsWith("task_graph.") && !call.name().equals("task_graph.validate")) {
+                if (taskGraphRuntime == null) {
+                    return ToolResult.rejected(call, "TASK_GRAPH_RUNTIME_UNAVAILABLE",
+                            "persistent Task Graph Runtime is unavailable");
+                }
+                rejectUnexpected(call.arguments(), Set.of("executionId"));
+                String executionId = call.arguments().path("executionId").asText("");
+                if (executionId.isBlank()) throw new IllegalArgumentException("executionId is required");
+                return switch (call.name()) {
+                    case "task_graph.inspect" -> taskGraphRuntime.inspect(context, call, executionId);
+                    case "task_graph.pause" -> taskGraphRuntime.pause(context, call, executionId);
+                    case "task_graph.resume" -> taskGraphRuntime.resume(context, call, executionId);
+                    case "task_graph.cancel" -> taskGraphRuntime.cancel(context, executionId, "external cancel");
+                    default -> throw new IllegalArgumentException("Unsupported Task Graph control");
+                };
             }
             if (call.name().equals("world.observe")) {
                 rejectUnexpected(call.arguments(), Set.of());
@@ -219,6 +257,7 @@ public final class RuntimeToolGateway implements ToolGateway {
     }
 
     @Override public void cancel(ToolContext context, String callId, String reason) {
+        if (taskGraphRuntime != null) taskGraphRuntime.cancel(context, callId, reason);
         if (activeTasks.containsKey(key(context, callId))) {
             commands.execute("brain-cancel-" + context.brainSessionId() + '-' + callId,
                     context.companionId(), stop("cancel"));
@@ -383,7 +422,12 @@ public final class RuntimeToolGateway implements ToolGateway {
         } else if (name.equals("item.smelt")) {
             root.putArray("required").add("item").add("quantity").add("station");
         } else if (name.equals("task_graph.validate") || name.equals("task_graph.execute")) {
-            root.putArray("required").add("graph");
+            var alternatives = root.putArray("oneOf");
+            alternatives.addObject().putArray("required").add("graph");
+            alternatives.addObject().putArray("required").add("document").add("format");
+        } else if (name.equals("task_graph.inspect") || name.equals("task_graph.pause")
+                || name.equals("task_graph.resume") || name.equals("task_graph.cancel")) {
+            root.putArray("required").add("executionId");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
                 Duration.ofSeconds(30), idempotent);
@@ -399,7 +443,44 @@ public final class RuntimeToolGateway implements ToolGateway {
     private static ObjectNode taskGraphSchema() {
         ObjectNode properties = Json.object();
         properties.putObject("graph").put("type", "object");
+        properties.putObject("document").put("type", "string").put("maxLength", 2 * 1024 * 1024);
+        properties.putObject("format").put("type", "string").putArray("enum").add("json").add("yaml");
+        properties.putObject("inputs").put("type", "object");
+        properties.putObject("provenance").put("type", "object");
         return properties;
+    }
+
+    private static JsonNode parsedTaskGraph(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("graph", "document", "format", "inputs", "provenance"));
+        boolean hasGraph = arguments.has("graph");
+        boolean hasDocument = arguments.has("document") || arguments.has("format");
+        if (hasGraph == hasDocument) {
+            throw new IllegalArgumentException("provide exactly one of graph or document+format");
+        }
+        if (hasGraph) {
+            JsonNode graph = arguments.path("graph");
+            if (!graph.isObject()) throw new IllegalArgumentException("graph must be an object");
+            return graph;
+        }
+        if (!arguments.path("document").isTextual() || !arguments.path("format").isTextual()) {
+            throw new IllegalArgumentException("document and format must be strings");
+        }
+        TaskGraphCodec.Format format = switch (arguments.path("format").asText()) {
+            case "json" -> TaskGraphCodec.Format.JSON;
+            case "yaml" -> TaskGraphCodec.Format.YAML;
+            default -> throw new IllegalArgumentException("format must be json or yaml");
+        };
+        return TaskGraphCodec.parse(arguments.path("document").asText(), format);
+    }
+
+    private static ObjectNode executionIdSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("executionId").put("type", "string").put("minLength", 1).put("maxLength", 256);
+        return properties;
+    }
+
+    @Override public void close() {
+        if (taskGraphRuntime != null) taskGraphRuntime.close();
     }
 
     private static JsonNode validatedScan(JsonNode arguments) {

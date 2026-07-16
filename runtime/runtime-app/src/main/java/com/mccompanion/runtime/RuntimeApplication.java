@@ -41,6 +41,7 @@ import com.mccompanion.runtime.tool.CompositeToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
 import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -180,6 +181,7 @@ public final class RuntimeApplication implements AutoCloseable {
             toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools,
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains)));
+            minecraftTools.attachTaskGraphRuntime(new TaskGraphRuntime(toolGateway, taskGraphs));
             externalBrain = brainOverride == null
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,

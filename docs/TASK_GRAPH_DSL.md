@@ -99,11 +99,20 @@ never become an unbounded loop.
 ## Current implementation state
 
 The bounded codec, schema validator, safe expression parser and `task_graph.validate` Tool are locally
-verified. `task_graph.execute` now deterministically executes the first bounded core:
+verified. Both JSON objects and bounded JSON/YAML `document+format` inputs use the production Tool
+Gateway. Validation distinguishes DSL-valid nodes from nodes executable by the current Runtime and
+binds each `call_tool` to the current `ToolDefinition.permission`.
+
+`task_graph.execute` creates a persistent asynchronous execution. Session-owned
+`task_graph.inspect`, `task_graph.pause`, `task_graph.resume`, and `task_graph.cancel` expose control
+without adding planning behavior. The first deterministic core executes:
 `sequence`, `call_tool`, `retry`, `fallback`, `wait`, `checkpoint`, `emit_progress`, `return`, and
-`fail`, with stable Tool call IDs, a Tool-call budget, bounded backoff/wait, evidence, and explicit
-failure for accepted-but-not-yet-executable node types. Conditions, loops, parallel execution,
-ASK_USER/memory nodes and safe resume remain tracked separately in `docs/RC_COMPLETION_MATRIX.md`.
-Schema migration 11 now persists the complete execution envelope and startup moves unfinished
-records to `RECONCILIATION_REQUIRED`; the executor is not yet wired to persist every node boundary,
-so this is recovery groundwork rather than a restart-resume claim.
+`fail`, with stable Tool call IDs, Tool/wall-time budgets, bounded backoff/wait, uniformly rotated
+evidence, inputs, variables initialized from inputs, and exact `${inputs.*}` /
+`${outputs.<node>.*}` references in Tool arguments and return values.
+
+Migrations 11–12 persist every supported node/Tool/checkpoint boundary. A safe pause resumes using
+completed node IDs and immutable Tool results, so completed effects are not repeated. Runtime
+startup still moves crash-left work to `RECONCILIATION_REQUIRED`; automatic reconciliation of an
+unconfirmed in-flight Tool is not yet claimed. Conditions, loops, parallel execution and
+ASK_USER/memory nodes remain tracked separately in `docs/RC_COMPLETION_MATRIX.md`.

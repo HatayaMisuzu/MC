@@ -54,6 +54,9 @@ release/install verification remain incomplete.
   delete memory. The legacy preference Tool is a compatibility wrapper over the same quarantine.
 - Body observations remain the trusted source for verified container World memory;
   user edits are stored with `USER` provenance and take precedence over inference.
+- Read-only primitive Tools now split the connected-body status into bounded world, inventory,
+  safety, task, and capability observations. Missing status is rejected rather than synthesized,
+  and `safety.inspect` explicitly excludes hostile threat scanning from its current result.
 - Added authenticated loopback memory list/search/export, user correction, delete, and
   per-category clear operations. Secret-shaped keys/values are rejected from Brain suggestions.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,

@@ -37,6 +37,7 @@ import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
 import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.tool.RuntimeToolGateway;
+import com.mccompanion.runtime.tool.ObservationToolGateway;
 import com.mccompanion.runtime.tool.CompositeToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.workspace.AgentWorkspace;
@@ -168,7 +169,8 @@ public final class RuntimeApplication implements AutoCloseable {
                     log);
             provider = createProvider(config, redactor, log);
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
-            CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
+            CapabilityRegistry capabilityRegistry = CapabilityRegistry.standard();
+            CapabilityVisibility capabilityVisibility = new CapabilityVisibility(capabilityRegistry);
             SessionRegistry activeSessionRegistry = sessions;
             RuntimeToolGateway minecraftTools = new RuntimeToolGateway(commands, companions, tasks, companionId -> {
                 try {
@@ -195,6 +197,9 @@ public final class RuntimeApplication implements AutoCloseable {
                         return current == null ? java.util.List.of() : current.definitions(context);
                     });
             toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools,
+                    new ObservationToolGateway(companions, tasks, capabilityRegistry,
+                            companionId -> activeSessionRegistry.forCompanion(companionId)
+                                    .map(value -> value.handshake()).orElse(null)),
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains), skillTools));
             toolGatewayReference.set(toolGateway);

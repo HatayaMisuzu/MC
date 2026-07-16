@@ -80,9 +80,11 @@ public final class MemoryToolGateway implements ToolGateway {
     }
 
     private ToolResult search(ToolContext context, ToolCall call) throws java.sql.SQLException {
-        rejectUnexpected(call.arguments(), Set.of("query", "limit"));
+        rejectUnexpected(call.arguments(), Set.of("kind", "query", "limit"));
         String query = text(call.arguments(), "query", 1, 128);
-        return ok(call, Json.MAPPER.valueToTree(memories.search(context.companionId(), query,
+        MemoryKind filter = call.arguments().has("kind")
+                ? kind(call.arguments().path("kind").asText("")) : null;
+        return ok(call, Json.MAPPER.valueToTree(memories.search(context.companionId(), filter, query,
                 boundedLimit(call.arguments().path("limit").asInt(25)))));
     }
 
@@ -130,7 +132,10 @@ public final class MemoryToolGateway implements ToolGateway {
         return p;
     }
     private static ObjectNode searchSchema() {
-        ObjectNode p = Json.object(); p.putObject("query").put("type", "string").put("maxLength", 128);
+        ObjectNode p = Json.object();
+        p.putObject("kind").put("type", "string").putArray("enum")
+                .add("WORKING").add("EPISODIC").add("WORLD").add("PREFERENCE");
+        p.putObject("query").put("type", "string").put("maxLength", 128);
         p.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 100); return p;
     }
     private static ObjectNode preferenceSchema() {

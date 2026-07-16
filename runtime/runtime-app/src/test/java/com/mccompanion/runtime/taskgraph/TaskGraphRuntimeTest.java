@@ -327,6 +327,44 @@ class TaskGraphRuntimeTest {
         }
     }
 
+    @Test
+    void readMemoryUsesPermissionBoundGenericSearchTool() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("memory-node.db"))) {
+            database.initialize();
+            var memories = new com.mccompanion.runtime.memory.MemoryRepository(database);
+            memories.remember("companion-1", com.mccompanion.runtime.memory.MemoryKind.WORLD, "ore:iron",
+                    Json.object().put("dimension", "minecraft:overworld"), true, 1.0, null,
+                    "BODY_OBSERVATION");
+            memories.remember("companion-1", com.mccompanion.runtime.memory.MemoryKind.PREFERENCE, "ore:avoid",
+                    Json.object().put("reason", "owner preference"), false, 0.5, Duration.ofDays(1),
+                    "EXTERNAL_BRAIN_SUGGESTION");
+            ToolGateway memory = new com.mccompanion.runtime.memory.MemoryToolGateway(memories);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(memory,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall execute = new ToolCall("execution-10", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"read-world-memory",
+                         "permissions":["MEMORY"],
+                         "root":{"id":"memory","type":"read_memory","kind":"WORLD","query":"ore"}}
+                        """);
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(1, terminal.observation().path("outputs").path("memory").size());
+                assertEquals("WORLD",
+                        terminal.observation().path("outputs").path("memory").path(0).path("kind").asText());
+
+                ToolCall denied = new ToolCall("execution-11", "task_graph.execute", Json.object());
+                var missingPermission = (com.fasterxml.jackson.databind.node.ObjectNode) graph.deepCopy();
+                missingPermission.set("permissions", Json.MAPPER.createArrayNode());
+                ToolResult rejected = runtime.start(context, denied, missingPermission, Json.object(), Json.object());
+                assertFalse(rejected.success());
+                assertTrue(rejected.observation().toString().contains("TOOL_PERMISSION_NOT_DECLARED"));
+            }
+        }
+    }
+
     private static void waitForState(TaskGraphRuntime runtime, ToolContext context, String executionId,
                                      String expected) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();

@@ -120,5 +120,7 @@ Tool results, so completed effects are not repeated even when suspension occurs 
 Runtime startup still moves crash-left work to `RECONCILIATION_REQUIRED`; automatic reconciliation
 of an unconfirmed in-flight Tool is not yet claimed. A Tool transport/worker failure with unknown
 effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or reported
-as a verified failure. ASK_USER/memory nodes remain tracked separately in
-`docs/RC_COMPLETION_MATRIX.md`.
+as a verified failure. `read_memory` is implemented as a permission-bound convenience node over
+the generic `memory.search` Tool; it requires `MEMORY`, filters by the declared memory kind, and
+retains provenance/verification metadata in its observation. `suggest_memory` and ASK_USER remain
+tracked separately in `docs/RC_COMPLETION_MATRIX.md`.

@@ -165,7 +165,8 @@ public final class TaskGraphValidator {
             case "read_memory" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "kind", "query"), state.issues);
                 enumText(node, "kind", path, Set.of("WORKING", "EPISODIC", "WORLD", "PREFERENCE"), state.issues);
-                boundedText(node, "query", path, 1, 1_024, state.issues);
+                boundedText(node, "query", path, 1, 128, state.issues);
+                requireBackingTool(state, path, "memory.search");
             }
             case "suggest_memory" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "kind", "content"), state.issues);
@@ -317,6 +318,19 @@ public final class TaskGraphValidator {
                     || value.path(index).asText().length() > 256) {
                 issues.add(issue(path + "[" + index + "]", "INVALID_TEXT", "option must contain 1..256 characters"));
             }
+        }
+    }
+
+    private static void requireBackingTool(State state, String path, String tool) {
+        if (!state.availableTools.containsKey(tool)) {
+            state.issues.add(issue(path + ".type", "TOOL_UNAVAILABLE",
+                    "node requires backing Tool " + tool));
+            return;
+        }
+        String permission = state.availableTools.get(tool);
+        if (!permission.isBlank() && !state.permissions.contains(permission)) {
+            state.issues.add(issue(path + ".type", "TOOL_PERMISSION_NOT_DECLARED",
+                    "graph permissions do not include backing Tool permission " + permission));
         }
     }
 

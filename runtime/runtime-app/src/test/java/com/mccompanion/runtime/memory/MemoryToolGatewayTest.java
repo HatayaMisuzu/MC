@@ -39,6 +39,14 @@ class MemoryToolGatewayTest {
             assertEquals("EXTERNAL_BRAIN_SUGGESTION", suggestion.observation().path("source").asText());
             assertEquals(MemoryKind.PREFERENCE, repository.search("c1", "concise", 10).getFirst().kind());
 
+            repository.remember("c1", MemoryKind.WORLD, "ore:iron",
+                    Json.object().put("dimension", "minecraft:overworld"), true, 1.0, null,
+                    "BODY_OBSERVATION");
+            var filtered = gateway.execute(context, new ToolCall("s1", "memory.search",
+                    Json.object().put("kind", "PREFERENCE").put("query", "ore").put("limit", 25)));
+            assertTrue(filtered.success());
+            assertTrue(filtered.observation().isEmpty(), filtered.observation().toString());
+
             assertTrue(gateway.execute(context, new ToolCall("w1", "memory.write_world", Json.object())).code()
                     .equals("TOOL_UNAVAILABLE"));
         }

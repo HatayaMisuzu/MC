@@ -30,7 +30,7 @@ import java.util.function.Consumer;
 public final class TaskGraphExecutor {
     public static final Set<String> EXECUTABLE_NODE_TYPES = Set.of("sequence", "call_tool", "if", "switch",
             "repeat", "while", "retry", "fallback", "parallel", "wait", "checkpoint", "emit_progress",
-            "return", "fail");
+            "read_memory", "return", "fail");
     private final ToolGateway tools;
     private final TaskGraphValidator validator;
 
@@ -105,6 +105,7 @@ public final class TaskGraphExecutor {
                 case "repeat" -> repeatNode(node, path, state, scope);
                 case "while" -> whileNode(node, path, state, scope);
                 case "parallel" -> parallelNode(node, path, state, scope);
+                case "read_memory" -> readMemory(node, path, state, nodeKey);
                 case "wait" -> waitNode(node, state);
                 case "checkpoint" -> event(nodeId, "CHECKPOINT", node.path("label"), state);
                 case "emit_progress" -> event(nodeId, "PROGRESS", node.path("message"), state);
@@ -320,6 +321,15 @@ public final class TaskGraphExecutor {
         Outcome stopped = state.controlOutcome();
         if (stopped != null) return stopped;
         return toolOutcome(nodeId, terminal, state);
+    }
+
+    private Outcome readMemory(JsonNode node, String path, State state, String nodeKey) {
+        ObjectNode call = Json.object().put("id", node.path("id").asText())
+                .put("type", "call_tool").put("tool", "memory.search")
+                .put("permission", "MEMORY");
+        call.set("arguments", Json.object().put("kind", node.path("kind").asText())
+                .put("query", node.path("query").asText()).put("limit", 25));
+        return callTool(call, path, state, nodeKey);
     }
 
     private static Outcome toolOutcome(String nodeId, ToolResult result, State state) {

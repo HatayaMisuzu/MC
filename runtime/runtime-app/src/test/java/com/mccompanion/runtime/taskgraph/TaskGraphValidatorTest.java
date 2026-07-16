@@ -19,7 +19,7 @@ class TaskGraphValidatorTest {
                 inputs:
                   target:
                     type: registry_block
-                permissions: [READ_WORLD, MOVE]
+                permissions: [READ_WORLD, MOVE, MEMORY]
                 limits:
                   maxNodes: 64
                   maxDepth: 12
@@ -72,7 +72,7 @@ class TaskGraphValidatorTest {
                     - {id: done, type: return, value: ok}
                 """, TaskGraphCodec.Format.YAML);
 
-        TaskGraphValidationResult result = validator.validate(graph, Set.of("world.observe"));
+        TaskGraphValidationResult result = validator.validate(graph, Set.of("world.observe", "memory.search"));
 
         assertTrue(result.valid(), result.issues().toString());
         assertEquals("generic-composition", result.graphId());

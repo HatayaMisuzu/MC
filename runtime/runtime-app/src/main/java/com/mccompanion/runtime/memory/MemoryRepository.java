@@ -62,9 +62,14 @@ public final class MemoryRepository {
     }
 
     public List<MemoryFact> search(String companionId, String text, int limit) throws SQLException {
+        return search(companionId, null, text, limit);
+    }
+
+    public List<MemoryFact> search(String companionId, MemoryKind filter, String text, int limit) throws SQLException {
         String query = required(text).toLowerCase(java.util.Locale.ROOT);
         List<MemoryFact> values = new ArrayList<>();
         for (MemoryKind kind : MemoryKind.values()) {
+            if (filter != null && kind != filter) continue;
             for (MemoryFact fact : relevant(companionId, kind, 100)) {
                 if (fact.key().toLowerCase(java.util.Locale.ROOT).contains(query)
                         || Json.write(fact.value()).toLowerCase(java.util.Locale.ROOT).contains(query)) values.add(fact);

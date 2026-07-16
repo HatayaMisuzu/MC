@@ -10,9 +10,10 @@ import java.util.List;
 /** Bounded execution limits. A graph may lower defaults, but never exceed hard product limits. */
 public record TaskGraphLimits(int maxNodes, int maxDepth, int maxLoopIterations, int maxRetriesPerNode,
                               int maxParallelNodes, int maxToolCalls, int maxWallTimeSeconds,
-                              int maxSerializedStateBytes, int maxEvidenceEntries) {
+                              int maxSerializedStateBytes, int maxEvidenceEntries, int maxEvidenceBytes) {
     public static final TaskGraphLimits DEFAULTS =
-            new TaskGraphLimits(256, 16, 64, 5, 4, 128, 1_800, 2 * 1024 * 1024, 1_024);
+            new TaskGraphLimits(256, 16, 64, 5, 4, 128, 1_800,
+                    2 * 1024 * 1024, 1_024, 512 * 1024);
     public static final TaskGraphLimits HARD_LIMITS = DEFAULTS;
 
     public static TaskGraphLimits parse(JsonNode value, List<TaskGraphValidationIssue> issues) {
@@ -23,7 +24,7 @@ public record TaskGraphLimits(int maxNodes, int maxDepth, int maxLoopIterations,
         }
         List<String> allowed = List.of("maxNodes", "maxDepth", "maxLoopIterations", "maxRetriesPerNode",
                 "maxParallelNodes", "maxToolCalls", "maxWallTimeSeconds", "maxSerializedStateBytes",
-                "maxEvidenceEntries");
+                "maxEvidenceEntries", "maxEvidenceBytes");
         value.fieldNames().forEachRemaining(name -> {
             if (!allowed.contains(name)) {
                 issues.add(new TaskGraphValidationIssue("$.limits." + name, "UNKNOWN_FIELD",
@@ -45,10 +46,17 @@ public record TaskGraphLimits(int maxNodes, int maxDepth, int maxLoopIterations,
                 bounded(value, "maxSerializedStateBytes", DEFAULTS.maxSerializedStateBytes,
                         HARD_LIMITS.maxSerializedStateBytes, issues),
                 bounded(value, "maxEvidenceEntries", DEFAULTS.maxEvidenceEntries,
-                        HARD_LIMITS.maxEvidenceEntries, issues));
+                        HARD_LIMITS.maxEvidenceEntries, issues),
+                bounded(value, "maxEvidenceBytes", DEFAULTS.maxEvidenceBytes,
+                        1_024, HARD_LIMITS.maxEvidenceBytes, issues));
     }
 
     private static int bounded(JsonNode value, String name, int fallback, int maximum,
+                               List<TaskGraphValidationIssue> issues) {
+        return bounded(value, name, fallback, 1, maximum, issues);
+    }
+
+    private static int bounded(JsonNode value, String name, int fallback, int minimum, int maximum,
                                List<TaskGraphValidationIssue> issues) {
         if (!value.has(name)) return fallback;
         JsonNode field = value.path(name);
@@ -58,9 +66,9 @@ public record TaskGraphLimits(int maxNodes, int maxDepth, int maxLoopIterations,
             return fallback;
         }
         int result = field.asInt();
-        if (result < 1 || result > maximum) {
+        if (result < minimum || result > maximum) {
             issues.add(new TaskGraphValidationIssue("$.limits." + name, "LIMIT_OUT_OF_RANGE",
-                    name + " must be 1.." + maximum));
+                    name + " must be " + minimum + ".." + maximum));
             return fallback;
         }
         return result;
@@ -72,6 +80,7 @@ public record TaskGraphLimits(int maxNodes, int maxDepth, int maxLoopIterations,
                 .put("maxParallelNodes", maxParallelNodes).put("maxToolCalls", maxToolCalls)
                 .put("maxWallTimeSeconds", maxWallTimeSeconds)
                 .put("maxSerializedStateBytes", maxSerializedStateBytes)
-                .put("maxEvidenceEntries", maxEvidenceEntries);
+                .put("maxEvidenceEntries", maxEvidenceEntries)
+                .put("maxEvidenceBytes", maxEvidenceBytes);
     }
 }

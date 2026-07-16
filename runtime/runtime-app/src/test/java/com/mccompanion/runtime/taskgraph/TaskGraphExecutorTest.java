@@ -9,6 +9,7 @@ import com.mccompanion.runtime.tool.ToolResult;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -179,6 +180,34 @@ class TaskGraphExecutorTest {
         assertEquals("$.x", result.value().path("path").asText());
     }
 
+    @Test
+    void appliesOneEntryAndByteBudgetToEveryEvidenceSource() {
+        OversizedEvidenceGateway tools = new OversizedEvidenceGateway();
+        TaskGraphExecutor executor = new TaskGraphExecutor(tools);
+        var graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"evidence-budget","permissions":["READ_WORLD"],
+                 "limits":{"maxEvidenceEntries":8,"maxEvidenceBytes":1024},
+                 "root":{"id":"root","type":"sequence","nodes":[
+                   {"id":"observe","type":"call_tool","tool":"world.observe"},
+                   {"id":"checkpoint","type":"checkpoint","label":"after observation"},
+                   {"id":"done","type":"return","value":"ok"}
+                 ]}}
+                """);
+
+        TaskGraphExecutionResult result = executor.execute("exec-evidence",
+                new ToolContext("hermes", "brain-1", "companion-1"), graph);
+
+        assertTrue(result.success(), result.toJson().toString());
+        String serialized = Json.write(result.toJson().path("evidence"));
+        assertTrue(serialized.getBytes(StandardCharsets.UTF_8).length <= 1024, serialized);
+        assertTrue(result.evidence().size() <= 8);
+        assertEquals(2, result.evidence().stream()
+                .filter(value -> value.path("code").asText().equals("EVIDENCE_ENTRY_OVERSIZED")).count());
+        assertFalse(serialized.contains("progress-raw"));
+        assertFalse(serialized.contains("terminal-raw"));
+        assertTrue(result.evidence().stream().anyMatch(value -> value.path("type").asText().equals("CHECKPOINT")));
+    }
+
     private static final class FakeGateway implements ToolGateway {
         private final boolean failFirst;
         private final List<String> callIds = new ArrayList<>();
@@ -271,6 +300,27 @@ class TaskGraphExecutorTest {
         @Override public ToolResult execute(ToolContext context, ToolCall call) {
             calls.incrementAndGet();
             return new ToolResult(call.callId(), call.name(), true, "OK", Json.object(), true);
+        }
+    }
+
+    private static final class OversizedEvidenceGateway implements ToolGateway {
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("world.observe", "1.0", "observe",
+                    Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                    Duration.ofSeconds(1), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            return new ToolResult(call.callId(), call.name(), true, "ACCEPTED", Json.object(), false);
+        }
+
+        @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                                  Duration timeout,
+                                                  java.util.function.Consumer<ToolResult> progress) {
+            progress.accept(new ToolResult(call.callId(), call.name(), true, "TOOL_PROGRESS",
+                    Json.object().put("payload", "progress-raw-" + "p".repeat(2_000)), false));
+            return new ToolResult(call.callId(), call.name(), true, "OK",
+                    Json.object().put("payload", "terminal-raw-" + "t".repeat(2_000)), true);
         }
     }
 }

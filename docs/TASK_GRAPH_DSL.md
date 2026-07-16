@@ -38,6 +38,13 @@ Every node has a graph-unique stable `id`. Supported input types are:
 string integer number boolean registry_item registry_block registry_entity position json
 ```
 
+Execution limits may lower the product defaults but cannot exceed them. Evidence has both
+`maxEvidenceEntries` and `maxEvidenceBytes` limits; the byte limit is at least 1024 and at most
+524288 by default/product hard limit. Progress observations, Tool outcome evidence, checkpoints and
+Runtime events all pass through this same rotating budget. An individual oversized entry is replaced
+by an explicit `EVIDENCE_ENTRY_OVERSIZED` record containing its byte count and SHA-256 rather than
+silently storing or truncating unbounded content.
+
 ## Node types
 
 ```text

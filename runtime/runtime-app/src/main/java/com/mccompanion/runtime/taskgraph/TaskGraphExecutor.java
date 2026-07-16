@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.security.Digests;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolGateway;
@@ -12,6 +13,7 @@ import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.tool.ToolDefinition;
 
 import java.time.Duration;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -485,6 +487,7 @@ public final class TaskGraphExecutor {
         private JsonNode result = Json.MAPPER.nullNode();
         private JsonNode waitingQuestion = Json.MAPPER.nullNode();
         private int toolCalls;
+        private int evidenceBytes;
 
         private State(String executionId, ToolContext context, JsonNode graph, TaskGraphLimits limits,
                       ObjectNode inputs, TaskGraphExecutionRecord previous, TaskGraphExecutionControl control,
@@ -504,8 +507,27 @@ public final class TaskGraphExecutor {
         }
 
         private synchronized void addEvidence(JsonNode value) {
-            evidence.add(value.deepCopy());
-            while (evidence.size() > limits.maxEvidenceEntries()) evidence.removeFirst();
+            JsonNode bounded = boundedEvidence(value);
+            int bytes = serializedBytes(bounded);
+            evidence.add(bounded);
+            evidenceBytes += bytes;
+            while (evidence.size() > limits.maxEvidenceEntries()
+                    || evidenceBytes > limits.maxEvidenceBytes()) {
+                evidenceBytes -= serializedBytes(evidence.removeFirst());
+            }
+        }
+
+        private JsonNode boundedEvidence(JsonNode value) {
+            JsonNode copy = value == null ? Json.MAPPER.nullNode() : value.deepCopy();
+            int bytes = serializedBytes(copy);
+            if (bytes <= limits.maxEvidenceBytes()) return copy;
+            return Json.object().put("code", "EVIDENCE_ENTRY_OVERSIZED")
+                    .put("originalBytes", bytes)
+                    .put("sha256", Digests.sha256(Json.canonical(copy)));
+        }
+
+        private static int serializedBytes(JsonNode value) {
+            return Json.write(value).getBytes(StandardCharsets.UTF_8).length;
         }
 
         private void restore(TaskGraphExecutionRecord previous) {

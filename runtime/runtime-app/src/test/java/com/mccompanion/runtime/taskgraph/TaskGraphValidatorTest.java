@@ -120,9 +120,14 @@ class TaskGraphValidatorTest {
                 permissions: []
                 limits:
                   maxNodes: 257
+                  maxEvidenceBytes: 1023
                 root: {id: done, type: return}
                 """, TaskGraphCodec.Format.YAML);
-        assertFalse(validator.validate(graph, Set.of()).valid());
+        TaskGraphValidationResult limits = validator.validate(graph, Set.of());
+        assertFalse(limits.valid());
+        assertTrue(limits.issues().stream().anyMatch(issue ->
+                issue.path().equals("$.limits.maxEvidenceBytes")
+                        && issue.code().equals("LIMIT_OUT_OF_RANGE")));
         assertThrows(IllegalArgumentException.class, () -> TaskGraphCodec.parse("""
                 version: mcac-task-graph/1
                 id: one

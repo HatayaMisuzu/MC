@@ -11,7 +11,7 @@ updating the Codex Goal UI.
 Current milestone: `EXTERNAL_ASK_USER_CORE_REPLAY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
-the complete generic Minecraft tool set, the full partial-delivery ASK_USER scenario,
+the complete generic Minecraft tool set,
 product UI controls, and release/install verification remain incomplete.
 
 ## Completed in this slice
@@ -124,8 +124,10 @@ product UI controls, and release/install verification remain incomplete.
   cancellation clears it; a valid answer resumes the original Brain session without opening a
   competing session.
 - Repository restart, coordinator interruption/resume, Hermes/OpenAI-compatible adapter,
-  HTTP, and game-delivery Replay tests pass locally. The complete `6/16 -> withdraw 6 -> return
-  -> deliver` combined ASK_USER/Fabric E2E remains open and is not claimed complete.
+  HTTP, and game-delivery Replay tests pass locally. The real Fabric 1.21.1 E2E now proves
+  `6/16 -> ASK_USER -> deliver_partial -> same Hermes session -> navigate -> withdraw 6 -> return
+  -> deliver -> FINAL_RESPONSE`; vanilla container/player/companion deltas prove conservation.
+  This remains Replay evidence and is not a Live provider or human-playtest claim.
 
 ## Deposit to storage slice
 

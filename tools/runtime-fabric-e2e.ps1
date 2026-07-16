@@ -317,9 +317,23 @@ try {
     Start-Sleep -Milliseconds 500
     if ($brainProvider.HasExited) { throw "Hermes replay exited before the Brain turn ($($brainProvider.ExitCode))." }
 
-    $brainReply = Invoke-ExternalBrainRequest $pairingToken $companionId 'Bring me the six iron ingots from that chest.'
+    $brainQuestion = Invoke-ExternalBrainRequest $pairingToken $companionId 'Bring me 16 iron ingots from that chest.'
+    if (-not $brainQuestion.accepted -or $brainQuestion.result.kind -ne 'ASK_USER' -or
+        -not $brainQuestion.result.question.questionId -or
+        $brainQuestion.result.question.brainSessionId -ne $brainQuestion.result.sessionId -or
+        @($brainQuestion.result.question.options | Where-Object { $_.id -eq 'deliver_partial' }).Count -ne 1) {
+        throw 'External Brain did not persist the bounded 6/16 shortage question.'
+    }
+    $waitingConversation = Wait-WaitingQuestion $pairingToken $companionId
+    if ($waitingConversation.waitingQuestion.questionId -ne $brainQuestion.result.question.questionId) {
+        throw 'Conversation inspection did not return the same persisted Brain question.'
+    }
+    $brainReply = Invoke-ExternalBrainRequest $pairingToken $companionId 'deliver_partial'
     if (-not $brainReply.accepted -or $brainReply.result.kind -ne 'FINAL_RESPONSE') {
         throw "External Brain did not reach a final response: $($brainReply.code) $($brainReply.result.kind)"
+    }
+    if ($brainReply.result.sessionId -ne $brainQuestion.result.sessionId) {
+        throw 'External Brain answer opened a competing session instead of resuming the original.'
     }
     $brainTools = @($brainReply.result.toolResults)
     $expectedBrainTools = @('movement.navigate', 'inventory.withdraw', 'movement.return', 'inventory.deliver')
@@ -335,8 +349,11 @@ try {
     $brainAudit = Invoke-RestMethod -Uri "http://127.0.0.1:18766/brain/audit?companionId=$companionId" -Headers @{
         Authorization = "Bearer $pairingToken"
     } -TimeoutSec 5
-    $externalBrainEvidence = [pscustomobject]@{ reply = $brainReply; audit = $brainAudit }
-    Write-Output '[runtime-e2e] External Brain completed navigate, withdraw, return, and deliver from terminal Fabric observations'
+    $externalBrainEvidence = [pscustomobject]@{
+        question = $brainQuestion; waitingConversation = $waitingConversation
+        reply = $brainReply; audit = $brainAudit
+    }
+    Write-Output '[runtime-e2e] External Brain resumed its ASK_USER session and completed navigate, withdraw, return, and deliver'
 
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
@@ -413,7 +430,7 @@ try {
     if ($runtimeStderr -match '(?m)^.*SEVERE.*$') {
         throw 'Runtime emitted a SEVERE error during E2E.'
     }
-    Write-Output 'Runtime/Fabric E2E passed: controls plus External Brain navigate, withdraw, return, deliver, and final reply from verified observations.'
+    Write-Output 'Runtime/Fabric E2E passed: External Brain 6/16 ASK_USER, same-session answer, navigate, withdraw, return, deliver, and final reply from verified observations.'
 } catch {
     foreach ($process in @($game, $provider, $brainProvider, $runtime)) {
         if ($process -and -not $process.HasExited) {

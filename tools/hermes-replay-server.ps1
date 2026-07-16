@@ -61,15 +61,33 @@ function Tool-Response([string]$callId, [string]$name, $arguments) {
 function New-TurnResponse([string]$sessionId, $request) {
     $step = [int]$sessions[$sessionId]
     switch ($step) {
-        0 { $response = Tool-Response 'navigate-chest-1' 'movement.navigate' @{
+        0 { $response = @{
+                kind = 'ASK_USER'
+                question = @{
+                    prompt = 'The verified chest contains only 6 of the requested 16 iron ingots. What should I do?'
+                    reason = 'RESOURCE_SHORTAGE'
+                    options = @(
+                        @{ id = 'deliver_partial'; label = 'Deliver 6'; description = 'Return and deliver the verified stock.' },
+                        @{ id = 'collect_missing'; label = 'Collect 10'; description = 'Acquire the missing amount first.' }
+                    )
+                    freeTextAllowed = $false
+                    context = @{ available = 6; requested = 16 }
+                }
+            } }
+        1 {
+            $answer = $request.userMessage | ConvertFrom-Json
+            if ($answer.type -ne 'user_answer' -or $answer.optionId -ne 'deliver_partial') {
+                throw 'Hermes replay expected the persisted deliver_partial user answer.'
+            }
+            $response = Tool-Response 'navigate-chest-1' 'movement.navigate' @{
                 dimension = 'minecraft:overworld'; x = $X; y = $Y; z = $Z } }
-        1 { Assert-TerminalObservation $request 'movement.navigate'; $response = Tool-Response 'withdraw-iron-1' 'inventory.withdraw' @{
+        2 { Assert-TerminalObservation $request 'movement.navigate'; $response = Tool-Response 'withdraw-iron-1' 'inventory.withdraw' @{
                 item = 'minecraft:iron_ingot'; quantity = 6; allowPartial = $false
                 container = @{ dimension = 'minecraft:overworld'; x = $X; y = $Y; z = $Z } } }
-        2 { Assert-TerminalObservation $request 'inventory.withdraw'; $response = Tool-Response 'return-owner-1' 'movement.return' @{} }
-        3 { Assert-TerminalObservation $request 'movement.return'; $response = Tool-Response 'deliver-iron-1' 'inventory.deliver' @{
+        3 { Assert-TerminalObservation $request 'inventory.withdraw'; $response = Tool-Response 'return-owner-1' 'movement.return' @{} }
+        4 { Assert-TerminalObservation $request 'movement.return'; $response = Tool-Response 'deliver-iron-1' 'inventory.deliver' @{
                 item = 'minecraft:iron_ingot'; quantity = 6; allowPartial = $false } }
-        4 { Assert-TerminalObservation $request 'inventory.deliver'; $response = @{
+        5 { Assert-TerminalObservation $request 'inventory.deliver'; $response = @{
                 kind = 'FINAL_RESPONSE'; response = 'I reached the chest, withdrew six iron ingots, returned, and delivered all six.' } }
         default { throw "Hermes replay session advanced past its terminal turn: $sessionId" }
     }

@@ -103,5 +103,7 @@ verified. `task_graph.execute` now deterministically executes the first bounded 
 `sequence`, `call_tool`, `retry`, `fallback`, `wait`, `checkpoint`, `emit_progress`, `return`, and
 `fail`, with stable Tool call IDs, a Tool-call budget, bounded backoff/wait, evidence, and explicit
 failure for accepted-but-not-yet-executable node types. Conditions, loops, parallel execution,
-ASK_USER/memory nodes, durable checkpoints, reconciliation, and restart recovery remain tracked
-separately in `docs/RC_COMPLETION_MATRIX.md`.
+ASK_USER/memory nodes and safe resume remain tracked separately in `docs/RC_COMPLETION_MATRIX.md`.
+Schema migration 11 now persists the complete execution envelope and startup moves unfinished
+records to `RECONCILIATION_REQUIRED`; the executor is not yet wired to persist every node boundary,
+so this is recovery groundwork rather than a restart-resume claim.

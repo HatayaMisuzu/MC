@@ -40,6 +40,7 @@ import com.mccompanion.runtime.tool.RuntimeToolGateway;
 import com.mccompanion.runtime.tool.CompositeToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
+import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -144,6 +145,7 @@ public final class RuntimeApplication implements AutoCloseable {
             CompanionRepository companions = new CompanionRepository(database);
             TaskEventStore events = new TaskEventStore(database);
             TaskRepository tasks = new TaskRepository(database, events);
+            TaskGraphExecutionRepository taskGraphs = new TaskGraphExecutionRepository(database);
             AgentPlanRepository plans = new AgentPlanRepository(database);
             MemoryRepository memories = new MemoryRepository(database);
             LeaseService leases = new LeaseService(database);
@@ -190,12 +192,14 @@ public final class RuntimeApplication implements AutoCloseable {
             int staleSessions = sessions.recoverStaleSessions();
             int reconciliationTasks = tasks.markUnfinishedForReconciliation().size();
             int recoveryPlans = plans.pauseRunningForRecovery();
+            int reconciliationGraphs = taskGraphs.markUnfinishedForReconciliation();
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
-                    || recoveryPlans > 0 || interruptedBrainSessions > 0) {
+                    || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
-                        + ", interruptedBrainSessions=" + interruptedBrainSessions);
+                        + ", interruptedBrainSessions=" + interruptedBrainSessions
+                        + ", reconciliationGraphs=" + reconciliationGraphs);
             }
 
             webSocket = new RuntimeWebSocketServer(

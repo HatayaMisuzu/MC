@@ -22,7 +22,8 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "conversation_event", "waiting_question", "brain_session", "brain_tool_call", "schema_migration");
+            "memory_fact", "conversation_event", "waiting_question", "brain_session", "brain_tool_call",
+            "task_graph_execution", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -532,6 +533,34 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "CREATE UNIQUE INDEX waiting_question_one_active_idx ON waiting_question(plan_id) WHERE state='WAITING' AND plan_id IS NOT NULL",
                 "CREATE UNIQUE INDEX waiting_question_one_brain_active_idx ON waiting_question(brain_session_id) WHERE state='WAITING' AND brain_session_id IS NOT NULL",
                 "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
+        List<String> taskGraphExecution = List.of(
+                """
+                CREATE TABLE task_graph_execution (
+                  execution_id TEXT PRIMARY KEY,
+                  controller_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  graph_id TEXT NOT NULL,
+                  graph_version TEXT NOT NULL,
+                  graph_hash TEXT NOT NULL,
+                  graph_json TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  current_node_id TEXT,
+                  completed_nodes_json TEXT NOT NULL,
+                  tool_results_json TEXT NOT NULL,
+                  variables_json TEXT NOT NULL,
+                  checkpoints_json TEXT NOT NULL,
+                  waiting_question_json TEXT,
+                  permissions_json TEXT NOT NULL,
+                  limits_json TEXT NOT NULL,
+                  provenance_json TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  result_code TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX task_graph_execution_companion_idx ON task_graph_execution(companion_id,state,updated_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -542,6 +571,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(7, "record typed memory provenance", memoryProvenance),
                 new Migration(8, "persist external brain sessions and tool observations", brainAudit),
                 new Migration(9, "bind asynchronous brain tools to durable tasks", asynchronousBrainTools),
-                new Migration(10, "persist external brain waiting questions", externalBrainQuestions));
+                new Migration(10, "persist external brain waiting questions", externalBrainQuestions),
+                new Migration(11, "persist typed task graph execution state", taskGraphExecution));
     }
 }

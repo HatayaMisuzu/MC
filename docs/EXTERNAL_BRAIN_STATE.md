@@ -247,11 +247,13 @@ product UI controls, and release/install verification remain incomplete.
   companion headers in addition to the Runtime pairing token.
 - MCP request IDs map deterministically to bounded internal call IDs. This lets a concurrent
   `notifications/cancelled` request reach the same durable task/tool execution, while completed
-  calls return both MCP text content and structured terminal observations. Runtime integration
-  verifies authentication, protocol negotiation, binding rejection, filtered discovery, failed
-  execution evidence, and cancellation acceptance. SSE progress/resumption, strict protocol
-  header lifecycle, concurrent cancellation E2E, Hermes native MCP setup, and a protocol doctor
-  remain, so the protocol is intentionally `PARTIAL`.
+  calls return both MCP text content and structured terminal observations. When the client accepts
+  SSE, Tool Gateway state changes stream as standard token-bound `notifications/progress` messages
+  before the final JSON-RPC result; a disconnected stream cancels the same bound internal call.
+  Runtime integration verifies authentication, protocol negotiation, binding rejection, filtered
+  discovery, JSON/SSE failure evidence, progress envelopes, and cancellation acceptance. SSE event
+  resumption, strict protocol-header lifecycle, live concurrent cancellation E2E, Hermes native
+  MCP setup, and a protocol doctor remain, so the protocol is intentionally `PARTIAL`.
 
 ## Craft item slice
 

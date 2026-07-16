@@ -167,6 +167,10 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
+                if (method.equals("tools/call") && acceptsSse(exchange)) {
+                    mcpToolCallSse(exchange, request.path("params"), id);
+                    return;
+                }
                 ObjectNode result = switch (method) {
                     case "initialize" -> mcpInitialize(request.path("params"));
                     case "ping" -> Json.object();
@@ -217,14 +221,73 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ToolResult accepted = toolGateway.execute(context, call);
         ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
                 context, call, accepted, Duration.ofSeconds(30), ignored -> { });
-        ObjectNode envelope = Json.object().put("callId", terminal.callId()).put("code", terminal.code())
-                .put("terminal", terminal.terminal()).set("observation", terminal.observation());
+        return mcpToolResult(terminal);
+    }
+
+    private void mcpToolCallSse(HttpExchange exchange, JsonNode params, JsonNode requestId) throws IOException {
+        ToolContext context = mcpContext(exchange);
+        String name = requiredText(params, "name", 64);
+        JsonNode arguments = params.path("arguments");
+        if (arguments.isMissingNode()) arguments = Json.object();
+        ToolCall call = new ToolCall(mcpCallId(context, requestId), name, arguments);
+        JsonNode progressToken = params.path("_meta").get("progressToken");
+        ToolResult accepted = toolGateway.execute(context, call);
+        exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+        exchange.sendResponseHeaders(200, 0);
+        try (var output = exchange.getResponseBody()) {
+            ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
+                    context, call, accepted, Duration.ofSeconds(30), progress -> {
+                        if (progressToken == null || progressToken.isNull()) return;
+                        try {
+                            writeSse(output, mcpProgress(progressToken, progress));
+                        } catch (IOException disconnected) {
+                            throw new java.io.UncheckedIOException(disconnected);
+                        }
+                    });
+            writeSse(output, mcpResult(requestId, mcpToolResult(terminal)));
+        } catch (java.io.UncheckedIOException disconnected) {
+            toolGateway.cancel(context, call.callId(), "MCP_STREAM_DISCONNECTED");
+            throw disconnected.getCause();
+        }
+    }
+
+    static ObjectNode mcpProgress(JsonNode progressToken, ToolResult progress) {
+        ObjectNode params = Json.object();
+        params.set("progressToken", progressToken.deepCopy());
+        params.put("progress", Math.max(0, progress.observation().path("taskRevision").asLong()));
+        params.put("message", progress.observation().path("state").asText(progress.code()));
+        params.set("structuredContent", toolEnvelope(progress));
+        ObjectNode notification = Json.object().put("jsonrpc", "2.0")
+                .put("method", "notifications/progress");
+        notification.set("params", params);
+        return notification;
+    }
+
+    private static ObjectNode mcpToolResult(ToolResult terminal) {
+        ObjectNode envelope = toolEnvelope(terminal);
         var content = Json.MAPPER.createArrayNode().add(
                 Json.object().put("type", "text").put("text", Json.write(envelope)));
         ObjectNode result = Json.object().put("isError", !terminal.success());
         result.set("content", content);
         result.set("structuredContent", envelope);
         return result;
+    }
+
+    private static ObjectNode toolEnvelope(ToolResult result) {
+        return Json.object().put("callId", result.callId()).put("code", result.code())
+                .put("terminal", result.terminal()).set("observation", result.observation());
+    }
+
+    private static boolean acceptsSse(HttpExchange exchange) {
+        String accept = exchange.getRequestHeaders().getFirst("Accept");
+        return accept != null && accept.toLowerCase(java.util.Locale.ROOT).contains("text/event-stream");
+    }
+
+    private static void writeSse(java.io.OutputStream output, JsonNode message) throws IOException {
+        output.write(("event: message\ndata: " + Json.write(message) + "\n\n")
+                .getBytes(StandardCharsets.UTF_8));
+        output.flush();
     }
 
     private static String mcpCallId(ToolContext context, JsonNode requestId) {

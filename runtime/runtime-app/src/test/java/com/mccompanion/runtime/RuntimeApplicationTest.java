@@ -191,6 +191,21 @@ class RuntimeApplicationTest {
                     callResult.path("structuredContent").path("code").asText());
             assertTrue(callResult.path("structuredContent").path("callId").asText().startsWith("mcp-"));
 
+            HttpResponse<String> streamed = http.send(bound.copy().header("Accept", "text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"observe-sse","method":"tools/call","params":{
+                              "name":"world.observe","arguments":{},
+                              "_meta":{"progressToken":"progress-observe"}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, streamed.statusCode(), streamed.body());
+            assertTrue(streamed.headers().firstValue("Content-Type").orElse("")
+                    .startsWith("text/event-stream"));
+            assertTrue(streamed.body().startsWith("event: message\ndata: "), streamed.body());
+            JsonNode streamedResult = Json.parse(streamed.body().lines()
+                    .filter(line -> line.startsWith("data: ")).findFirst().orElseThrow().substring(6));
+            assertEquals("observe-sse", streamedResult.path("id").asText());
+            assertTrue(streamedResult.path("result").path("isError").asBoolean());
+
             HttpResponse<String> cancelled = http.send(bound.copy()
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","method":"notifications/cancelled","params":{

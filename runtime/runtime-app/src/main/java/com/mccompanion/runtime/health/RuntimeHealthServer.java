@@ -36,6 +36,7 @@ import com.mccompanion.runtime.tool.ToolDefinition;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
+import com.mccompanion.runtime.workspace.SkillRepository;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -66,6 +67,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final BrainAuditRepository brainAudit;
     private final ToolGateway toolGateway;
     private final TaskGraphRuntime taskGraphRuntime;
+    private final SkillRepository skills;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -91,7 +93,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             RuntimeLog log) throws IOException {
         this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
-                null, log);
+                null, null, log);
     }
 
     public RuntimeHealthServer(
@@ -110,6 +112,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             BrainAuditRepository brainAudit,
             ToolGateway toolGateway,
             TaskGraphRuntime taskGraphRuntime,
+            SkillRepository skills,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -126,6 +129,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.brainAudit = brainAudit;
         this.toolGateway = toolGateway;
         this.taskGraphRuntime = taskGraphRuntime;
+        this.skills = skills;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -137,6 +141,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
         server.createContext("/memories", this::memoryManagement);
+        server.createContext("/skills", this::skillManagement);
         server.createContext("/mcp", this::mcp);
         executor = Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-management");
@@ -444,6 +449,57 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         .put("message", failure.getMessage()));
             } catch (java.sql.SQLException failure) {
                 log.error("Memory management failed", failure);
+                sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+            }
+        }
+    }
+
+    private void skillManagement(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (skills == null) {
+                sendJson(exchange, 503, Json.object().put("code", "SKILL_LIFECYCLE_UNAVAILABLE"));
+                return;
+            }
+            try {
+                if ("GET".equals(exchange.getRequestMethod())) {
+                    String companionId = queryParameter(exchange, "companionId");
+                    if (companionId == null || companionId.isBlank()) {
+                        sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED"));
+                        return;
+                    }
+                    ObjectNode body = Json.object().put("companionId", companionId);
+                    body.set("versions", Json.MAPPER.valueToTree(
+                            skills.list(config.server.profileId, companionId)));
+                    sendJson(exchange, 200, body);
+                    return;
+                }
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    String action = required(request, "action");
+                    Object result = switch (action) {
+                        case "approve" -> skills.approve(required(request, "requestId"),
+                                "LOCAL_MANAGEMENT_USER");
+                        case "reject" -> skills.reject(required(request, "requestId"),
+                                "LOCAL_MANAGEMENT_USER", requiredText(request, "reason", 256));
+                        case "disable" -> skills.disable(config.server.profileId,
+                                required(request, "companionId"), required(request, "skillId"),
+                                "LOCAL_MANAGEMENT_USER", requiredText(request, "reason", 256));
+                        case "rollback" -> skills.rollback(config.server.profileId,
+                                required(request, "companionId"), required(request, "skillId"),
+                                requiredPositiveLong(request, "version"), "LOCAL_MANAGEMENT_USER",
+                                requiredText(request, "reason", 256));
+                        default -> throw new IllegalArgumentException("skill action is invalid");
+                    };
+                    sendJson(exchange, 200, Json.MAPPER.valueToTree(result));
+                    return;
+                }
+                exchange.sendResponseHeaders(405, -1);
+            } catch (IllegalArgumentException failure) {
+                sendJson(exchange, 400, Json.object().put("code", "INVALID_SKILL_REQUEST")
+                        .put("message", failure.getMessage()));
+            } catch (java.sql.SQLException failure) {
+                log.error("Skill management failed", failure);
                 sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
             }
         }
@@ -849,6 +905,14 @@ public final class RuntimeHealthServer implements AutoCloseable {
         String value = node.path(field).asText("").strip();
         if (value.isEmpty() || value.length() > maximum) throw new IllegalArgumentException(field + " is required");
         return value;
+    }
+
+    private static long requiredPositiveLong(com.fasterxml.jackson.databind.JsonNode node, String field) {
+        JsonNode value = node.path(field);
+        if (!value.isIntegralNumber() || !value.canConvertToLong() || value.asLong() <= 0) {
+            throw new IllegalArgumentException(field + " must be a positive integer");
+        }
+        return value.asLong();
     }
 
     private static java.util.List<String> strings(com.fasterxml.jackson.databind.JsonNode value, int maximum) {

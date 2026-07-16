@@ -82,7 +82,9 @@ The external Brain receives logical Workspace resources and bounded MCAC Tools, 
 Generated Skill drafts are addressed by logical Skill ID and stored in profile/companion-isolated
 Runtime scopes. Drafts remain quarantined until the real Task Graph validator accepts their
 document; validation alone does not promote, execute, or expand permissions. See
-`docs/AGENT_WORKSPACE.md`.
+`docs/AGENT_WORKSPACE.md`. The Brain may request promotion but cannot approve it; approval and
+rejection belong to the authenticated local management boundary, and rollback is limited to a
+previously approved version.
 No runtime Tool exposes arbitrary Shell, Git, Gradle, compiler/process execution, arbitrary files,
 production source, browser cookies, launcher credentials, Minecraft save mutation, direct inventory
 editing, or direct world editing. Search is a separate authorized gateway, not arbitrary networking.

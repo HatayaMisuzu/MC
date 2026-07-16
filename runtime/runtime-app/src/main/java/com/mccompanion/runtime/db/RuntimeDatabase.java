@@ -24,7 +24,7 @@ public final class RuntimeDatabase implements AutoCloseable {
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
             "memory_fact", "memory_suggestion", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call",
-            "task_graph_execution", "schema_migration");
+            "task_graph_execution", "skill_version", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -631,6 +631,32 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX memory_suggestion_review_idx ON memory_suggestion(companion_id,status,updated_at)");
+        List<String> skillLifecycle = List.of(
+                """
+                CREATE TABLE skill_version (
+                  request_id TEXT PRIMARY KEY,
+                  profile_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  skill_id TEXT NOT NULL,
+                  version INTEGER NOT NULL,
+                  format TEXT NOT NULL,
+                  document TEXT NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  permissions_json TEXT NOT NULL,
+                  provenance_json TEXT NOT NULL,
+                  validation_json TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  status_reason TEXT,
+                  controller_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  approved_by TEXT,
+                  approved_at INTEGER,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  UNIQUE(profile_id, companion_id, skill_id, version)
+                )
+                """,
+                "CREATE INDEX skill_version_scope_idx ON skill_version(profile_id,companion_id,skill_id,status,version)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -647,6 +673,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(13, "persist task graph terminal result", taskGraphResult),
                 new Migration(14, "persist task graph node outputs", taskGraphOutputs),
                 new Migration(15, "bind waiting questions to task graph executions", taskGraphQuestions),
-                new Migration(16, "quarantine external memory suggestions", memorySuggestionQuarantine));
+                new Migration(16, "quarantine external memory suggestions", memorySuggestionQuarantine),
+                new Migration(17, "persist generated skill promotion and rollback lifecycle", skillLifecycle));
     }
 }

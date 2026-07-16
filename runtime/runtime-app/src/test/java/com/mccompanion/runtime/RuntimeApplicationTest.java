@@ -9,6 +9,8 @@ import com.mccompanion.runtime.search.ReplaySearchProvider;
 import com.mccompanion.runtime.search.SearchPage;
 import com.mccompanion.runtime.search.SearchSource;
 import com.mccompanion.runtime.tool.ToolCall;
+import com.mccompanion.runtime.workspace.SkillRepository;
+import com.mccompanion.runtime.security.Digests;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.junit.jupiter.api.Test;
@@ -35,6 +37,59 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class RuntimeApplicationTest {
     @TempDir Path temporary;
+
+    @Test
+    void localManagementApprovesGeneratedSkillButBrainToolOnlyCreatesPendingReview() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("skill-management"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        try (RuntimeApplication application = RuntimeApplication.start(config, false)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            SkillRepository repository = new SkillRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()));
+            String document = """
+                    version: mcac-task-graph/1
+                    id: managed_skill
+                    permissions: []
+                    root:
+                      id: done
+                      type: return
+                      value: complete
+                    """;
+            var pending = repository.requestPromotion(config.server.profileId, "companion-1",
+                    "managed_skill", "yaml", document, Digests.sha256(document),
+                    Json.MAPPER.createArrayNode(), Json.object().put("provider", "replay-test"),
+                    Json.object().put("valid", true), "controller", "brain-session");
+            assertEquals("PENDING_REVIEW", pending.status());
+
+            HttpClient http = HttpClient.newHttpClient();
+            URI endpoint = new URI("http://127.0.0.1:" + config.server.managementPort + "/skills");
+            HttpResponse<String> unauthorized = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
+                            .put("action", "approve").put("requestId", pending.requestId()))))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(401, unauthorized.statusCode());
+
+            HttpResponse<String> approved = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
+                            .put("action", "approve").put("requestId", pending.requestId()))))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, approved.statusCode(), approved.body());
+            assertEquals("ACTIVE", Json.parse(approved.body()).path("status").asText());
+            assertEquals("LOCAL_MANAGEMENT_USER", Json.parse(approved.body()).path("approvedBy").asText());
+
+            HttpResponse<String> listed = http.send(HttpRequest.newBuilder(new URI(
+                            endpoint + "?companionId=companion-1"))
+                    .header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, listed.statusCode(), listed.body());
+            assertEquals("ACTIVE", Json.parse(listed.body()).path("versions").path(0).path("status").asText());
+        }
+    }
 
     @Test
     void startsWithoutApiKeyAcceptsAuthenticatedSessionAndShutsDown() throws Exception {

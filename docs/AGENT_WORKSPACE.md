@@ -11,6 +11,9 @@ skill.list
 skill.read
 skill.save_draft
 skill.validate
+skill.request_promotion
+skill.disable
+skill.rollback
 ```
 
 `skill.save_draft` accepts only a bounded declarative JSON/YAML Task Graph document and stores it
@@ -18,6 +21,14 @@ as `QUARANTINED`. `skill.validate` parses the stored document with the real Task
 validates it against the current Runtime node set, Tool definitions, permissions, and input
 schemas. A successful validation reports `GENERATED_VALIDATED`; it does not promote or execute the
 draft and does not grant additional permissions.
+
+`skill.request_promotion` persists a numbered `PENDING_REVIEW` version with the controller and
+Brain session, graph provenance, declared permissions, complete validation result, and document
+SHA-256. There is deliberately no external-Brain approval Tool. The authenticated loopback
+`/skills` management endpoint is the local-user boundary for listing review records, approving or
+rejecting a request, disabling an active version, and rolling back to a previously approved
+version. Approval records `LOCAL_MANAGEMENT_USER`; rollback cannot activate a draft that was never
+approved.
 
 Workspace invariants:
 
@@ -32,6 +43,6 @@ Workspace invariants:
   and keeps the previous content in a Runtime-only backup area;
 - reads verify the persisted SHA-256 before returning content.
 
-This slice does not yet implement promotion approval, immutable promoted versions, revocation,
-rollback, temporary execution policy, workspace migration tooling, or the terminal review UI.
-Those remain visible in `docs/RC_COMPLETION_MATRIX.md`.
+This slice does not yet implement the terminal review UI, signed/administrator promotion policies,
+temporary execution policy, direct Task Graph Skill invocation, workspace migration tooling, or
+backup retention controls. Those remain visible in `docs/RC_COMPLETION_MATRIX.md`.

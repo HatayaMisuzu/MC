@@ -40,6 +40,7 @@ import com.mccompanion.runtime.tool.RuntimeToolGateway;
 import com.mccompanion.runtime.tool.CompositeToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.workspace.AgentWorkspace;
+import com.mccompanion.runtime.workspace.SkillRepository;
 import com.mccompanion.runtime.workspace.SkillToolGateway;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
 import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
@@ -185,8 +186,10 @@ public final class RuntimeApplication implements AutoCloseable {
                     new java.util.concurrent.atomic.AtomicReference<>();
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
                     "database parent").resolve("agent-workspace");
+            SkillRepository skillRepository = new SkillRepository(database);
             SkillToolGateway skillTools = new SkillToolGateway(
                     new AgentWorkspace(workspaceRoot, config.server.profileId),
+                    skillRepository, config.server.profileId,
                     context -> {
                         CompositeToolGateway current = toolGatewayReference.get();
                         return current == null ? java.util.List.of() : current.definitions(context);
@@ -238,7 +241,7 @@ public final class RuntimeApplication implements AutoCloseable {
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
                     kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,
-                    toolGateway, taskGraphRuntime, log);
+                    toolGateway, taskGraphRuntime, skillRepository, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;

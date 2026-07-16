@@ -11,6 +11,7 @@ import com.mccompanion.runtime.task.TaskType;
 import com.mccompanion.runtime.task.TaskRecord;
 import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.task.TaskState;
+import com.mccompanion.runtime.taskgraph.TaskGraphValidator;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -24,6 +25,7 @@ public final class RuntimeToolGateway implements ToolGateway {
     private final CompanionRepository companions;
     private final TaskRepository tasks;
     private final Function<String, List<String>> availableCapabilities;
+    private final TaskGraphValidator taskGraphs = new TaskGraphValidator();
     private final java.util.concurrent.ConcurrentMap<String, String> activeTasks =
             new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -138,6 +140,9 @@ public final class RuntimeToolGateway implements ToolGateway {
         values.add(definition("task.pause", "Pause the active task safely", Json.object(), "LOW", "CONTROL_TASK", false));
         values.add(definition("task.resume", "Resume a paused task", Json.object(), "LOW", "CONTROL_TASK", false));
         values.add(definition("task.cancel", "Cancel the active task", Json.object(), "LOW", "CONTROL_TASK", false));
+        values.add(definition("task_graph.validate",
+                "Statically validate a bounded declarative task graph without executing it",
+                taskGraphSchema(), "LOW", "VALIDATE_TASK_GRAPH", true));
         if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
@@ -167,6 +172,16 @@ public final class RuntimeToolGateway implements ToolGateway {
         boolean exposed = definitions(context).stream().anyMatch(value -> value.name().equals(call.name()));
         if (!exposed) return ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Tool is not AVAILABLE_NOW");
         try {
+            if (call.name().equals("task_graph.validate")) {
+                rejectUnexpected(call.arguments(), Set.of("graph"));
+                JsonNode graph = call.arguments().path("graph");
+                if (!graph.isObject()) throw new IllegalArgumentException("graph must be an object");
+                Set<String> tools = definitions(context).stream().map(ToolDefinition::name)
+                        .filter(name -> !name.equals("task_graph.validate")).collect(java.util.stream.Collectors.toSet());
+                var validation = taskGraphs.validate(graph, tools);
+                return new ToolResult(call.callId(), call.name(), validation.valid(),
+                        validation.valid() ? "OK" : "TASK_GRAPH_INVALID", validation.toJson(), true);
+            }
             if (call.name().equals("world.observe")) {
                 rejectUnexpected(call.arguments(), Set.of());
                 JsonNode status = companions.get(context.companionId())
@@ -355,6 +370,8 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("block").add("maxBlocks").add("origin");
         } else if (name.equals("item.smelt")) {
             root.putArray("required").add("item").add("quantity").add("station");
+        } else if (name.equals("task_graph.validate")) {
+            root.putArray("required").add("graph");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
                 Duration.ofSeconds(30), idempotent);
@@ -364,6 +381,12 @@ public final class RuntimeToolGateway implements ToolGateway {
         ObjectNode properties = Json.object();
         for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
         properties.putObject("dimension").put("type", "string");
+        return properties;
+    }
+
+    private static ObjectNode taskGraphSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("graph").put("type", "object");
         return properties;
     }
 

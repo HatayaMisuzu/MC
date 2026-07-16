@@ -46,7 +46,8 @@ class RuntimeToolGatewayTest {
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
 
                 var names = gateway.definitions(context).stream().map(ToolDefinition::name).toList();
-                assertTrue(names.containsAll(List.of("world.observe", "movement.navigate", "movement.follow")));
+                assertTrue(names.containsAll(List.of("world.observe", "movement.navigate", "movement.follow",
+                        "task_graph.validate")));
                 assertFalse(names.contains("inventory.withdraw"));
                 ToolResult observed = gateway.execute(context,
                         new ToolCall("observe-1", "world.observe", Json.object()));
@@ -60,6 +61,43 @@ class RuntimeToolGatewayTest {
                         new ToolCall("withdraw-1", "inventory.withdraw", Json.object()));
                 assertFalse(unavailable.success());
                 assertEquals("TOOL_UNAVAILABLE", unavailable.code());
+            }
+        }
+    }
+
+    @Test
+    void validatesExternalTaskGraphsWithoutExecutingThem() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("graph.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("graph.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions,
+                        new TaskRepository(database, new TaskEventStore(database)), new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
+                        ignored -> List.of("NavigateTo"));
+                ToolContext context = new ToolContext("hermes", "brain-session", "c1");
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"navigate-after-observe",
+                         "permissions":["READ_WORLD","MOVE"],
+                         "root":{"id":"root","type":"sequence","nodes":[
+                           {"id":"observe","type":"call_tool","tool":"world.observe"},
+                           {"id":"move","type":"call_tool","tool":"movement.navigate",
+                            "arguments":{"x":1,"y":64,"z":1}}
+                         ]}}
+                        """);
+                ToolResult valid = gateway.execute(context, new ToolCall("graph-1", "task_graph.validate",
+                        Json.object().set("graph", graph)));
+                assertTrue(valid.success(), valid.observation().toString());
+                assertTrue(valid.observation().path("valid").asBoolean());
+
+                ((com.fasterxml.jackson.databind.node.ObjectNode) graph.path("root").path("nodes").path(1))
+                        .put("tool", "shell.execute");
+                ToolResult invalid = gateway.execute(context, new ToolCall("graph-2", "task_graph.validate",
+                        Json.object().set("graph", graph)));
+                assertFalse(invalid.success());
+                assertEquals("TASK_GRAPH_INVALID", invalid.code());
             }
         }
     }

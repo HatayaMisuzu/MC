@@ -1,7 +1,7 @@
 # RC completion matrix
 
 Updated: 2026-07-16  
-Baseline: `d95598a`  
+Baseline: `86e8262`
 Overall status: `PARTIAL`
 
 Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_VERIFIED`,
@@ -9,6 +9,18 @@ Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_V
 
 | Module | Status | Implementation evidence | Test evidence | Remaining gap |
 |---|---|---|---|---|
+| Primitive Tool Coverage | PARTIAL | Existing gateway exposes bounded world observation/scan, movement, composite resource/inventory/item/combat actions and deterministic task controls | Runtime schema tests plus real Fabric coverage for existing composite actions | Complete world/registry, movement, block, inventory/item, entity, menu, safety and task primitive families |
+| Task Graph Schema | LOCALLY_VERIFIED | `mcac-task-graph/1` JSON/YAML codec; all required declarative node types; stable node IDs; typed inputs; permissions; bounded limits | YAML/JSON parsing, all-node conformance, duplicate-key and oversized-document tests | Remote verification and schema migration/versioning |
+| Task Graph Validator | LOCALLY_VERIFIED | strict unknown-field rejection, safe expression parser without eval, unique IDs, contextual Tool availability, permission declarations and hard resource ceilings; exposed as `task_graph.validate` | Runtime Tool Gateway integration plus unsafe expression, unavailable Tool, duplicate ID, unbounded loop/retry and limit-escalation tests | Tool input-schema/permission compatibility, parser fuzz/property coverage and remote verification |
+| Task Graph Runtime | NOT_STARTED | — | — | Deterministic node execution, state transitions, cancellation, evidence and observation verification |
+| Task Checkpoint/Resume | NOT_STARTED | — | — | Durable graph hash/version, node state, immutable Tool results, reconciliation and restart recovery |
+| Agent Workspace | NOT_STARTED | — | — | Isolated logical workspace API, quotas, path/symlink/junction/ADS protection and migrations |
+| Built-in Skills | NOT_STARTED | Existing composite capabilities are not yet packaged as declarative built-in Task Graph skills | — | Read-only built-in skill resources and primitive composition conformance |
+| Generated Skill Quarantine | NOT_STARTED | — | — | Draft validation, untrusted-content scanning, quarantine and temporary-use policy |
+| Skill Promotion | NOT_STARTED | — | — | Provenance/hash/test evidence, approval policy, versioning, rollback and revocation |
+| Registry/Mod Compatibility | PARTIAL | Existing namespaced item/block arguments and connected-body capability intersection | Runtime schemas and Fabric tests use vanilla registry IDs | Generic registry/recipe/menu/dimension discovery and unknown test namespace coverage |
+| Primitive-based Representative E2E | NOT_STARTED | — | — | Five structurally different external-Brain Task Graph E2Es, including unknown namespace content |
+| Existing Composite Capability Migration | PARTIAL | Existing composite capabilities remain bounded, tested vanilla behavior | Existing Runtime/Fabric tests | Route composites through shared primitive executors or built-in skills and prove primitive equivalence |
 | External Brain Bridge | REMOTELY_VERIFIED | `runtime/.../brain`, authenticated `/brain`, game/Web ingress | PR fast, Windows, Minecraft heavy at `d95598a` | Live provider verification excluded |
 | Async Tool Loop | LOCALLY_VERIFIED | durable session/call/task/behavior binding; immediate PAUSED/RECONCILIATION mapping; timeout cancellation confirmation; audited callId dedupe | PAUSED/reconciliation/timeout, duplicate-call, concurrent-cancel, companion-isolation and restart tests; prior real Fabric E2E | Remote verification of current SHA |
 | Hermes Resume | LOCALLY_VERIFIED | same-session resume, durable question recovery, and once-only undelivered observation delivery | coordinator interruption/resume and audit restart tests | Remote disconnect/backoff E2E and protocol doctor |
@@ -46,7 +58,8 @@ Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_V
 
 ## Current execution order
 
-1. Close remaining asynchronous Tool Loop state/cancellation/recovery edge cases.
-2. Migrate External Brain `ASK_USER` to durable questions and resume the same Brain session.
-3. Implement the generic Minecraft body capabilities and verified multi-strategy E2E.
-4. Finish standard Tool protocol, product UI, reliability, installer, and release packaging.
+1. Implement durable deterministic Task Graph execution and checkpoint/resume.
+2. Complete the primitive Tool families and migrate composite capabilities onto shared executors/skills.
+3. Implement the isolated Agent Workspace and generated Skill quarantine/promotion lifecycle.
+4. Prove generality through primitive-only representative E2E, fuzz/failure injection and unknown Registry content.
+5. Finish UI, MCP identity/reconnect hardening, memory/search contamination protection and current-version release validation.

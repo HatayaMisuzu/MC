@@ -72,7 +72,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300, batch = "collection")
     public void collectResourceUsesMovementAndVanillaItemPickup(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -87,8 +87,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "collect test created no live body");
         BlockPos origin = body.blockPosition();
-        for (int x = 0; x <= 7; x++) {
-            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+        for (int x = -1; x <= 7; x++) {
+            for (int z = -2; z <= 2; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+            }
         }
         ItemEntity first = new ItemEntity(body.serverLevel(), body.getX() + 4.0D, body.getY() + 0.25D, body.getZ(),
                 new ItemStack(Items.COAL, 2));
@@ -134,7 +136,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(body != null, "retreat test created no live body");
         BlockPos origin = body.blockPosition();
         for (int x = -9; x <= 9; x++) {
-            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            for (int z = -4; z <= 4; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+            }
         }
         var zombie = EntityType.ZOMBIE.create(body.serverLevel());
         helper.assertTrue(zombie != null, "retreat test could not create threat");
@@ -222,7 +226,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400, batch = "mining")
     public void mineResourceVeinUsesHardnessToolDurabilityDropsAndPickup(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -238,6 +242,12 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(body != null, "mine test created no live body");
         BlockPos origin = body.blockPosition().offset(2, 0, 0);
         BlockPos second = origin.offset(1, 0, 0);
+        for (int x = -1; x <= 4; x++) {
+            for (int z = -1; z <= 1; z++) {
+                body.serverLevel().setBlockAndUpdate(body.blockPosition().offset(x, -1, z),
+                        Blocks.STONE.defaultBlockState());
+            }
+        }
         body.serverLevel().setBlockAndUpdate(origin, Blocks.DIAMOND_ORE.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(second, Blocks.DIAMOND_ORE.defaultBlockState());
         ItemStack pickaxe = new ItemStack(Items.IRON_PICKAXE);

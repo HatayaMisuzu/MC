@@ -166,9 +166,11 @@ product UI controls, and release/install verification remain incomplete.
   full inventory, stops after a bounded no-progress window if drops disappear, and reports
   success only after the companion's verified inventory delta reaches the target.
 - The first real Fabric test exposed drops falling out of an empty test structure and correctly
-  returned `RESOURCE_LOST`; the repaired world supplies ordinary supporting blocks. The passing
-  test proves movement, vanilla removal of a two-coal ItemEntity, inventory +2, and a terminal
-  `COLLECT_COMPLETE` observation. Broader resources and restart/unreachable cases remain open.
+  returned `RESOURCE_LOST`; the repaired world supplies an ordinary bounded support surface.
+  Collection runs in its own GameTest batch so adjacent concurrent companions cannot consume its
+  world drop. The passing test proves movement, vanilla removal of a two-coal ItemEntity,
+  inventory +2, and a terminal `COLLECT_COMPLETE` observation. Broader resources and
+  restart/unreachable cases remain open.
 
 ## Vanilla bounded-vein mining slice
 
@@ -183,8 +185,9 @@ product UI controls, and release/install verification remain incomplete.
   `playerTouch` and the total inventory delta covers the observed drop count. A real Fabric
   GameTest proves two connected diamond ores disappear, two diamonds enter the inventory, an
   iron pickaxe consumes at least two durability, and audit evidence records the vanilla server
-  player game-mode path. Distant navigation, broader ores/tools, restart, and Brain E2E remain,
-  so Mine is intentionally `PARTIAL` rather than complete.
+  player game-mode path. Its supported fixture and isolated batch prevent real drops from falling
+  into the empty structure or being collected by an adjacent concurrent test. Distant navigation,
+  broader ores/tools, restart, and Brain E2E remain, so Mine is intentionally `PARTIAL`.
 
 ## Vanilla furnace smelting slice
 
@@ -212,9 +215,11 @@ product UI controls, and release/install verification remain incomplete.
   than silently resuming a now-invalid task. A bounded stuck outcome also pauses safely.
 - An isolated real Fabric GameTest begins travel toward a stationary zombie and proves the active
   task is interrupted, distance from the hostile increases, the body actually moves, and terminal
-  observation/evidence are present. The hostile fixture uses a separate GameTest batch so its
-  production detection radius cannot contaminate unrelated concurrent tests. Terrain-aware escape,
-  environmental-direction recovery, multiple/ranged threats, and restart/E2E remain `PARTIAL`.
+  observation/evidence are present. The hostile fixture uses a separate GameTest batch and a
+  bounded two-dimensional support surface, so its production detection radius cannot contaminate
+  unrelated concurrent tests and minor lateral movement cannot fall out of the fixture.
+  Terrain-aware escape, environmental-direction recovery, multiple/ranged threats, and
+  restart/E2E remain `PARTIAL`.
 
 ## Bounded owner-defense slice
 

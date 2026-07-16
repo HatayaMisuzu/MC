@@ -125,6 +125,11 @@ try {
             $stream.Write($responseHeader, 0, $responseHeader.Length)
             $stream.Write($responseBody, 0, $responseBody.Length)
             $stream.Flush()
+        } catch {
+            # A cancelled planning turn may close its HTTP connection while this deterministic
+            # fixture is reading or writing. Keep the replay provider available for the next
+            # independent request and log only the exception type, never request contents.
+            Write-Warning "Replay provider connection ended: $($_.Exception.GetType().Name)"
         } finally {
             $client.Dispose()
         }

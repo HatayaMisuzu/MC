@@ -10,6 +10,8 @@ $config = Join-Path $runtimeHome 'runtime.yml'
 $token = Join-Path $runtimeHome 'data\pairing.token'
 $gameToken = Join-Path $fabric 'build\gametest\config\minecraft-ai-companion\runtime.token'
 $gameRun = Join-Path $fabric 'build\gametest'
+$gameOutFile = Join-Path $runtimeHome 'fabric-gametest.out.log'
+$gameErrFile = Join-Path $runtimeHome 'fabric-gametest.err.log'
 
 if (-not (Test-Path -LiteralPath $runtimeBat)) {
     throw 'Runtime distribution is missing; run :runtime:runtime-app:installDist first.'
@@ -64,7 +66,14 @@ function Start-TestProcess([string]$file, [string]$arguments, [string]$workingDi
 
 function Read-ProcessLog([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return '' }
-    return [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+    $stream = [IO.FileStream]::new($path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+    try {
+        $reader = [IO.StreamReader]::new($stream, [Text.Encoding]::UTF8, $true)
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    } finally {
+        $stream.Dispose()
+    }
 }
 
 function Invoke-RuntimeCommand(
@@ -152,6 +161,10 @@ function Wait-AgentPlan(
 $runtime = $null
 $game = $null
 $provider = $null
+$runtimeOut = $null
+$runtimeErr = $null
+$providerOut = $null
+$providerErr = $null
 $commandEvidence = @()
 $conversationEvidence = $null
 $goalModificationEvidence = $null
@@ -184,8 +197,6 @@ try {
     Copy-Item -LiteralPath $token -Destination $gameToken -Force
     $pairingToken = (Get-Content -Raw -LiteralPath $token).Trim()
 
-    $gameOutFile = Join-Path $runtimeHome 'fabric-gametest.out.log'
-    $gameErrFile = Join-Path $runtimeHome 'fabric-gametest.err.log'
     $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon > `"$gameOutFile`" 2> `"$gameErrFile`"`""
     $game = Start-TestProcess 'cmd.exe' $gameArgs $fabric $false
 
@@ -375,6 +386,34 @@ try {
     }
     Write-Output 'Runtime/Fabric E2E passed: controls plus shortage question, game delivery, original-plan resume, and verified partial handoff.'
 } catch {
+    foreach ($process in @($game, $provider, $runtime)) {
+        if ($process -and -not $process.HasExited) {
+            $process.Kill()
+            $null = $process.WaitForExit(5000)
+        }
+    }
+    $failureEvidence = Join-Path $runtimeHome 'evidence'
+    New-Item -ItemType Directory -Force -Path $failureEvidence | Out-Null
+    [IO.File]::WriteAllText((Join-Path $failureEvidence 'fabric-gametest.out.log'),
+        (Read-ProcessLog $gameOutFile), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $failureEvidence 'fabric-gametest.err.log'),
+        (Read-ProcessLog $gameErrFile), [Text.UTF8Encoding]::new($false))
+    if ($runtimeOut) {
+        [IO.File]::WriteAllText((Join-Path $failureEvidence 'runtime-cli.out.log'),
+            $runtimeOut.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
+    if ($runtimeErr) {
+        [IO.File]::WriteAllText((Join-Path $failureEvidence 'runtime-cli.err.log'),
+            $runtimeErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
+    if ($providerOut) {
+        [IO.File]::WriteAllText((Join-Path $failureEvidence 'provider-replay.out.log'),
+            $providerOut.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
+    if ($providerErr) {
+        [IO.File]::WriteAllText((Join-Path $failureEvidence 'provider-replay.err.log'),
+            $providerErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
     $failurePath = Join-Path $runtimeHome 'e2e-failure.txt'
     $failureText = $_.Exception.ToString() + [Environment]::NewLine + $_.ScriptStackTrace
     [IO.File]::WriteAllText($failurePath, $failureText, [Text.UTF8Encoding]::new($false))

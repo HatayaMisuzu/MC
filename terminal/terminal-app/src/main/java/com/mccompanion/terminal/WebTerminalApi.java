@@ -60,6 +60,8 @@ final class WebTerminalApi {
         send(exchange, 200, providerStatus(requiredQuery(exchange, "instanceId")));
       else if ("POST".equals(method) && "/api/provider/test".equals(path))
         send(exchange, 200, providerTest(body(exchange)));
+      else if ("GET".equals(method) && "/api/search/status".equals(path))
+        send(exchange, 200, searchStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/session/status".equals(path))
         send(exchange, 200, sessionStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/companions".equals(path))
@@ -266,6 +268,11 @@ final class WebTerminalApi {
         .put("message", result.message());
   }
 
+  private JsonNode searchStatus(String instanceId) throws Exception {
+    MinecraftInstance instance = root.instance(instanceId);
+    return new SearchConfigurationService().status(root.profile(instance));
+  }
+
   private ObjectNode sessionStatus(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
     if (instance.loader() != LoaderType.FABRIC) {
@@ -343,6 +350,7 @@ final class WebTerminalApi {
           case "install" -> installPlan(request);
           case "runtime" -> runtimePlan(request);
           case "provider" -> providerPlan(request);
+          case "search" -> searchPlan(request);
           case "session" -> sessionPlan(request);
           case "companions" -> companionPlan(request);
           case "agent" -> agentPlan(request);
@@ -507,6 +515,29 @@ final class WebTerminalApi {
           new PairingService().ensureConfigured(instance, profile);
           return (ObjectNode) provider.status(profile);
         });
+  }
+
+  private OperationManager.Plan searchPlan(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String action = required(request, "action").toLowerCase();
+    if (!List.of("configure", "disable").contains(action))
+      throw new IllegalArgumentException("Search action is not supported");
+    MinecraftInstance instance = root.instance(instanceId);
+    ObjectNode details = JSON.createObjectNode().put("summary", "Search " + action)
+        .put("storesToken", false);
+    if ("configure".equals(action)) details.put("endpoint", required(request, "endpoint"))
+        .put("tokenEnv", required(request, "tokenEnv"));
+    JsonNode copy = request.deepCopy();
+    return operations.create("search", action, instanceId, false, details, progress -> {
+      SearchConfigurationService search = new SearchConfigurationService();
+      RuntimeProfile profile = root.profile(instance);
+      if ("disable".equals(action)) search.disable(profile);
+      else search.configure(profile, required(copy, "endpoint"), required(copy, "tokenEnv"),
+          copy.path("timeoutSeconds").asInt(15), textList(copy.path("allowedDomains")),
+          textList(copy.path("deniedDomains")));
+      new PairingService().ensureConfigured(instance, profile);
+      return (ObjectNode) search.status(profile);
+    });
   }
 
   private OperationManager.Plan sessionPlan(JsonNode request) throws Exception {
@@ -820,6 +851,13 @@ final class WebTerminalApi {
     if (!Double.isFinite(value) || Math.abs(value) > 30_000_000)
       throw new IllegalArgumentException(key + " 超出安全范围");
     return value;
+  }
+
+  private static List<String> textList(JsonNode node) {
+    if (!node.isArray()) return List.of();
+    java.util.ArrayList<String> values = new java.util.ArrayList<>();
+    node.forEach(value -> values.add(value.asText("")));
+    return List.copyOf(values);
   }
 
   private static String decode(String value) {

@@ -258,6 +258,20 @@ product UI controls, and release/install verification remain incomplete.
   resumption, live concurrent cancellation E2E, and verified Hermes-native configuration remain,
   so the protocol is intentionally `PARTIAL`.
 
+## Search configuration and privacy UI slice
+
+- Added a Terminal/Web Search configuration lifecycle with explicit `disabled`/`http` state,
+  HTTPS-only remote endpoints (loopback HTTP remains available for Replay), environment-variable
+  token references, a 1..30 second timeout, and normalized allow/deny domain lists that cannot
+  overlap. Tokens are never accepted by or returned to the page.
+- Pairing/profile generation now carries `search.json` into the actual Runtime YAML. This closes
+  the previous product-path gap where the bounded Search Gateway existed but Terminal-generated
+  Runtime profiles always fell back to disabled defaults.
+- The Search & Privacy page states the no-cookie/no-login/no-coordinate boundary and the rule that
+  external search content cannot become verified World Memory. Validation, YAML propagation,
+  Vitest, and the TypeScript production build pass. Provider connection testing, Search Doctor,
+  caching, source-click UI, and the full session lifecycle remain `PARTIAL`.
+
 ## Craft item slice
 
 - Added `item.craft` / `CraftItem` only when the connected Fabric body reports the

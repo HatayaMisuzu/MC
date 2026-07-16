@@ -12,6 +12,7 @@ import {
   PlayCircle,
   RefreshCw,
   Server,
+  Search,
   Settings,
   ShieldCheck,
   SunMoon,
@@ -31,6 +32,7 @@ export type Route =
   | 'smoke'
   | 'runtime'
   | 'provider'
+  | 'search'
   | 'brain'
   | 'doctor'
   | 'logs'
@@ -45,6 +47,7 @@ const navigation: Array<{ id: Route; label: string; icon: typeof Gauge }> = [
   { id: 'smoke', label: '自动测试', icon: ClipboardCheck },
   { id: 'runtime', label: 'Runtime', icon: Server },
   { id: 'provider', label: 'Provider', icon: Activity },
+  { id: 'search', label: 'Search 与隐私', icon: Search },
   { id: 'brain', label: 'External Brain', icon: BrainCircuit },
   { id: 'doctor', label: 'Doctor', icon: HeartPulse },
   { id: 'logs', label: '日志与支持', icon: FileText },

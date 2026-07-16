@@ -48,6 +48,25 @@ class PairingAndProfileServiceTest {
   }
 
   @Test
+  void searchConfigurationIsWrittenToRuntimeYamlWithoutItsToken() throws Exception {
+    var i = instance("search");
+    var p = new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe")).ensure("search");
+    Files.writeString(p.profileDirectory().resolve("search.json"), """
+        {"mode":"http","endpoint":"https://search.example/v1/query",
+         "tokenEnv":"MCAC_SEARCH_KEY","timeoutSeconds":9,
+         "allowedDomains":["docs.example"],"deniedDomains":["blocked.example"]}
+        """);
+
+    new PairingService().ensureConfigured(i, p);
+
+    String yaml = Files.readString(p.configFile());
+    assertTrue(yaml.contains("search:\n  mode: http"));
+    assertTrue(yaml.contains("token_env: MCAC_SEARCH_KEY"));
+    assertTrue(yaml.contains("allowed_domains: [\"docs.example\"]"));
+    assertFalse(yaml.contains("Bearer"));
+  }
+
+  @Test
   void profilesGetStableDistinctPorts() throws Exception {
     var service =
         new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe"), port -> true);

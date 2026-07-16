@@ -1,4 +1,9 @@
-# Minecraft AI Companion 0.3.0 验收报告
+# Historical Minecraft AI Companion 0.3.0 terminal/release report
+
+> Archived evidence from 2026-07-13. This report predates the current External Brain, typed
+> Task Graph, primitive Tool, and Skill Workspace RC requirements. It does not establish current
+> SHA readiness and must not be used as the final RC report. Current status:
+> [docs/RC_COMPLETION_MATRIX.md](docs/RC_COMPLETION_MATRIX.md).
 
 日期：2026-07-13
 

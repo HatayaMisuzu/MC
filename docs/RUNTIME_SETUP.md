@@ -1,6 +1,8 @@
 # Companion Runtime 设置
 
-Runtime 是独立 Java 21 应用。它提供本地 WebSocket、SQLite WAL、控制租约、任务事件、规则解析、CLI 和可选 OpenAI-compatible Provider。Mod 不依赖 Runtime 才能加载。
+Runtime 是独立 Java 21 应用。它提供本地 WebSocket、SQLite WAL、控制租约、任务事件、
+External Brain Bridge、受限 Tool Gateway、MCP、记忆、搜索和确定性执行基础。Mod 不依赖
+Runtime 才能加载。Runtime 不是内置高层 Agent；高层推理和规划属于外部 Brain。
 
 ## 启动
 
@@ -22,9 +24,9 @@ Fabric 1.21.1 主目标启用 Runtime 控制时，在服务器关闭状态下把
 
 Runtime CLI 支持 `list`，以及 `follow/status/return/goto/stop/pause/resume <companion-id>`。单同伴测试或演示可用 `first` 代替 UUID，例如 `follow first`。
 
-## 无模型规则模式
+## 兼容规则模式
 
-默认 `provider.mode: rules`，不需要 API key，支持：
+旧的 `provider.mode: rules` 不需要 API key，只提供明确控制命令的兼容快速通道：
 
 - `跟着我`
 - `停止`
@@ -35,7 +37,9 @@ Runtime CLI 支持 `list`，以及 `follow/status/return/goto/stop/pause/resume 
 - `当前状态`
 - `取消任务`
 
-## OpenAI-compatible 模式
+它不是高层 Planner，也不是最终 External Brain 路径。
+
+## External Brain / OpenAI-compatible 模式
 
 Provider 配置只保存公开信息：
 
@@ -48,7 +52,12 @@ provider:
   timeout_seconds: 60
 ```
 
-在启动 Runtime 的进程环境中设置 `MC_COMPANION_API_KEY`。不要把 key 写进 YAML。Provider 超时、连接失败或返回无效 JSON 时，Runtime 会拒绝不安全输出并回退规则模式。
+在启动 Runtime 的进程环境中设置 `MC_COMPANION_API_KEY`。不要把 key 写进 YAML。Provider
+超时、连接失败或返回无效 Tool Call 时，Runtime 会安全失败并保留可恢复状态；不得由
+内部 Planner 接管开放式目标。
+
+运行时 Brain 无 Shell、Git、Gradle、任意文件、生产源码或任意网络权限。联网搜索必须
+通过单独授权的 Search Gateway。
 
 ## 停止
 

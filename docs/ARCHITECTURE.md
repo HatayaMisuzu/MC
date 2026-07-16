@@ -1,46 +1,118 @@
-# 架构
+# MCAC architecture
+
+Updated: 2026-07-16
+
+## Authority boundary
 
 ```text
-Companion Runtime (Java 21)
-  task / event / lease / SQLite / rules / optional provider
-                    |
-          authenticated WebSocket
-                    |
-Minecraft loader module
-  commands / lifecycle / bridge / platform hooks
-                    |
-Minecraft version body
-  CompanionPlayer / FakeConnection / persistence
-                    |
-Behavior + Reflex + Pathing
-                    |
+Player / game chat / HTML control terminal
+                    │
+                    ▼
+MCAC Runtime
+├─ bounded context and conversation
+├─ typed memory and Search Gateway
+├─ primitive Tool Gateway
+├─ deterministic Task Graph Runtime
+├─ isolated Skill Workspace
+├─ safety, persistence, audit and verification
+└─ product/diagnostic APIs
+                    │
+                    ▼
+Hermes / DeepSeek / another external LLM or Agent
+```
+
+The external Brain is the only high-level decision-maker.
+
+```text
+Task Graph Runtime = deterministic orchestration
+External Brain = reasoning and planning
+```
+
+MCAC can validate and execute a Brain-authored graph, enforce limits and permissions, dispatch
+primitive Minecraft actions, pause/cancel/retry/checkpoint, reconcile after restart, and return
+verified observations. It cannot invent an open-ended goal, choose a high-level strategy, maintain
+a competing personality/plan, or modify production source.
+
+## Runtime and body layers
+
+```text
+External Brain adapters
+  Hermes mcac-brain/1 · OpenAI-compatible · explicit non-Live Replay
+                              │
+Runtime Tool Gateway / MCP / authenticated Brain ingress
+                              │
+Task Graph Runtime · Skill Workspace · Memory · Search · Audit
+                              │ authenticated WebSocket
+Minecraft loader bridge (Fabric full bridge; Forge/NeoForge LOCAL_ONLY)
+                              │
+Version body / CompanionPlayer / behavior lifecycle
+                              │
+Primitive executors + SafetyExecutor + ObservationVerifier
+                              │
 PlayerActionGateway + ActionEvidence
-                    |
-Vanilla/Mod player code paths
+                              │
+Vanilla/Mod player interaction paths
 ```
 
-## 不变量
+Current code still contains composite capabilities such as mining, smelting, storage, crafting, and
+defense. They are compatibility conveniences with real vanilla behavior evidence. They must migrate
+to shared primitive executors or declarative built-in Skills and must not remain the only path.
 
-- `pure-core` 不引用 `net.minecraft` 或 Loader API。
-- Runtime 不引用 Minecraft 类。
-- 三个 Loader 工程只声明其真实 Minecraft、Loader 和 Java 范围。
-- 路径 worker 只读取主线程创建的 immutable `NavSnapshot`。
-- 异步结果返回主线程时重新校验 world、dimension、lease epoch、behavior revision、companion 和 owner。
-- 正常任务改变世界的唯一入口是 `PlayerActionGateway`。
-- spawn/respawn、迁移和测试夹具例外隔离并审计。
-
-## 启动顺序
+## Tool, Task Graph, and Skill relationship
 
 ```text
-版本/Java 检查 → Loader 初始化 → Body Core → 数据迁移
-→ 可选兼容发现 → capability freeze → Runtime pairing
+Primitive Tool
+  one bounded observable action
+        ▲
+        │ composed by
+Declarative Skill
+  reusable Task Graph + permissions + provenance + trust state
+        ▲
+        │ selected/authored/revised by
+External Brain Task Graph
+  goal-specific deterministic orchestration
 ```
 
-Runtime 失败只能令状态降级为 `LOCAL_ONLY`/`SAFE_IDLE`，不能阻止 Mod 加载。
+Wood, diamonds, shelter construction, chest organization, smelting, defense, and unknown Mod
+resources are acceptance scenarios. They do not define production Handler classes.
 
-## 行为状态
+## Runtime permission boundary
 
-`CREATED → STARTING → RUNNING ↔ WAITING/PAUSED → COMPLETED/FAILED/CANCELLED`
+The external Brain receives logical Workspace resources and bounded MCAC Tools, never host authority.
+No runtime Tool exposes arbitrary Shell, Git, Gradle, compiler/process execution, arbitrary files,
+production source, browser cookies, launcher credentials, Minecraft save mutation, direct inventory
+editing, or direct world editing. Search is a separate authorized gateway, not arbitrary networking.
 
-每个行为支持 start、tick、pause、resume、cancel、事件处理和序列化快照。租约过期、Runtime 断线、owner 下线或高优先反射会停止输入并进入安全状态。
+## Registry and Mod compatibility
 
+Generic Mod support comes from Registry IDs and schemas reported by the connected body: blocks,
+items, entity types, recipes, menu types, tags, dimensions, tool requirements, and observable
+components. MCAC may promise observation and generic interaction only; unknown behavior must return
+an honest failure/observation. Ordinary Registry content must not require one Java adapter per Mod.
+
+## Safety
+
+Emergency reflexes for immediate hazards may preempt normal graph execution:
+
+```text
+Emergency Reflex > User Cancel > Explicit Safety Tool > Normal Task Graph
+```
+
+Reflexes and explicit `safety.*` Tools share executors and observation formats. A reflex may pause
+dangerous work but cannot silently replace the long-term goal; the external Brain decides recovery.
+
+## Product reuse
+
+The repository already contains an HTML control terminal, installer, updater, rollback, uninstaller,
+Doctor, support-bundle, multi-loader build, and release packaging. New Task Graph/Skill/permission
+features extend these surfaces rather than creating parallel products.
+
+## Layer invariants
+
+- `pure-core` does not reference Minecraft or Loader APIs.
+- Runtime does not reference Minecraft classes.
+- Normal world-changing actions pass through `PlayerActionGateway` and real player interaction.
+- Asynchronous results are revalidated against world, dimension, lease, behavior revision,
+  companion, and owner.
+- Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.
+- Replay is automation evidence, not Live-provider or human-play evidence.

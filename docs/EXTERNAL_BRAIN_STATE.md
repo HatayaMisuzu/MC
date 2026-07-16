@@ -8,11 +8,12 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `GENERIC_RESOURCE_BODY_PARTIALLY_VERIFIED`
+This is a chronological engineering log, not the completion authority. Current status is in
+`docs/RC_COMPLETION_MATRIX.md`.
 
-The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
-the complete generic Minecraft tool set,
-product UI controls, and release/install verification remain incomplete.
+The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`. Primitive Tool coverage,
+Task Graph execution/recovery, Skill Workspace, product UI controls, and current-version
+release/install verification remain incomplete.
 
 ## Completed in this slice
 

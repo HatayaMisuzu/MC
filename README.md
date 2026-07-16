@@ -1,6 +1,13 @@
 # Minecraft AI Companion 0.3.0
 
-Minecraft AI Companion 是面向 PCL2/HMCL 的 Windows 本地控制中心。普通用户只需双击 `mcac.exe`：程序会在随机 Loopback 端口启动后端并自动打开中文 HTML 图形界面；不需要安装 Java、Node.js 或 Gradle，也不需要编辑 JSON/YAML。
+Minecraft AI Companion（MCAC）是面向 PCL2/HMCL 的 Windows 本地 Minecraft 身体与控制中心。
+Hermes、DeepSeek 或其他外部 LLM/Agent 是唯一高层决策者；MCAC 提供通用 Minecraft
+Tools、上下文、记忆、搜索、安全、持久化、验证、确定性 Task Graph 执行和产品界面。
+MCAC 不是内置高层 Agent，也不是隐藏 Planner。
+
+当前仓库仍处于 RC 建设阶段。发布包/安装器基础已经存在，但最新 External Brain、
+Task Graph 和 Skill Workspace 版本尚未达到最终 RC 门槛。普通用户发布流程的历史说明
+保留如下；当前完成状态以 [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md) 为准。
 
 ## 使用发布包
 
@@ -42,6 +49,22 @@ mcac-release/
 
 所有写操作都经过“生成计划 → 用户确认 → 执行 → 结构化进度 → 验证 → 失败回滚”。前端不直接读取 SQLite、Token 或 Minecraft 文件。
 
+现有 HTML 终端将继续扩展 Task Graph、Skills、Workspace 和权限视图，不会另起一套控制产品。
+
+## 架构与权限
+
+```text
+Task Graph Runtime = deterministic orchestration
+External Brain = reasoning and planning
+```
+
+运行时外部 Brain 只能通过受限 Tool Gateway、逻辑 Workspace 和声明式 JSON/YAML
+Task Graph/Skill 工作。它不能访问 Shell、Git、Gradle、任意文件系统、生产源码、Cookie、
+启动器凭据或直接世界/库存编辑。
+
+木材、钻石、熔炼、箱子、防御和建造是通用性验收场景，不对应专用 Java Handler。
+未知 Mod 内容通过动态 Registry、通用交互和真实 Observation 支持。
+
 ## 支持矩阵
 
 | Minecraft | Loader | Java | 模式 |
@@ -73,4 +96,14 @@ build/distributions/mcac-release/
 build/distributions/mcac-release.zip
 ```
 
-验收证据见 [FINAL_REPORT.md](FINAL_REPORT.md)，仍需外部环境的项目见 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)。
+当前文档入口：
+
+- [架构与权限边界](docs/ARCHITECTURE.md)
+- [当前执行约束](CODEX_EXECUTION.md)
+- [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md)
+- [Typed Task Graph DSL](docs/TASK_GRAPH_DSL.md)
+- [MCP 协议](docs/MCP_PROTOCOL.md)
+- [已知限制](KNOWN_LIMITATIONS.md)
+
+[FINAL_REPORT.md](FINAL_REPORT.md) 是 2026-07-13 的历史 0.3.0 终端/发布工程报告，不代表
+当前 SHA 或 External Brain/Task Graph RC 已通过。

@@ -162,8 +162,21 @@ tasks.register('secretCheck') {
     }
 }
 
+tasks.register('documentationCheck') {
+    group = 'verification'
+    description = 'Verifies Markdown links, documented paths/commands, and current readiness labels.'
+    doLast {
+        exec {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/documentation-check.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
+    }
+}
+
 tasks.named('check') {
-    dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck'
+    dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck',
+            'documentationCheck'
 }
 
 def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')

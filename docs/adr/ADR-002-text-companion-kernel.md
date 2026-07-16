@@ -1,6 +1,13 @@
 # ADR-002 — 纯文本 Companion 的规则、模型、Skill 与验证分层
 
-状态：Accepted（0.4.0 Text Companion Beta 实施基线）
+状态：Superseded
+
+由 [../ARCHITECTURE.md](../ARCHITECTURE.md) 与
+[../TASK_GRAPH_DSL.md](../TASK_GRAPH_DSL.md) 取代。
+
+本 ADR 记录早期内置 `AgentDecision`/短计划架构，保留用于迁移审计。它不再授权 MCAC
+维护高层 Planner，也不代表当前产品方向。当前唯一高层决策者是外部 Brain；现有
+`AgentKernel`/短计划代码属于待迁移兼容层，不应继续扩展为内部 Agent。
 
 ## 背景
 

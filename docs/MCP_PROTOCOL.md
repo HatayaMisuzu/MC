@@ -34,7 +34,9 @@ X-MCAC-Companion-Id: <connected companion UUID>
 ```
 
 The controller header is optional and defaults to `mcp`; Brain-session and companion headers
-are mandatory. A client must not reuse one Brain-session ID across independent users or tasks.
+are mandatory. These headers are routing claims, not sufficient proof of identity by themselves.
+Runtime also binds calls to the authenticated pairing context and durable session/task state.
+A client must not reuse one Brain-session ID across independent users or tasks.
 
 ## Lifecycle
 
@@ -131,6 +133,9 @@ MCAC Terminal Doctor performs a live local negotiation and bounded-tool check be
 
 ## Current protocol limits
 
+- Full lease expiry, request nonce, progress-resume token, cross-companion authorization, and
+  replay-resistant identity hardening remain tracked as `PARTIAL`; this document does not claim
+  they are complete.
 - SSE event replay/resumption is not implemented; reconnect and reconcile through durable task
   and audit state.
 - HTTP transport sessions are stateless; MCAC identity and task state remain durable.

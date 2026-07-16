@@ -481,6 +481,141 @@ class RuntimeApplicationTest {
         }
     }
 
+    @Test
+    void taskGraphAskUserUsesSharedHttpAndGameAnswerRoutingWithoutSwallowingChat() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("task-graph-ask"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        config.provider.mode = "rules";
+        try (RuntimeApplication application = RuntimeApplication.start(config, false)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"graph-world","capabilities":{}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"graph-companion","ownerId":"owner-1","displayName":"Graph Companion",
+                      "worldId":"graph-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("graph-companion").isEmpty() && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            HttpClient http = HttpClient.newHttpClient();
+            URI mcp = new URI("http://127.0.0.1:" + config.server.managementPort + "/mcp");
+            java.util.function.Function<String, HttpRequest.Builder> mcpRequest = ignored ->
+                    HttpRequest.newBuilder(mcp).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .header("MCP-Protocol-Version", "2025-06-18")
+                            .header("X-MCAC-Controller-Id", "hermes-test")
+                            .header("X-MCAC-Brain-Session-Id", "brain-graph")
+                            .header("X-MCAC-Companion-Id", "graph-companion");
+
+            HttpResponse<String> started = http.send(mcpRequest.apply("start").POST(
+                    HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"graph-game","method":"tools/call","params":{
+                              "name":"task_graph.execute","arguments":{"graph":{
+                                "version":"mcac-task-graph/1","id":"game-answer","permissions":[],
+                                "root":{"id":"root","type":"sequence","nodes":[
+                                  {"id":"ask","type":"ask_user","prompt":"Continue?","options":["Yes","No"]},
+                                  {"id":"done","type":"return","value":"${outputs.ask.text}"}
+                                ]}}}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            JsonNode startedResult = Json.parse(started.body()).path("result").path("structuredContent");
+            assertFalse(startedResult.path("isError").asBoolean(false), started.body());
+            assertEquals("WAITING", startedResult.path("observation").path("state").asText());
+            String executionId = startedResult.path("observation").path("executionId").asText();
+            var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()));
+            String questionId = conversations.activeForTaskGraph(executionId).orElseThrow().questionId();
+
+            HttpResponse<String> ordinary = http.send(HttpRequest.newBuilder(
+                            new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"controllerId":"runtime-primary","companionId":"graph-companion",
+                             "text":"How are you?"}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(503, ordinary.statusCode(), ordinary.body());
+            assertEquals(questionId, conversations.activeForTaskGraph(executionId).orElseThrow().questionId());
+            assertEquals(0, conversations.list("graph-companion", 20).stream()
+                    .filter(event -> event.kind().equals("ANSWER")).count());
+
+            client.send("""
+                    {"type":"player_request","sessionId":"%s","sequence":1,"payload":{
+                      "requestId":"graph-game-answer","companionId":"graph-companion","ownerId":"owner-1",
+                      "text":"Yes"}}
+                    """.formatted(sessionId));
+            JsonNode gameAnswer = client.awaitPlayerReply("graph-game-answer", 5);
+            assertEquals("task-graph", gameAnswer.path("payload").path("source").asText());
+            assertTrue(gameAnswer.path("payload").path("accepted").asBoolean());
+            assertEquals("RESUME_ACCEPTED", gameAnswer.path("payload").path("code").asText());
+
+            JsonNode inspectedGraph = awaitTaskGraphState(http, mcpRequest, executionId, "SUCCEEDED");
+            assertEquals("SUCCEEDED", inspectedGraph.path("state").asText(), inspectedGraph.toString());
+            assertEquals("Yes", inspectedGraph.path("value").asText());
+
+            HttpResponse<String> httpStarted = http.send(mcpRequest.apply("start-http").POST(
+                    HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"graph-http","method":"tools/call","params":{
+                              "name":"task_graph.execute","arguments":{"graph":{
+                                "version":"mcac-task-graph/1","id":"http-answer","permissions":[],
+                                "root":{"id":"root","type":"sequence","nodes":[
+                                  {"id":"ask","type":"ask_user","prompt":"Choose","options":["Yes","No"]},
+                                  {"id":"done","type":"return","value":"${outputs.ask.text}"}
+                                ]}}}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            String httpExecution = Json.parse(httpStarted.body()).path("result").path("structuredContent")
+                    .path("observation").path("executionId").asText();
+            assertFalse(httpExecution.isBlank(), httpStarted.body());
+            HttpResponse<String> httpAnswer = http.send(HttpRequest.newBuilder(
+                            new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"controllerId":"runtime-primary","companionId":"graph-companion","text":"No"}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, httpAnswer.statusCode(), httpAnswer.body());
+            assertEquals("task-graph", Json.parse(httpAnswer.body()).path("source").asText());
+            assertEquals("RESUME_ACCEPTED", Json.parse(httpAnswer.body()).path("code").asText());
+            JsonNode httpGraph = awaitTaskGraphState(http, mcpRequest, httpExecution, "SUCCEEDED");
+            assertEquals("No", httpGraph.path("value").asText());
+            client.closeBlocking();
+        }
+    }
+
+    private static JsonNode awaitTaskGraphState(
+            HttpClient http,
+            java.util.function.Function<String, HttpRequest.Builder> mcpRequest,
+            String executionId,
+            String expectedState) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        JsonNode latest = Json.object();
+        String latestBody = "";
+        while (System.nanoTime() < deadline) {
+            HttpResponse<String> inspected = http.send(mcpRequest.apply("inspect").POST(
+                    HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"inspect-%s","method":"tools/call","params":{
+                              "name":"task_graph.inspect","arguments":{"executionId":"%s"}}}
+                            """.formatted(executionId, executionId))).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            latestBody = inspected.body();
+            latest = Json.parse(latestBody).path("result").path("structuredContent").path("observation");
+            if (expectedState.equals(latest.path("state").asText())) return latest;
+            Thread.sleep(20);
+        }
+        fail("Task Graph did not reach " + expectedState + "; latest=" + latestBody);
+        return latest;
+    }
+
     private static int freePort() throws Exception {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();

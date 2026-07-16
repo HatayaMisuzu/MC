@@ -34,6 +34,7 @@ import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
@@ -66,6 +67,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final MemoryRepository memories;
     private final ConversationService conversations;
     private final ExternalBrainCoordinator externalBrain;
+    private final TaskGraphRuntime taskGraphRuntime;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
@@ -81,7 +83,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                                   CapabilityVisibility capabilityVisibility, MemoryRepository memories,
                                   ConversationService conversations, RuntimeLog log) {
         this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, memories, conversations, null, log, Clock.systemUTC());
+                capabilityVisibility, memories, conversations, null, null, log, Clock.systemUTC());
     }
 
     public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
@@ -91,7 +93,18 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                                   ConversationService conversations, ExternalBrainCoordinator externalBrain,
                                   RuntimeLog log) {
         this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, memories, conversations, externalBrain, log, Clock.systemUTC());
+                capabilityVisibility, memories, conversations, externalBrain, null, log, Clock.systemUTC());
+    }
+
+    public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
+                                  CommandService commands, CompanionRepository companions, ProviderRouter providers,
+                                  AgentPlanRepository plans, AgentKernel kernel,
+                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories,
+                                  ConversationService conversations, ExternalBrainCoordinator externalBrain,
+                                  TaskGraphRuntime taskGraphRuntime, RuntimeLog log) {
+        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
+                capabilityVisibility, memories, conversations, externalBrain, taskGraphRuntime,
+                log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
@@ -99,7 +112,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                            AgentPlanRepository plans, AgentKernel kernel,
                            CapabilityVisibility capabilityVisibility, MemoryRepository memories,
                            ConversationService conversations, ExternalBrainCoordinator externalBrain,
-                           RuntimeLog log, Clock clock) {
+                           TaskGraphRuntime taskGraphRuntime, RuntimeLog log, Clock clock) {
         super(address);
         this.pairingToken = pairingToken;
         this.sessions = sessions;
@@ -112,6 +125,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.memories = memories;
         this.conversations = conversations;
         this.externalBrain = externalBrain;
+        this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.clock = clock;
         this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
@@ -272,6 +286,35 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 var activePlan = plans.activeForCompanion(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
+                if (waiting.isPresent() && taskGraphRuntime != null
+                        && taskGraphRuntime.handles(waiting.orElseThrow())) {
+                    if (incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
+                        var resumed = taskGraphRuntime.answer(waiting.orElseThrow(), incoming);
+                        reply.put("accepted", resumed.success()).put("source", "task-graph")
+                                .put("code", resumed.code()).put("reply", "Answer received.")
+                                .put("questionId", waiting.orElseThrow().questionId())
+                                .put("executionId", waiting.orElseThrow().taskGraphExecutionId());
+                        reply.set("taskGraph", resumed.observation());
+                        ObjectNode message = envelope(session, "player_reply");
+                        message.set("payload", reply);
+                        if (session.peer().isOpen()) session.peer().send(Json.write(message));
+                        return;
+                    }
+                    if (incoming.kind() == IncomingMessageKind.CONTROL) {
+                        var cancelled = taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_CANCELLED");
+                        reply.put("accepted", cancelled.success()).put("source", "task-graph")
+                                .put("code", cancelled.code()).put("reply", "Cancelled.")
+                                .put("executionId", waiting.orElseThrow().taskGraphExecutionId());
+                        ObjectNode message = envelope(session, "player_reply");
+                        message.set("payload", reply);
+                        if (session.peer().isOpen()) session.peer().send(Json.write(message));
+                        return;
+                    }
+                    if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                        taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_MODIFIED_GOAL");
+                        waiting = java.util.Optional.empty();
+                    }
+                }
                 if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() == null
                         && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
                     var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);

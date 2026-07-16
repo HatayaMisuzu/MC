@@ -38,7 +38,7 @@ public final class ConversationRepository {
                                List<ConversationOption> options, boolean freeTextAllowed,
                                JsonNode context, Instant expiresAt) throws SQLException {
         return askInternal(companionId, required(planId), null, null, prompt, reason, options,
-                freeTextAllowed, context, expiresAt);
+                null, freeTextAllowed, context, expiresAt);
     }
 
     public WaitingQuestion askBrain(String companionId, String brainSessionId, String taskId,
@@ -48,11 +48,22 @@ public final class ConversationRepository {
         Optional<WaitingQuestion> existing = activeForBrainSession(sessionId);
         if (existing.isPresent()) return existing.get();
         return askInternal(companionId, null, sessionId, taskId, prompt, reason, options,
-                freeTextAllowed, context, expiresAt);
+                null, freeTextAllowed, context, expiresAt);
+    }
+
+    public WaitingQuestion askTaskGraph(String companionId, String executionId, String prompt, String reason,
+                                        List<ConversationOption> options, boolean freeTextAllowed,
+                                        JsonNode context, Instant expiresAt) throws SQLException {
+        String id = required(executionId);
+        Optional<WaitingQuestion> existing = activeForTaskGraph(id);
+        if (existing.isPresent()) return existing.get();
+        return askInternal(companionId, null, null, null, prompt, reason, options,
+                id, freeTextAllowed, context, expiresAt);
     }
 
     private WaitingQuestion askInternal(String companionId, String planId, String brainSessionId, String taskId,
                                         String prompt, String reason, List<ConversationOption> options,
+                                        String taskGraphExecutionId,
                                         boolean freeTextAllowed, JsonNode context, Instant expiresAt) throws SQLException {
         if (options == null || options.isEmpty() || options.size() > 3) {
             throw new IllegalArgumentException("A waiting question requires 1..3 options");
@@ -68,20 +79,20 @@ public final class ConversationRepository {
             try {
                 try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO waiting_question(question_id,plan_id,brain_session_id,task_id,companion_id,
-                          prompt,reason,options_json,free_text_allowed,state,context_json,answer_json,
-                          created_at,updated_at,expires_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,'WAITING',?,NULL,?,?,?)
+                          task_graph_execution_id,prompt,reason,options_json,free_text_allowed,state,
+                          context_json,answer_json,created_at,updated_at,expires_at)
+                        VALUES(?,?,?,?,?, ?,?,?,?,?,'WAITING',?,NULL,?,?,?)
                         """)) {
                     statement.setString(1, questionId); statement.setString(2, planId);
                     statement.setString(3, brainSessionId); statement.setString(4, taskId);
-                    statement.setString(5, required(companionId)); statement.setString(6, required(prompt));
-                    statement.setString(7, required(reason));
-                    statement.setString(8, Json.write(Json.MAPPER.valueToTree(options)));
-                    statement.setInt(9, freeTextAllowed ? 1 : 0);
-                    statement.setString(10, Json.write(context == null ? Json.object() : context));
-                    statement.setLong(11, now); statement.setLong(12, now);
-                    if (expiresAt == null) statement.setNull(13, java.sql.Types.BIGINT);
-                    else statement.setLong(13, expiresAt.toEpochMilli());
+                    statement.setString(5, required(companionId)); statement.setString(6, taskGraphExecutionId);
+                    statement.setString(7, required(prompt)); statement.setString(8, required(reason));
+                    statement.setString(9, Json.write(Json.MAPPER.valueToTree(options)));
+                    statement.setInt(10, freeTextAllowed ? 1 : 0);
+                    statement.setString(11, Json.write(context == null ? Json.object() : context));
+                    statement.setLong(12, now); statement.setLong(13, now);
+                    if (expiresAt == null) statement.setNull(14, java.sql.Types.BIGINT);
+                    else statement.setLong(14, expiresAt.toEpochMilli());
                     statement.executeUpdate();
                 }
                 JsonNode payload = Json.object().put("reason", reason).put("freeTextAllowed", freeTextAllowed)
@@ -160,6 +171,18 @@ public final class ConversationRepository {
                   AND (expires_at IS NULL OR expires_at>?) ORDER BY updated_at DESC LIMIT 1
                 """)) {
             statement.setString(1, required(brainSessionId)); statement.setLong(2, clock.millis());
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(readQuestion(result)) : Optional.empty();
+            }
+        }
+    }
+
+    public Optional<WaitingQuestion> activeForTaskGraph(String executionId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM waiting_question WHERE task_graph_execution_id=? AND state='WAITING'
+                  AND (expires_at IS NULL OR expires_at>?) ORDER BY updated_at DESC LIMIT 1
+                """)) {
+            statement.setString(1, required(executionId)); statement.setLong(2, clock.millis());
             try (ResultSet result = statement.executeQuery()) {
                 return result.next() ? Optional.of(readQuestion(result)) : Optional.empty();
             }
@@ -265,6 +288,7 @@ public final class ConversationRepository {
         String answer = result.getString("answer_json");
         return new WaitingQuestion(result.getString("question_id"), result.getString("plan_id"),
                 result.getString("brain_session_id"), result.getString("task_id"),
+                result.getString("task_graph_execution_id"),
                 result.getString("companion_id"), result.getString("prompt"), result.getString("reason"),
                 List.copyOf(options), result.getInt("free_text_allowed") != 0, result.getString("state"),
                 Json.parse(result.getString("context_json")), answer == null ? null : Json.parse(answer),

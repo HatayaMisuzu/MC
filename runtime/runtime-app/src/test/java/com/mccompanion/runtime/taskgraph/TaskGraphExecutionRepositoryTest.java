@@ -30,6 +30,7 @@ class TaskGraphExecutionRepositoryTest {
             assertEquals(64, created.graphHash().length());
             var running = repository.save(created.executionId(), created.revision(), "RUNNING", "observe",
                     Json.parse("[\"start\"]"), Json.object(), Json.object(),
+                    Json.object().put("observe", "value"),
                     Json.parse("[{\"nodeId\":\"start\"}]"), Json.parse("[{\"type\":\"checkpoint\"}]"),
                     null, Json.object().put("partial", true), "RUNNING");
             assertEquals(1, running.revision());
@@ -40,10 +41,40 @@ class TaskGraphExecutionRepositoryTest {
             assertEquals("RECONCILIATION_REQUIRED", recovered.state());
             assertEquals("RUNTIME_RESTARTED", recovered.resultCode());
             assertTrue(recovered.result().path("partial").asBoolean());
+            assertEquals("value", recovered.outputs().path("observe").asText());
             assertEquals(2, recovered.revision());
             assertThrows(IllegalStateException.class, () -> repository.save("execution-1", 0, "RUNNING",
-                    "other", Json.parse("[]"), Json.object(), Json.object(), Json.parse("[]"),
+                    "other", Json.parse("[]"), Json.object(), Json.object(), Json.object(), Json.parse("[]"),
                     Json.parse("[]"), null, Json.MAPPER.nullNode(), "RUNNING"));
+        }
+    }
+
+    @Test
+    void restartPreservesSafelyPausedAndWaitingExecutions() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("safe-states.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"safe","permissions":[],
+                     "root":{"id":"done","type":"return"}}
+                    """);
+            var waiting = repository.create("waiting",
+                    new ToolContext("hermes", "brain-1", "companion-1"), graph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            waiting = repository.save(waiting.executionId(), waiting.revision(), "WAITING", "ask",
+                    Json.parse("[]"), Json.object(), Json.object(), Json.object(), Json.parse("[]"),
+                    Json.parse("[]"), Json.object().put("questionId", "question-1"),
+                    Json.MAPPER.nullNode(), "TASK_GRAPH_WAITING_USER");
+            var paused = repository.create("paused",
+                    new ToolContext("hermes", "brain-2", "companion-1"), graph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(paused.executionId(), paused.revision(), "PAUSED", "wait",
+                    Json.parse("[]"), Json.object(), Json.object(), Json.object(), Json.parse("[]"),
+                    Json.parse("[]"), null, Json.MAPPER.nullNode(), "TASK_GRAPH_PAUSED");
+
+            assertEquals(0, repository.markUnfinishedForReconciliation());
+            assertEquals("WAITING", repository.get("waiting").orElseThrow().state());
+            assertEquals("PAUSED", repository.get("paused").orElseThrow().state());
         }
     }
 }

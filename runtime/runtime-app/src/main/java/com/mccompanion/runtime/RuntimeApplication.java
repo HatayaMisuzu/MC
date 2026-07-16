@@ -181,7 +181,9 @@ public final class RuntimeApplication implements AutoCloseable {
             toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools,
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains)));
-            minecraftTools.attachTaskGraphRuntime(new TaskGraphRuntime(toolGateway, taskGraphs));
+            TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
+                    conversationRepository);
+            minecraftTools.attachTaskGraphRuntime(taskGraphRuntime);
             externalBrain = brainOverride == null
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
@@ -217,11 +219,12 @@ public final class RuntimeApplication implements AutoCloseable {
                     memories,
                     conversations,
                     externalBrain,
+                    taskGraphRuntime,
                     log);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
                     kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,
-                    toolGateway, log);
+                    toolGateway, taskGraphRuntime, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;

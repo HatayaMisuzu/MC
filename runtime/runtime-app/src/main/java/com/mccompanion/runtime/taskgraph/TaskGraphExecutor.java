@@ -30,17 +30,23 @@ import java.util.function.Consumer;
 public final class TaskGraphExecutor {
     public static final Set<String> EXECUTABLE_NODE_TYPES = Set.of("sequence", "call_tool", "if", "switch",
             "repeat", "while", "retry", "fallback", "parallel", "wait", "checkpoint", "emit_progress",
-            "read_memory", "return", "fail");
+            "ask_user", "read_memory", "return", "fail");
     private final ToolGateway tools;
     private final TaskGraphValidator validator;
+    private final Set<String> executableNodeTypes;
 
     public TaskGraphExecutor(ToolGateway tools) {
-        this(tools, new TaskGraphValidator());
+        this(tools, new TaskGraphValidator(), EXECUTABLE_NODE_TYPES);
     }
 
     TaskGraphExecutor(ToolGateway tools, TaskGraphValidator validator) {
+        this(tools, validator, EXECUTABLE_NODE_TYPES);
+    }
+
+    TaskGraphExecutor(ToolGateway tools, TaskGraphValidator validator, Set<String> executableNodeTypes) {
         this.tools = java.util.Objects.requireNonNull(tools, "tools");
         this.validator = java.util.Objects.requireNonNull(validator, "validator");
+        this.executableNodeTypes = Set.copyOf(executableNodeTypes);
     }
 
     public TaskGraphExecutionResult execute(String executionId, ToolContext context, JsonNode graph) {
@@ -55,7 +61,7 @@ public final class TaskGraphExecutor {
         Map<String, String> available = tools.definitions(context).stream()
                 .filter(value -> !value.name().startsWith("task_graph."))
                 .collect(java.util.stream.Collectors.toMap(value -> value.name(), value -> value.permission()));
-        TaskGraphValidationResult validation = validator.validateExecutable(graph, available, EXECUTABLE_NODE_TYPES);
+        TaskGraphValidationResult validation = validator.validateExecutable(graph, available, executableNodeTypes);
         if (!validation.valid()) {
             return new TaskGraphExecutionResult(id, "FAILED", "TASK_GRAPH_INVALID", 0, List.of(), Map.of(),
                     List.of(validation.toJson()), Json.object());
@@ -68,6 +74,7 @@ public final class TaskGraphExecutor {
             case SUCCESS, RETURN -> "SUCCEEDED";
             case PAUSED -> "PAUSED";
             case CANCELLED -> "CANCELLED";
+            case WAITING -> "WAITING";
             case RECONCILIATION -> "RECONCILIATION_REQUIRED";
             case FAILURE -> "FAILED";
         };
@@ -89,7 +96,7 @@ public final class TaskGraphExecutor {
         String nodeKey = scoped(nodeId, scope);
         if (state.isCompleted(nodeKey)) return Outcome.success();
         state.enter(nodeId);
-        if (!EXECUTABLE_NODE_TYPES.contains(type)) {
+        if (!executableNodeTypes.contains(type)) {
             return Outcome.failure("NODE_TYPE_NOT_EXECUTABLE",
                     Json.object().put("nodeId", nodeId).put("nodeType", type));
         }
@@ -105,6 +112,7 @@ public final class TaskGraphExecutor {
                 case "repeat" -> repeatNode(node, path, state, scope);
                 case "while" -> whileNode(node, path, state, scope);
                 case "parallel" -> parallelNode(node, path, state, scope);
+                case "ask_user" -> askUser(node, state);
                 case "read_memory" -> readMemory(node, path, state, nodeKey);
                 case "wait" -> waitNode(node, state);
                 case "checkpoint" -> event(nodeId, "CHECKPOINT", node.path("label"), state);
@@ -332,6 +340,25 @@ public final class TaskGraphExecutor {
         return callTool(call, path, state, nodeKey);
     }
 
+    private Outcome askUser(JsonNode node, State state) {
+        String nodeId = node.path("id").asText();
+        JsonNode waiting = state.waitingQuestion(nodeId);
+        if (waiting.path("state").asText().equals("ANSWERED") && waiting.has("answer")) {
+            state.recordNodeOutput(nodeId, waiting.path("answer"));
+            state.clearWaitingQuestion();
+            return Outcome.success();
+        }
+        if (waiting.isObject()) return Outcome.waiting(waiting);
+        ObjectNode request = Json.object().put("state", "REQUESTED").put("nodeId", nodeId)
+                .put("prompt", node.path("prompt").asText())
+                .put("freeTextAllowed", node.has("freeTextAllowed")
+                        ? node.path("freeTextAllowed").asBoolean() : !node.has("options"));
+        request.set("options", node.has("options") ? node.path("options").deepCopy()
+                : Json.MAPPER.createArrayNode());
+        state.setWaitingQuestion(request);
+        return Outcome.waiting(request);
+    }
+
     private static Outcome toolOutcome(String nodeId, ToolResult result, State state) {
         state.recordToolOutcome(nodeId, result);
         return result.success() && result.terminal() ? Outcome.success()
@@ -393,12 +420,15 @@ public final class TaskGraphExecutor {
         return parentScope.isBlank() ? current : parentScope + '/' + current;
     }
 
-    private enum Kind { SUCCESS, FAILURE, RETURN, PAUSED, CANCELLED, RECONCILIATION }
+    private enum Kind { SUCCESS, FAILURE, RETURN, PAUSED, CANCELLED, WAITING, RECONCILIATION }
     private record Outcome(Kind kind, String code, JsonNode value) {
         static Outcome success() { return new Outcome(Kind.SUCCESS, "OK", Json.object()); }
         static Outcome failure(String code, JsonNode value) { return new Outcome(Kind.FAILURE, code, value); }
         static Outcome paused() { return new Outcome(Kind.PAUSED, "TASK_GRAPH_PAUSED", Json.object()); }
         static Outcome cancelled() { return new Outcome(Kind.CANCELLED, "TASK_GRAPH_CANCELLED", Json.object()); }
+        static Outcome waiting(JsonNode value) {
+            return new Outcome(Kind.WAITING, "TASK_GRAPH_WAITING_USER", value);
+        }
         static Outcome reconciliation(String code, JsonNode value) {
             return new Outcome(Kind.RECONCILIATION, code, value);
         }
@@ -424,6 +454,7 @@ public final class TaskGraphExecutor {
         private final Consumer<TaskGraphExecutionSnapshot> snapshots;
         private String currentNodeId;
         private JsonNode result = Json.MAPPER.nullNode();
+        private JsonNode waitingQuestion = Json.MAPPER.nullNode();
         private int toolCalls;
 
         private State(String executionId, ToolContext context, JsonNode graph, TaskGraphLimits limits,
@@ -451,9 +482,11 @@ public final class TaskGraphExecutor {
         private void restore(TaskGraphExecutionRecord previous) {
             previous.completedNodes().forEach(value -> completedNodes.add(value.asText()));
             previous.variables().fields().forEachRemaining(entry -> variables.set(entry.getKey(), entry.getValue()));
+            previous.outputs().fields().forEachRemaining(entry -> outputs.put(entry.getKey(), entry.getValue()));
             previous.checkpoints().forEach(value -> checkpoints.add(value.deepCopy()));
             previous.evidence().forEach(this::addEvidence);
             result = previous.result().deepCopy();
+            waitingQuestion = previous.waitingQuestion().deepCopy();
             previous.toolResults().fields().forEachRemaining(entry -> {
                 JsonNode value = entry.getValue();
                 ToolResult result = new ToolResult(entry.getKey(), value.path("toolName").asText(),
@@ -496,10 +529,13 @@ public final class TaskGraphExecutor {
                             .put("toolName", result.toolName())
                             .put("success", result.success()).put("code", result.code())
                             .set("observation", result.observation())));
+            ObjectNode outputValues = Json.object();
+            outputs.forEach(outputValues::set);
             ArrayNode boundedEvidence = Json.MAPPER.createArrayNode();
             evidence.forEach(boundedEvidence::add);
             snapshots.accept(new TaskGraphExecutionSnapshot(state, nodeId, completed, results,
-                    variables.deepCopy(), checkpoints.deepCopy(), boundedEvidence, result.deepCopy(), code));
+                    variables.deepCopy(), checkpoints.deepCopy(), outputValues.deepCopy(),
+                    boundedEvidence, waitingQuestion.deepCopy(), result.deepCopy(), code));
         }
 
         private String nodeForCall(String callId) {
@@ -581,6 +617,27 @@ public final class TaskGraphExecutor {
         private synchronized TaskGraphExecutionResult executionResult(String terminalState, Outcome outcome) {
             return new TaskGraphExecutionResult(executionId, terminalState, outcome.code, toolCalls,
                     List.copyOf(completedNodes), Map.copyOf(outputs), List.copyOf(evidence), outcome.value);
+        }
+
+        private synchronized JsonNode waitingQuestion(String nodeId) {
+            if (!waitingQuestion.isObject()) return Json.MAPPER.nullNode();
+            String requestedNode = waitingQuestion.path("context").path("nodeId").asText(
+                    waitingQuestion.path("nodeId").asText(""));
+            return requestedNode.equals(nodeId) ? waitingQuestion.deepCopy() : Json.MAPPER.nullNode();
+        }
+
+        private synchronized void setWaitingQuestion(JsonNode question) {
+            waitingQuestion = question.deepCopy();
+        }
+
+        private synchronized void clearWaitingQuestion() {
+            waitingQuestion = Json.MAPPER.nullNode();
+        }
+
+        private synchronized void recordNodeOutput(String nodeId, JsonNode value) {
+            outputs.put(nodeId, value.deepCopy());
+            variables.set(nodeId, value.deepCopy());
+            variables.set("last", value.deepCopy());
         }
     }
 }

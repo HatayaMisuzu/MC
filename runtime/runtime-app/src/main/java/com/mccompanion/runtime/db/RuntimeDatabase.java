@@ -566,6 +566,52 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "ALTER TABLE task_graph_execution ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'");
         List<String> taskGraphResult = List.of(
                 "ALTER TABLE task_graph_execution ADD COLUMN result_json TEXT NOT NULL DEFAULT 'null'");
+        List<String> taskGraphOutputs = List.of(
+                "ALTER TABLE task_graph_execution ADD COLUMN outputs_json TEXT NOT NULL DEFAULT '{}'");
+        List<String> taskGraphQuestions = List.of(
+                "ALTER TABLE waiting_question RENAME TO waiting_question_before_task_graph",
+                """
+                CREATE TABLE waiting_question (
+                  question_id TEXT PRIMARY KEY,
+                  plan_id TEXT,
+                  brain_session_id TEXT,
+                  task_id TEXT,
+                  task_graph_execution_id TEXT,
+                  companion_id TEXT NOT NULL,
+                  prompt TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  options_json TEXT NOT NULL,
+                  free_text_allowed INTEGER NOT NULL,
+                  state TEXT NOT NULL,
+                  context_json TEXT NOT NULL,
+                  answer_json TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  expires_at INTEGER,
+                  CHECK (
+                    (CASE WHEN plan_id IS NOT NULL THEN 1 ELSE 0 END) +
+                    (CASE WHEN brain_session_id IS NOT NULL THEN 1 ELSE 0 END) +
+                    (CASE WHEN task_graph_execution_id IS NOT NULL THEN 1 ELSE 0 END) = 1
+                  ),
+                  FOREIGN KEY(plan_id) REFERENCES agent_plan(plan_id) ON DELETE CASCADE,
+                  FOREIGN KEY(brain_session_id) REFERENCES brain_session(session_id) ON DELETE CASCADE,
+                  FOREIGN KEY(task_id) REFERENCES task(task_id) ON DELETE SET NULL,
+                  FOREIGN KEY(task_graph_execution_id) REFERENCES task_graph_execution(execution_id) ON DELETE CASCADE
+                )
+                """,
+                """
+                INSERT INTO waiting_question(question_id,plan_id,brain_session_id,task_id,
+                  task_graph_execution_id,companion_id,prompt,reason,options_json,free_text_allowed,
+                  state,context_json,answer_json,created_at,updated_at,expires_at)
+                SELECT question_id,plan_id,brain_session_id,task_id,NULL,companion_id,prompt,reason,
+                  options_json,free_text_allowed,state,context_json,answer_json,created_at,updated_at,
+                  expires_at FROM waiting_question_before_task_graph
+                """,
+                "DROP TABLE waiting_question_before_task_graph",
+                "CREATE UNIQUE INDEX waiting_question_one_active_idx ON waiting_question(plan_id) WHERE state='WAITING' AND plan_id IS NOT NULL",
+                "CREATE UNIQUE INDEX waiting_question_one_brain_active_idx ON waiting_question(brain_session_id) WHERE state='WAITING' AND brain_session_id IS NOT NULL",
+                "CREATE UNIQUE INDEX waiting_question_one_graph_active_idx ON waiting_question(task_graph_execution_id) WHERE state='WAITING' AND task_graph_execution_id IS NOT NULL",
+                "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -579,6 +625,8 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(10, "persist external brain waiting questions", externalBrainQuestions),
                 new Migration(11, "persist typed task graph execution state", taskGraphExecution),
                 new Migration(12, "persist task graph inputs and bounded evidence", taskGraphRuntimeState),
-                new Migration(13, "persist task graph terminal result", taskGraphResult));
+                new Migration(13, "persist task graph terminal result", taskGraphResult),
+                new Migration(14, "persist task graph node outputs", taskGraphOutputs),
+                new Migration(15, "bind waiting questions to task graph executions", taskGraphQuestions));
     }
 }

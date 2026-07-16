@@ -77,6 +77,27 @@ Expressions allow only:
 `${...}` wrapping is optional. Expressions are parsed but never evaluated as source code. Function
 calls, indexing, assignment, imports and arbitrary operators are rejected.
 
+## User questions
+
+`ask_user` pauses the current execution without creating a plan or choosing a strategy:
+
+```yaml
+- id: confirm
+  type: ask_user
+  prompt: Continue with the externally selected action?
+  options: [Yes, No]
+  freeTextAllowed: false
+- id: done
+  type: return
+  value: ${outputs.confirm.text}
+```
+
+`options` accepts one to three labels. When options are present, `freeTextAllowed` defaults to
+`false`; without options it defaults to `true`. The accepted answer is persisted as the node output
+with `text` and `optionId` fields. Web and game answer ingress resume only the execution that owns
+the durable question. Ordinary chat that does not classify as an answer is not consumed by the
+question.
+
 ## Limits
 
 Graphs may lower these defaults but cannot raise them:
@@ -107,20 +128,24 @@ binds each `call_tool` to the current `ToolDefinition.permission`.
 `task_graph.inspect`, `task_graph.pause`, `task_graph.resume`, and `task_graph.cancel` expose control
 without adding planning behavior. The deterministic core executes `sequence`, `call_tool`, `if`,
 `switch`, `repeat`, `while`, `retry`, `fallback`, `parallel`, `wait`, `checkpoint`,
-`emit_progress`, `return`, and `fail`. Safe expressions can read graph inputs, persisted state, and
-prior Tool observations. Loop iterations receive stable scoped node and Tool call IDs, and loop
-cursors are persisted. Parallel branches use real bounded concurrency; state snapshots are
-serialized, and pause/cancel reaches every active Tool call. Tool/wall-time/loop/concurrency budgets,
-bounded backoff/wait, uniformly rotated evidence, inputs, variables, and exact `${inputs.*}`,
-`${state.*}`, and `${outputs.<node>.*}` references are enforced.
+`emit_progress`, `ask_user`, `read_memory`, `return`, and `fail`. Safe expressions can read graph
+inputs, persisted state, and prior Tool observations. Loop iterations receive stable scoped node and
+Tool call IDs, and loop cursors are persisted. Parallel branches use real bounded concurrency; state
+snapshots are serialized, and pause/cancel reaches every active Tool call.
+Tool/wall-time/loop/concurrency budgets, bounded backoff/wait, uniformly rotated evidence, inputs,
+variables, durable node outputs, and exact `${inputs.*}`, `${state.*}`, and
+`${outputs.<node>.*}` references are enforced.
 
-Migrations 11–13 persist every supported node/Tool/checkpoint/loop boundary and the terminal
-`return` value. A safe pause resumes using completed scoped node IDs, loop cursors, and immutable
-Tool results, so completed effects are not repeated even when suspension occurs inside an iteration.
-Runtime startup still moves crash-left work to `RECONCILIATION_REQUIRED`; automatic reconciliation
-of an unconfirmed in-flight Tool is not yet claimed. A Tool transport/worker failure with unknown
-effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or reported
-as a verified failure. `read_memory` is implemented as a permission-bound convenience node over
-the generic `memory.search` Tool; it requires `MEMORY`, filters by the declared memory kind, and
-retains provenance/verification metadata in its observation. `suggest_memory` and ASK_USER remain
-tracked separately in `docs/RC_COMPLETION_MATRIX.md`.
+Migrations 11–15 persist every supported node, Tool, checkpoint, loop and parallel boundary, terminal
+`return` values, all node outputs, and Task Graph-owned waiting questions. A safe pause resumes using
+completed scoped node IDs, loop cursors, and immutable Tool results, so completed effects are not
+repeated even when suspension occurs inside an iteration. A Runtime restart preserves safely waiting
+and paused executions; an answered `ask_user` question resumes the original execution once, including
+after restart. Startup still moves crash-left `READY` or `RUNNING` work to
+`RECONCILIATION_REQUIRED`; automatic reconciliation of an unconfirmed in-flight Tool is not yet
+claimed. A Tool transport or worker failure with unknown effect is also persisted as
+`RECONCILIATION_REQUIRED` rather than being left `RUNNING` or reported as a verified failure.
+`read_memory` is implemented as a permission-bound convenience node over the generic
+`memory.search` Tool; it requires `MEMORY`, filters by the declared memory kind, and retains
+provenance and verification metadata in its observation. `suggest_memory` remains tracked separately
+in `docs/RC_COMPLETION_MATRIX.md`.

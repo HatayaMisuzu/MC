@@ -203,7 +203,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                         .filter(value -> !value.name().startsWith("task_graph."))
                         .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
                 var validation = taskGraphs.validateExecutable(graph, tools,
-                        TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
+                        taskGraphRuntime == null ? TaskGraphExecutor.EXECUTABLE_NODE_TYPES
+                                : taskGraphRuntime.executableNodeTypes());
                 return new ToolResult(call.callId(), call.name(), validation.valid(),
                         validation.valid() ? "OK" : "TASK_GRAPH_INVALID", validation.toJson(), true);
             }

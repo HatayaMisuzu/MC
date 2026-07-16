@@ -30,3 +30,5 @@ terminal/web-ui/vite.config.js
 terminal/web-ui/vite.config.d.ts
 terminal-test-results/
 launch-logs/
+.codex/
+artifacts/codex-verification/

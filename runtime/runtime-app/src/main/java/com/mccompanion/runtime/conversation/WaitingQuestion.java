@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.List;
 
 public record WaitingQuestion(String questionId, String planId, String brainSessionId, String taskId,
+                              String taskGraphExecutionId,
                               String companionId, String prompt,
                               String reason, List<ConversationOption> options, boolean freeTextAllowed,
                               String state, JsonNode context, JsonNode answer,
@@ -13,7 +14,7 @@ public record WaitingQuestion(String questionId, String planId, String brainSess
                            String reason, List<ConversationOption> options, boolean freeTextAllowed,
                            String state, JsonNode context, JsonNode answer,
                            Instant createdAt, Instant updatedAt, Instant expiresAt) {
-        this(questionId, planId, null, null, companionId, prompt, reason, options, freeTextAllowed,
+        this(questionId, planId, null, null, null, companionId, prompt, reason, options, freeTextAllowed,
                 state, context, answer, createdAt, updatedAt, expiresAt);
     }
 }

@@ -365,6 +365,120 @@ class TaskGraphRuntimeTest {
         }
     }
 
+    @Test
+    void askUserPersistsQuestionAndResumesSameExecutionWithDurableAnswerOutput() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-user.db"))) {
+            database.initialize();
+            var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(),
+                    new TaskGraphExecutionRepository(database), conversations)) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall execute = new ToolCall("execution-12", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"ask-and-resume","permissions":[],
+                         "root":{"id":"root","type":"sequence","nodes":[
+                          {"id":"ask","type":"ask_user","prompt":"Continue?","options":["Yes","No"]},
+                          {"id":"done","type":"return","value":"${outputs.ask.text}"}
+                         ]}}
+                        """);
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                ToolResult waiting = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(waiting.success(), waiting.observation().toString());
+                assertEquals("WAITING", waiting.observation().path("state").asText());
+                var question = conversations.activeForCompanion("companion-1").orElseThrow();
+                assertNull(question.taskId());
+                assertEquals("execution-12", question.taskGraphExecutionId());
+                assertFalse(question.freeTextAllowed());
+                assertEquals("execution-12",
+                        waiting.observation().path("waitingQuestion").path("context")
+                                .path("taskGraphExecutionId").asText());
+
+                ToolResult resumed = runtime.answer(question,
+                        new com.mccompanion.runtime.conversation.IncomingMessageResolution(
+                                com.mccompanion.runtime.conversation.IncomingMessageKind.WAITING_ANSWER,
+                                "option_1", "Yes"));
+                assertTrue(resumed.success(), resumed.observation().toString());
+                ToolResult duplicate = runtime.answer(question,
+                        new com.mccompanion.runtime.conversation.IncomingMessageResolution(
+                                com.mccompanion.runtime.conversation.IncomingMessageKind.WAITING_ANSWER,
+                                "option_1", "Yes"));
+                assertFalse(duplicate.success());
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("Yes", terminal.observation().path("outputs").path("ask").path("text").asText());
+                assertEquals("Yes", terminal.observation().path("value").asText());
+                assertTrue(conversations.activeForCompanion("companion-1").isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void askUserSurvivesRuntimeRestartAndResumesOriginalExecution() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-restart.db"))) {
+            database.initialize();
+            var repository = new TaskGraphExecutionRepository(database);
+            var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+            ToolCall execute = new ToolCall("execution-13", "task_graph.execute", Json.object());
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"ask-restart","permissions":[],
+                     "root":{"id":"root","type":"sequence","nodes":[
+                      {"id":"ask","type":"ask_user","prompt":"Choose","options":["One","Two"]},
+                      {"id":"done","type":"return","value":"${outputs.ask.optionId}"}
+                     ]}}
+                    """);
+            try (TaskGraphRuntime first = new TaskGraphRuntime(new FakeGateway(), repository, conversations)) {
+                first.start(context, execute, graph, Json.object(), Json.object());
+                ToolResult waiting = first.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("WAITING", waiting.observation().path("state").asText());
+            }
+            assertEquals(0, repository.markUnfinishedForReconciliation());
+            var question = conversations.activeForTaskGraph("execution-13").orElseThrow();
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(new FakeGateway(), repository, conversations)) {
+                ToolResult resumed = restarted.answer(question,
+                        new com.mccompanion.runtime.conversation.IncomingMessageResolution(
+                                com.mccompanion.runtime.conversation.IncomingMessageKind.WAITING_ANSWER,
+                                "option_2", "Two"));
+                assertTrue(resumed.success(), resumed.observation().toString());
+                ToolResult terminal = restarted.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("option_2", terminal.observation().path("value").asText());
+                assertEquals("execution-13", terminal.observation().path("executionId").asText());
+            }
+        }
+    }
+
+    @Test
+    void cancellingWaitingGraphCancelsItsQuestionAndPreventsLateAnswer() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-cancel.db"))) {
+            database.initialize();
+            var repository = new TaskGraphExecutionRepository(database);
+            var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+            ToolCall execute = new ToolCall("execution-14", "task_graph.execute", Json.object());
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"ask-cancel","permissions":[],
+                     "root":{"id":"ask","type":"ask_user","prompt":"Continue?","options":["Yes","No"]}}
+                    """);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(), repository, conversations)) {
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                assertEquals("WAITING",
+                        runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { })
+                                .observation().path("state").asText());
+                var question = conversations.activeForTaskGraph("execution-14").orElseThrow();
+                ToolResult cancelled = runtime.cancel(question, "OWNER_CANCELLED");
+                assertTrue(cancelled.success(), cancelled.observation().toString());
+                assertTrue(conversations.activeForTaskGraph("execution-14").isEmpty());
+                ToolResult late = runtime.answer(question,
+                        new com.mccompanion.runtime.conversation.IncomingMessageResolution(
+                                com.mccompanion.runtime.conversation.IncomingMessageKind.WAITING_ANSWER,
+                                "option_1", "Yes"));
+                assertFalse(late.success());
+                assertEquals("CANCELLED", repository.get("execution-14").orElseThrow().state());
+            }
+        }
+    }
+
     private static void waitForState(TaskGraphRuntime runtime, ToolContext context, String executionId,
                                      String expected) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();

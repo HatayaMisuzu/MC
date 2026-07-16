@@ -158,9 +158,13 @@ public final class TaskGraphValidator {
                         Math.min(300_000, state.limits.maxWallTimeSeconds() * 1_000), state.issues);
             }
             case "ask_user" -> {
-                rejectUnknown(node, path, Set.of("id", "type", "prompt", "options"), state.issues);
+                rejectUnknown(node, path, Set.of("id", "type", "prompt", "options", "freeTextAllowed"), state.issues);
                 boundedText(node, "prompt", path, 1, 2_000, state.issues);
-                if (node.has("options")) validateStringArray(node.path("options"), path + ".options", 1, 8, state.issues);
+                if (node.has("options")) validateStringArray(node.path("options"), path + ".options", 1, 3, state.issues);
+                if (node.has("freeTextAllowed") && !node.path("freeTextAllowed").isBoolean()) {
+                    state.issues.add(issue(path + ".freeTextAllowed", "INVALID_TYPE",
+                            "freeTextAllowed must be boolean"));
+                }
             }
             case "read_memory" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "kind", "query"), state.issues);

@@ -52,23 +52,24 @@ public final class TaskGraphExecutionRepository {
 
     public TaskGraphExecutionRecord save(String executionId, long expectedRevision, String state,
                                          String currentNodeId, JsonNode completedNodes, JsonNode toolResults,
-                                         JsonNode variables, JsonNode checkpoints, JsonNode evidence,
+                                         JsonNode variables, JsonNode outputs, JsonNode checkpoints, JsonNode evidence,
                                          JsonNode waitingQuestion,
                                          JsonNode result, String resultCode) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 UPDATE task_graph_execution SET state=?,current_node_id=?,completed_nodes_json=?,
-                tool_results_json=?,variables_json=?,checkpoints_json=?,waiting_question_json=?,
+                tool_results_json=?,variables_json=?,outputs_json=?,checkpoints_json=?,waiting_question_json=?,
                 evidence_json=?,result_json=?,result_code=?,revision=revision+1,updated_at=?
                 WHERE execution_id=? AND revision=?
                 """)) {
             statement.setString(1, required(state)); statement.setString(2, blankToNull(currentNodeId));
             statement.setString(3, Json.write(completedNodes)); statement.setString(4, Json.write(toolResults));
-            statement.setString(5, Json.write(variables)); statement.setString(6, Json.write(checkpoints));
-            statement.setString(7, waitingQuestion == null || waitingQuestion.isNull() ? null : Json.write(waitingQuestion));
-            statement.setString(8, Json.write(evidence));
-            statement.setString(9, Json.write(result == null ? Json.MAPPER.nullNode() : result));
-            statement.setString(10, required(resultCode)); statement.setLong(11, clock.millis());
-            statement.setString(12, required(executionId)); statement.setLong(13, expectedRevision);
+            statement.setString(5, Json.write(variables)); statement.setString(6, Json.write(outputs));
+            statement.setString(7, Json.write(checkpoints));
+            statement.setString(8, waitingQuestion == null || waitingQuestion.isNull() ? null : Json.write(waitingQuestion));
+            statement.setString(9, Json.write(evidence));
+            statement.setString(10, Json.write(result == null ? Json.MAPPER.nullNode() : result));
+            statement.setString(11, required(resultCode)); statement.setLong(12, clock.millis());
+            statement.setString(13, required(executionId)); statement.setLong(14, expectedRevision);
             if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_TASK_GRAPH_REVISION");
         }
         return get(executionId).orElseThrow();
@@ -78,7 +79,7 @@ public final class TaskGraphExecutionRepository {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 UPDATE task_graph_execution SET state='RECONCILIATION_REQUIRED',
                 result_code='RUNTIME_RESTARTED',revision=revision+1,updated_at=?
-                WHERE state IN ('READY','RUNNING','WAITING','PAUSED')
+                WHERE state IN ('READY','RUNNING')
                 """)) {
             statement.setLong(1, clock.millis());
             return statement.executeUpdate();
@@ -99,7 +100,8 @@ public final class TaskGraphExecutionRepository {
                         Json.parse(row.getString("graph_json")), row.getString("state"),
                         row.getString("current_node_id"), Json.parse(row.getString("completed_nodes_json")),
                         Json.parse(row.getString("tool_results_json")), Json.parse(row.getString("inputs_json")),
-                        Json.parse(row.getString("variables_json")), Json.parse(row.getString("checkpoints_json")),
+                        Json.parse(row.getString("variables_json")), Json.parse(row.getString("outputs_json")),
+                        Json.parse(row.getString("checkpoints_json")),
                         Json.parse(row.getString("evidence_json")),
                         waiting == null ? Json.MAPPER.nullNode() : Json.parse(waiting),
                         Json.parse(row.getString("permissions_json")), Json.parse(row.getString("limits_json")),

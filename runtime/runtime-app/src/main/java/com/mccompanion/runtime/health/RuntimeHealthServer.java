@@ -35,6 +35,7 @@ import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolDefinition;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -64,6 +65,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final ExternalBrainCoordinator externalBrain;
     private final BrainAuditRepository brainAudit;
     private final ToolGateway toolGateway;
+    private final TaskGraphRuntime taskGraphRuntime;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -87,6 +89,28 @@ public final class RuntimeHealthServer implements AutoCloseable {
             BrainAuditRepository brainAudit,
             ToolGateway toolGateway,
             RuntimeLog log) throws IOException {
+        this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
+                capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
+                null, log);
+    }
+
+    public RuntimeHealthServer(
+            RuntimeConfig config,
+            String pairingToken,
+            SessionRegistry sessions,
+            CommandService commands,
+            CompanionRepository companions,
+            AgentPlanRepository plans,
+            AgentKernel kernel,
+            ProviderRouter providers,
+            CapabilityVisibility capabilityVisibility,
+            ConversationService conversations,
+            MemoryRepository memories,
+            ExternalBrainCoordinator externalBrain,
+            BrainAuditRepository brainAudit,
+            ToolGateway toolGateway,
+            TaskGraphRuntime taskGraphRuntime,
+            RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
         this.sessions = sessions;
@@ -101,6 +125,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.externalBrain = externalBrain;
         this.brainAudit = brainAudit;
         this.toolGateway = toolGateway;
+        this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -440,11 +465,11 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 }
                 return;
             }
-            if (externalBrain == null) {
-                sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
-                return;
-            }
             if ("GET".equals(exchange.getRequestMethod())) {
+                if (externalBrain == null) {
+                    sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
+                    return;
+                }
                 ObjectNode body = Json.object().put("activeControllerId",
                         externalBrain.activeControllerId() == null ? "" : externalBrain.activeControllerId());
                 body.set("health", Json.MAPPER.valueToTree(externalBrain.health()));
@@ -476,6 +501,33 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 AgentContext context = new AgentContext(companionId, verifiedWorld, recent, taskContext,
                         memories.verifiedLandmarkKeys(companionId), visible.availableNames(),
                         memories.preferenceContext(companionId, 24), 5);
+                if (waiting.isPresent() && taskGraphRuntime != null
+                        && taskGraphRuntime.handles(waiting.orElseThrow())) {
+                    if (incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
+                        ToolResult resumed = taskGraphRuntime.answer(waiting.orElseThrow(), incoming);
+                        sendJson(exchange, resumed.success() ? 200 : 409,
+                                Json.object().put("accepted", resumed.success()).put("source", "task-graph")
+                                        .put("code", resumed.code()).put("executionId",
+                                                waiting.orElseThrow().taskGraphExecutionId())
+                                        .set("result", resumed.observation()));
+                        return;
+                    }
+                    if (incoming.kind() == IncomingMessageKind.CONTROL) {
+                        ToolResult cancelled = taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_CANCELLED");
+                        sendJson(exchange, cancelled.success() ? 200 : 409,
+                                Json.object().put("accepted", cancelled.success()).put("source", "task-graph")
+                                        .put("code", cancelled.code()).set("result", cancelled.observation()));
+                        return;
+                    }
+                    if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                        taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_MODIFIED_GOAL");
+                        waiting = java.util.Optional.empty();
+                    }
+                }
+                if (externalBrain == null) {
+                    sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
+                    return;
+                }
                 if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                         && incoming.kind() == IncomingMessageKind.CONTROL) {
                     conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
@@ -557,6 +609,18 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 var activePlan = plans.activeForCompanion(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
+                if (waiting.isPresent() && taskGraphRuntime != null
+                        && taskGraphRuntime.handles(waiting.orElseThrow())
+                        && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
+                    ToolResult resumed = taskGraphRuntime.answer(waiting.orElseThrow(), incoming);
+                    ObjectNode body = Json.object().put("accepted", resumed.success())
+                            .put("source", "task-graph").put("code", resumed.code())
+                            .put("questionId", waiting.orElseThrow().questionId())
+                            .put("executionId", waiting.orElseThrow().taskGraphExecutionId());
+                    body.set("result", resumed.observation());
+                    sendJson(exchange, resumed.success() ? 200 : 409, body);
+                    return;
+                }
                 if (waiting.isPresent() && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
                     var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
                     ObjectNode body = Json.object().put("accepted", true).put("source", "waiting-answer")

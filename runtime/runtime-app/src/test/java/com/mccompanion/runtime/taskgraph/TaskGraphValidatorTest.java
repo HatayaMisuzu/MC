@@ -152,4 +152,23 @@ class TaskGraphValidatorTest {
         assertEquals(2, result.issues().stream()
                 .filter(issue -> issue.code().equals("INVALID_REFERENCE")).count());
     }
+
+    @Test
+    void rejectsNestedParallelToKeepSharedSchedulingDeadlockFree() {
+        JsonNode graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"nested-parallel","permissions":[],
+                 "root":{"id":"outer","type":"parallel","maxConcurrency":2,"nodes":[
+                   {"id":"wait","type":"wait","durationMillis":1},
+                   {"id":"inner","type":"parallel","maxConcurrency":1,"nodes":[
+                     {"id":"nested-wait","type":"wait","durationMillis":1}
+                   ]}
+                 ]}}
+                """);
+
+        TaskGraphValidationResult result = validator.validate(graph, Set.of());
+
+        assertFalse(result.valid());
+        assertTrue(result.issues().stream()
+                .anyMatch(issue -> issue.code().equals("NESTED_PARALLEL_NOT_SUPPORTED")));
+    }
 }

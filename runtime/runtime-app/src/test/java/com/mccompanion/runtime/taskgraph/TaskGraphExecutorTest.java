@@ -11,6 +11,12 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -98,6 +104,40 @@ class TaskGraphExecutorTest {
     }
 
     @Test
+    void sharedParallelExecutorEnforcesGlobalConcurrencyAcrossGraphs() throws Exception {
+        ExecutorService shared = Executors.newFixedThreadPool(2);
+        ConcurrencyGateway tools = new ConcurrencyGateway();
+        try {
+            TaskGraphExecutor executor = new TaskGraphExecutor(
+                    tools, new TaskGraphValidator(), TaskGraphExecutor.EXECUTABLE_NODE_TYPES, shared);
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"shared-parallel","permissions":["READ_WORLD"],
+                     "root":{"id":"parallel","type":"parallel","maxConcurrency":2,"nodes":[
+                       {"id":"one","type":"call_tool","tool":"world.observe"},
+                       {"id":"two","type":"call_tool","tool":"world.observe"}
+                     ]}}
+                    """);
+            CompletableFuture<TaskGraphExecutionResult> first = CompletableFuture.supplyAsync(() ->
+                    executor.execute("parallel-one",
+                            new ToolContext("hermes", "brain-1", "companion-1"), graph));
+            CompletableFuture<TaskGraphExecutionResult> second = CompletableFuture.supplyAsync(() ->
+                    executor.execute("parallel-two",
+                            new ToolContext("hermes", "brain-2", "companion-2"), graph));
+
+            assertTrue(tools.twoActive.await(2, TimeUnit.SECONDS), "shared workers did not start");
+            assertEquals(2, tools.maximumActive.get());
+            tools.release.countDown();
+            assertTrue(first.get(2, TimeUnit.SECONDS).success());
+            assertTrue(second.get(2, TimeUnit.SECONDS).success());
+            assertEquals(2, tools.maximumActive.get());
+        } finally {
+            tools.release.countDown();
+            shared.shutdownNow();
+            assertTrue(shared.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void unsupportedValidatedNodeFailsHonestlyWithoutCallingTools() {
         FakeGateway tools = new FakeGateway(false);
         TaskGraphExecutor executor = new TaskGraphExecutor(tools);
@@ -160,6 +200,35 @@ class TaskGraphExecutorTest {
             navigation = call.arguments().deepCopy();
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("arrived", true), true);
+        }
+    }
+
+    private static final class ConcurrencyGateway implements ToolGateway {
+        private final CountDownLatch twoActive = new CountDownLatch(2);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final AtomicInteger active = new AtomicInteger();
+        private final AtomicInteger maximumActive = new AtomicInteger();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("world.observe", "1.0", "observe",
+                    Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                    Duration.ofSeconds(2), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            int current = active.incrementAndGet();
+            maximumActive.accumulateAndGet(current, Math::max);
+            twoActive.countDown();
+            try {
+                if (!release.await(2, TimeUnit.SECONDS)) throw new AssertionError("test release timed out");
+                return new ToolResult(call.callId(), call.name(), true, "OK",
+                        Json.object().put("observed", true), true);
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(failure);
+            } finally {
+                active.decrementAndGet();
+            }
         }
     }
 }

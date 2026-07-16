@@ -17,6 +17,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -34,19 +36,32 @@ public final class TaskGraphExecutor {
     private final ToolGateway tools;
     private final TaskGraphValidator validator;
     private final Set<String> executableNodeTypes;
+    private final ExecutorService parallelExecutor;
+    private static final ExecutorService DEFAULT_PARALLEL_EXECUTOR =
+            Executors.newFixedThreadPool(TaskGraphLimits.HARD_LIMITS.maxParallelNodes(), runnable -> {
+                Thread thread = new Thread(runnable, "mcac-task-graph-parallel-shared");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     public TaskGraphExecutor(ToolGateway tools) {
-        this(tools, new TaskGraphValidator(), EXECUTABLE_NODE_TYPES);
+        this(tools, new TaskGraphValidator(), EXECUTABLE_NODE_TYPES, DEFAULT_PARALLEL_EXECUTOR);
     }
 
     TaskGraphExecutor(ToolGateway tools, TaskGraphValidator validator) {
-        this(tools, validator, EXECUTABLE_NODE_TYPES);
+        this(tools, validator, EXECUTABLE_NODE_TYPES, DEFAULT_PARALLEL_EXECUTOR);
     }
 
     TaskGraphExecutor(ToolGateway tools, TaskGraphValidator validator, Set<String> executableNodeTypes) {
+        this(tools, validator, executableNodeTypes, DEFAULT_PARALLEL_EXECUTOR);
+    }
+
+    TaskGraphExecutor(ToolGateway tools, TaskGraphValidator validator, Set<String> executableNodeTypes,
+                      ExecutorService parallelExecutor) {
         this.tools = java.util.Objects.requireNonNull(tools, "tools");
         this.validator = java.util.Objects.requireNonNull(validator, "validator");
         this.executableNodeTypes = Set.copyOf(executableNodeTypes);
+        this.parallelExecutor = java.util.Objects.requireNonNull(parallelExecutor, "parallelExecutor");
     }
 
     public TaskGraphExecutionResult execute(String executionId, ToolContext context, JsonNode graph) {
@@ -237,24 +252,31 @@ public final class TaskGraphExecutor {
     private Outcome parallelNode(JsonNode node, String path, State state, String scope) {
         JsonNode nodes = node.path("nodes");
         int concurrency = Math.min(node.path("maxConcurrency").asInt(), nodes.size());
-        var executor = Executors.newFixedThreadPool(concurrency, runnable -> {
-            Thread thread = new Thread(runnable, "mcac-task-graph-parallel");
-            thread.setDaemon(true);
-            return thread;
-        });
-        List<Future<Outcome>> futures = new ArrayList<>();
+        var completion = new ExecutorCompletionService<IndexedOutcome>(parallelExecutor);
+        List<Future<IndexedOutcome>> futures = new ArrayList<>();
+        Outcome[] outcomes = new Outcome[nodes.size()];
+        int next = 0;
+        int completed = 0;
         try {
-            for (int index = 0; index < nodes.size(); index++) {
-                int child = index;
-                futures.add(executor.submit(() ->
-                        run(nodes.path(child), path + ".nodes[" + child + "]", state, scope)));
+            while (next < concurrency) {
+                int child = next++;
+                futures.add(completion.submit(() -> new IndexedOutcome(child,
+                        run(nodes.path(child), path + ".nodes[" + child + "]", state, scope))));
             }
-            Outcome selected = Outcome.success();
-            for (Future<Outcome> future : futures) {
-                Outcome outcome = future.get();
-                if (selected.kind == Kind.SUCCESS && outcome.kind != Kind.SUCCESS) selected = outcome;
+            while (completed < nodes.size()) {
+                IndexedOutcome result = completion.take().get();
+                outcomes[result.index()] = result.outcome();
+                completed++;
+                if (next < nodes.size()) {
+                    int child = next++;
+                    futures.add(completion.submit(() -> new IndexedOutcome(child,
+                            run(nodes.path(child), path + ".nodes[" + child + "]", state, scope))));
+                }
             }
-            return selected;
+            for (Outcome outcome : outcomes) {
+                if (outcome.kind != Kind.SUCCESS) return outcome;
+            }
+            return Outcome.success();
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             return Outcome.failure("EXECUTION_INTERRUPTED", Json.object());
@@ -266,12 +288,6 @@ public final class TaskGraphExecutor {
             futures.forEach(value -> {
                 if (!value.isDone()) value.cancel(true);
             });
-            executor.shutdownNow();
-            try {
-                executor.awaitTermination(1, TimeUnit.SECONDS);
-            } catch (InterruptedException failure) {
-                Thread.currentThread().interrupt();
-            }
         }
     }
 
@@ -421,6 +437,9 @@ public final class TaskGraphExecutor {
     }
 
     private enum Kind { SUCCESS, FAILURE, RETURN, PAUSED, CANCELLED, WAITING, RECONCILIATION }
+    private record IndexedOutcome(int index, Outcome outcome) {
+    }
+
     private record Outcome(Kind kind, String code, JsonNode value) {
         static Outcome success() { return new Outcome(Kind.SUCCESS, "OK", Json.object()); }
         static Outcome failure(String code, JsonNode value) { return new Outcome(Kind.FAILURE, code, value); }

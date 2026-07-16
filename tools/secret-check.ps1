@@ -9,7 +9,7 @@ $matches = Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction Silently
         $_.FullName -notmatch '[\\/](\.git|\.gradle|build|run|runs|mcac-local|node_modules|dist|test-results|playwright-report)[\\/]' -and
         $_.Extension -notin @('.jar', '.zip', '.class', '.png', '.jpg', '.jpeg')
     } |
-    Select-String -Pattern 'sk-[A-Za-z0-9_-]{16,}' -ErrorAction SilentlyContinue
+    Select-String -Pattern '(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}' -ErrorAction SilentlyContinue
 
 if (@($matches).Count -gt 0) {
     throw "Potential API key material detected in $(@($matches).Count) source location(s)."

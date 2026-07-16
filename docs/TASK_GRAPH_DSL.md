@@ -64,6 +64,11 @@ fail
 `backoffMillis`. `parallel` requires `maxConcurrency`. Unknown fields and unknown node types are
 rejected instead of ignored.
 
+`parallel` branches use one Runtime-owned shared pool, not a new pool per node. A graph may lower
+`maxParallelNodes` from the hard maximum of four, and each node's `maxConcurrency` and branch count
+must fit that graph budget. Nested `parallel` nodes are rejected so a parent cannot occupy the
+bounded pool while waiting for child work.
+
 ## Expressions
 
 Expressions allow only:
@@ -161,7 +166,8 @@ without adding planning behavior. The deterministic core executes `sequence`, `c
 `emit_progress`, `ask_user`, `read_memory`, `return`, and `fail`. Safe expressions can read graph
 inputs, persisted state, and prior Tool observations. Loop iterations receive stable scoped node and
 Tool call IDs, and loop cursors are persisted. Parallel branches use real bounded concurrency; state
-snapshots are serialized, and pause/cancel reaches every active Tool call.
+snapshots are serialized, pause/cancel reaches every active Tool call, and all active graphs share
+the Runtime's four-worker parallel budget.
 Tool/wall-time/loop/concurrency budgets, bounded backoff/wait, uniformly rotated evidence, inputs,
 variables, durable node outputs, and exact `${inputs.*}`, `${state.*}`, and
 `${outputs.<node>.*}` references are enforced, including bounded literal array selection and length.

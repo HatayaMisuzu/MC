@@ -100,7 +100,16 @@ public final class TaskGraphValidator {
             case "parallel" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "nodes", "maxConcurrency"), state.issues);
                 int maximum = boundedInt(node, "maxConcurrency", path, 1, state.limits.maxParallelNodes(), state.issues);
-                validateChildren(node.path("nodes"), path + ".nodes", depth, state, 1, maximum);
+                if (state.parallelDepth > 0) {
+                    state.issues.add(issue(path, "NESTED_PARALLEL_NOT_SUPPORTED",
+                            "parallel nodes cannot be nested"));
+                }
+                state.parallelDepth++;
+                try {
+                    validateChildren(node.path("nodes"), path + ".nodes", depth, state, 1, maximum);
+                } finally {
+                    state.parallelDepth--;
+                }
             }
             case "call_tool" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "tool", "arguments", "permission"), state.issues);
@@ -370,6 +379,7 @@ public final class TaskGraphValidator {
         private int nodeCount;
         private int toolCalls;
         private int maxDepth;
+        private int parallelDepth;
 
         private State(TaskGraphLimits limits, Map<String, String> availableTools,
                       Set<String> executableNodeTypes, Set<String> permissions,

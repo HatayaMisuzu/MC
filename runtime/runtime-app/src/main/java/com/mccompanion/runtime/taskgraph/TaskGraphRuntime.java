@@ -38,6 +38,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
     private final Set<String> executableNodeTypes;
     private final TaskGraphValidator validator = new TaskGraphValidator();
     private final ExecutorService workers;
+    private final ExecutorService parallelWorkers;
     private final Map<String, Running> active = new ConcurrentHashMap<>();
 
     public TaskGraphRuntime(ToolGateway tools, TaskGraphExecutionRepository repository) {
@@ -57,6 +58,12 @@ public final class TaskGraphRuntime implements AutoCloseable {
             thread.setDaemon(false);
             return thread;
         });
+        this.parallelWorkers = Executors.newFixedThreadPool(
+                TaskGraphLimits.HARD_LIMITS.maxParallelNodes(), runnable -> {
+                    Thread thread = new Thread(runnable, "mcac-task-graph-parallel");
+                    thread.setDaemon(false);
+                    return thread;
+                });
     }
 
     public ToolResult start(ToolContext context, ToolCall call, JsonNode graph, JsonNode inputs,
@@ -205,7 +212,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
         workers.submit(() -> {
             AtomicLong revision = new AtomicLong(record.revision());
             try {
-                TaskGraphExecutionResult result = new TaskGraphExecutor(tools, validator, executableNodeTypes)
+                TaskGraphExecutionResult result = new TaskGraphExecutor(
+                        tools, validator, executableNodeTypes, parallelWorkers)
                         .execute(record.executionId(), context, record.graph(), record.inputs(),
                         record, control, snapshot -> {
                             try {
@@ -406,8 +414,11 @@ public final class TaskGraphRuntime implements AutoCloseable {
             cancelActiveTool(value, "runtime shutdown");
         });
         workers.shutdownNow();
+        parallelWorkers.shutdownNow();
         try {
-            if (!workers.awaitTermination(5, TimeUnit.SECONDS)) {
+            boolean workersStopped = workers.awaitTermination(5, TimeUnit.SECONDS);
+            boolean parallelStopped = parallelWorkers.awaitTermination(5, TimeUnit.SECONDS);
+            if (!workersStopped || !parallelStopped) {
                 throw new IllegalStateException("Task Graph workers did not terminate");
             }
         } catch (InterruptedException failure) {

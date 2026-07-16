@@ -1,6 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
+import com.mccompanion.minecraft.fabric.RegistryObservationService;
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -20,6 +21,42 @@ import org.slf4j.LoggerFactory;
 /** Headless integration tests that exercise the real ServerPlayer body and fake connection. */
 public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "registry")
+    public void liveRegistryAndRecipeQueriesDiscoverUnknownNamespaceContent(GameTestHelper helper) {
+        var search = RegistryObservationService.registry(helper.getLevel().getServer(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("tool", "registry.search").put("kind", "ITEM")
+                        .put("namespace", "mcac_registry_fixture").put("query", "blue").put("limit", 8));
+        helper.assertTrue(search.success(), "unknown namespace Registry search failed: " + search.code());
+        helper.assertValueEqual(search.observation().path("totalMatches").asInt(), 2,
+                "Registry search did not discover both fixture items");
+        helper.assertTrue(java.util.stream.StreamSupport.stream(
+                        search.observation().path("entries").spliterator(), false)
+                        .anyMatch(value -> value.path("id").asText().equals(
+                                RegistryFixtureInitializer.BLUE_ITEM_ID.toString())),
+                "Registry search did not return the unknown namespaced item");
+
+        var described = RegistryObservationService.registry(helper.getLevel().getServer(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("tool", "registry.describe").put("kind", "BLOCK")
+                        .put("id", RegistryFixtureInitializer.BLUE_BLOCK_ID.toString()));
+        helper.assertTrue(described.success(), "unknown namespace Registry describe failed: " + described.code());
+        helper.assertValueEqual(described.observation().path("entry").path("id").asText(),
+                RegistryFixtureInitializer.BLUE_BLOCK_ID.toString(),
+                "Registry describe returned the wrong block");
+
+        var recipes = RegistryObservationService.recipes(helper.getLevel().getServer(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("type", "CRAFTING").put("query", "oak_planks")
+                        .put("output", "minecraft:oak_planks").put("limit", 8));
+        helper.assertTrue(recipes.success(), "live recipe query failed: " + recipes.code());
+        helper.assertTrue(recipes.observation().path("totalMatches").asInt() >= 1,
+                "live recipe manager did not expose oak planks");
+        helper.assertValueEqual(recipes.observation().path("source").asText(),
+                "LIVE_SERVER_RECIPE_MANAGER", "recipe query source was not the live server");
+        helper.succeed();
+    }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
     public void exploreAreaScansIncrementallyAndReturnsRankedVerifiedCandidates(GameTestHelper helper) {
@@ -107,10 +144,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "collect-coal", "skill",
                 null, null, null, new SkillParameters("CollectResource", "minecraft:coal", 2, false)).success(),
                 "collect skill failed to start");
-        helper.succeedWhen(() -> {
-            var snapshot = registry.runtimeSnapshots(false).stream()
-                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
-            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for vanilla pickup completion");
+        awaitBehaviorIdle(helper, registry, companionId, 240, snapshot -> {
             helper.assertValueEqual(count(body, Items.COAL), 2, "collection did not verify the inventory delta");
             helper.assertTrue(!first.isAlive(), "collected ItemEntity remained in the world");
             helper.assertTrue(snapshot.behaviorObservation() != null, "collection produced no observation");
@@ -266,12 +300,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 null, null, null, new SkillParameters("MineResourceVein", "minecraft:diamond_ore", 2, false,
                         body.serverLevel().dimension().location().toString(),
                         origin.getX(), origin.getY(), origin.getZ())).success(), "mine skill failed to start");
-        // Mining deliberately consumes vanilla hardness ticks. Avoid treating the first RUNNING
-        // snapshot as a terminal assertion failure on faster CI hosts before retry polling begins.
-        helper.runAfterDelay(20, () -> helper.succeedWhen(() -> {
-            var snapshot = registry.runtimeSnapshots(false).stream()
-                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
-            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for vanilla vein mining completion");
+        awaitBehaviorIdle(helper, registry, companionId, 320, snapshot -> {
             helper.assertTrue(!body.serverLevel().getBlockState(origin).is(Blocks.DIAMOND_ORE)
                     && !body.serverLevel().getBlockState(second).is(Blocks.DIAMOND_ORE),
                     "mined ore blocks remained in the world");
@@ -285,7 +314,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
                     "mining evidence did not identify the vanilla ServerPlayerGameMode path");
             helper.assertTrue(registry.remove(owner).success(), "mine test cleanup failed");
-        }));
+        });
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 700)
@@ -635,6 +664,26 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             if (stack.is(item)) total += stack.getCount();
         }
         return total;
+    }
+
+    private static void awaitBehaviorIdle(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            String companionId,
+            int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+        var snapshot = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        if (snapshot.behaviorState().equals("RUNNING")) {
+            helper.assertTrue(ticksRemaining > 0, "timed out waiting for behavior completion");
+            helper.runAfterDelay(1, () -> awaitBehaviorIdle(
+                    helper, registry, companionId, ticksRemaining - 1, terminalAssertions));
+            return;
+        }
+        helper.assertValueEqual(snapshot.behaviorState(), "IDLE",
+                "behavior reached an unexpected terminal state");
+        terminalAssertions.accept(snapshot);
+        helper.succeed();
     }
 
     private static double horizontalDistanceToSqr(Vec3 first, Vec3 second) {

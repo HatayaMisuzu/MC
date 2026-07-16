@@ -15,12 +15,21 @@ Current read-only observation primitives:
 | `task.inspect` | Current durable Runtime task and at most 16 recent events, or `IDLE` |
 | `capability.list` | Formal Runtime capability registry intersected with the connected loader/body/current status |
 | `capability.describe` | One formal definition plus its current lifecycle state |
+| `registry.search` | Bounded namespace-aware ITEM/BLOCK/ENTITY/DIMENSION/MENU search over the authenticated connected server |
+| `registry.describe` | Exact namespaced identifier lookup with bounded type-specific details from the connected server |
+| `recipe.query` | Bounded crafting/smelting recipe query over the connected server recipe manager |
 
 Every body-derived result identifies `CONNECTED_BODY_OBSERVATION`, retains the observation time and
 dimension when present, and returns `OBSERVATION_UNAVAILABLE` instead of inventing missing data.
 Capability state is not inferred from a Tool name alone: it is computed from formal implementation,
 the authenticated Mod handshake, Minecraft/loader support, body declaration, Runtime connectivity,
 and the current spawned-body status.
+
+The Registry Tools are exposed only when the authenticated Mod handshake advertises
+`registry_query`/`recipe_query`. Runtime binds each result to the Brain session, companion, Runtime
+session, query ID, size limit, and timeout. Fabric 1.21.1 currently supplies live Registry and recipe
+observations; loaders without that implementation do not advertise the Tools. Unknown namespaces
+are discovered through the live Registry rather than a per-Mod adapter.
 
 Existing action Tools still include movement, bounded scan, collect, vein mining, smelting,
 inventory withdraw/deposit/deliver, crafting, eating, owner defense, and task controls. Several are
@@ -44,7 +53,6 @@ Runtime/Fabric E2E remains part of the RC gap.
 
 Still required for RC:
 
-- dynamic `registry.search/describe` and `recipe.query`;
 - movement look;
 - block inspect/interact/place;
 - inventory drop;
@@ -52,5 +60,6 @@ Still required for RC:
 - entity inspect/interact/attack;
 - menu session inspect/click/quick-move/close;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
-- real Fabric tests for each mutating primitive, unknown namespace coverage, cancellation, budgets,
-  world/inventory deltas, and composite-to-primitive equivalence.
+- cross-loader Registry query support plus tags/tool-requirement/component breadth;
+- real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and
+  composite-to-primitive equivalence.

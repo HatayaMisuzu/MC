@@ -288,6 +288,84 @@ class RuntimeApplicationTest {
     }
 
     @Test
+    void routesLiveRegistryQueriesFromMcpThroughTheAuthenticatedModSession() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("registry-mcp"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        config.provider.mode = "rules";
+        try (RuntimeApplication application = RuntimeApplication.start(config, false)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"registry-world",
+                     "capabilities":{"registry_query":true,"recipe_query":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"registry-companion","ownerId":"owner-1","displayName":"Registry Companion",
+                      "worldId":"registry-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("registry-companion").isEmpty()
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertTrue(application.companions().get("registry-companion").isPresent());
+
+            URI endpoint = new URI("http://127.0.0.1:" + config.server.managementPort + "/mcp");
+            HttpClient http = HttpClient.newHttpClient();
+            HttpRequest request = HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .header("MCP-Protocol-Version", "2025-06-18")
+                    .header("X-MCAC-Controller-Id", "hermes-test")
+                    .header("X-MCAC-Brain-Session-Id", "registry-brain-session")
+                    .header("X-MCAC-Companion-Id", "registry-companion")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"registry-search","method":"tools/call","params":{
+                              "name":"registry.search","arguments":{
+                                "kind":"ITEM","namespace":"unknownmod","query":"blue","limit":4}}}
+                            """)).build();
+            CompletableFuture<HttpResponse<String>> response = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return http.send(request, HttpResponse.BodyHandlers.ofString());
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            });
+
+            JsonNode command = client.awaitCommand("query_registry", 5);
+            String queryId = command.path("payload").path("arguments").path("queryId").asText();
+            assertFalse(queryId.isBlank());
+            assertEquals("unknownmod",
+                    command.path("payload").path("arguments").path("namespace").asText());
+            client.send("""
+                    {"type":"registry_result","sessionId":"%s","sequence":1,"payload":{
+                      "queryId":"%s","companionId":"registry-companion","success":true,"code":"OK",
+                      "observation":{"source":"LIVE_SERVER_REGISTRY","totalMatches":1,"truncated":false,
+                        "entries":[{"kind":"ITEM","id":"unknownmod:blue_gem",
+                          "namespace":"unknownmod","path":"blue_gem"}]}}}
+                    """.formatted(sessionId, queryId));
+
+            HttpResponse<String> completed = response.get(5, TimeUnit.SECONDS);
+            assertEquals(200, completed.statusCode(), completed.body());
+            JsonNode result = Json.parse(completed.body()).path("result");
+            assertFalse(result.path("isError").asBoolean(), completed.body());
+            assertEquals("unknownmod:blue_gem", result.path("structuredContent")
+                    .path("observation").path("entries").path(0).path("id").asText());
+            client.closeBlocking();
+        }
+    }
+
+    @Test
     void externalBrainEndpointRunsReplayToolLoopAndPersistsFinalReply() throws Exception {
         RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("external-brain"));
         config.server.port = 0;
@@ -715,6 +793,21 @@ class RuntimeApplicationTest {
                 messageArrived.await(20, TimeUnit.MILLISECONDS);
             }
             fail("Timed out waiting for player_reply " + requestId + "; received=" + messages);
+            return Json.object();
+        }
+
+        private JsonNode awaitCommand(String command, int seconds) throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+            while (System.nanoTime() < deadline) {
+                for (JsonNode message : messages) {
+                    if ("command".equals(message.path("type").asText())
+                            && command.equals(message.path("payload").path("command").asText())) {
+                        return message;
+                    }
+                }
+                messageArrived.await(20, TimeUnit.MILLISECONDS);
+            }
+            fail("Timed out waiting for command " + command + "; received=" + messages);
             return Json.object();
         }
     }

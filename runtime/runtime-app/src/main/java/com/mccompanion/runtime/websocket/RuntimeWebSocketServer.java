@@ -35,6 +35,7 @@ import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
+import com.mccompanion.runtime.tool.RegistryToolGateway;
 import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.server.WebSocketServer;
@@ -68,6 +69,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final ConversationService conversations;
     private final ExternalBrainCoordinator externalBrain;
     private final TaskGraphRuntime taskGraphRuntime;
+    private volatile RegistryToolGateway registryQueries;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
@@ -140,6 +142,11 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         if (!started.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
             throw new IllegalStateException("WebSocket server did not start in time");
         }
+    }
+
+    public void attachRegistryQueries(RegistryToolGateway gateway) {
+        if (registryQueries != null) throw new IllegalStateException("Registry query gateway is already attached");
+        registryQueries = java.util.Objects.requireNonNull(gateway, "gateway");
     }
 
     @Override
@@ -253,6 +260,12 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             case "command_accepted" -> commands.onCommandAccepted(convert(payload, CommandAccepted.class));
             case "behavior_event", "event" -> commands.onBehaviorEvent(convert(payload, BehaviorEvent.class));
             case "protocol_error", "error" -> commands.onProtocolError(convert(payload, ErrorEnvelope.class));
+            case "registry_result" -> {
+                if (registryQueries == null || !registryQueries.complete(session, payload)) {
+                    sendError(session.peer(), session, "UNKNOWN_QUERY_RESULT",
+                            "Registry result has no active query binding");
+                }
+            }
             case "player_request" -> handlePlayerRequest(session, payload);
             case "conversation_delivery_ack" -> acknowledgeConversationDelivery(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }

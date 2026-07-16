@@ -99,6 +99,14 @@ items, entity types, recipes, menu types, tags, dimensions, tool requirements, a
 components. MCAC may promise observation and generic interaction only; unknown behavior must return
 an honest failure/observation. Ordinary Registry content must not require one Java adapter per Mod.
 
+The current Fabric bridge advertises live `registry_query` and `recipe_query` support. A
+capability-gated Runtime gateway dispatches bounded read-only query commands to that authenticated
+session and accepts results only when query ID, Runtime session, companion, Brain call, timeout, and
+result-size boundaries still match. `registry.search`, `registry.describe`, and `recipe.query`
+therefore observe unknown namespaces from the live server Registry/recipe manager; they do not
+consult a static compatibility list or grant the external Brain direct loader access. Other loaders
+must remain honest by omitting those capabilities until their bridge supplies the same contract.
+
 ## Safety
 
 Emergency reflexes for immediate hazards may preempt normal graph execution:

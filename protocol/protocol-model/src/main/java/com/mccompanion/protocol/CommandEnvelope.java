@@ -36,7 +36,7 @@ public record CommandEnvelope(
         boolean leaseProtected = switch (command) {
             case START_BEHAVIOR, PAUSE_BEHAVIOR, RESUME_BEHAVIOR, CANCEL_BEHAVIOR,
                     RENEW_LEASE, RELEASE_LEASE -> true;
-            case QUERY_STATUS, ACQUIRE_LEASE -> false;
+            case QUERY_STATUS, QUERY_REGISTRY, QUERY_RECIPE, ACQUIRE_LEASE -> false;
         };
         if (leaseProtected && (leaseId == null || controlEpoch == 0)) {
             throw new IllegalArgumentException(command + " requires a leaseId and a positive controlEpoch");

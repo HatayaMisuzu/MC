@@ -39,6 +39,7 @@ import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.tool.RuntimeToolGateway;
 import com.mccompanion.runtime.tool.ObservationToolGateway;
 import com.mccompanion.runtime.tool.CompositeToolGateway;
+import com.mccompanion.runtime.tool.RegistryToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.workspace.AgentWorkspace;
 import com.mccompanion.runtime.workspace.SkillRepository;
@@ -159,13 +160,14 @@ public final class RuntimeApplication implements AutoCloseable {
             sessions = new SessionRegistry(database, companions, log);
             ConversationRepository conversationRepository = new ConversationRepository(database);
             ConversationService conversations = new ConversationService(conversationRepository, sessions, log);
+            ProtocolCommandSender commandSender = new ProtocolCommandSender();
             CommandService commands = new CommandService(
                     sessions,
                     companions,
                     tasks,
                     leases,
                     new IdempotencyStore(database),
-                    new ProtocolCommandSender(),
+                    commandSender,
                     log);
             provider = createProvider(config, redactor, log);
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
@@ -184,6 +186,7 @@ public final class RuntimeApplication implements AutoCloseable {
                 }
             });
             SearchProvider searchProvider = searchOverride == null ? createSearchProvider(config, redactor, log) : searchOverride;
+            RegistryToolGateway registryTools = new RegistryToolGateway(sessions, commandSender);
             java.util.concurrent.atomic.AtomicReference<CompositeToolGateway> toolGatewayReference =
                     new java.util.concurrent.atomic.AtomicReference<>();
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
@@ -200,6 +203,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     new ObservationToolGateway(companions, tasks, capabilityRegistry,
                             companionId -> activeSessionRegistry.forCompanion(companionId)
                                     .map(value -> value.handshake()).orElse(null)),
+                    registryTools,
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains), skillTools));
             toolGatewayReference.set(toolGateway);
@@ -244,6 +248,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     externalBrain,
                     taskGraphRuntime,
                     log);
+            webSocket.attachRegistryQueries(registryTools);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
                     kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,

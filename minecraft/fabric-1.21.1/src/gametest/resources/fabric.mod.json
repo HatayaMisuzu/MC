@@ -5,6 +5,9 @@
   "name": "Minecraft AI Companion GameTests",
   "environment": "server",
   "entrypoints": {
+    "main": [
+      "com.mccompanion.minecraft.v121.RegistryFixtureInitializer"
+    ],
     "fabric-gametest": [
       "com.mccompanion.minecraft.v121.CompanionLifecycleGameTests"
     ]

@@ -147,6 +147,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("travel", true)
                 .put("bounded_world_snapshot", true)
                 .put("inventory_observation", true)
+                .put("registry_query", true)
+                .put("recipe_query", true)
                 .put("primitive_lifecycle", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
@@ -297,6 +299,16 @@ final class RuntimeBridge implements AutoCloseable {
                 publishStatusOnServerThread();
                 result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
             }
+            case "QUERY_REGISTRY" -> {
+                sendQueryResult(commandId, companionId, arguments,
+                        RegistryObservationService.registry(server, arguments));
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
+            case "QUERY_RECIPE" -> {
+                sendQueryResult(commandId, companionId, arguments,
+                        RegistryObservationService.recipes(server, arguments));
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
             default -> result = new CompanionRegistry.RuntimeResult(false, "UNKNOWN_COMMAND", null, 0, "FAILED");
         }
         if (!result.success()) {
@@ -311,6 +323,18 @@ final class RuntimeBridge implements AutoCloseable {
             observedBehaviorStates.put(companionId + ':' + result.behaviorId(), result.state().toUpperCase(Locale.ROOT));
         }
         publishStatusOnServerThread();
+    }
+
+    private void sendQueryResult(String commandId, String companionId, JsonNode arguments,
+                                 RegistryObservationService.Result result) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("queryId", arguments.path("queryId").asText())
+                .put("commandId", commandId)
+                .put("companionId", companionId)
+                .put("success", result.success())
+                .put("code", result.code());
+        payload.set("observation", result.observation());
+        sendEnvelope("registry_result", payload);
     }
 
     private static SkillParameters skillParameters(JsonNode parameters) {

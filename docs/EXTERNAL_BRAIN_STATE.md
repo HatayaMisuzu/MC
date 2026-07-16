@@ -53,6 +53,9 @@ product UI controls, and release/install verification remain incomplete.
   user edits are stored with `USER` provenance and take precedence over inference.
 - Added authenticated loopback memory list/search/export, user correction, delete, and
   per-category clear operations. Secret-shaped values are rejected from Brain suggestions.
+- Added bounded `world.locate_known_container`; it returns only verified container memories,
+  exposes verification provenance/time, marks same- versus cross-dimension candidates, and
+  filters unverified inferences instead of presenting them as world facts.
 
 ## Brain persistence and restart slice
 

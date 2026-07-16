@@ -15,7 +15,8 @@ Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_V
 | External ASK_USER | LOCALLY_VERIFIED | structured Hermes/OpenAI-compatible question; durable brainSession/task binding; Web/game routing; idempotent answer | adapter/restart/HTTP/game Replay plus real Fabric `6/16 -> ASK -> withdraw 6 -> return -> deliver` E2E | Remote verification of current SHA; Live/Human excluded |
 | Search | PARTIAL | bounded query/open/citations/cancel gateway and privacy filtering | Runtime Replay tests, remote fast | user UI configuration, cache, doctor, full session lifecycle |
 | Memory | PARTIAL | four types, provenance, user CRUD/export | repository and Web tests | working-memory cleanup, episodic automation, conflict/capacity policy |
-| Container | LOCALLY_VERIFIED | vanilla withdraw/deposit and verified deltas | Fabric GameTests and Runtime/Fabric E2E | multi-container fill, invalidation/restart breadth |
+| LocateKnownContainer | LOCALLY_VERIFIED | bounded `world.locate_known_container` returns only body/user-verified World Memory and flags cross-dimension candidates | multi-container, cross-dimension, unverified-filter Runtime tests | remote verification of current SHA |
+| Container | LOCALLY_VERIFIED | vanilla withdraw/deposit, verified deltas, and known-container lookup | Fabric GameTests and Runtime/Fabric E2E | multi-container fill, invalidation/restart breadth |
 | Craft | LOCALLY_VERIFIED | vanilla 2x2/3x3 recipe/menu execution | Fabric GameTests | broader recipe/restart cases |
 | Explore | NOT_STARTED | — | — | `world.scan`, `ExploreArea`, budgets and ranking |
 | Collect | NOT_STARTED | — | — | legal break/drop collection tool |

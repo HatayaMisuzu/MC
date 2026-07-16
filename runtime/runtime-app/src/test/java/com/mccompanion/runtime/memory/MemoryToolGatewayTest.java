@@ -23,7 +23,8 @@ class MemoryToolGatewayTest {
                     true, 1.0, null, "USER");
             MemoryToolGateway gateway = new MemoryToolGateway(repository);
             ToolContext context = new ToolContext("controller", "brain-session", "c1");
-            assertEquals(java.util.List.of("memory.list", "memory.search", "memory.suggest_preference"),
+            assertEquals(java.util.List.of("world.locate_known_container", "memory.list", "memory.search",
+                            "memory.suggest_preference"),
                     gateway.definitions(context).stream().map(value -> value.name()).toList());
 
             var listed = gateway.execute(context, new ToolCall("l1", "memory.list",
@@ -40,6 +41,36 @@ class MemoryToolGatewayTest {
 
             assertTrue(gateway.execute(context, new ToolCall("w1", "memory.write_world", Json.object())).code()
                     .equals("TOOL_UNAVAILABLE"));
+        }
+    }
+
+    @Test
+    void locateKnownContainerReturnsOnlyVerifiedCandidatesAndMarksCrossDimension() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("containers.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            repository.remember("c1", MemoryKind.WORLD, "container:minecraft:overworld:1:64:2",
+                    Json.object().put("dimension", "minecraft:overworld").put("x", 1).put("y", 64).put("z", 2)
+                            .put("type", "minecraft:chest"), true, 1.0, null, "BODY_OBSERVATION");
+            repository.remember("c1", MemoryKind.WORLD, "container:minecraft:the_nether:3:70:4",
+                    Json.object().put("dimension", "minecraft:the_nether").put("x", 3).put("y", 70).put("z", 4),
+                    true, 1.0, null, "BODY_OBSERVATION");
+            repository.remember("c1", MemoryKind.WORLD, "container:unverified",
+                    Json.object().put("dimension", "minecraft:overworld").put("x", 9).put("y", 64).put("z", 9),
+                    false, 0.5, null, "INFERENCE");
+            MemoryToolGateway gateway = new MemoryToolGateway(repository);
+            var result = gateway.execute(new ToolContext("controller", "brain-session", "c1"),
+                    new ToolCall("locate-1", "world.locate_known_container",
+                            Json.object().put("dimension", "minecraft:overworld").put("limit", 10)));
+            assertTrue(result.success());
+            assertEquals(2, result.observation().path("count").asInt());
+            assertEquals(1, java.util.stream.StreamSupport.stream(
+                    result.observation().path("containers").spliterator(), false)
+                    .filter(value -> value.path("sameDimension").asBoolean()).count());
+            assertTrue(java.util.stream.StreamSupport.stream(
+                    result.observation().path("containers").spliterator(), false)
+                    .allMatch(value -> value.path("verified").asBoolean()
+                            && value.path("source").asText().equals("BODY_OBSERVATION")));
         }
     }
 

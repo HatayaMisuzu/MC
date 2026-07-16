@@ -19,7 +19,9 @@ public final class MemoryToolGateway implements ToolGateway {
     public MemoryToolGateway(MemoryRepository memories) { this.memories = java.util.Objects.requireNonNull(memories); }
 
     @Override public List<ToolDefinition> definitions(ToolContext context) {
-        return List.of(definition("memory.list", "List one typed memory category with provenance", listSchema()),
+        return List.of(definition("world.locate_known_container",
+                        "List only body-verified known containers, with dimension compatibility", containerSchema()),
+                definition("memory.list", "List one typed memory category with provenance", listSchema()),
                 definition("memory.search", "Search bounded memory keys and values", searchSchema()),
                 definition("memory.suggest_preference", "Store an unverified preference suggestion for user review", preferenceSchema()));
     }
@@ -27,6 +29,7 @@ public final class MemoryToolGateway implements ToolGateway {
     @Override public ToolResult execute(ToolContext context, ToolCall call) {
         try {
             return switch (call.name()) {
+                case "world.locate_known_container" -> locateContainers(context, call);
                 case "memory.list" -> list(context, call);
                 case "memory.search" -> search(context, call);
                 case "memory.suggest_preference" -> suggest(context, call);
@@ -37,6 +40,36 @@ public final class MemoryToolGateway implements ToolGateway {
         } catch (java.sql.SQLException failure) {
             return ToolResult.rejected(call, "PERSISTENCE_ERROR", "Memory store is unavailable");
         }
+    }
+
+    private ToolResult locateContainers(ToolContext context, ToolCall call) throws java.sql.SQLException {
+        rejectUnexpected(call.arguments(), Set.of("dimension", "limit"));
+        String dimension = call.arguments().path("dimension").asText("").strip();
+        if (!dimension.isEmpty() && !dimension.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException("dimension must be a namespaced id");
+        }
+        int limit = call.arguments().path("limit").asInt(20);
+        if (limit < 1 || limit > 20) throw new IllegalArgumentException("limit must be 1..20");
+        var candidates = Json.MAPPER.createArrayNode();
+        for (MemoryFact fact : memories.relevant(context.companionId(), MemoryKind.WORLD, 100)) {
+            if (!fact.verified() || !fact.key().startsWith("container:")) continue;
+            JsonNode value = fact.value();
+            String candidateDimension = value.path("dimension").asText("");
+            if (candidateDimension.isBlank() || !value.path("x").canConvertToInt()
+                    || !value.path("y").canConvertToInt() || !value.path("z").canConvertToInt()) continue;
+            ObjectNode candidate = candidates.addObject().put("memoryId", fact.memoryId())
+                    .put("dimension", candidateDimension).put("x", value.path("x").asInt())
+                    .put("y", value.path("y").asInt()).put("z", value.path("z").asInt())
+                    .put("sameDimension", dimension.isEmpty() || dimension.equals(candidateDimension))
+                    .put("verified", true).put("source", fact.source())
+                    .put("verifiedAt", fact.updatedAt().toString());
+            if (value.hasNonNull("type")) candidate.set("type", value.path("type"));
+            if (candidates.size() >= limit) break;
+        }
+        ObjectNode observation = Json.object().put("requestedDimension", dimension)
+                .put("count", candidates.size());
+        observation.set("containers", candidates);
+        return ok(call, observation);
     }
 
     private ToolResult list(ToolContext context, ToolCall call) throws java.sql.SQLException {
@@ -87,6 +120,13 @@ public final class MemoryToolGateway implements ToolGateway {
         p.putObject("kind").put("type", "string").putArray("enum")
                 .add("WORKING").add("EPISODIC").add("WORLD").add("PREFERENCE");
         p.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 100);
+        return p;
+    }
+    private static ObjectNode containerSchema() {
+        ObjectNode p = Json.object();
+        p.putObject("dimension").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        p.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 20);
         return p;
     }
     private static ObjectNode searchSchema() {

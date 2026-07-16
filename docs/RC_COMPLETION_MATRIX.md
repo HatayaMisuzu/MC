@@ -18,7 +18,7 @@ Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_V
 | LocateKnownContainer | LOCALLY_VERIFIED | bounded `world.locate_known_container` returns only body/user-verified World Memory and flags cross-dimension candidates | multi-container, cross-dimension, unverified-filter Runtime tests | remote verification of current SHA |
 | Container | LOCALLY_VERIFIED | vanilla withdraw/deposit, verified deltas, and known-container lookup | Fabric GameTests and Runtime/Fabric E2E | multi-container fill, invalidation/restart breadth |
 | Craft | LOCALLY_VERIFIED | vanilla 2x2/3x3 recipe/menu execution | Fabric GameTests | broader recipe/restart cases |
-| Explore | NOT_STARTED | — | — | `world.scan`, `ExploreArea`, budgets and ranking |
+| Explore | PARTIAL | `world.scan` dispatches incremental `ExploreArea`: radius 1..16, 256 blocks/tick, loaded chunks only, 64 candidates, distance ranking | Runtime schema test; real Fabric GameTest proves asynchronous scan and ranked diamond-ore candidates | route exploration, world-change/unreachable/restart breadth, Runtime/Fabric Brain E2E |
 | Collect | NOT_STARTED | — | — | legal break/drop collection tool |
 | Mine | NOT_STARTED | — | — | vein/tool/durability/drop verification |
 | Smelt | NOT_STARTED | — | — | furnace lifecycle and multi-round verification |

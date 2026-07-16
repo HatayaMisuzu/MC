@@ -28,6 +28,7 @@ import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.item.crafting.ShapedRecipe;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.BlockHitResult;
 import org.slf4j.Logger;
@@ -49,6 +50,7 @@ final class BehaviorDirector {
     private final ReflexController reflexController = new ReflexController();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, SkillProgress> skills = new HashMap<>();
+    private final Map<UUID, ScanProgress> scans = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
@@ -64,12 +66,18 @@ final class BehaviorDirector {
 
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
         observations.remove(entry.companionId);
-        skills.put(entry.companionId, createSkill(body, entry, parameters));
+        if (parameters.capability().equals("ExploreArea")) {
+            skills.remove(entry.companionId);
+            scans.put(entry.companionId, createScan(body, parameters));
+        } else {
+            scans.remove(entry.companionId);
+            skills.put(entry.companionId, createSkill(body, entry, parameters));
+        }
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
-        if (!skills.containsKey(entry.companionId)) {
+        if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -88,13 +96,17 @@ final class BehaviorDirector {
             if (body.containerMenu != body.inventoryMenu) body.closeContainer();
         }
         if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
-                || code.equals("LEASE_EXPIRED"))) skills.remove(entry.companionId);
+                || code.equals("LEASE_EXPIRED"))) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+        }
     }
 
     void forget(UUID companionId) {
         navigation.remove(companionId);
         actionGateway.discard(companionId);
         skills.remove(companionId);
+        scans.remove(companionId);
         observations.remove(companionId);
     }
 
@@ -333,6 +345,8 @@ final class BehaviorDirector {
     }
 
     private void tickSkill(CompanionEntry entry, CompanionPlayer body) {
+        ScanProgress scan = scans.get(entry.companionId);
+        if (scan != null) { tickScan(entry, body, scan); return; }
         SkillProgress progress = skills.get(entry.companionId);
         if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
         if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
@@ -344,6 +358,62 @@ final class BehaviorDirector {
         else if (progress.parameters.capability().equals("DepositToStorage")) tickDeposit(entry, body, progress);
         else if (progress.parameters.capability().equals("CraftItem")) tickCraft(entry, body, progress);
         else tickEating(entry, body, progress);
+    }
+
+    private ScanProgress createScan(CompanionPlayer body, SkillParameters parameters) {
+        if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+            return ScanProgress.failed(parameters, "WORLD_CHANGED");
+        }
+        ResourceLocation key = ResourceLocation.tryParse(parameters.itemId());
+        if (key == null || !BuiltInRegistries.BLOCK.containsKey(key)) {
+            return ScanProgress.failed(parameters, "BLOCK_UNKNOWN");
+        }
+        int radius = parameters.quantity();
+        if (radius < 1 || radius > 16) return ScanProgress.failed(parameters, "SCAN_RADIUS_INVALID");
+        BlockPos center = parameters.hasBlockTarget()
+                ? new BlockPos(parameters.x(), parameters.y(), parameters.z()) : body.blockPosition();
+        if (body.distanceToSqr(Vec3.atCenterOf(center)) > 32.0D * 32.0D) {
+            return ScanProgress.failed(parameters, "SCAN_ORIGIN_OUT_OF_RANGE");
+        }
+        return new ScanProgress(parameters, BuiltInRegistries.BLOCK.get(key), center,
+                radius, Math.min(radius, 8), server.getTickCount(), null);
+    }
+
+    private void tickScan(CompanionEntry entry, CompanionPlayer body, ScanProgress scan) {
+        if (scan.failureCode != null) { pauseSafely(entry, body, scan.failureCode); return; }
+        if (!body.serverLevel().dimension().location().toString().equals(scan.parameters.dimension())) {
+            pauseSafely(entry, body, "WORLD_CHANGED"); return;
+        }
+        if (server.getTickCount() - scan.startedTick > 20 * 20) {
+            pauseSafely(entry, body, "SCAN_TIMEOUT"); return;
+        }
+        int diameter = scan.radius * 2 + 1;
+        int height = scan.verticalRadius * 2 + 1;
+        int total = diameter * diameter * height;
+        int budget = 256;
+        while (budget-- > 0 && scan.index < total) {
+            int value = scan.index++;
+            int yOffset = value % height - scan.verticalRadius;
+            value /= height;
+            int zOffset = value % diameter - scan.radius;
+            int xOffset = value / diameter - scan.radius;
+            BlockPos position = scan.center.offset(xOffset, yOffset, zOffset);
+            if (!body.serverLevel().hasChunkAt(position)) continue;
+            if (body.serverLevel().getBlockState(position).is(scan.block) && scan.candidates.size() < 64) {
+                scan.candidates.add(new CompanionRegistry.ScanCandidate(
+                        BuiltInRegistries.BLOCK.getKey(scan.block).toString(), scan.parameters.dimension(),
+                        position.getX(), position.getY(), position.getZ(),
+                        position.distSqr(scan.center)));
+            }
+        }
+        if (scan.index < total) return;
+        scan.candidates.sort(java.util.Comparator.comparingDouble(CompanionRegistry.ScanCandidate::distanceSquared));
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                "SCAN_COMPLETE", scan.parameters.itemId(), total, scan.candidates.size(), scan.candidates));
+        stop(entry, body, true, "NONE");
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        savedData.changed();
     }
 
     private void tickCraft(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -794,6 +864,28 @@ final class BehaviorDirector {
         }
         private static SkillProgress failed(SkillParameters parameters, String code) {
             return new SkillProgress(parameters, null, 0, 0, 0, 0, 0, code);
+        }
+    }
+
+    private static final class ScanProgress {
+        private final SkillParameters parameters;
+        private final Block block;
+        private final BlockPos center;
+        private final int radius;
+        private final int verticalRadius;
+        private final int startedTick;
+        private final String failureCode;
+        private final java.util.List<CompanionRegistry.ScanCandidate> candidates = new java.util.ArrayList<>();
+        private int index;
+
+        private ScanProgress(SkillParameters parameters, Block block, BlockPos center, int radius,
+                             int verticalRadius, int startedTick, String failureCode) {
+            this.parameters = parameters; this.block = block; this.center = center; this.radius = radius;
+            this.verticalRadius = verticalRadius; this.startedTick = startedTick; this.failureCode = failureCode;
+        }
+
+        private static ScanProgress failed(SkillParameters parameters, String code) {
+            return new ScanProgress(parameters, Blocks.AIR, BlockPos.ZERO, 1, 1, 0, code);
         }
     }
 

@@ -141,6 +141,8 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
+        if (available.contains("ExploreArea")) values.add(definition("world.scan",
+                "Incrementally scan a bounded loaded area for one block type", scanSchema(), "MEDIUM", "READ_WORLD", true));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
@@ -193,6 +195,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "movement.follow" -> noArguments(call, TaskType.FOLLOW);
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
+            case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
@@ -324,6 +327,8 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("item").add("quantity").add("container");
         } else if (name.equals("inventory.deliver") || name.equals("item.craft")) {
             root.putArray("required").add("item").add("quantity");
+        } else if (name.equals("world.scan")) {
+            root.putArray("required").add("block").add("radius");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
                 Duration.ofSeconds(30), idempotent);
@@ -333,6 +338,42 @@ public final class RuntimeToolGateway implements ToolGateway {
         ObjectNode properties = Json.object();
         for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
         properties.putObject("dimension").put("type", "string");
+        return properties;
+    }
+
+    private static JsonNode validatedScan(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("block", "radius", "center"));
+        String block = arguments.path("block").asText("");
+        if (!block.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException("block must be a namespaced block id");
+        }
+        if (!arguments.path("radius").canConvertToInt()) throw new IllegalArgumentException("radius must be an integer");
+        int radius = arguments.path("radius").asInt();
+        if (radius < 1 || radius > 16) throw new IllegalArgumentException("radius must be 1..16");
+        ObjectNode values = Json.object().put("item", block).put("quantity", radius);
+        if (arguments.has("center")) {
+            JsonNode center = arguments.path("center");
+            if (!center.isObject()) throw new IllegalArgumentException("center must be an object");
+            rejectUnexpected(center, Set.of("dimension", "x", "y", "z"));
+            for (String field : List.of("x", "y", "z")) {
+                if (!center.path(field).canConvertToInt()) throw new IllegalArgumentException("center." + field + " must be an integer");
+            }
+            values.set("target", center.deepCopy());
+        }
+        return values;
+    }
+
+    private static ObjectNode scanSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("block").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("radius").put("type", "integer").put("minimum", 1).put("maximum", 16);
+        ObjectNode center = properties.putObject("center");
+        center.put("type", "object").put("additionalProperties", false);
+        ObjectNode fields = center.putObject("properties");
+        fields.putObject("dimension").put("type", "string");
+        for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
+        center.putArray("required").add("x").add("y").add("z");
         return properties;
     }
 

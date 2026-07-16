@@ -143,6 +143,19 @@ product UI controls, and release/install verification remain incomplete.
 - Fabric GameTests prove withdraw/deposit item conservation and prove a completely full
   container returns `CONTAINER_FULL` without changing either inventory.
 
+## Bounded world scan slice
+
+- Added `world.scan` backed by the generic `ExploreArea` body capability. Inputs accept one
+  namespaced block ID, a radius from 1 to 16, and an optional nearby center; arbitrary chunks,
+  dimensions, scripts, and world edits are not accepted.
+- Fabric scans at most 256 loaded positions per server tick and returns at most 64 unique
+  candidates sorted by squared distance. The terminal Tool observation carries the exact block,
+  dimension, coordinates, scanned-position budget, and candidate count.
+- A real Fabric 1.21.1 GameTest proves the scan remains RUNNING immediately after dispatch,
+  completes across later ticks, finds two placed diamond-ore candidates once each, and ranks the
+  nearer candidate first. Route exploration and restart/unreachable breadth remain incomplete,
+  so the matrix truthfully keeps Explore at `PARTIAL`.
+
 ## Craft item slice
 
 - Added `item.craft` / `CraftItem` only when the connected Fabric body reports the

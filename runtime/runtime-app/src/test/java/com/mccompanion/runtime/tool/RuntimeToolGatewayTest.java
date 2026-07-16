@@ -127,6 +127,31 @@ class RuntimeToolGatewayTest {
     }
 
     @Test
+    void worldScanSchemaIsBoundedBeforeDispatch() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("scan.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("scan.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions,
+                        new TaskRepository(database, new TaskEventStore(database)), new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, ignored -> List.of("ExploreArea"));
+                ToolContext context = new ToolContext("hermes", "brain-session", "c1");
+                ToolDefinition scan = gateway.definitions(context).stream()
+                        .filter(value -> value.name().equals("world.scan")).findFirst().orElseThrow();
+                assertEquals(List.of("block", "radius"), java.util.stream.StreamSupport.stream(
+                        scan.inputSchema().path("required").spliterator(), false)
+                        .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
+                ToolResult rejected = gateway.execute(context, new ToolCall("scan-1", "world.scan",
+                        Json.object().put("block", "minecraft:diamond_ore").put("radius", 17)));
+                assertFalse(rejected.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", rejected.code());
+            }
+        }
+    }
+
+    @Test
     void waitsForDurableTaskTerminalStateAndReturnsLastFabricObservation() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("terminal.db"));
              RuntimeLog log = new RuntimeLog(temporary.resolve("terminal.log"), false, new Redactor())) {

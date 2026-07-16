@@ -19,6 +19,55 @@ import org.slf4j.LoggerFactory;
 public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
+    public void exploreAreaScansIncrementallyAndReturnsRankedVerifiedCandidates(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Explorer").success(), "explore test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "explore test created no live body");
+        BlockPos origin = body.blockPosition();
+        BlockPos near = origin.offset(2, 0, 0);
+        BlockPos far = origin.offset(4, 1, 0);
+        body.serverLevel().setBlockAndUpdate(near, Blocks.DIAMOND_ORE.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(far, Blocks.DIAMOND_ORE.defaultBlockState());
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-explore";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "explore lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "scan-diamond", "skill",
+                null, null, null, new SkillParameters("ExploreArea", "minecraft:diamond_ore", 6, false,
+                        body.serverLevel().dimension().location().toString(),
+                        origin.getX(), origin.getY(), origin.getZ())).success(), "explore skill failed to start");
+        helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                        .filter(snapshot -> snapshot.companionId().equals(companionId))
+                        .findFirst().orElseThrow().behaviorState().equals("RUNNING"),
+                "bounded scan completed synchronously instead of incrementally across ticks");
+        helper.succeedWhen(() -> {
+            var snapshot = registry.runtimeSnapshots(false).stream()
+                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for bounded scan completion");
+            var observation = snapshot.behaviorObservation();
+            helper.assertTrue(observation != null, "scan produced no verified observation");
+            helper.assertValueEqual(observation.failureCode(), "SCAN_COMPLETE", "scan code mismatch");
+            helper.assertValueEqual(observation.available(), 2, "scan did not deduplicate candidates");
+            helper.assertValueEqual(observation.candidates().get(0).x(), near.getX(), "nearest candidate was not ranked first");
+            helper.assertValueEqual(observation.candidates().get(1).x(), far.getX(), "far candidate was not ranked second");
+            helper.assertTrue(observation.candidates().get(0).distanceSquared()
+                            < observation.candidates().get(1).distanceSquared(),
+                    "candidate distances are not increasing");
+            helper.assertTrue(registry.remove(owner).success(), "explore test cleanup failed");
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600)
     public void runtimeSkillsUseVanillaActionsAndVerifyWorldDeltas(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")

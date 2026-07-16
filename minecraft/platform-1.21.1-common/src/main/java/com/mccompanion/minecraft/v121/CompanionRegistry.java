@@ -386,7 +386,8 @@ public final class CompanionRegistry {
             if (!skill.capability().equals("DeliverItem") && !skill.capability().equals("EatAndRecover")
                     && !skill.capability().equals("WithdrawFromStorage")
                     && !skill.capability().equals("DepositToStorage")
-                    && !skill.capability().equals("CraftItem")) {
+                    && !skill.capability().equals("CraftItem")
+                    && !skill.capability().equals("ExploreArea")) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }
             entry.mode = CompanionEntry.Mode.SKILL;
@@ -530,7 +531,17 @@ public final class CompanionRegistry {
             java.util.List<ContainerSnapshot> visibleContainers, String evidenceSummary,
             BehaviorObservation behaviorObservation) { }
 
-    public record BehaviorObservation(String failureCode, String itemId, int requested, int available) { }
+    public record BehaviorObservation(String failureCode, String itemId, int requested, int available,
+                                      java.util.List<ScanCandidate> candidates) {
+        public BehaviorObservation {
+            candidates = candidates == null ? java.util.List.of() : java.util.List.copyOf(candidates);
+        }
+        public BehaviorObservation(String failureCode, String itemId, int requested, int available) {
+            this(failureCode, itemId, requested, available, java.util.List.of());
+        }
+    }
+
+    public record ScanCandidate(String block, String dimension, int x, int y, int z, double distanceSquared) { }
 
     public record ContainerSnapshot(String type, String dimension, int x, int y, int z) { }
 

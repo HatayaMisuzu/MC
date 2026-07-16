@@ -153,6 +153,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("WithdrawFromStorage", true)
                 .put("DepositToStorage", true)
                 .put("CraftItem", true)
+                .put("ExploreArea", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);
@@ -437,19 +438,29 @@ final class RuntimeBridge implements AutoCloseable {
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("positionX", snapshot.x()).put("positionY", snapshot.y()).put("positionZ", snapshot.z())
                     .put("evidence", snapshot.evidenceSummary());
+            appendBehaviorObservation(evidence, snapshot.behaviorObservation());
             sendObservedBehaviorEvent(snapshot, "completed", "completed", 1.0D, null, evidence);
         } else if (current.equals("PAUSED") && previous.equals("RUNNING")) {
             String failure = failureCode(snapshot.evidenceSummary());
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("failureCode", failure).put("evidence", snapshot.evidenceSummary());
-            if (snapshot.behaviorObservation() != null) {
-                evidence.put("failureCode", snapshot.behaviorObservation().failureCode())
-                        .put("item", snapshot.behaviorObservation().itemId())
-                        .put("requested", snapshot.behaviorObservation().requested())
-                        .put("available", snapshot.behaviorObservation().available());
-            }
+            appendBehaviorObservation(evidence, snapshot.behaviorObservation());
             sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, null, evidence);
         }
+    }
+
+    private static void appendBehaviorObservation(ObjectNode evidence,
+                                                   CompanionRegistry.BehaviorObservation observation) {
+        if (observation == null) return;
+        evidence.put("failureCode", observation.failureCode())
+                .put("item", observation.itemId())
+                .put("requested", observation.requested())
+                .put("available", observation.available());
+        ArrayNode candidates = evidence.putArray("candidates");
+        observation.candidates().forEach(candidate -> candidates.addObject()
+                .put("block", candidate.block()).put("dimension", candidate.dimension())
+                .put("x", candidate.x()).put("y", candidate.y()).put("z", candidate.z())
+                .put("distanceSquared", candidate.distanceSquared()));
     }
 
     private void sendObservedBehaviorEvent(CompanionRegistry.RuntimeSnapshot snapshot, String event, String state,

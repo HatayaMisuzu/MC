@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,6 +40,39 @@ class SearchToolGatewayTest {
             assertTrue(gateway.execute(CONTEXT, new ToolCall("c1", "search.citations", Json.object())).success());
             assertEquals("SEARCH_CANCELLED", gateway.execute(CONTEXT,
                     new ToolCall("x1", "search.cancel", Json.object())).code());
+        }
+    }
+
+    @Test
+    void cacheIsBoundedToCompanionPolicyAndStillCreatesIndependentSessions() {
+        SearchSource source = new SearchSource("docs-1", "Fabric docs", "https://docs.fabricmc.net/",
+                "docs.fabricmc.net", "Fabric", null, Instant.now(), "Documentation", "OFFICIAL", "text/html");
+        AtomicInteger calls = new AtomicInteger();
+        SearchProvider provider = new SearchProvider() {
+            @Override public List<SearchSource> query(SearchQuery request) { calls.incrementAndGet(); return List.of(source); }
+            @Override public SearchPage open(SearchSource value, SearchQuery policy) { throw new UnsupportedOperationException(); }
+            @Override public void close() { }
+        };
+        try (SearchToolGateway gateway = new SearchToolGateway(provider)) {
+            ToolCall firstCall = new ToolCall("q1", "search.query", Json.object().put("query", "Fabric docs"));
+            var first = gateway.execute(CONTEXT, firstCall);
+            var second = gateway.execute(new ToolContext("controller", "brain-session-2", "companion"),
+                    new ToolCall("q2", "search.query", Json.object().put("query", "Fabric docs")));
+            var otherCompanion = gateway.execute(new ToolContext("controller", "brain-session-3", "other-companion"),
+                    new ToolCall("q3", "search.query", Json.object().put("query", "Fabric docs")));
+
+            assertFalse(first.observation().path("cacheHit").asBoolean());
+            assertTrue(second.observation().path("cacheHit").asBoolean());
+            assertFalse(otherCompanion.observation().path("cacheHit").asBoolean());
+            assertNotEquals(first.observation().path("searchId").asText(), second.observation().path("searchId").asText());
+            assertEquals(2, calls.get());
+
+            gateway.execute(new ToolContext("controller", "brain-session-2", "companion"),
+                    new ToolCall("cancel", "search.cancel", Json.object()));
+            var afterCancel = gateway.execute(new ToolContext("controller", "brain-session-4", "companion"),
+                    new ToolCall("q4", "search.query", Json.object().put("query", "Fabric docs")));
+            assertFalse(afterCancel.observation().path("cacheHit").asBoolean());
+            assertEquals(3, calls.get());
         }
     }
 

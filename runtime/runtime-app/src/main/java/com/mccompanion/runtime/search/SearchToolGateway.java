@@ -17,10 +17,13 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /** Session-bound search tools. URLs are never accepted from a Brain tool call. */
 public final class SearchToolGateway implements ToolGateway, AutoCloseable {
+    private static final int MAX_CACHE_ENTRIES = 128;
+    private static final long CACHE_TTL_NANOS = Duration.ofMinutes(5).toNanos();
     private final SearchProvider provider;
     private final List<String> globallyAllowedDomains;
     private final List<String> deniedDomains;
     private final Map<String, SearchState> states = new ConcurrentHashMap<>();
+    private final Map<CacheKey, CacheEntry> cache = new ConcurrentHashMap<>();
 
     public SearchToolGateway(SearchProvider provider) { this(provider, List.of(), List.of()); }
 
@@ -66,13 +69,26 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
         SearchQuery request = new SearchQuery(a.path("query").asText(""), domains, a.path("maxResults").asInt(5),
                 a.has("recencyDays") ? a.path("recencyDays").asInt() : null, a.path("locale").asText("en"),
                 a.path("safeSearch").asBoolean(true), Duration.ofSeconds(a.path("timeoutSeconds").asInt(15)));
-        List<SearchSource> sources = provider.query(request).stream()
-                .filter(source -> deniedDomains.stream().noneMatch(denied -> source.domain().equals(denied)
-                        || source.domain().endsWith("." + denied)))
-                .limit(request.maxResults()).toList();
+        CacheKey cacheKey = new CacheKey(context.companionId(), request);
+        long now = System.nanoTime();
+        CacheEntry cached = cache.get(cacheKey);
+        boolean cacheHit = cached != null && now - cached.storedAtNanos() <= CACHE_TTL_NANOS;
+        if (cached != null && !cacheHit) cache.remove(cacheKey, cached);
+        List<SearchSource> sources;
+        if (cacheHit) {
+            sources = cached.sources();
+        } else {
+            sources = provider.query(request).stream()
+                    .filter(source -> deniedDomains.stream().noneMatch(denied -> source.domain().equals(denied)
+                            || source.domain().endsWith("." + denied)))
+                    .limit(request.maxResults()).toList();
+            evictCache(now);
+            cache.put(cacheKey, new CacheEntry(now, sources));
+        }
         String searchId = UUID.randomUUID().toString();
-        states.put(context.brainSessionId(), new SearchState(searchId, request, sources));
-        ObjectNode observation = Json.object().put("searchId", searchId).put("trustBoundary", "UNTRUSTED_EXTERNAL_CONTENT");
+        states.put(context.brainSessionId(), new SearchState(searchId, request, sources, cacheKey));
+        ObjectNode observation = Json.object().put("searchId", searchId)
+                .put("trustBoundary", "UNTRUSTED_EXTERNAL_CONTENT").put("cacheHit", cacheHit);
         observation.set("sources", Json.MAPPER.valueToTree(sources));
         return new ToolResult(call.callId(), call.name(), true, "OK", observation, true);
     }
@@ -116,7 +132,10 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
     private ToolResult cancel(ToolContext context, ToolCall call) {
         rejectUnexpected(call.arguments(), List.of());
         SearchState state = states.remove(context.brainSessionId());
-        if (state != null) provider.cancel(state.searchId());
+        if (state != null) {
+            cache.remove(state.cacheKey());
+            provider.cancel(state.searchId());
+        }
         return new ToolResult(call.callId(), call.name(), true, "SEARCH_CANCELLED", Json.object(), true);
     }
 
@@ -126,7 +145,14 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
         return state;
     }
 
-    @Override public void close() { states.clear(); provider.close(); }
+    private void evictCache(long now) {
+        cache.entrySet().removeIf(entry -> now - entry.getValue().storedAtNanos() > CACHE_TTL_NANOS);
+        if (cache.size() < MAX_CACHE_ENTRIES) return;
+        cache.entrySet().stream().min(java.util.Comparator.comparingLong(entry -> entry.getValue().storedAtNanos()))
+                .ifPresent(entry -> cache.remove(entry.getKey(), entry.getValue()));
+    }
+
+    @Override public void close() { states.clear(); cache.clear(); provider.close(); }
 
     private static ToolDefinition definition(String name, String description, JsonNode properties, boolean idempotent) {
         ObjectNode schema = Json.object().put("type", "object").put("additionalProperties", false);
@@ -159,7 +185,11 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
         if (!node.isObject()) throw new IllegalArgumentException("arguments must be an object");
         node.fieldNames().forEachRemaining(field -> { if (!allowed.contains(field)) throw new IllegalArgumentException("unexpected argument"); });
     }
-    private record SearchState(String searchId, SearchQuery policy, List<SearchSource> sources) {
+    private record SearchState(String searchId, SearchQuery policy, List<SearchSource> sources, CacheKey cacheKey) {
         private SearchState { sources = List.copyOf(sources); }
+    }
+    private record CacheKey(String companionId, SearchQuery policy) { }
+    private record CacheEntry(long storedAtNanos, List<SearchSource> sources) {
+        private CacheEntry { sources = List.copyOf(sources); }
     }
 }

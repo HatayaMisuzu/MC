@@ -273,8 +273,11 @@ product UI controls, and release/install verification remain incomplete.
 - Search Doctor now contributes safe configuration/token-source readiness to the general Doctor and
   offers an explicit live provider probe. The probe uses a fixed non-private query, requests at most
   one result, rejects redirects and responses over 1 MiB, validates the result envelope, and never
-  returns a credential or provider body to the UI. Caching, source-click UI, and the full session
-  lifecycle remain `PARTIAL`.
+  returns a credential or provider body to the UI.
+- Successful queries now use a five-minute, 128-entry in-memory cache keyed by companion and complete
+  privacy policy. Cache hits still receive independent session/source IDs, never cross companions,
+  and `search.cancel` removes both the active session and its cached result. Source-click UI and the
+  full persisted search-session lifecycle remain `PARTIAL`.
 
 ## Craft item slice
 

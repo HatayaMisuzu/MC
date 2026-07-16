@@ -33,6 +33,14 @@ platformBuilds.each { target, directory ->
     }
 }
 
+// Every isolated loader build includes the shared root modules and runs `clean`, so parallel loader
+// builds (or a loader build overlapping root `check`) can race on the same Windows JAR files.
+// Keep the public `check buildPlatforms` command deterministic without disabling parallelism for
+// the ordinary shared-module test graph.
+tasks.named('build-fabric-1.21.1') { mustRunAfter 'check' }
+tasks.named('build-forge-1.20.1') { mustRunAfter 'build-fabric-1.21.1' }
+tasks.named('build-neoforge-1.21.1') { mustRunAfter 'build-forge-1.20.1' }
+
 tasks.register('buildPlatforms') {
     group = 'build'
     dependsOn platformBuilds.keySet().collect { "build-${it}" }

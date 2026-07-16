@@ -28,6 +28,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private final CompanionRepository companions;
     private final TaskRepository tasks;
     private final Function<String, List<String>> availableCapabilities;
+    private final Duration cancellationConfirmationTimeout;
     private final TaskGraphValidator taskGraphs = new TaskGraphValidator();
     private volatile TaskGraphRuntime taskGraphRuntime;
     private final java.util.concurrent.ConcurrentMap<String, String> activeTasks =
@@ -40,10 +41,21 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     public RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
                               Function<String, List<String>> availableCapabilities) {
+        this(commands, companions, tasks, availableCapabilities, Duration.ofSeconds(5));
+    }
+
+    RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
+                       Function<String, List<String>> availableCapabilities,
+                       Duration cancellationConfirmationTimeout) {
         this.commands = java.util.Objects.requireNonNull(commands, "commands");
         this.companions = java.util.Objects.requireNonNull(companions, "companions");
         this.tasks = tasks;
         this.availableCapabilities = java.util.Objects.requireNonNull(availableCapabilities, "availableCapabilities");
+        this.cancellationConfirmationTimeout = java.util.Objects.requireNonNull(
+                cancellationConfirmationTimeout, "cancellationConfirmationTimeout");
+        if (cancellationConfirmationTimeout.isNegative() || cancellationConfirmationTimeout.isZero()) {
+            throw new IllegalArgumentException("cancellationConfirmationTimeout must be positive");
+        }
     }
 
     public void attachTaskGraphRuntime(TaskGraphRuntime runtime) {
@@ -81,7 +93,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             CommandReply cancellation = commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
                     context.companionId(), stop("cancel"));
             activeTasks.remove(key(context, call.callId()));
-            long cancelDeadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            long cancelDeadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
             while (cancellation.accepted() && System.nanoTime() < cancelDeadline) {
                 TaskRecord cancelled = tasks.get(taskId).orElse(null);
                 if (cancelled == null) break;
@@ -94,8 +106,11 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 }
                 Thread.sleep(25);
             }
-            return new ToolResult(call.callId(), call.name(), false, "TOOL_TIMEOUT",
-                    Json.object().put("state", "INTERRUPTED").put("taskId", taskId)
+            TaskRecord reconciled = markCancellationUnconfirmed(taskId, cancellation);
+            return new ToolResult(call.callId(), call.name(), false,
+                    "TOOL_TIMEOUT_RECONCILIATION_REQUIRED",
+                    Json.object().put("state", "RECONCILIATION_REQUIRED").put("taskId", taskId)
+                            .put("taskRevision", reconciled.revision()).put("timedOut", true)
                             .put("cancellationConfirmed", false)
                             .put("message", cancellation.accepted()
                                     ? "Tool timed out; cancellation was dispatched but not confirmed"
@@ -109,6 +124,28 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         }
     }
 
+    private TaskRecord markCancellationUnconfirmed(String taskId, CommandReply cancellation)
+            throws java.sql.SQLException, InterruptedException {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            TaskRecord task = tasks.get(taskId)
+                    .orElseThrow(() -> new IllegalArgumentException("Bound task disappeared"));
+            if (task.state().terminal() || task.state() == TaskState.RECONCILIATION_REQUIRED) return task;
+            ObjectNode evidence = Json.object()
+                    .put("code", "TOOL_TIMEOUT_RECONCILIATION_REQUIRED")
+                    .put("cancellationAccepted", cancellation.accepted())
+                    .put("message", cancellation.accepted()
+                            ? "Tool cancellation was dispatched but not durably confirmed"
+                            : "Tool cancellation could not be dispatched");
+            try {
+                return tasks.transition(task.taskId(), task.revision(), TaskState.RECONCILIATION_REQUIRED,
+                        "ToolTimeoutCancellationUnconfirmed", evidence);
+            } catch (TaskRepository.StaleTaskRevisionException stale) {
+                Thread.sleep(5);
+            }
+        }
+        throw new java.sql.SQLException("Unable to persist Tool cancellation reconciliation state");
+    }
+
     private ToolResult terminalResult(ToolCall call, TaskRecord task) throws java.sql.SQLException {
         TaskState state = task.state();
         ObjectNode observation = Json.object().put("state", switch (state) {
@@ -116,7 +153,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                     case FAILED -> "FAILED";
                     case CANCELLED -> "CANCELLED";
                     case BLOCKED, PAUSED -> "BLOCKED";
-                    case RECONCILIATION_REQUIRED -> "INTERRUPTED";
+                    case RECONCILIATION_REQUIRED -> "RECONCILIATION_REQUIRED";
                     default -> throw new IllegalStateException("Task is not terminal");
                 }).put("taskId", task.taskId()).put("behaviorId", task.behaviorId())
                 .put("taskRevision", task.revision()).put("behaviorRevision", task.behaviorRevision());
@@ -125,7 +162,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         boolean success = state == TaskState.COMPLETED;
         String code = success ? "OK" : state == TaskState.CANCELLED ? "TOOL_CANCELLED"
                 : state == TaskState.BLOCKED || state == TaskState.PAUSED ? "TOOL_BLOCKED"
-                : state == TaskState.RECONCILIATION_REQUIRED ? "TOOL_INTERRUPTED" : "TOOL_FAILED";
+                : state == TaskState.RECONCILIATION_REQUIRED ? "TOOL_RECONCILIATION_REQUIRED" : "TOOL_FAILED";
         return new ToolResult(call.callId(), call.name(), success, code, observation, true);
     }
 
@@ -229,7 +266,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                     case "task_graph.inspect" -> taskGraphRuntime.inspect(context, call, executionId);
                     case "task_graph.pause" -> taskGraphRuntime.pause(context, call, executionId);
                     case "task_graph.resume" -> taskGraphRuntime.resume(context, call, executionId);
-                    case "task_graph.cancel" -> taskGraphRuntime.cancel(context, executionId, "external cancel");
+                    case "task_graph.cancel" ->
+                            taskGraphRuntime.cancel(context, call, executionId, "external cancel");
                     default -> throw new IllegalArgumentException("Unsupported Task Graph control");
                 };
             }

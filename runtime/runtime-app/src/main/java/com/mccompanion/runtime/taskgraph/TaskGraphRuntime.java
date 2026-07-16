@@ -31,12 +31,14 @@ import com.mccompanion.runtime.security.Digests;
  * it never creates goals, graphs, or high-level strategies.
  */
 public final class TaskGraphRuntime implements AutoCloseable {
+    private static final Duration DEFAULT_CANCELLATION_CONFIRMATION_TIMEOUT = Duration.ofSeconds(5);
     private static final Set<String> TERMINAL =
             Set.of("SUCCEEDED", "FAILED", "CANCELLED", "PAUSED", "RECONCILIATION_REQUIRED");
     private final ToolGateway tools;
     private final TaskGraphExecutionRepository repository;
     private final ConversationRepository conversations;
     private final Set<String> executableNodeTypes;
+    private final Duration cancellationConfirmationTimeout;
     private final TaskGraphValidator validator = new TaskGraphValidator();
     private final ExecutorService workers;
     private final ExecutorService parallelWorkers;
@@ -48,9 +50,20 @@ public final class TaskGraphRuntime implements AutoCloseable {
 
     public TaskGraphRuntime(ToolGateway tools, TaskGraphExecutionRepository repository,
                             ConversationRepository conversations) {
+        this(tools, repository, conversations, DEFAULT_CANCELLATION_CONFIRMATION_TIMEOUT);
+    }
+
+    TaskGraphRuntime(ToolGateway tools, TaskGraphExecutionRepository repository,
+                     ConversationRepository conversations, Duration cancellationConfirmationTimeout) {
         this.tools = java.util.Objects.requireNonNull(tools, "tools");
         this.repository = java.util.Objects.requireNonNull(repository, "repository");
         this.conversations = conversations;
+        this.cancellationConfirmationTimeout =
+                java.util.Objects.requireNonNull(cancellationConfirmationTimeout, "cancellationConfirmationTimeout");
+        if (cancellationConfirmationTimeout.isNegative() || cancellationConfirmationTimeout.isZero()
+                || cancellationConfirmationTimeout.compareTo(Duration.ofSeconds(10)) > 0) {
+            throw new IllegalArgumentException("cancellationConfirmationTimeout must be 1ns..10s");
+        }
         HashSet<String> executable = new HashSet<>(TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
         if (conversations == null) executable.remove("ask_user");
         this.executableNodeTypes = Set.copyOf(executable);
@@ -122,9 +135,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
                 if (TERMINAL.contains(record.state()) || waitingReady(record)) return terminal(call, record);
                 Thread.sleep(25);
             }
-            cancel(context, call.callId(), "timeout");
-            return new ToolResult(call.callId(), call.name(), false, "TOOL_TIMEOUT",
-                    Json.object().put("executionId", call.callId()).put("state", "INTERRUPTED"), true);
+            cancel(context, new ToolCall("timeout-cancel-" + call.callId(), "task_graph.cancel",
+                    Json.object().put("executionId", call.callId())), call.callId(), "timeout");
+            return timeoutResult(context, call);
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             return new ToolResult(call.callId(), call.name(), false, "TOOL_INTERRUPTED",
@@ -186,15 +199,20 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     public ToolResult cancel(ToolContext context, String executionId, String reason) {
-        ToolCall synthetic = new ToolCall("cancel-" + executionId, "task_graph.cancel",
-                Json.object().put("executionId", executionId));
+        return cancel(context, new ToolCall("cancel-" + executionId, "task_graph.cancel",
+                Json.object().put("executionId", executionId)), executionId, reason);
+    }
+
+    public ToolResult cancel(ToolContext context, ToolCall call, String executionId, String reason) {
+        ToolCall request = call == null ? new ToolCall("cancel-" + executionId, "task_graph.cancel",
+                Json.object().put("executionId", executionId)) : call;
         try {
             TaskGraphExecutionRecord record = owned(context, executionId);
             Running running = active.get(executionId);
             if (running != null) {
                 running.control.requestCancel();
                 cancelActiveTool(running, reason);
-                return new ToolResult(synthetic.callId(), synthetic.name(), true, "CANCEL_REQUESTED",
+                return new ToolResult(request.callId(), request.name(), true, "CANCEL_REQUESTED",
                         inspectJson(record).put("state", "CANCEL_REQUESTED"), true);
             }
             if (record.state().equals("PAUSED") || record.state().equals("WAITING")) {
@@ -203,13 +221,64 @@ public final class TaskGraphRuntime implements AutoCloseable {
                         "CANCELLED", null, record.completedNodes(), record.toolResults(), record.variables(),
                         record.outputs(), record.checkpoints(), record.evidence(), cancelledQuestion, record.result(),
                         "TASK_GRAPH_CANCELLED");
-                return new ToolResult(synthetic.callId(), synthetic.name(), true, "TASK_GRAPH_CANCELLED",
+                return new ToolResult(request.callId(), request.name(), true, "TASK_GRAPH_CANCELLED",
                         inspectJson(cancelled), true);
             }
-            return terminal(synthetic, record);
+            return terminal(request, record);
         } catch (SQLException | IllegalArgumentException failure) {
-            return ToolResult.rejected(synthetic, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
+            return ToolResult.rejected(request, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
         }
+    }
+
+    private ToolResult timeoutResult(ToolContext context, ToolCall call)
+            throws SQLException, InterruptedException {
+        long deadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
+        while (System.nanoTime() < deadline) {
+            TaskGraphExecutionRecord record = owned(context, call.callId());
+            ToolResult observed = timeoutTerminal(call, record);
+            if (observed != null) return observed;
+            Thread.sleep(25);
+        }
+        TaskGraphExecutionRecord reconciled = markCancellationUnconfirmed(context, call.callId());
+        ToolResult observed = timeoutTerminal(call, reconciled);
+        if (observed != null) return observed;
+        return new ToolResult(call.callId(), call.name(), false,
+                "TOOL_TIMEOUT_RECONCILIATION_REQUIRED",
+                inspectJson(reconciled).put("timedOut", true).put("cancellationConfirmed", false), true);
+    }
+
+    private static ToolResult timeoutTerminal(ToolCall call, TaskGraphExecutionRecord record) {
+        if (record.state().equals("CANCELLED")) {
+            return new ToolResult(call.callId(), call.name(), false, "TOOL_TIMEOUT_CANCELLED",
+                    inspectJson(record).put("timedOut", true).put("cancellationConfirmed", true), true);
+        }
+        if (record.state().equals("RECONCILIATION_REQUIRED")) {
+            return new ToolResult(call.callId(), call.name(), false,
+                    "TOOL_TIMEOUT_RECONCILIATION_REQUIRED",
+                    inspectJson(record).put("timedOut", true).put("cancellationConfirmed", false), true);
+        }
+        if (TERMINAL.contains(record.state())) return terminal(call, record);
+        return null;
+    }
+
+    private TaskGraphExecutionRecord markCancellationUnconfirmed(ToolContext context, String executionId)
+            throws SQLException, InterruptedException {
+        for (int attempt = 0; attempt < 40; attempt++) {
+            TaskGraphExecutionRecord record = owned(context, executionId);
+            if (TERMINAL.contains(record.state())) return record;
+            try {
+                return repository.save(record.executionId(), record.revision(),
+                        "RECONCILIATION_REQUIRED", record.currentNodeId(), record.completedNodes(),
+                        record.toolResults(), record.variables(), record.outputs(), record.checkpoints(),
+                        record.evidence(), record.waitingQuestion(),
+                        Json.object().put("message", "timeout cancellation was not confirmed"),
+                        "TOOL_TIMEOUT_RECONCILIATION_REQUIRED");
+            } catch (IllegalStateException stale) {
+                if (!"STALE_TASK_GRAPH_REVISION".equals(stale.getMessage())) throw stale;
+                Thread.sleep(5);
+            }
+        }
+        throw new SQLException("Unable to persist Task Graph cancellation reconciliation state");
     }
 
     private void submit(ToolContext context, TaskGraphExecutionRecord record) {

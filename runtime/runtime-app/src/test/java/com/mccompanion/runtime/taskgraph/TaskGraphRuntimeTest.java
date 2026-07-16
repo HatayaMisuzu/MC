@@ -126,8 +126,12 @@ class TaskGraphRuntimeTest {
                 assertFalse(reused.success());
                 assertEquals("TASK_GRAPH_CALL_ID_REUSED", reused.code());
 
-                ToolResult cancelled = runtime.cancel(owner, "execution-3", "test");
+                ToolCall cancelCall = new ToolCall(
+                        "external-cancel-request", "task_graph.cancel", Json.object());
+                ToolResult cancelled = runtime.cancel(
+                        owner, cancelCall, "execution-3", "test");
                 assertTrue(cancelled.success());
+                assertEquals("external-cancel-request", cancelled.callId());
                 ToolResult terminal = runtime.await(owner, call, Duration.ofSeconds(2), ignored -> { });
                 assertEquals("CANCELLED", terminal.observation().path("state").asText());
             }
@@ -494,6 +498,50 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void timeoutConfirmsWaitCancellationAndQuarantinesUnconfirmedToolCancellation() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("timeout-confirmation.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+            ToolCall waitCall = new ToolCall("execution-timeout-wait", "task_graph.execute", Json.object());
+            var waitGraph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"timeout-wait","permissions":[],
+                     "root":{"id":"wait","type":"wait","durationMillis":1000}}
+                    """);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(
+                    new FakeGateway(), repository, null, Duration.ofMillis(200))) {
+                runtime.start(context, waitCall, waitGraph, Json.object(), Json.object());
+                ToolResult timeout = runtime.await(
+                        context, waitCall, Duration.ofMillis(30), ignored -> { });
+                assertEquals("TOOL_TIMEOUT_CANCELLED", timeout.code());
+                assertEquals("CANCELLED", timeout.observation().path("state").asText());
+                assertTrue(timeout.observation().path("cancellationConfirmed").asBoolean());
+            }
+
+            UnconfirmedCancellationGateway gateway = new UnconfirmedCancellationGateway();
+            ToolCall toolCall = new ToolCall("execution-timeout-tool", "task_graph.execute", Json.object());
+            var toolGraph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"timeout-tool",
+                     "permissions":["READ_WORLD"],
+                     "root":{"id":"block","type":"call_tool","tool":"test.block"}}
+                    """);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(
+                    gateway, repository, null, Duration.ofMillis(100))) {
+                runtime.start(context, toolCall, toolGraph, Json.object(), Json.object());
+                assertTrue(gateway.entered.await(2, TimeUnit.SECONDS));
+                ToolResult timeout = runtime.await(
+                        context, toolCall, Duration.ofMillis(30), ignored -> { });
+                assertEquals("TOOL_TIMEOUT_RECONCILIATION_REQUIRED", timeout.code());
+                assertEquals("RECONCILIATION_REQUIRED", timeout.observation().path("state").asText());
+                assertFalse(timeout.observation().path("cancellationConfirmed").asBoolean());
+                assertEquals("RECONCILIATION_REQUIRED",
+                        repository.get("execution-timeout-tool").orElseThrow().state());
+                assertEquals(Set.of("execution-timeout-tool:block:1"), gateway.cancelled);
+            }
+        }
+    }
+
+    @Test
     void readMemoryUsesPermissionBoundGenericSearchTool() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("memory-node.db"))) {
             database.initialize();
@@ -732,6 +780,37 @@ class TaskGraphRuntimeTest {
             calls++;
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("moved", true), true);
+        }
+    }
+
+    private static final class UnconfirmedCancellationGateway implements ToolGateway {
+        private final CountDownLatch entered = new CountDownLatch(1);
+        private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.block", "1.0", "block",
+                    Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                    Duration.ofSeconds(10), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            return new ToolResult(call.callId(), call.name(), true, "ACCEPTED", Json.object(), false);
+        }
+
+        @Override public ToolResult awaitTerminal(
+                ToolContext context, ToolCall call, ToolResult accepted, Duration timeout,
+                java.util.function.Consumer<ToolResult> progress) {
+            entered.countDown();
+            try {
+                Thread.sleep(Duration.ofSeconds(10));
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+            }
+            return new ToolResult(call.callId(), call.name(), false, "INTERRUPTED", Json.object(), true);
+        }
+
+        @Override public void cancel(ToolContext context, String callId, String reason) {
+            cancelled.add(callId);
         }
     }
 }

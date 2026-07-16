@@ -169,6 +169,11 @@ inputs, persisted state, and prior Tool observations. Loop iterations receive st
 Tool call IDs, and loop cursors are persisted. Parallel branches use real bounded concurrency; state
 snapshots are serialized, pause/cancel reaches every active Tool call, and all active graphs share
 the Runtime's four-worker parallel budget.
+The result of `task_graph.cancel` preserves the external request `callId`. Execution timeout requests
+cancellation of every active child Tool and waits for a bounded durable confirmation. Confirmed
+cancellation is returned as `TOOL_TIMEOUT_CANCELLED`; if cancellation cannot be confirmed, the
+execution is persisted as `RECONCILIATION_REQUIRED` and returned as
+`TOOL_TIMEOUT_RECONCILIATION_REQUIRED` rather than being reported as a verified stop.
 Tool/wall-time/loop/concurrency budgets, bounded backoff/wait, uniformly rotated evidence, inputs,
 variables, durable node outputs, and exact `${inputs.*}`, `${state.*}`, and
 `${outputs.<node>.*}` references are enforced, including bounded literal array selection and length.

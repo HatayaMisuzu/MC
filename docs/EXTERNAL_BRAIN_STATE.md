@@ -78,12 +78,13 @@ release/install verification remain incomplete.
   `CANCELLED`, or `INTERRUPTED`; `RUNNING` progress is persisted for audit.
 - The binding uses one stable `brainSessionId + callId + taskId + behaviorId`. Stable command
   IDs and the existing command idempotency store prevent duplicate Fabric execution.
-- Tool timeout dispatches a real cancellation and reports `INTERRUPTED`; concurrent controller
-  cancellation reaches the active Tool Gateway without waiting for the Brain turn lock.
-- Tool timeout waits briefly for durable Fabric cancellation confirmation and distinguishes
-  confirmed `CANCELLED` from an honestly `INTERRUPTED` result.
+- Tool timeout dispatches a real cancellation; concurrent controller cancellation reaches the
+  active Tool Gateway without waiting for the Brain turn lock.
+- Tool timeout waits briefly for durable Fabric cancellation confirmation. A confirmed stop is
+  returned as `TOOL_TIMEOUT_CANCELLED`; an unconfirmed or undispatchable stop is durably moved to
+  `RECONCILIATION_REQUIRED` and returned as `TOOL_TIMEOUT_RECONCILIATION_REQUIRED`.
 - `PAUSED` is returned immediately as `BLOCKED`, and `RECONCILIATION_REQUIRED` immediately as
-  `INTERRUPTED`, with the last Fabric observation so the external Brain can
+  `RECONCILIATION_REQUIRED`, with the last Fabric observation so the external Brain can
   ask the owner rather than waiting until timeout.
 - A repeated `brainSessionId + callId` reuses the audited result and never executes the Tool
   Gateway twice; reusing an ID with different tool input is rejected. Separate companion turns

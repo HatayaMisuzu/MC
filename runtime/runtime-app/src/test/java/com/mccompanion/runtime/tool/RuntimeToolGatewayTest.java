@@ -11,6 +11,7 @@ import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
+import com.mccompanion.runtime.task.TaskRecord;
 import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.task.TaskState;
 import com.mccompanion.runtime.task.TaskType;
@@ -123,6 +124,11 @@ class RuntimeToolGatewayTest {
                         Duration.ofSeconds(2), ignored -> { });
                 assertTrue(executed.success(), executed.observation().toString());
                 assertEquals(20, executed.observation().path("outputs").path("observe").path("health").asInt());
+
+                ToolCall cancelCall = new ToolCall("external-cancel-request", "task_graph.cancel",
+                        Json.object().put("executionId", executeCall.callId()));
+                ToolResult cancelledTerminal = gateway.execute(context, cancelCall);
+                assertEquals(cancelCall.callId(), cancelledTerminal.callId());
 
                 ToolResult unsupported = gateway.execute(context, new ToolCall("graph-4", "task_graph.validate",
                         Json.object().set("graph", Json.parse("""
@@ -337,9 +343,51 @@ class RuntimeToolGatewayTest {
                     assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
                             immediate + " waited for the tool timeout");
                     assertTrue(immediateResult.terminal());
-                    assertEquals(immediate == TaskState.PAUSED ? "BLOCKED" : "INTERRUPTED",
+                    assertEquals(immediate == TaskState.PAUSED ? "BLOCKED" : "RECONCILIATION_REQUIRED",
                             immediateResult.observation().path("state").asText());
+                    if (immediate == TaskState.RECONCILIATION_REQUIRED) {
+                        assertEquals("TOOL_RECONCILIATION_REQUIRED", immediateResult.code());
+                    }
                 }
+            }
+        }
+    }
+
+    @Test
+    void unconfirmedMinecraftToolTimeoutPersistsReconciliationState() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("timeout-reconciliation.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("timeout-reconciliation.log"),
+                     false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions, tasks,
+                        new LeaseService(database), new IdempotencyStore(database),
+                        new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateTo"), Duration.ofMillis(100));
+                var task = tasks.create("c-timeout", TaskType.TRAVEL, "timeout", Json.object());
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                ToolCall call = new ToolCall("navigate-timeout", "movement.navigate", Json.object());
+                ToolResult accepted = new ToolResult(call.callId(), call.name(), true,
+                        "COMMAND_DISPATCHED", Json.object().put("taskId", task.taskId()), false);
+
+                ToolResult result = gateway.awaitTerminal(
+                        new ToolContext("hermes", "session-timeout", "c-timeout"),
+                        call, accepted, Duration.ofMillis(25), ignored -> { });
+
+                assertFalse(result.success());
+                assertEquals("TOOL_TIMEOUT_RECONCILIATION_REQUIRED", result.code());
+                assertEquals("RECONCILIATION_REQUIRED",
+                        result.observation().path("state").asText());
+                assertTrue(result.observation().path("timedOut").asBoolean());
+                assertFalse(result.observation().path("cancellationConfirmed").asBoolean());
+                TaskRecord persisted = tasks.get(task.taskId()).orElseThrow();
+                assertEquals(TaskState.RECONCILIATION_REQUIRED, persisted.state());
+                assertEquals("ToolTimeoutCancellationUnconfirmed",
+                        tasks.events(task.taskId()).getLast().eventType());
             }
         }
     }

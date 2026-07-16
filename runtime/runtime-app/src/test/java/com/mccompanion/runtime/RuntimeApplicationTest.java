@@ -89,13 +89,18 @@ class RuntimeApplicationTest {
             assertTrue(application.commands().activeTaskFor("companion-1").isEmpty(),
                     "a conversational status response must not start a Minecraft task");
             var conversationDatabase = new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath());
-            var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(conversationDatabase)
-                    .list("companion-1", 10);
+            var conversationRepository = new com.mccompanion.runtime.conversation.ConversationRepository(conversationDatabase);
+            var transcript = conversationRepository.list("companion-1", 10);
             assertEquals(List.of("MESSAGE", "CHAT"), transcript.stream()
                     .map(com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
             assertEquals("USER", transcript.getFirst().direction());
             assertEquals("ASSISTANT", transcript.getLast().direction());
-            assertTrue(transcript.getLast().gameDelivered());
+            long deliveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+            while (!transcript.getLast().gameDelivered() && System.nanoTime() < deliveryDeadline) {
+                Thread.sleep(10);
+                transcript = conversationRepository.list("companion-1", 10);
+            }
+            assertTrue(transcript.getLast().gameDelivered(), "game delivery audit should follow the async WebSocket send");
             client.closeBlocking();
         }
         assertTrue(Files.isRegularFile(config.databasePath()));

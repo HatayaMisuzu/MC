@@ -106,17 +106,27 @@ function Invoke-RuntimeCommand(
 
 function Wait-RuntimeTaskState([string]$pairingToken, [string]$taskId, [string]$expected) {
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    $snapshot = $null
+    $lastInspectionError = $null
     do {
-        $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:18766/tasks/$taskId" -Headers @{
-            Authorization = "Bearer $pairingToken"
-        } -TimeoutSec 3
-        if ($snapshot.task.state -eq $expected) { return $snapshot }
-        if ($snapshot.task.state -in @('COMPLETED', 'FAILED', 'CANCELLED') -and $snapshot.task.state -ne $expected) {
-            throw "Runtime task entered $($snapshot.task.state) while waiting for $expected."
+        try {
+            $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:18766/tasks/$taskId" -Headers @{
+                Authorization = "Bearer $pairingToken"
+            } -TimeoutSec 3
+            $lastInspectionError = $null
+            if ($snapshot.task.state -eq $expected) { return $snapshot }
+            if ($snapshot.task.state -in @('COMPLETED', 'FAILED', 'CANCELLED') -and $snapshot.task.state -ne $expected) {
+                throw "Runtime task entered $($snapshot.task.state) while waiting for $expected."
+            }
+        } catch {
+            if ($_.Exception.Message -match '^Runtime task entered ') { throw }
+            $lastInspectionError = $_.Exception.Message
         }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Runtime task did not reach $expected in time (last=$($snapshot.task.state))."
+    $lastState = if ($snapshot) { $snapshot.task.state } else { 'unavailable' }
+    $transport = if ($lastInspectionError) { "; lastInspectionError=$lastInspectionError" } else { '' }
+    throw "Runtime task did not reach $expected in time (last=$lastState$transport)."
 }
 
 function Invoke-AgentRequest([string]$pairingToken, [string]$companionId, [string]$text) {
@@ -144,14 +154,21 @@ function Invoke-ExternalBrainRequest([string]$pairingToken, [string]$companionId
 
 function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $lastInspectionError = $null
     do {
-        $conversation = Invoke-RestMethod -Uri "http://127.0.0.1:18766/conversations?companionId=$companionId" -Headers @{
-            Authorization = "Bearer $pairingToken"
-        } -TimeoutSec 3
-        if ($conversation.waitingQuestion) { return $conversation }
+        try {
+            $conversation = Invoke-RestMethod -Uri "http://127.0.0.1:18766/conversations?companionId=$companionId" -Headers @{
+                Authorization = "Bearer $pairingToken"
+            } -TimeoutSec 3
+            $lastInspectionError = $null
+            if ($conversation.waitingQuestion) { return $conversation }
+        } catch {
+            $lastInspectionError = $_.Exception.Message
+        }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw 'Runtime did not persist a waiting question after the verified shortage.'
+    $transport = if ($lastInspectionError) { " Last inspection error: $lastInspectionError" } else { '' }
+    throw "Runtime did not persist a waiting question after the verified shortage.$transport"
 }
 
 function Wait-AgentPlan(
@@ -162,20 +179,29 @@ function Wait-AgentPlan(
     [string]$expectedCapability
 ) {
     $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    $snapshot = $null
+    $lastInspectionError = $null
     do {
-        $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:18766/plans/$planId" -Headers @{
-            Authorization = "Bearer $pairingToken"
-        } -TimeoutSec 3
-        $plan = $snapshot.plan
-        $current = @($plan.steps | Where-Object { $_.index -eq $plan.currentStep })[0]
-        if ($plan.state -eq $expectedState -and $plan.planningRevision -ge $minimumPlanningRevision -and
-            ($expectedState -ne 'RUNNING' -or $current.taskId) -and
-            (-not $expectedCapability -or $current.definition.capability -eq $expectedCapability)) {
-            return $snapshot
+        try {
+            $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:18766/plans/$planId" -Headers @{
+                Authorization = "Bearer $pairingToken"
+            } -TimeoutSec 3
+            $lastInspectionError = $null
+            $plan = $snapshot.plan
+            $current = @($plan.steps | Where-Object { $_.index -eq $plan.currentStep })[0]
+            if ($plan.state -eq $expectedState -and $plan.planningRevision -ge $minimumPlanningRevision -and
+                ($expectedState -ne 'RUNNING' -or $current.taskId) -and
+                (-not $expectedCapability -or $current.definition.capability -eq $expectedCapability)) {
+                return $snapshot
+            }
+        } catch {
+            $lastInspectionError = $_.Exception.Message
         }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Plan $planId did not reach state=$expectedState revision>=$minimumPlanningRevision capability=$expectedCapability."
+    $lastState = if ($snapshot) { $snapshot.plan.state } else { 'unavailable' }
+    $transport = if ($lastInspectionError) { "; lastInspectionError=$lastInspectionError" } else { '' }
+    throw "Plan $planId did not reach state=$expectedState revision>=$minimumPlanningRevision capability=$expectedCapability (last=$lastState$transport)."
 }
 
 $runtime = $null
@@ -355,7 +381,6 @@ try {
     }
     Write-Output '[runtime-e2e] External Brain resumed its ASK_USER session and completed navigate, withdraw, return, and deliver'
 
-    if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     Write-Output '[runtime-e2e] Fabric GameTest exited; stopping Runtime'
     $runtime.StandardInput.WriteLine('quit')

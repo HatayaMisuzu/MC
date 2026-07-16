@@ -156,6 +156,20 @@ product UI controls, and release/install verification remain incomplete.
   nearer candidate first. Route exploration and restart/unreachable breadth remain incomplete,
   so the matrix truthfully keeps Explore at `PARTIAL`.
 
+## Vanilla dropped-resource collection slice
+
+- Added `resource.collect` backed by `CollectResource`. Production finds only nearby live
+  `ItemEntity` instances for the requested namespaced item, walks through normal player input,
+  and invokes vanilla pickup interaction only within reach; it never creates an entity or edits
+  an inventory.
+- Dispatch rejects unavailable quantities unless partial collection is authorized, detects a
+  full inventory, stops after a bounded no-progress window if drops disappear, and reports
+  success only after the companion's verified inventory delta reaches the target.
+- The first real Fabric test exposed drops falling out of an empty test structure and correctly
+  returned `RESOURCE_LOST`; the repaired world supplies ordinary supporting blocks. The passing
+  test proves movement, vanilla removal of a two-coal ItemEntity, inventory +2, and a terminal
+  `COLLECT_COMPLETE` observation. Broader resources and restart/unreachable cases remain open.
+
 ## Craft item slice
 
 - Added `item.craft` / `CraftItem` only when the connected Fabric body reports the

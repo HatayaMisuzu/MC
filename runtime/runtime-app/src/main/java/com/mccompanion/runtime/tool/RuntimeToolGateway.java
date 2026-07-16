@@ -143,6 +143,9 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("ExploreArea")) values.add(definition("world.scan",
                 "Incrementally scan a bounded loaded area for one block type", scanSchema(), "MEDIUM", "READ_WORLD", true));
+        if (available.contains("CollectResource")) values.add(definition("resource.collect",
+                "Collect nearby dropped items through vanilla movement and pickup", itemQuantitySchema(),
+                "MEDIUM", "COLLECT", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
@@ -196,6 +199,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
+            case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
@@ -325,7 +329,8 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
-        } else if (name.equals("inventory.deliver") || name.equals("item.craft")) {
+        } else if (name.equals("inventory.deliver") || name.equals("item.craft")
+                || name.equals("resource.collect")) {
             root.putArray("required").add("item").add("quantity");
         } else if (name.equals("world.scan")) {
             root.putArray("required").add("block").add("radius");

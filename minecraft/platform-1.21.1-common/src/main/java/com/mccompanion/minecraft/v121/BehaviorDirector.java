@@ -229,6 +229,25 @@ final class BehaviorDirector {
             return new SkillProgress(parameters, item, 1, 0, body.getFoodData().getFoodLevel(),
                     count(body, item), server.getTickCount(), null);
         }
+        if (parameters.capability().equals("CollectResource")) {
+            Item item = resolveItem(parameters.itemId());
+            if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
+            if (inventoryCapacity(body, new ItemStack(item)) < 1) {
+                return SkillProgress.failed(parameters, "INVENTORY_FULL");
+            }
+            int available = nearbyResourceCount(body, item, 16.0D);
+            if (available < parameters.quantity() && !parameters.allowPartial()) {
+                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                        "RESOURCE_INSUFFICIENT", parameters.itemId(), parameters.quantity(), available));
+                return SkillProgress.failed(parameters, "RESOURCE_INSUFFICIENT");
+            }
+            int target = Math.min(available, parameters.quantity());
+            if (target < 1) return SkillProgress.failed(parameters, "RESOURCE_NOT_FOUND");
+            SkillProgress progress = new SkillProgress(parameters, item, target, 0,
+                    body.getFoodData().getFoodLevel(), count(body, item), server.getTickCount(), null);
+            progress.lastActionTick = server.getTickCount();
+            return progress;
+        }
         if (parameters.capability().equals("WithdrawFromStorage")) {
             Item item = resolveItem(parameters.itemId());
             if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
@@ -357,7 +376,48 @@ final class BehaviorDirector {
         else if (progress.parameters.capability().equals("WithdrawFromStorage")) tickWithdrawal(entry, body, progress);
         else if (progress.parameters.capability().equals("DepositToStorage")) tickDeposit(entry, body, progress);
         else if (progress.parameters.capability().equals("CraftItem")) tickCraft(entry, body, progress);
+        else if (progress.parameters.capability().equals("CollectResource")) tickCollection(entry, body, progress);
         else tickEating(entry, body, progress);
+    }
+
+    private void tickCollection(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        int collected = count(body, progress.item) - progress.itemBaseline;
+        if (collected >= progress.target) {
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "COLLECT_COMPLETE", progress.parameters.itemId(), progress.parameters.quantity(), collected));
+            actionGateway.stopInput(body);
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE; savedData.changed(); return;
+        }
+        if (collected > progress.bestProgress) {
+            progress.bestProgress = collected;
+            progress.lastActionTick = server.getTickCount();
+        }
+        java.util.List<ItemEntity> resources = body.serverLevel().getEntitiesOfClass(
+                ItemEntity.class, body.getBoundingBox().inflate(16.0D),
+                entity -> entity.isAlive() && entity.getItem().is(progress.item));
+        if (resources.isEmpty()) {
+            actionGateway.stopInput(body);
+            if (server.getTickCount() - progress.lastActionTick > 40) {
+                pauseSafely(entry, body, "RESOURCE_LOST");
+            }
+            return;
+        }
+        ItemEntity nearest = resources.stream().min(
+                java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(body))).orElseThrow();
+        double distance = nearest.distanceToSqr(body);
+        if (distance <= 2.25D) {
+            actionGateway.stopInput(body);
+            int before = count(body, progress.item);
+            nearest.playerTouch(body);
+            if (count(body, progress.item) == before && inventoryCapacity(body, nearest.getItem()) < 1) {
+                pauseSafely(entry, body, "INVENTORY_FULL");
+            }
+            return;
+        }
+        Vec3 delta = nearest.position().subtract(body.position());
+        float yaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+        actionGateway.applyMoveInput(body, yaw, delta.y > 0.6D || body.horizontalCollision);
     }
 
     private ScanProgress createScan(CompanionPlayer body, SkillParameters parameters) {
@@ -613,6 +673,12 @@ final class BehaviorDirector {
         return null;
     }
 
+    private static int nearbyResourceCount(CompanionPlayer body, Item item, double radius) {
+        return body.serverLevel().getEntitiesOfClass(ItemEntity.class, body.getBoundingBox().inflate(radius),
+                        entity -> entity.isAlive() && entity.getItem().is(item)).stream()
+                .mapToInt(entity -> entity.getItem().getCount()).sum();
+    }
+
     private static int findSlot(ServerPlayer player, Item item) {
         for (int slot = 0; slot < 9; slot++) if (player.getInventory().getItem(slot).is(item)) return slot;
         return -1;
@@ -841,6 +907,7 @@ final class BehaviorDirector {
         private final Set<UUID> droppedEntities = new HashSet<>();
         private int actions;
         private int lastActionTick;
+        private int bestProgress;
 
         private SkillProgress(SkillParameters parameters, Item item, int target, int ownerBaseline,
                               int foodBaseline, int itemBaseline, int startedTick, String failureCode) {

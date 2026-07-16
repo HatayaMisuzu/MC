@@ -11,6 +11,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,6 +66,52 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                             < observation.candidates().get(1).distanceSquared(),
                     "candidate distances are not increasing");
             helper.assertTrue(registry.remove(owner).success(), "explore test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300)
+    public void collectResourceUsesMovementAndVanillaItemPickup(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Collector").success(), "collect test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "collect test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = 0; x <= 7; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+        }
+        ItemEntity first = new ItemEntity(body.serverLevel(), body.getX() + 4.0D, body.getY() + 0.25D, body.getZ(),
+                new ItemStack(Items.COAL, 2));
+        first.setNoPickUpDelay();
+        helper.assertTrue(body.serverLevel().addFreshEntity(first),
+                "collect test could not create world drops");
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-collect";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "collect lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "collect-coal", "skill",
+                null, null, null, new SkillParameters("CollectResource", "minecraft:coal", 2, false)).success(),
+                "collect skill failed to start");
+        helper.succeedWhen(() -> {
+            var snapshot = registry.runtimeSnapshots(false).stream()
+                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for vanilla pickup completion");
+            helper.assertValueEqual(count(body, Items.COAL), 2, "collection did not verify the inventory delta");
+            helper.assertTrue(!first.isAlive(), "collected ItemEntity remained in the world");
+            helper.assertTrue(snapshot.behaviorObservation() != null, "collection produced no observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "COLLECT_COMPLETE",
+                    "collection observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().available(), 2,
+                    "collection observation quantity mismatch");
+            helper.assertTrue(registry.remove(owner).success(), "collect test cleanup failed");
         });
     }
 

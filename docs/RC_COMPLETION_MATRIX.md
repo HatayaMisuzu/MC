@@ -19,7 +19,7 @@ Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_V
 | Container | LOCALLY_VERIFIED | vanilla withdraw/deposit, verified deltas, and known-container lookup | Fabric GameTests and Runtime/Fabric E2E | multi-container fill, invalidation/restart breadth |
 | Craft | LOCALLY_VERIFIED | vanilla 2x2/3x3 recipe/menu execution | Fabric GameTests | broader recipe/restart cases |
 | Explore | PARTIAL | `world.scan` dispatches incremental `ExploreArea`: radius 1..16, 256 blocks/tick, loaded chunks only, 64 candidates, distance ranking | Runtime schema test; real Fabric GameTest proves asynchronous scan and ranked diamond-ore candidates | route exploration, world-change/unreachable/restart breadth, Runtime/Fabric Brain E2E |
-| Collect | NOT_STARTED | — | — | legal break/drop collection tool |
+| Collect | PARTIAL | `resource.collect` uses walking input plus vanilla `ItemEntity.playerTouch`; validates inventory delta, missing/insufficient/full/no-progress states | Runtime schema test; real Fabric GameTest collects a coal stack after movement and proves entity removal + inventory delta | scattered/moving drops, restart/unreachable breadth, wood/iron/diamond cases, Brain E2E |
 | Mine | NOT_STARTED | — | — | vein/tool/durability/drop verification |
 | Smelt | NOT_STARTED | — | — | furnace lifecycle and multi-round verification |
 | Retreat | NOT_STARTED | — | — | deterministic safety reflex and task interruption |

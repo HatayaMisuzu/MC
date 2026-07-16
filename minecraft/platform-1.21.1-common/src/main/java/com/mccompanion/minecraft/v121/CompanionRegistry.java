@@ -387,7 +387,8 @@ public final class CompanionRegistry {
                     && !skill.capability().equals("WithdrawFromStorage")
                     && !skill.capability().equals("DepositToStorage")
                     && !skill.capability().equals("CraftItem")
-                    && !skill.capability().equals("ExploreArea")) {
+                    && !skill.capability().equals("ExploreArea")
+                    && !skill.capability().equals("CollectResource")) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }
             entry.mode = CompanionEntry.Mode.SKILL;

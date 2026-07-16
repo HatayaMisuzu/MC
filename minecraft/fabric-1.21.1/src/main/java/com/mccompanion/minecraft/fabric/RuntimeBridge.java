@@ -154,6 +154,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("DepositToStorage", true)
                 .put("CraftItem", true)
                 .put("ExploreArea", true)
+                .put("CollectResource", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);

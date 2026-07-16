@@ -1,5 +1,9 @@
 package com.mccompanion.runtime.tool;
 
+import com.mccompanion.protocol.CapabilitySet;
+import com.mccompanion.protocol.CompanionBodyState;
+import com.mccompanion.protocol.CompanionStatus;
+import com.mccompanion.protocol.PositionDto;
 import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.command.IdempotencyStore;
 import com.mccompanion.runtime.command.ProtocolCommandSender;
@@ -9,6 +13,8 @@ import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.session.CompanionRepository;
+import com.mccompanion.runtime.session.Handshake;
+import com.mccompanion.runtime.session.SessionPeer;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
 import com.mccompanion.runtime.task.TaskRecord;
@@ -22,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -235,6 +242,100 @@ class RuntimeToolGatewayTest {
     }
 
     @Test
+    void boundedActionPrimitivesDispatchThroughExistingBodyExecutors() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("action-primitives.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("action-primitives.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                for (String companionId : List.of(
+                        "c-step", "c-stop", "c-idle", "c-break", "c-collect", "c-from", "c-to")) {
+                    CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
+                            "minecraft:overworld", new PositionDto(10, 64, -5), CompanionBodyState.SPAWNED,
+                            null, null, 0, 0, true, CapabilitySet.empty(), Instant.now());
+                    sessions.registerCompanion(session, status, Json.object()
+                            .put("dimension", "minecraft:overworld")
+                            .set("position", Json.object().put("x", 10).put("y", 64).put("z", -5)));
+                }
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
+                                "WithdrawFromStorage", "DepositToStorage"));
+
+                var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
+                assertTrue(definitions.stream().map(ToolDefinition::name).toList().containsAll(List.of(
+                        "movement.step", "movement.stop", "block.break", "entity.collect", "inventory.transfer")));
+                assertEquals("MOVE", definition(definitions, "movement.step").permission());
+                assertEquals("MINE", definition(definitions, "block.break").permission());
+                assertEquals("COLLECT", definition(definitions, "entity.collect").permission());
+                assertEquals("INVENTORY", definition(definitions, "inventory.transfer").permission());
+                assertEquals(List.of("item", "quantity"), required(definition(definitions, "entity.collect")));
+
+                ToolResult stepped = gateway.execute(new ToolContext("hermes", "session", "c-step"),
+                        new ToolCall("step", "movement.step", Json.object().put("dx", 2).put("dy", -1).put("dz", 3)));
+                assertTrue(stepped.success(), stepped.observation().toString());
+                var stepCommand = peer.lastCommand();
+                assertEquals("travel", stepCommand.path("arguments").path("behaviorType").asText());
+                assertEquals(12, stepCommand.path("arguments").path("parameters").path("target").path("x").asInt());
+                assertEquals(63, stepCommand.path("arguments").path("parameters").path("target").path("y").asInt());
+                assertEquals(-2, stepCommand.path("arguments").path("parameters").path("target").path("z").asInt());
+
+                ToolResult moving = gateway.execute(new ToolContext("hermes", "session", "c-stop"),
+                        new ToolCall("move-before-stop", "movement.navigate",
+                                Json.object().put("x", 12).put("y", 64).put("z", -5)));
+                assertTrue(moving.success(), moving.observation().toString());
+                ToolResult stopped = gateway.execute(new ToolContext("hermes", "session", "c-stop"),
+                        new ToolCall("stop-moving", "movement.stop", Json.object()));
+                assertTrue(stopped.success(), stopped.observation().toString());
+                assertEquals("cancel_behavior", peer.lastCommand().path("command").asText());
+
+                ToolResult broken = gateway.execute(new ToolContext("hermes", "session", "c-break"),
+                        new ToolCall("break", "block.break", Json.object().put("block", "examplemod:blue_ore")
+                                .set("position", Json.object().put("dimension", "examplemod:moon")
+                                        .put("x", 3).put("y", 70).put("z", 4))));
+                assertTrue(broken.success(), broken.observation().toString());
+                var breakParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("MineResourceVein", breakParameters.path("capability").asText());
+                assertEquals(1, breakParameters.path("parameters").path("quantity").asInt());
+                assertEquals("examplemod:blue_ore", breakParameters.path("parameters").path("item").asText());
+                assertEquals("examplemod:moon",
+                        breakParameters.path("parameters").path("target").path("dimension").asText());
+
+                ToolResult collected = gateway.execute(new ToolContext("hermes", "session", "c-collect"),
+                        new ToolCall("collect", "entity.collect",
+                                Json.object().put("item", "examplemod:blue_gem").put("quantity", 2)));
+                assertTrue(collected.success(), collected.observation().toString());
+                assertEquals("CollectResource", peer.lastCommand().path("arguments").path("parameters")
+                        .path("capability").asText());
+
+                executeTransfer(gateway, peer, "c-from", "FROM_CONTAINER", "WithdrawFromStorage");
+                executeTransfer(gateway, peer, "c-to", "TO_CONTAINER", "DepositToStorage");
+
+                ToolResult zeroStep = gateway.execute(new ToolContext("hermes", "session", "c-step"),
+                        new ToolCall("zero-step", "movement.step",
+                                Json.object().put("dx", 0).put("dy", 0).put("dz", 0)));
+                assertFalse(zeroStep.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", zeroStep.code());
+                ToolResult invalidDirection = gateway.execute(new ToolContext("hermes", "session", "c-to"),
+                        new ToolCall("invalid-transfer", "inventory.transfer", Json.object()
+                                .put("direction", "ARBITRARY").put("item", "minecraft:stone").put("quantity", 1)
+                                .set("container", Json.object().put("x", 1).put("y", 64).put("z", 1))));
+                assertFalse(invalidDirection.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", invalidDirection.code());
+                ToolResult noMovement = gateway.execute(new ToolContext("hermes", "session", "c-idle"),
+                        new ToolCall("stop-idle", "movement.stop", Json.object()));
+                assertFalse(noMovement.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", noMovement.code());
+            }
+        }
+    }
+
+    @Test
     void rejectsUnsafeCoordinatesBeforeAnyMinecraftCommand() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("invalid.db"));
              RuntimeLog log = new RuntimeLog(temporary.resolve("invalid.log"), false, new Redactor())) {
@@ -402,6 +503,43 @@ class RuntimeToolGatewayTest {
                 assertEquals("ToolTimeoutCancellationUnconfirmed",
                         tasks.events(task.taskId()).getLast().eventType());
             }
+        }
+    }
+
+    private static ToolDefinition definition(List<ToolDefinition> definitions, String name) {
+        return definitions.stream().filter(value -> value.name().equals(name)).findFirst().orElseThrow();
+    }
+
+    private static List<String> required(ToolDefinition definition) {
+        return java.util.stream.StreamSupport.stream(
+                definition.inputSchema().path("required").spliterator(), false)
+                .map(com.fasterxml.jackson.databind.JsonNode::asText).toList();
+    }
+
+    private static void executeTransfer(RuntimeToolGateway gateway, CapturingPeer peer, String companionId,
+                                        String direction, String expectedCapability) {
+        ToolResult result = gateway.execute(new ToolContext("hermes", "session", companionId),
+                new ToolCall("transfer-" + companionId, "inventory.transfer", Json.object()
+                        .put("direction", direction).put("item", "examplemod:blue_gem").put("quantity", 3)
+                        .set("container", Json.object().put("dimension", "examplemod:moon")
+                                .put("x", 4).put("y", 70).put("z", 5))));
+        assertTrue(result.success(), result.observation().toString());
+        var parameters = peer.lastCommand().path("arguments").path("parameters");
+        assertEquals(expectedCapability, parameters.path("capability").asText());
+        assertFalse(parameters.path("parameters").has("direction"));
+        assertEquals("examplemod:blue_gem", parameters.path("parameters").path("item").asText());
+    }
+
+    private static final class CapturingPeer implements SessionPeer {
+        private final List<String> messages = new ArrayList<>();
+        @Override public String id() { return "primitive-peer"; }
+        @Override public String remoteAddress() { return "loopback"; }
+        @Override public boolean isOpen() { return true; }
+        @Override public void send(String text) { messages.add(text); }
+        @Override public void close(int code, String reason) { }
+
+        private com.fasterxml.jackson.databind.JsonNode lastCommand() {
+            return Json.parse(messages.getLast()).path("payload");
         }
     }
 }

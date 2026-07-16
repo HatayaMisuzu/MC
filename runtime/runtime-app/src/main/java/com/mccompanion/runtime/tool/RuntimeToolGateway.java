@@ -208,14 +208,24 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
+        if (available.contains("NavigateTo")) values.add(definition("movement.step",
+                "Move a bounded relative step through normal navigation", stepSchema(), "LOW", "MOVE", false));
+        if (available.contains("NavigateTo") && tasks != null) values.add(definition("movement.stop",
+                "Cancel only an active movement task", Json.object(), "LOW", "MOVE", false));
         if (available.contains("ExploreArea")) values.add(definition("world.scan",
                 "Incrementally scan a bounded loaded area for one block type", scanSchema(), "MEDIUM", "READ_WORLD", true));
         if (available.contains("CollectResource")) values.add(definition("resource.collect",
                 "Collect nearby dropped items through vanilla movement and pickup", itemQuantitySchema(),
                 "MEDIUM", "COLLECT", false));
+        if (available.contains("CollectResource")) values.add(definition("entity.collect",
+                "Collect a bounded nearby item entity through vanilla movement and pickup", itemQuantitySchema(),
+                "MEDIUM", "COLLECT", false));
         if (available.contains("MineResourceVein")) values.add(definition("resource.mine_vein",
                 "Mine a bounded connected vein through vanilla block breaking and collect its drops",
                 mineSchema(), "MEDIUM", "MINE", false));
+        if (available.contains("MineResourceVein")) values.add(definition("block.break",
+                "Break one observed block through vanilla block-breaking rules", blockBreakSchema(),
+                "MEDIUM", "MINE", false));
         if (available.contains("SmeltItem")) values.add(definition("item.smelt",
                 "Smelt a bounded quantity in a verified nearby furnace using held input and fuel",
                 smeltSchema(), "LOW", "CRAFT", false));
@@ -224,6 +234,11 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 Json.object(), "MEDIUM", "COMBAT", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
+        if (available.contains("WithdrawFromStorage") && available.contains("DepositToStorage")) {
+            values.add(definition("inventory.transfer",
+                    "Transfer a bounded item quantity between inventory and one verified container",
+                    transferSchema(), "LOW", "INVENTORY", false));
+        }
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
         if (available.contains("DeliverItem")) values.add(definition("inventory.deliver", "Deliver held items to the owner", itemQuantitySchema(), "LOW", "INVENTORY", false));
         if (available.contains("EatAndRecover")) values.add(definition("item.eat_and_recover", "Eat food using normal game interaction", foodSchema(), "LOW", "SURVIVAL", false));
@@ -277,7 +292,14 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                         .orElseThrow(() -> new IllegalArgumentException("COMPANION_NOT_FOUND")).status();
                 return new ToolResult(call.callId(), call.name(), true, "OK", status, true);
             }
-            Intent intent = intent(call);
+            Intent intent;
+            if (call.name().equals("movement.step")) {
+                intent = step(context, call.arguments());
+            } else if (call.name().equals("movement.stop")) {
+                intent = movementStop(context, call.arguments());
+            } else {
+                intent = intent(call);
+            }
             String commandId = "brain-" + context.brainSessionId() + '-' + call.callId();
             CommandReply reply = commands.execute(commandId, context.companionId(), intent);
             ToolResult result = new ToolResult(call.callId(), call.name(), reply.accepted(), reply.code(),
@@ -312,13 +334,16 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "movement.follow" -> noArguments(call, TaskType.FOLLOW);
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
+            case "block.break" -> breakBlock(call.arguments());
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
+            case "entity.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "resource.mine_vein" -> skill("MineResourceVein", validatedMine(call.arguments()));
             case "item.smelt" -> skill("SmeltItem", validatedSmelt(call.arguments()));
             case "combat.defend_owner" -> skill("DefendOwner", noArgumentsNode(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
+            case "inventory.transfer" -> transfer(call.arguments());
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
             case "inventory.deliver" -> skill("DeliverItem", validatedItemQuantity(call.arguments(), false));
             case "item.eat_and_recover" -> skill("EatAndRecover", validatedFood(call.arguments()));
@@ -356,6 +381,73 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode target = Json.object().put("dimension", arguments.path("dimension").asText("minecraft:overworld"))
                 .put("x", x).put("y", y).put("z", z);
         return new Intent(TaskType.TRAVEL, Json.object().set("target", target), "movement.navigate");
+    }
+
+    private Intent step(ToolContext context, JsonNode arguments) throws java.sql.SQLException {
+        rejectUnexpected(arguments, Set.of("dx", "dy", "dz"));
+        int dx = boundedDelta(arguments, "dx");
+        int dy = boundedDelta(arguments, "dy");
+        int dz = boundedDelta(arguments, "dz");
+        if (dx == 0 && dy == 0 && dz == 0) throw new IllegalArgumentException("step delta must not be zero");
+        JsonNode status = companions.get(context.companionId())
+                .orElseThrow(() -> new IllegalArgumentException("COMPANION_NOT_FOUND")).status();
+        JsonNode position = status.path("position");
+        for (String field : List.of("x", "y", "z")) {
+            if (!position.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException("connected-body position is unavailable");
+            }
+        }
+        long x = (long) position.path("x").asInt() + dx;
+        long y = (long) position.path("y").asInt() + dy;
+        long z = (long) position.path("z").asInt() + dz;
+        if (Math.abs(x) > 30_000_000L || Math.abs(z) > 30_000_000L || y < -2048L || y > 2048L) {
+            throw new IllegalArgumentException("relative target is outside safe bounds");
+        }
+        ObjectNode target = Json.object().put("dimension", status.path("dimension").asText("minecraft:overworld"))
+                .put("x", x).put("y", y).put("z", z);
+        return new Intent(TaskType.TRAVEL, Json.object().set("target", target), "movement.step");
+    }
+
+    private Intent movementStop(ToolContext context, JsonNode arguments) throws java.sql.SQLException {
+        rejectUnexpected(arguments, Set.of());
+        if (tasks == null) throw new IllegalArgumentException("durable task state is unavailable");
+        TaskRecord active = tasks.activeForCompanion(context.companionId())
+                .orElseThrow(() -> new IllegalArgumentException("no active movement task"));
+        if (active.type() != TaskType.TRAVEL && active.type() != TaskType.FOLLOW
+                && active.type() != TaskType.RETURN) {
+            throw new IllegalArgumentException("active task is not a movement task");
+        }
+        return stop("cancel");
+    }
+
+    private static int boundedDelta(JsonNode arguments, String field) {
+        JsonNode value = arguments.path(field);
+        if (!value.isIntegralNumber() || !value.canConvertToInt()) {
+            throw new IllegalArgumentException(field + " must be an integer");
+        }
+        int delta = value.asInt();
+        if (delta < -8 || delta > 8) throw new IllegalArgumentException(field + " must be -8..8");
+        return delta;
+    }
+
+    private static Intent breakBlock(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("block", "position"));
+        ObjectNode mine = Json.object().put("block", arguments.path("block").asText())
+                .put("maxBlocks", 1).put("allowPartial", false);
+        mine.set("origin", arguments.path("position"));
+        return skill("MineResourceVein", validatedMine(mine));
+    }
+
+    private static Intent transfer(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("direction", "item", "quantity", "allowPartial", "container"));
+        String direction = arguments.path("direction").asText("");
+        if (!direction.equals("FROM_CONTAINER") && !direction.equals("TO_CONTAINER")) {
+            throw new IllegalArgumentException("direction is invalid");
+        }
+        ObjectNode values = (ObjectNode) arguments.deepCopy();
+        values.remove("direction");
+        return skill(direction.equals("FROM_CONTAINER") ? "WithdrawFromStorage" : "DepositToStorage",
+                validatedWithdraw(values));
     }
 
     private static JsonNode validatedWithdraw(JsonNode arguments) {
@@ -449,10 +541,16 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         root.set("properties", schema);
         if (name.equals("movement.navigate")) {
             root.putArray("required").add("x").add("y").add("z");
+        } else if (name.equals("movement.step")) {
+            root.putArray("required").add("dx").add("dy").add("dz");
+        } else if (name.equals("block.break")) {
+            root.putArray("required").add("block").add("position");
         } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
+        } else if (name.equals("inventory.transfer")) {
+            root.putArray("required").add("direction").add("item").add("quantity").add("container");
         } else if (name.equals("inventory.deliver") || name.equals("item.craft")
-                || name.equals("resource.collect")) {
+                || name.equals("resource.collect") || name.equals("entity.collect")) {
             root.putArray("required").add("item").add("quantity");
         } else if (name.equals("world.scan")) {
             root.putArray("required").add("block").add("radius");
@@ -476,6 +574,34 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
         properties.putObject("dimension").put("type", "string");
+        return properties;
+    }
+
+    private static ObjectNode stepSchema() {
+        ObjectNode properties = Json.object();
+        for (String field : List.of("dx", "dy", "dz")) {
+            properties.putObject(field).put("type", "integer").put("minimum", -8).put("maximum", 8);
+        }
+        return properties;
+    }
+
+    private static ObjectNode blockBreakSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("block").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        ObjectNode position = properties.putObject("position");
+        position.put("type", "object").put("additionalProperties", false);
+        ObjectNode fields = position.putObject("properties");
+        fields.putObject("dimension").put("type", "string");
+        for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
+        position.putArray("required").add("x").add("y").add("z");
+        return properties;
+    }
+
+    private static ObjectNode transferSchema() {
+        ObjectNode properties = withdrawSchema();
+        properties.putObject("direction").put("type", "string").putArray("enum")
+                .add("FROM_CONTAINER").add("TO_CONTAINER");
         return properties;
     }
 

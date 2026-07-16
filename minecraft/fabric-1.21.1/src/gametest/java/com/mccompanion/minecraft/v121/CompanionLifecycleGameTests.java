@@ -266,7 +266,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 null, null, null, new SkillParameters("MineResourceVein", "minecraft:diamond_ore", 2, false,
                         body.serverLevel().dimension().location().toString(),
                         origin.getX(), origin.getY(), origin.getZ())).success(), "mine skill failed to start");
-        helper.succeedWhen(() -> {
+        // Mining deliberately consumes vanilla hardness ticks. Avoid treating the first RUNNING
+        // snapshot as a terminal assertion failure on faster CI hosts before retry polling begins.
+        helper.runAfterDelay(20, () -> helper.succeedWhen(() -> {
             var snapshot = registry.runtimeSnapshots(false).stream()
                     .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
             helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for vanilla vein mining completion");
@@ -283,7 +285,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
                     "mining evidence did not identify the vanilla ServerPlayerGameMode path");
             helper.assertTrue(registry.remove(owner).success(), "mine test cleanup failed");
-        });
+        }));
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 700)

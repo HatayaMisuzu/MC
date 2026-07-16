@@ -39,12 +39,15 @@ import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.tool.RuntimeToolGateway;
 import com.mccompanion.runtime.tool.CompositeToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
+import com.mccompanion.runtime.workspace.AgentWorkspace;
+import com.mccompanion.runtime.workspace.SkillToolGateway;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
 import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Objects;
@@ -178,9 +181,20 @@ public final class RuntimeApplication implements AutoCloseable {
                 }
             });
             SearchProvider searchProvider = searchOverride == null ? createSearchProvider(config, redactor, log) : searchOverride;
+            java.util.concurrent.atomic.AtomicReference<CompositeToolGateway> toolGatewayReference =
+                    new java.util.concurrent.atomic.AtomicReference<>();
+            Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
+                    "database parent").resolve("agent-workspace");
+            SkillToolGateway skillTools = new SkillToolGateway(
+                    new AgentWorkspace(workspaceRoot, config.server.profileId),
+                    context -> {
+                        CompositeToolGateway current = toolGatewayReference.get();
+                        return current == null ? java.util.List.of() : current.definitions(context);
+                    });
             toolGateway = new CompositeToolGateway(java.util.List.of(minecraftTools,
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
-                    config.search.allowedDomains, config.search.deniedDomains)));
+                    config.search.allowedDomains, config.search.deniedDomains), skillTools));
+            toolGatewayReference.set(toolGateway);
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
                     conversationRepository);
             minecraftTools.attachTaskGraphRuntime(taskGraphRuntime);

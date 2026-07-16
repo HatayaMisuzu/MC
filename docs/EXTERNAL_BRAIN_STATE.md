@@ -81,6 +81,10 @@ product UI controls, and release/install verification remain incomplete.
 - `PAUSED` is returned immediately as `BLOCKED`, and `RECONCILIATION_REQUIRED` immediately as
   `INTERRUPTED`, with the last Fabric observation so the external Brain can
   ask the owner rather than waiting until timeout.
+- A repeated `brainSessionId + callId` reuses the audited result and never executes the Tool
+  Gateway twice; reusing an ID with different tool input is rejected. Separate companion turns
+  use isolated sessions and locks, while cancellation reaches an active tool without waiting for
+  that companion's turn lock.
 - The local Hermes Replay E2E proves `movement.navigate -> inventory.withdraw -> movement.return
   -> inventory.deliver -> FINAL_RESPONSE` against a real Fabric 1.21.1 GameTest body. Every step
   carries terminal Fabric evidence; the chest loses six ingots, the owner gains six, and the

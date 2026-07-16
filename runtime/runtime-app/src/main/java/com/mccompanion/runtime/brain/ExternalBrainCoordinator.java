@@ -155,7 +155,18 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             }
             List<ToolResult> batch = new ArrayList<>();
             for (ToolCall call : result.toolCalls()) {
-                ToolResult accepted = tools.execute(toolContext, call);
+                BrainAuditRepository.AuditedToolCall previous = audit == null ? null
+                        : audit.tool(session.sessionId(), call.callId()).orElse(null);
+                ToolResult accepted;
+                if (previous != null && (!previous.call().name().equals(call.name())
+                        || !previous.call().arguments().equals(call.arguments()))) {
+                    accepted = ToolResult.rejected(call, "DUPLICATE_CALL_ID_CONFLICT",
+                            "callId was already used with different tool input");
+                } else if (previous != null) {
+                    accepted = previous.result();
+                } else {
+                    accepted = tools.execute(toolContext, call);
+                }
                 if (audit != null) audit.tool(session.sessionId(), call, accepted);
                 ToolResult observation;
                 if (accepted.terminal()) {

@@ -92,6 +92,24 @@ public final class BrainAuditRepository {
         } catch (SQLException failure) { throw persistence(failure); }
     }
 
+    public Optional<AuditedToolCall> tool(String sessionId, String callId) {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT tool_name,arguments_json,success,result_code,observation_json,terminal
+                FROM brain_tool_call WHERE session_id=? AND call_id=?
+                """)) {
+            statement.setString(1, sessionId); statement.setString(2, callId);
+            try (var row = statement.executeQuery()) {
+                if (!row.next()) return Optional.empty();
+                ToolCall call = new ToolCall(callId, row.getString("tool_name"),
+                        Json.parse(row.getString("arguments_json")));
+                ToolResult result = new ToolResult(callId, call.name(), row.getInt("success") != 0,
+                        row.getString("result_code"), Json.parse(row.getString("observation_json")),
+                        row.getInt("terminal") != 0);
+                return Optional.of(new AuditedToolCall(call, result));
+            }
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
     public void opened(BrainSession session, String provider) {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO brain_session(session_id,controller_id,companion_id,provider,state,last_code,created_at,updated_at)
@@ -220,4 +238,6 @@ public final class BrainAuditRepository {
         String text = value.path(field).asText("").strip();
         return text.isBlank() ? null : text;
     }
+
+    public record AuditedToolCall(ToolCall call, ToolResult result) { }
 }

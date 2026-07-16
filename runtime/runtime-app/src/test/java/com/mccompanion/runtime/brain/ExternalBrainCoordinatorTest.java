@@ -20,6 +20,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -200,6 +204,101 @@ class ExternalBrainCoordinatorTest {
             } finally {
                 first.close();
             }
+        }
+    }
+
+    @Test
+    void repeatedCallIdReturnsAuditedResultWithoutExecutingToolAgain() throws Exception {
+        AtomicInteger turns = new AtomicInteger();
+        RecordingGateway gateway = new RecordingGateway();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> switch (turns.getAndIncrement()) {
+            case 0, 1 -> BrainTurnResult.tools(List.of(
+                    new ToolCall("same-call", "world.observe", Json.object())));
+            default -> BrainTurnResult.finalResponse("done");
+        });
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("duplicate-call.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, gateway, 4, audit, new ConversationRepository(database))) {
+                BrainCoordinatorResult result = coordinator.continueTurn("hermes-1", "c1", "observe", context());
+                assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+                assertEquals(3, turns.get());
+                assertEquals(List.of("world.observe"), gateway.calls,
+                        "duplicate callId must not execute the gateway twice");
+                assertEquals(2, result.toolResults().size());
+                assertEquals(result.toolResults().get(0).observation(), result.toolResults().get(1).observation());
+            }
+        }
+    }
+
+    @Test
+    void concurrentCancelDoesNotWaitForCompanionTurnLock() throws Exception {
+        CountDownLatch awaiting = new CountDownLatch(1);
+        CountDownLatch cancelled = new CountDownLatch(1);
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("movement.navigate", "1.0", "navigate", Json.object(),
+                        "LOW", "MOVE", Duration.ofSeconds(5), false));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "COMMAND_DISPATCHED",
+                        Json.object().put("state", "ACCEPTED").put("taskId", "task-1"), false);
+            }
+            @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                                      Duration timeout, java.util.function.Consumer<ToolResult> progress) {
+                awaiting.countDown();
+                try {
+                    if (!cancelled.await(2, TimeUnit.SECONDS)) throw new AssertionError("cancel was blocked");
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(failure);
+                }
+                return new ToolResult(call.callId(), call.name(), false, "TOOL_CANCELLED",
+                        Json.object().put("state", "CANCELLED").put("taskId", "task-1"), true);
+            }
+            @Override public void cancel(ToolContext context, String callId, String reason) { cancelled.countDown(); }
+        };
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> BrainTurnResult.tools(List.of(
+                new ToolCall("navigate-1", "movement.navigate", Json.object()))));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            CompletableFuture<BrainCoordinatorResult> turn = CompletableFuture.supplyAsync(() ->
+                    coordinator.continueTurn("hermes-1", "c1", "go", context()));
+            assertTrue(awaiting.await(1, TimeUnit.SECONDS));
+            long started = System.nanoTime();
+            coordinator.cancel("hermes-1", "c1", "OWNER_CANCELLED");
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
+                    "cancel waited for the companion turn lock");
+            assertEquals(BrainTurnResult.Kind.CANCEL, turn.get(2, TimeUnit.SECONDS).kind());
+        }
+    }
+
+    @Test
+    void companionSessionsRunConcurrentlyAndRemainIsolated() throws Exception {
+        CountDownLatch bothEntered = new CountDownLatch(2);
+        var sessionByCompanion = new ConcurrentHashMap<String, String>();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            sessionByCompanion.put(request.context().companionId(), request.sessionId());
+            bothEntered.countDown();
+            try {
+                if (!bothEntered.await(1, TimeUnit.SECONDS)) throw new AssertionError("companion turns serialized globally");
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new AssertionError(failure);
+            }
+            return BrainTurnResult.finalResponse("done " + request.context().companionId());
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, new RecordingGateway(), 4)) {
+            CompletableFuture<BrainCoordinatorResult> first = CompletableFuture.supplyAsync(() ->
+                    coordinator.continueTurn("hermes-1", "c1", "one",
+                            AgentContext.empty("c1", List.of("FollowOwner"))));
+            CompletableFuture<BrainCoordinatorResult> second = CompletableFuture.supplyAsync(() ->
+                    coordinator.continueTurn("hermes-1", "c2", "two",
+                            AgentContext.empty("c2", List.of("FollowOwner"))));
+            assertEquals("done c1", first.get(2, TimeUnit.SECONDS).response());
+            assertEquals("done c2", second.get(2, TimeUnit.SECONDS).response());
+            assertEquals(2, sessionByCompanion.size());
+            assertNotEquals(sessionByCompanion.get("c1"), sessionByCompanion.get("c2"));
         }
     }
 

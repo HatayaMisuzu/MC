@@ -42,30 +42,21 @@ if (Test-Path -LiteralPath $whitelistPath) {
         }
 }
 
-$allowedSegments = @(
-    [IO.Path]::DirectorySeparatorChar + 'src' + [IO.Path]::DirectorySeparatorChar + 'test' + [IO.Path]::DirectorySeparatorChar,
-    [IO.Path]::DirectorySeparatorChar + 'gametest' + [IO.Path]::DirectorySeparatorChar,
-    [IO.Path]::DirectorySeparatorChar + 'test-fixtures' + [IO.Path]::DirectorySeparatorChar
-)
-
 $violations = [System.Collections.Generic.List[string]]::new()
 foreach ($relativeRoot in $productionRoots) {
     $scanRoot = Join-Path $root $relativeRoot
     if (-not (Test-Path -LiteralPath $scanRoot)) { continue }
 
-    Get-ChildItem -LiteralPath $scanRoot -Recurse -File | Where-Object {
-        $_.Extension -in @('.java', '.kt') -and
-        $_.FullName -notmatch '[\\/](build|\.gradle|run|runs|test|gametest|test-fixtures)[\\/]'
-    } | ForEach-Object {
+    # Enumerate module source sets rather than recursively walking the whole repository area.
+    # Gradle may replace build/report directories while this task runs in parallel with tests.
+    $sourceRoots = Get-ChildItem -LiteralPath $scanRoot -Directory | ForEach-Object {
+        Join-Path $_.FullName 'src\main'
+    } | Where-Object { Test-Path -LiteralPath $_ -PathType Container }
+    foreach ($sourceRoot in $sourceRoots) {
+      Get-ChildItem -LiteralPath $sourceRoot -Recurse -File | Where-Object {
+        $_.Extension -in @('.java', '.kt')
+      } | ForEach-Object {
         $path = $_.FullName
-        $isTestFixture = $false
-        foreach ($segment in $allowedSegments) {
-            if ($path.Contains($segment)) {
-                $isTestFixture = $true
-                break
-            }
-        }
-        if ($isTestFixture) { return }
         $lineNumber = 0
         foreach ($line in [IO.File]::ReadLines($path)) {
             $lineNumber++
@@ -80,6 +71,7 @@ foreach ($relativeRoot in $productionRoots) {
                 }
             }
         }
+      }
     }
 }
 

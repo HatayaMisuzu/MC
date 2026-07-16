@@ -8,7 +8,7 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `EXTERNAL_ASK_USER_CORE_REPLAY_VERIFIED`
+Current milestone: `GENERIC_RESOURCE_BODY_PARTIALLY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
 the complete generic Minecraft tool set,
@@ -169,6 +169,22 @@ product UI controls, and release/install verification remain incomplete.
   returned `RESOURCE_LOST`; the repaired world supplies ordinary supporting blocks. The passing
   test proves movement, vanilla removal of a two-coal ItemEntity, inventory +2, and a terminal
   `COLLECT_COMPLETE` observation. Broader resources and restart/unreachable cases remain open.
+
+## Vanilla bounded-vein mining slice
+
+- Added `resource.mine_vein` backed by `MineResourceVein`, with a namespaced block, quantity
+  1..32, explicit same-dimension origin, and bounded partial-work policy. Fabric discovers only
+  connected six-neighbor matching blocks in loaded chunks and within normal player reach.
+- Each block advances according to vanilla hardness and the held tool. The terminal mutation is
+  `ServerPlayerGameMode.destroyBlock`; production never calls `setBlock`, creates drops, edits an
+  inventory, or fabricates tool wear. Incorrect tools, changed/unloaded resources, rejected or
+  unbreakable blocks, missing drops, full inventory, world change, and timeout stop explicitly.
+- Completion waits until tracked real `ItemEntity` drops have been picked up through vanilla
+  `playerTouch` and the total inventory delta covers the observed drop count. A real Fabric
+  GameTest proves two connected diamond ores disappear, two diamonds enter the inventory, an
+  iron pickaxe consumes at least two durability, and audit evidence records the vanilla server
+  player game-mode path. Distant navigation, broader ores/tools, restart, and Brain E2E remain,
+  so Mine is intentionally `PARTIAL` rather than complete.
 
 ## Craft item slice
 

@@ -51,6 +51,7 @@ final class BehaviorDirector {
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, SkillProgress> skills = new HashMap<>();
     private final Map<UUID, ScanProgress> scans = new HashMap<>();
+    private final Map<UUID, MineProgress> mines = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
@@ -68,16 +69,23 @@ final class BehaviorDirector {
         observations.remove(entry.companionId);
         if (parameters.capability().equals("ExploreArea")) {
             skills.remove(entry.companionId);
+            mines.remove(entry.companionId);
             scans.put(entry.companionId, createScan(body, parameters));
+        } else if (parameters.capability().equals("MineResourceVein")) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.put(entry.companionId, createMine(body, parameters));
         } else {
             scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
             skills.put(entry.companionId, createSkill(body, entry, parameters));
         }
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
-        if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)) {
+        if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)
+                && !mines.containsKey(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -99,6 +107,7 @@ final class BehaviorDirector {
                 || code.equals("LEASE_EXPIRED"))) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
         }
     }
 
@@ -107,6 +116,7 @@ final class BehaviorDirector {
         actionGateway.discard(companionId);
         skills.remove(companionId);
         scans.remove(companionId);
+        mines.remove(companionId);
         observations.remove(companionId);
     }
 
@@ -366,6 +376,8 @@ final class BehaviorDirector {
     private void tickSkill(CompanionEntry entry, CompanionPlayer body) {
         ScanProgress scan = scans.get(entry.companionId);
         if (scan != null) { tickScan(entry, body, scan); return; }
+        MineProgress mine = mines.get(entry.companionId);
+        if (mine != null) { tickMine(entry, body, mine); return; }
         SkillProgress progress = skills.get(entry.companionId);
         if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
         if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
@@ -474,6 +486,129 @@ final class BehaviorDirector {
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
         savedData.changed();
+    }
+
+    private MineProgress createMine(CompanionPlayer body, SkillParameters parameters) {
+        if (!parameters.hasBlockTarget()) return MineProgress.failed(parameters, "MINE_ORIGIN_MISSING");
+        if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+            return MineProgress.failed(parameters, "WORLD_CHANGED");
+        }
+        ResourceLocation key = ResourceLocation.tryParse(parameters.itemId());
+        if (key == null || !BuiltInRegistries.BLOCK.containsKey(key)) {
+            return MineProgress.failed(parameters, "BLOCK_UNKNOWN");
+        }
+        Block block = BuiltInRegistries.BLOCK.get(key);
+        BlockPos origin = new BlockPos(parameters.x(), parameters.y(), parameters.z());
+        if (!body.serverLevel().hasChunkAt(origin) || !body.serverLevel().getBlockState(origin).is(block)) {
+            return MineProgress.failed(parameters, "RESOURCE_CHANGED");
+        }
+        if (body.distanceToSqr(Vec3.atCenterOf(origin)) > 25.0D) {
+            return MineProgress.failed(parameters, "RESOURCE_OUT_OF_REACH");
+        }
+        if (body.serverLevel().getBlockState(origin).requiresCorrectToolForDrops()
+                && !body.hasCorrectToolForDrops(body.serverLevel().getBlockState(origin))) {
+            return MineProgress.failed(parameters, "TOOL_INADEQUATE");
+        }
+        java.util.ArrayDeque<BlockPos> pending = new java.util.ArrayDeque<>();
+        java.util.Set<BlockPos> visited = new java.util.HashSet<>();
+        java.util.List<BlockPos> targets = new java.util.ArrayList<>();
+        pending.add(origin); visited.add(origin);
+        while (!pending.isEmpty() && targets.size() < parameters.quantity()) {
+            BlockPos position = pending.removeFirst();
+            if (!body.serverLevel().hasChunkAt(position)
+                    || !body.serverLevel().getBlockState(position).is(block)
+                    || body.distanceToSqr(Vec3.atCenterOf(position)) > 25.0D) continue;
+            targets.add(position.immutable());
+            for (Direction direction : Direction.values()) {
+                BlockPos adjacent = position.relative(direction);
+                if (visited.add(adjacent) && adjacent.distManhattan(origin) <= 6) pending.addLast(adjacent);
+            }
+        }
+        if (targets.isEmpty()) return MineProgress.failed(parameters, "RESOURCE_NOT_FOUND");
+        return new MineProgress(parameters, block, targets, server.getTickCount(), inventoryItemCount(body), null);
+    }
+
+    private void tickMine(CompanionEntry entry, CompanionPlayer body, MineProgress mine) {
+        if (mine.failureCode != null) { pauseSafely(entry, body, mine.failureCode); return; }
+        if (!body.serverLevel().dimension().location().toString().equals(mine.parameters.dimension())) {
+            pauseSafely(entry, body, "WORLD_CHANGED"); return;
+        }
+        if (server.getTickCount() - mine.startedTick > 20 * 60) {
+            pauseSafely(entry, body, "MINE_TIMEOUT"); return;
+        }
+        if (mine.targetIndex < mine.targets.size()) {
+            BlockPos target = mine.targets.get(mine.targetIndex);
+            var state = body.serverLevel().getBlockState(target);
+            if (!state.is(mine.block)) {
+                pauseSafely(entry, body, "RESOURCE_CHANGED"); return;
+            }
+            if (body.distanceToSqr(Vec3.atCenterOf(target)) > 25.0D) {
+                pauseSafely(entry, body, "RESOURCE_OUT_OF_REACH"); return;
+            }
+            if (state.requiresCorrectToolForDrops() && !body.hasCorrectToolForDrops(state)) {
+                pauseSafely(entry, body, "TOOL_INADEQUATE"); return;
+            }
+            float increment = state.getDestroyProgress(body, body.serverLevel(), target);
+            if (!(increment > 0.0F) || !Float.isFinite(increment)) {
+                pauseSafely(entry, body, "BLOCK_UNBREAKABLE"); return;
+            }
+            Vec3 delta = Vec3.atCenterOf(target).subtract(body.getEyePosition());
+            body.setYRot((float) Math.toDegrees(Math.atan2(-delta.x, delta.z)));
+            body.setXRot((float) -Math.toDegrees(Math.atan2(delta.y,
+                    Math.sqrt(delta.x * delta.x + delta.z * delta.z))));
+            body.swing(InteractionHand.MAIN_HAND);
+            mine.destroyProgress += increment;
+            if (mine.destroyProgress < 1.0F) return;
+            actionGateway.markVanillaGameModeAction(body);
+            if (!body.gameMode.destroyBlock(target) || body.serverLevel().getBlockState(target).is(mine.block)) {
+                pauseSafely(entry, body, "BLOCK_BREAK_REJECTED"); return;
+            }
+            mine.destroyed.add(new CompanionRegistry.ScanCandidate(
+                    BuiltInRegistries.BLOCK.getKey(mine.block).toString(), mine.parameters.dimension(),
+                    target.getX(), target.getY(), target.getZ(), mine.targets.getFirst().distSqr(target)));
+            body.serverLevel().getEntitiesOfClass(ItemEntity.class,
+                            new net.minecraft.world.phys.AABB(target).inflate(2.0D),
+                            entity -> entity.isAlive() && entity.getAge() <= 2
+                                    && !mine.dropEntities.contains(entity.getUUID()))
+                    .forEach(entity -> {
+                        mine.dropEntities.add(entity.getUUID());
+                        mine.expectedDropCount += entity.getItem().getCount();
+                    });
+            mine.targetIndex++;
+            mine.destroyProgress = 0.0F;
+            return;
+        }
+        java.util.List<ItemEntity> drops = mine.dropEntities.stream()
+                .map(body.serverLevel()::getEntity).filter(ItemEntity.class::isInstance)
+                .map(ItemEntity.class::cast).filter(ItemEntity::isAlive).toList();
+        int inventoryDelta = inventoryItemCount(body) - mine.inventoryBaseline;
+        if (mine.expectedDropCount > 0 && drops.isEmpty() && inventoryDelta >= mine.expectedDropCount) {
+            mine.destroyed.sort(java.util.Comparator.comparingDouble(CompanionRegistry.ScanCandidate::distanceSquared));
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "MINE_COMPLETE", mine.parameters.itemId(), mine.parameters.quantity(),
+                    mine.destroyed.size(), mine.destroyed));
+            actionGateway.stopInput(body);
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE; savedData.changed(); return;
+        }
+        if (mine.expectedDropCount == 0 && server.getTickCount() - mine.startedTick > 20) {
+            pauseSafely(entry, body, "DROP_NOT_PRODUCED"); return;
+        }
+        if (drops.isEmpty()) return;
+        ItemEntity nearest = drops.stream().min(
+                java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(body))).orElseThrow();
+        if (nearest.distanceToSqr(body) <= 2.25D) {
+            actionGateway.stopInput(body);
+            int before = inventoryItemCount(body);
+            nearest.playerTouch(body);
+            if (inventoryItemCount(body) == before && inventoryCapacity(body, nearest.getItem()) < 1) {
+                pauseSafely(entry, body, "INVENTORY_FULL");
+            }
+            return;
+        }
+        Vec3 delta = nearest.position().subtract(body.position());
+        actionGateway.applyMoveInput(body, (float) Math.toDegrees(Math.atan2(-delta.x, delta.z)),
+                delta.y > 0.6D || body.horizontalCollision);
     }
 
     private void tickCraft(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -677,6 +812,14 @@ final class BehaviorDirector {
         return body.serverLevel().getEntitiesOfClass(ItemEntity.class, body.getBoundingBox().inflate(radius),
                         entity -> entity.isAlive() && entity.getItem().is(item)).stream()
                 .mapToInt(entity -> entity.getItem().getCount()).sum();
+    }
+
+    private static int inventoryItemCount(CompanionPlayer body) {
+        int count = 0;
+        for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+            count += body.getInventory().getItem(slot).getCount();
+        }
+        return count;
     }
 
     private static int findSlot(ServerPlayer player, Item item) {
@@ -953,6 +1096,30 @@ final class BehaviorDirector {
 
         private static ScanProgress failed(SkillParameters parameters, String code) {
             return new ScanProgress(parameters, Blocks.AIR, BlockPos.ZERO, 1, 1, 0, code);
+        }
+    }
+
+    private static final class MineProgress {
+        private final SkillParameters parameters;
+        private final Block block;
+        private final java.util.List<BlockPos> targets;
+        private final int startedTick;
+        private final int inventoryBaseline;
+        private final String failureCode;
+        private final java.util.Set<UUID> dropEntities = new java.util.HashSet<>();
+        private final java.util.List<CompanionRegistry.ScanCandidate> destroyed = new java.util.ArrayList<>();
+        private int targetIndex;
+        private float destroyProgress;
+        private int expectedDropCount;
+
+        private MineProgress(SkillParameters parameters, Block block, java.util.List<BlockPos> targets,
+                             int startedTick, int inventoryBaseline, String failureCode) {
+            this.parameters = parameters; this.block = block; this.targets = java.util.List.copyOf(targets);
+            this.startedTick = startedTick; this.inventoryBaseline = inventoryBaseline; this.failureCode = failureCode;
+        }
+
+        private static MineProgress failed(SkillParameters parameters, String code) {
+            return new MineProgress(parameters, Blocks.AIR, java.util.List.of(), 0, 0, code);
         }
     }
 

@@ -115,6 +115,56 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
+    public void mineResourceVeinUsesHardnessToolDurabilityDropsAndPickup(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Miner").success(), "mine test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "mine test created no live body");
+        BlockPos origin = body.blockPosition().offset(2, 0, 0);
+        BlockPos second = origin.offset(1, 0, 0);
+        body.serverLevel().setBlockAndUpdate(origin, Blocks.DIAMOND_ORE.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(second, Blocks.DIAMOND_ORE.defaultBlockState());
+        ItemStack pickaxe = new ItemStack(Items.IRON_PICKAXE);
+        body.getInventory().setItem(0, pickaxe);
+        body.getInventory().selected = 0;
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-mine";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "mine lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "mine-diamond", "skill",
+                null, null, null, new SkillParameters("MineResourceVein", "minecraft:diamond_ore", 2, false,
+                        body.serverLevel().dimension().location().toString(),
+                        origin.getX(), origin.getY(), origin.getZ())).success(), "mine skill failed to start");
+        helper.succeedWhen(() -> {
+            var snapshot = registry.runtimeSnapshots(false).stream()
+                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for vanilla vein mining completion");
+            helper.assertTrue(!body.serverLevel().getBlockState(origin).is(Blocks.DIAMOND_ORE)
+                    && !body.serverLevel().getBlockState(second).is(Blocks.DIAMOND_ORE),
+                    "mined ore blocks remained in the world");
+            helper.assertValueEqual(count(body, Items.DIAMOND), 2, "vanilla diamond drops were not collected");
+            helper.assertTrue(pickaxe.getDamageValue() >= 2, "vanilla tool durability was not consumed");
+            helper.assertTrue(snapshot.behaviorObservation() != null, "mining produced no observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "MINE_COMPLETE",
+                    "mining observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().available(), 2,
+                    "mining observation block count mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
+                    "mining evidence did not identify the vanilla ServerPlayerGameMode path");
+            helper.assertTrue(registry.remove(owner).success(), "mine test cleanup failed");
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600)
     public void runtimeSkillsUseVanillaActionsAndVerifyWorldDeltas(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")

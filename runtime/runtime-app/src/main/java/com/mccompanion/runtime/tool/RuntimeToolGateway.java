@@ -146,6 +146,9 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("CollectResource")) values.add(definition("resource.collect",
                 "Collect nearby dropped items through vanilla movement and pickup", itemQuantitySchema(),
                 "MEDIUM", "COLLECT", false));
+        if (available.contains("MineResourceVein")) values.add(definition("resource.mine_vein",
+                "Mine a bounded connected vein through vanilla block breaking and collect its drops",
+                mineSchema(), "MEDIUM", "MINE", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
@@ -200,6 +203,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "movement.navigate" -> navigate(call.arguments());
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
+            case "resource.mine_vein" -> skill("MineResourceVein", validatedMine(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
@@ -334,6 +338,8 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("item").add("quantity");
         } else if (name.equals("world.scan")) {
             root.putArray("required").add("block").add("radius");
+        } else if (name.equals("resource.mine_vein")) {
+            root.putArray("required").add("block").add("maxBlocks").add("origin");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
                 Duration.ofSeconds(30), idempotent);
@@ -379,6 +385,44 @@ public final class RuntimeToolGateway implements ToolGateway {
         fields.putObject("dimension").put("type", "string");
         for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
         center.putArray("required").add("x").add("y").add("z");
+        return properties;
+    }
+
+    private static JsonNode validatedMine(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("block", "maxBlocks", "origin", "allowPartial"));
+        String block = arguments.path("block").asText("");
+        if (!block.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException("block must be a namespaced block id");
+        }
+        if (!arguments.path("maxBlocks").canConvertToInt()) {
+            throw new IllegalArgumentException("maxBlocks must be an integer");
+        }
+        int maximum = arguments.path("maxBlocks").asInt();
+        if (maximum < 1 || maximum > 32) throw new IllegalArgumentException("maxBlocks must be 1..32");
+        JsonNode origin = arguments.path("origin");
+        if (!origin.isObject()) throw new IllegalArgumentException("origin must be an object");
+        rejectUnexpected(origin, Set.of("dimension", "x", "y", "z"));
+        for (String field : List.of("x", "y", "z")) {
+            if (!origin.path(field).canConvertToInt()) throw new IllegalArgumentException("origin." + field + " must be an integer");
+        }
+        ObjectNode values = Json.object().put("item", block).put("quantity", maximum)
+                .put("allowPartial", arguments.path("allowPartial").asBoolean(false));
+        values.set("target", origin.deepCopy());
+        return values;
+    }
+
+    private static ObjectNode mineSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("block").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxBlocks").put("type", "integer").put("minimum", 1).put("maximum", 32);
+        properties.putObject("allowPartial").put("type", "boolean");
+        ObjectNode origin = properties.putObject("origin");
+        origin.put("type", "object").put("additionalProperties", false);
+        ObjectNode fields = origin.putObject("properties");
+        fields.putObject("dimension").put("type", "string");
+        for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
+        origin.putArray("required").add("x").add("y").add("z");
         return properties;
     }
 

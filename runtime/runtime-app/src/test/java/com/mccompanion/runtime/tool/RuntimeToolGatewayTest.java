@@ -76,7 +76,7 @@ class RuntimeToolGatewayTest {
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
                         ignored -> List.of("WithdrawFromStorage", "DepositToStorage", "CraftItem", "DeliverItem",
-                                "EatAndRecover", "CollectResource"));
+                                "EatAndRecover", "CollectResource", "MineResourceVein"));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
                 ToolDefinition withdraw = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("inventory.withdraw")).findFirst().orElseThrow();
@@ -96,6 +96,16 @@ class RuntimeToolGatewayTest {
                 assertEquals(List.of("item", "quantity"), java.util.stream.StreamSupport.stream(
                         collect.inputSchema().path("required").spliterator(), false)
                         .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
+                ToolDefinition mine = gateway.definitions(context).stream()
+                        .filter(value -> value.name().equals("resource.mine_vein")).findFirst().orElseThrow();
+                assertEquals(List.of("block", "maxBlocks", "origin"), java.util.stream.StreamSupport.stream(
+                        mine.inputSchema().path("required").spliterator(), false)
+                        .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
+                ToolResult invalidMine = gateway.execute(context, new ToolCall("mine-1", "resource.mine_vein",
+                        Json.object().put("block", "minecraft:diamond_ore").put("maxBlocks", 33)
+                                .set("origin", Json.object().put("x", 1).put("y", 64).put("z", 1))));
+                assertFalse(invalidMine.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", invalidMine.code());
                 ToolResult invalidStation = gateway.execute(context, new ToolCall("craft-1", "item.craft",
                         Json.object().put("item", "minecraft:iron_pickaxe").put("quantity", 1)
                                 .set("station", Json.object().put("x", 1).put("y", 64))));

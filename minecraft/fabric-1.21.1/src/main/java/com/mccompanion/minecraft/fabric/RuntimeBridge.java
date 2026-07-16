@@ -155,6 +155,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("CraftItem", true)
                 .put("ExploreArea", true)
                 .put("CollectResource", true)
+                .put("MineResourceVein", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);

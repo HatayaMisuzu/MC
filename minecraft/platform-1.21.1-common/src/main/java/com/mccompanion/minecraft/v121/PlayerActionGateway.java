@@ -16,6 +16,7 @@ final class PlayerActionGateway {
 
     private final Map<UUID, InFlight> inFlight = new HashMap<>();
     private final Deque<ActionEvidence> completed = new ArrayDeque<>();
+    private final java.util.Set<UUID> gameModeActions = new java.util.HashSet<>();
 
     void startBehavior(CompanionPlayer body, CompanionEntry.Mode mode, long tick) {
         completeBehavior(body, false, "SUPERSEDED", tick);
@@ -35,6 +36,8 @@ final class PlayerActionGateway {
         body.stopWalking();
     }
 
+    void markVanillaGameModeAction(CompanionPlayer body) { gameModeActions.add(body.getUUID()); }
+
     void completeBehavior(CompanionPlayer body, boolean success, String failureCode, long tick) {
         InFlight started = inFlight.remove(body.getUUID());
         if (started == null) {
@@ -52,7 +55,7 @@ final class PlayerActionGateway {
                 inventoryDigest(body),
                 success,
                 success ? "NONE" : failureCode,
-                "VANILLA_PLAYER_INPUT",
+                gameModeActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_GAME_MODE" : "VANILLA_PLAYER_INPUT",
                 false));
         while (completed.size() > MAX_COMPLETED_EVIDENCE) {
             completed.removeFirst();
@@ -61,6 +64,7 @@ final class PlayerActionGateway {
 
     void discard(UUID companionId) {
         inFlight.remove(companionId);
+        gameModeActions.remove(companionId);
     }
 
     String evidenceSummary(UUID companionId) {

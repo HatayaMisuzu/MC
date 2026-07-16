@@ -54,19 +54,21 @@ public final class TaskGraphExecutionRepository {
                                          String currentNodeId, JsonNode completedNodes, JsonNode toolResults,
                                          JsonNode variables, JsonNode checkpoints, JsonNode evidence,
                                          JsonNode waitingQuestion,
-                                         String resultCode) throws SQLException {
+                                         JsonNode result, String resultCode) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 UPDATE task_graph_execution SET state=?,current_node_id=?,completed_nodes_json=?,
                 tool_results_json=?,variables_json=?,checkpoints_json=?,waiting_question_json=?,
-                evidence_json=?,result_code=?,revision=revision+1,updated_at=? WHERE execution_id=? AND revision=?
+                evidence_json=?,result_json=?,result_code=?,revision=revision+1,updated_at=?
+                WHERE execution_id=? AND revision=?
                 """)) {
             statement.setString(1, required(state)); statement.setString(2, blankToNull(currentNodeId));
             statement.setString(3, Json.write(completedNodes)); statement.setString(4, Json.write(toolResults));
             statement.setString(5, Json.write(variables)); statement.setString(6, Json.write(checkpoints));
             statement.setString(7, waitingQuestion == null || waitingQuestion.isNull() ? null : Json.write(waitingQuestion));
-            statement.setString(8, Json.write(evidence)); statement.setString(9, required(resultCode));
-            statement.setLong(10, clock.millis());
-            statement.setString(11, required(executionId)); statement.setLong(12, expectedRevision);
+            statement.setString(8, Json.write(evidence));
+            statement.setString(9, Json.write(result == null ? Json.MAPPER.nullNode() : result));
+            statement.setString(10, required(resultCode)); statement.setLong(11, clock.millis());
+            statement.setString(12, required(executionId)); statement.setLong(13, expectedRevision);
             if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_TASK_GRAPH_REVISION");
         }
         return get(executionId).orElseThrow();
@@ -101,7 +103,8 @@ public final class TaskGraphExecutionRepository {
                         Json.parse(row.getString("evidence_json")),
                         waiting == null ? Json.MAPPER.nullNode() : Json.parse(waiting),
                         Json.parse(row.getString("permissions_json")), Json.parse(row.getString("limits_json")),
-                        Json.parse(row.getString("provenance_json")), row.getLong("revision"),
+                        Json.parse(row.getString("provenance_json")), Json.parse(row.getString("result_json")),
+                        row.getLong("revision"),
                         row.getString("result_code"), Instant.ofEpochMilli(row.getLong("created_at")),
                         Instant.ofEpochMilli(row.getLong("updated_at"))));
             }

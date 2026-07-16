@@ -31,7 +31,7 @@ class TaskGraphExecutionRepositoryTest {
             var running = repository.save(created.executionId(), created.revision(), "RUNNING", "observe",
                     Json.parse("[\"start\"]"), Json.object(), Json.object(),
                     Json.parse("[{\"nodeId\":\"start\"}]"), Json.parse("[{\"type\":\"checkpoint\"}]"),
-                    null, "RUNNING");
+                    null, Json.object().put("partial", true), "RUNNING");
             assertEquals(1, running.revision());
             assertEquals("observe", running.currentNodeId());
 
@@ -39,10 +39,11 @@ class TaskGraphExecutionRepositoryTest {
             var recovered = repository.get("execution-1").orElseThrow();
             assertEquals("RECONCILIATION_REQUIRED", recovered.state());
             assertEquals("RUNTIME_RESTARTED", recovered.resultCode());
+            assertTrue(recovered.result().path("partial").asBoolean());
             assertEquals(2, recovered.revision());
             assertThrows(IllegalStateException.class, () -> repository.save("execution-1", 0, "RUNNING",
                     "other", Json.parse("[]"), Json.object(), Json.object(), Json.parse("[]"),
-                    Json.parse("[]"), null, "RUNNING"));
+                    Json.parse("[]"), null, Json.MAPPER.nullNode(), "RUNNING"));
         }
     }
 }

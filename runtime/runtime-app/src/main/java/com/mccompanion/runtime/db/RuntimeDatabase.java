@@ -564,6 +564,8 @@ public final class RuntimeDatabase implements AutoCloseable {
         List<String> taskGraphRuntimeState = List.of(
                 "ALTER TABLE task_graph_execution ADD COLUMN inputs_json TEXT NOT NULL DEFAULT '{}'",
                 "ALTER TABLE task_graph_execution ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'");
+        List<String> taskGraphResult = List.of(
+                "ALTER TABLE task_graph_execution ADD COLUMN result_json TEXT NOT NULL DEFAULT 'null'");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -576,6 +578,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(9, "bind asynchronous brain tools to durable tasks", asynchronousBrainTools),
                 new Migration(10, "persist external brain waiting questions", externalBrainQuestions),
                 new Migration(11, "persist typed task graph execution state", taskGraphExecution),
-                new Migration(12, "persist task graph inputs and bounded evidence", taskGraphRuntimeState));
+                new Migration(12, "persist task graph inputs and bounded evidence", taskGraphRuntimeState),
+                new Migration(13, "persist task graph terminal result", taskGraphResult));
     }
 }

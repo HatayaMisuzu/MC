@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 /** Resolves bounded data references only; it does not evaluate source code. */
 final class TaskGraphValues {
     private static final Pattern REFERENCE =
-            Pattern.compile("\\$\\{(inputs|variables|outputs)(?:\\.[A-Za-z0-9_-]+)+}");
+            Pattern.compile("\\$\\{(inputs|variables|state|outputs)(?:\\.[A-Za-z0-9_-]+)+}");
 
     private TaskGraphValues() {
     }
@@ -78,7 +78,7 @@ final class TaskGraphValues {
         return value.deepCopy();
     }
 
-    private static JsonNode lookup(ObjectNode context, String path) {
+    static JsonNode lookup(ObjectNode context, String path) {
         JsonNode current = context;
         for (String segment : path.split("\\.")) {
             if (!current.isObject() || !current.has(segment)) {

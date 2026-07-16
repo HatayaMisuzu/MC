@@ -143,7 +143,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
             TaskGraphExecutionRecord ready = repository.save(record.executionId(), record.revision(),
                     "READY", record.currentNodeId(), record.completedNodes(), record.toolResults(),
                     record.variables(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
-                    "RESUME_REQUESTED");
+                    record.result(), "RESUME_REQUESTED");
             submit(context, ready);
             return new ToolResult(call.callId(), call.name(), true, "RESUME_ACCEPTED",
                     inspectJson(ready).put("state", "ACCEPTED"), true);
@@ -167,7 +167,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
             if (record.state().equals("PAUSED")) {
                 TaskGraphExecutionRecord cancelled = repository.save(record.executionId(), record.revision(),
                         "CANCELLED", null, record.completedNodes(), record.toolResults(), record.variables(),
-                        record.checkpoints(), record.evidence(), record.waitingQuestion(), "TASK_GRAPH_CANCELLED");
+                        record.checkpoints(), record.evidence(), record.waitingQuestion(), record.result(),
+                        "TASK_GRAPH_CANCELLED");
                 return terminal(synthetic, cancelled);
             }
             return terminal(synthetic, record);
@@ -192,7 +193,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                         revision.get(), snapshot.state(), snapshot.currentNodeId(),
                                         snapshot.completedNodes(), snapshot.toolResults(), snapshot.variables(),
                                         snapshot.checkpoints(), snapshot.evidence(), Json.MAPPER.nullNode(),
-                                        snapshot.resultCode());
+                                        snapshot.result(), snapshot.resultCode());
                                 revision.set(saved.revision());
                             } catch (SQLException failure) {
                                 throw new IllegalStateException("TASK_GRAPH_PERSISTENCE_ERROR", failure);
@@ -243,8 +244,10 @@ public final class TaskGraphRuntime implements AutoCloseable {
                 .put("revision", record.revision()).put("resultCode", record.resultCode());
         result.set("completedNodes", record.completedNodes());
         result.set("outputs", outputs(record.toolResults()));
+        result.set("variables", record.variables());
         result.set("checkpoints", record.checkpoints());
         result.set("evidence", record.evidence());
+        result.set("value", record.result());
         return result;
     }
 

@@ -50,6 +50,7 @@ class TaskGraphRuntimeTest {
                 assertEquals("testmod:unknown_item", gateway.arguments.getFirst().path("item").asText());
                 assertEquals("testmod:unknown_item",
                         terminal.observation().path("outputs").path("observe").path("item").asText());
+                assertEquals("testmod:unknown_item", terminal.observation().path("value").asText());
                 assertTrue(terminal.observation().path("evidence").size() <= 2);
             }
         }
@@ -129,6 +130,134 @@ class TaskGraphRuntimeTest {
         }
     }
 
+    @Test
+    void executesIfAndSwitchFromVerifiedToolObservation() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("condition.db"))) {
+            database.initialize();
+            FakeGateway gateway = new FakeGateway();
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall call = new ToolCall("execution-4", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"conditional",
+                         "inputs":{"minimum":{"type":"integer","required":true}},
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"root","type":"sequence","nodes":[
+                           {"id":"observe","type":"call_tool","tool":"test.observe",
+                            "arguments":{"item":"testmod:ore"}},
+                           {"id":"enough","type":"if",
+                            "condition":"${outputs.observe.count >= inputs.minimum}",
+                            "then":{"id":"choose","type":"switch","expression":"${outputs.observe.item}",
+                             "cases":[{"equals":"testmod:ore",
+                               "node":{"id":"done","type":"return","value":"${outputs.observe.item}"}}],
+                             "default":{"id":"wrong","type":"fail","code":"WRONG_ITEM","message":"wrong"}},
+                            "else":{"id":"short","type":"fail","code":"SHORT","message":"short"}}
+                         ]}}
+                        """);
+                ToolResult accepted = runtime.start(context, call, graph,
+                        Json.object().put("minimum", 1), Json.object());
+                ToolResult terminal = runtime.await(context, call, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertTrue(terminal.observation().path("completedNodes").toString().contains("choose"));
+            }
+        }
+    }
+
+    @Test
+    void repeatUsesPriorObservationsAndStableIterationCallIds() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("repeat.db"))) {
+            database.initialize();
+            FakeGateway gateway = new FakeGateway();
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall call = new ToolCall("execution-5", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"repeat-observation",
+                         "inputs":{"target":{"type":"integer","required":true}},
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"repeat","type":"repeat","maxIterations":5,
+                          "until":"${outputs.observe.count >= inputs.target}",
+                          "body":{"id":"observe","type":"call_tool","tool":"test.observe",
+                           "arguments":{"item":"testmod:ore"}}}}
+                        """);
+                runtime.start(context, call, graph, Json.object().put("target", 3), Json.object());
+                ToolResult terminal = runtime.await(context, call, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(3, gateway.arguments.size());
+                assertEquals(3, terminal.observation().path("outputs").path("observe").path("count").asInt());
+                assertEquals(3, terminal.observation().path("variables").path("_mcac")
+                        .path("loops").path("repeat").asInt());
+            }
+        }
+    }
+
+    @Test
+    void whileFailsExplicitlyWhenItsBoundIsExhausted() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("while.db"))) {
+            database.initialize();
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(),
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall call = new ToolCall("execution-6", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"bounded-while",
+                         "inputs":{"keepGoing":{"type":"boolean","required":true}},
+                         "permissions":[],
+                         "root":{"id":"loop","type":"while",
+                          "condition":"${inputs.keepGoing == true}","maxIterations":2,
+                          "body":{"id":"tick","type":"emit_progress","message":"tick"}}}
+                        """);
+                runtime.start(context, call, graph, Json.object().put("keepGoing", true), Json.object());
+                ToolResult terminal = runtime.await(context, call, Duration.ofSeconds(2), ignored -> { });
+                assertFalse(terminal.success());
+                assertEquals("LOOP_EXHAUSTED", terminal.code());
+                assertEquals("FAILED", terminal.observation().path("state").asText());
+            }
+        }
+    }
+
+    @Test
+    void resumesInsideRepeatWithoutReplayingCompletedIterationTools() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("repeat-resume.db"))) {
+            database.initialize();
+            FakeGateway gateway = new FakeGateway();
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall execute = new ToolCall("execution-7", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"repeat-resume",
+                         "inputs":{"target":{"type":"integer","required":true}},
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"repeat","type":"repeat","maxIterations":5,
+                          "until":"${outputs.observe.count >= inputs.target}",
+                          "body":{"id":"iteration","type":"sequence","nodes":[
+                           {"id":"observe","type":"call_tool","tool":"test.observe",
+                            "arguments":{"item":"testmod:ore"}},
+                           {"id":"wait","type":"wait","durationMillis":400}
+                          ]}}}
+                        """);
+                runtime.start(context, execute, graph, Json.object().put("target", 2), Json.object());
+                waitForState(runtime, context, "execution-7", "RUNNING");
+                ToolResult pause = runtime.pause(context,
+                        new ToolCall("pause-repeat", "task_graph.pause", Json.object()), "execution-7");
+                assertTrue(pause.success());
+                ToolResult paused = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("PAUSED", paused.observation().path("state").asText());
+                assertEquals(1, gateway.arguments.size());
+
+                assertTrue(runtime.resume(context,
+                        new ToolCall("resume-repeat", "task_graph.resume", Json.object()), "execution-7").success());
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(3), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(2, gateway.arguments.size(),
+                        "resume replayed a Tool already persisted in the interrupted iteration");
+            }
+        }
+    }
+
     private static void waitForState(TaskGraphRuntime runtime, ToolContext context, String executionId,
                                      String expected) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
@@ -154,7 +283,8 @@ class TaskGraphRuntimeTest {
         @Override public ToolResult execute(ToolContext context, ToolCall call) {
             arguments.add(call.arguments());
             return new ToolResult(call.callId(), call.name(), true, "OK",
-                    Json.object().put("item", call.arguments().path("item").asText()), true);
+                    Json.object().put("item", call.arguments().path("item").asText())
+                            .put("count", arguments.size()), true);
         }
     }
 }

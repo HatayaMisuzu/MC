@@ -250,10 +250,13 @@ product UI controls, and release/install verification remain incomplete.
   calls return both MCP text content and structured terminal observations. When the client accepts
   SSE, Tool Gateway state changes stream as standard token-bound `notifications/progress` messages
   before the final JSON-RPC result; a disconnected stream cancels the same bound internal call.
-  Runtime integration verifies authentication, protocol negotiation, binding rejection, filtered
-  discovery, JSON/SSE failure evidence, progress envelopes, and cancellation acceptance. SSE event
-  resumption, strict protocol-header lifecycle, live concurrent cancellation E2E, Hermes native
-  MCP setup, and a protocol doctor remain, so the protocol is intentionally `PARTIAL`.
+  Runtime integration verifies authentication, protocol negotiation and subsequent version-header
+  enforcement, binding rejection, filtered discovery, JSON/SSE failure evidence, progress
+  envelopes, and cancellation acceptance. Terminal Doctor now performs a live authenticated MCP
+  negotiation plus bounded schema/permission discovery without exposing the token, and
+  `docs/MCP_PROTOCOL.md` documents the lifecycle and Hermes connection contract. SSE event
+  resumption, live concurrent cancellation E2E, and verified Hermes-native configuration remain,
+  so the protocol is intentionally `PARTIAL`.
 
 ## Craft item slice
 

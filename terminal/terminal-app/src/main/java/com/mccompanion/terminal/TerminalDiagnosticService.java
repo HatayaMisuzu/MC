@@ -48,6 +48,10 @@ final class TerminalDiagnosticService {
         boolean protocol = PROTOCOL.equals(health.protocolVersion());
         results.add(result(protocol, "protocol.compatible", protocol ? "Runtime protocol is compatible" : "Compatible Runtime protocol not observed",
                 Map.of("expected", PROTOCOL, "actual", value(health.protocolVersion())), "Update or restart Runtime"));
+        McpProtocolDoctor.Result mcp = new McpProtocolDoctor().probe(profile);
+        results.add(result(mcp.healthy(), "mcp.protocol", mcp.detail(),
+                Map.of("protocolVersion", mcp.protocolVersion(), "toolCount", Integer.toString(mcp.toolCount())),
+                "Start or update Runtime, then inspect MCP configuration"));
 
         String hook = new HookService().status(instance, controlHome);
         results.add(new DiagnosticResult("INSTALLED".equals(hook) ? DiagnosticResult.Severity.PASS : DiagnosticResult.Severity.WARNING,

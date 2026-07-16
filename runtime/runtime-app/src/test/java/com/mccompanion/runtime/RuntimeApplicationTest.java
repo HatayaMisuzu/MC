@@ -157,13 +157,24 @@ class RuntimeApplicationTest {
 
             HttpResponse<String> unbound = http.send(HttpRequest.newBuilder(endpoint)
                     .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .header("MCP-Protocol-Version", "2025-06-18")
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
                             """)).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(-32602, Json.parse(unbound.body()).path("error").path("code").asInt());
 
+            HttpResponse<String> incompatible = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .header("MCP-Protocol-Version", "2024-11-05")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"old-version","method":"tools/list","params":{}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, incompatible.statusCode(), incompatible.body());
+            assertEquals(-32600, Json.parse(incompatible.body()).path("error").path("code").asInt());
+
             HttpRequest.Builder bound = HttpRequest.newBuilder(endpoint)
                     .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .header("MCP-Protocol-Version", "2025-06-18")
                     .header("X-MCAC-Controller-Id", "hermes-test")
                     .header("X-MCAC-Brain-Session-Id", "brain-session-1")
                     .header("X-MCAC-Companion-Id", "missing-companion");

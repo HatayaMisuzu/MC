@@ -148,6 +148,13 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             String method = request.path("method").asText();
+            if (!method.equals("initialize") && !supportedMcpVersion(
+                    exchange.getRequestHeaders().getFirst("MCP-Protocol-Version"))) {
+                if (id == null || id.isNull()) exchange.sendResponseHeaders(400, -1);
+                else sendJson(exchange, 400, mcpError(id, -32600,
+                        "MCP-Protocol-Version must match a supported negotiated version"));
+                return;
+            }
             if (method.equals("notifications/initialized")) {
                 exchange.sendResponseHeaders(202, -1);
                 return;
@@ -191,14 +198,17 @@ public final class RuntimeHealthServer implements AutoCloseable {
 
     private static ObjectNode mcpInitialize(JsonNode params) {
         String requested = params.path("protocolVersion").asText("");
-        String negotiated = requested.equals("2025-03-26") || requested.equals("2025-06-18")
-                ? requested : "2025-06-18";
+        String negotiated = supportedMcpVersion(requested) ? requested : "2025-06-18";
         ObjectNode result = Json.object().put("protocolVersion", negotiated);
         ObjectNode capabilities = Json.object();
         capabilities.set("tools", Json.object().put("listChanged", false));
         result.set("capabilities", capabilities);
         result.set("serverInfo", Json.object().put("name", "mcac-runtime").put("version", "0.3.0"));
         return result;
+    }
+
+    private static boolean supportedMcpVersion(String version) {
+        return "2025-03-26".equals(version) || "2025-06-18".equals(version);
     }
 
     private ObjectNode mcpTools(HttpExchange exchange) {

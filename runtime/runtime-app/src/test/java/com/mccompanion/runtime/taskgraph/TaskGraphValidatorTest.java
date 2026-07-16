@@ -2,8 +2,11 @@ package com.mccompanion.runtime.taskgraph;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.tool.ToolDefinition;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -170,5 +173,51 @@ class TaskGraphValidatorTest {
         assertFalse(result.valid());
         assertTrue(result.issues().stream()
                 .anyMatch(issue -> issue.code().equals("NESTED_PARALLEL_NOT_SUPPORTED")));
+    }
+
+    @Test
+    void bindsLiteralArgumentsAndPermissionsToCurrentToolDefinitions() {
+        ToolDefinition navigate = new ToolDefinition("movement.navigate", "1.0", "navigate",
+                Json.parse("""
+                        {"type":"object","additionalProperties":false,
+                         "required":["x","y","z"],
+                         "properties":{
+                           "x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"},
+                           "dimension":{"type":"string","maxLength":128}}}
+                        """), "LOW", "MOVE", Duration.ofSeconds(1), true);
+        JsonNode invalidLiteral = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"invalid-literal","permissions":["MOVE"],
+                 "root":{"id":"move","type":"call_tool","tool":"movement.navigate",
+                  "arguments":{"x":"wrong","y":64,"extra":true}}}
+                """);
+
+        TaskGraphValidationResult invalid = validator.validateExecutable(
+                invalidLiteral, Map.of(navigate.name(), navigate), TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
+
+        assertFalse(invalid.valid());
+        assertTrue(invalid.issues().stream().anyMatch(issue ->
+                issue.code().equals("TOOL_INPUT_SCHEMA_INVALID")
+                        && issue.path().contains(".arguments.x")));
+        assertTrue(invalid.issues().stream().anyMatch(issue ->
+                issue.code().equals("TOOL_INPUT_SCHEMA_INVALID")
+                        && issue.path().contains(".arguments.z")));
+        assertTrue(invalid.issues().stream().anyMatch(issue ->
+                issue.code().equals("TOOL_INPUT_SCHEMA_INVALID")
+                        && issue.path().contains(".arguments.extra")));
+
+        JsonNode deferredReference = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"deferred-reference","permissions":["MOVE"],
+                 "root":{"id":"move","type":"call_tool","tool":"movement.navigate",
+                  "arguments":{"x":"${inputs.x}","y":64,"z":0}}}
+                """);
+        assertTrue(validator.validateExecutable(deferredReference, Map.of(navigate.name(), navigate),
+                TaskGraphExecutor.EXECUTABLE_NODE_TYPES).valid());
+
+        ((com.fasterxml.jackson.databind.node.ArrayNode) deferredReference.path("permissions")).add("SHELL");
+        TaskGraphValidationResult unknownPermission = validator.validateExecutable(
+                deferredReference, Map.of(navigate.name(), navigate), TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
+        assertFalse(unknownPermission.valid());
+        assertTrue(unknownPermission.issues().stream()
+                .anyMatch(issue -> issue.code().equals("UNKNOWN_PERMISSION")));
     }
 }

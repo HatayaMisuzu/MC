@@ -155,6 +155,30 @@ class TaskGraphExecutorTest {
         assertTrue(result.evidence().toString().contains("NODE_NOT_EXECUTABLE"));
     }
 
+    @Test
+    void revalidatesResolvedToolArgumentsBeforeDispatch() {
+        SchemaGateway tools = new SchemaGateway();
+        TaskGraphExecutor executor = new TaskGraphExecutor(tools);
+        var graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"runtime-schema",
+                 "inputs":{"x":{"type":"string","required":true}},
+                 "permissions":["MOVE"],
+                 "root":{"id":"move","type":"call_tool","tool":"movement.navigate",
+                  "arguments":{"x":"${inputs.x}","y":64,"z":0}}}
+                """);
+
+        TaskGraphExecutionResult result = executor.execute("exec-schema",
+                new ToolContext("hermes", "brain-1", "companion-1"), graph,
+                Json.object().put("x", "not-an-integer"), null,
+                new TaskGraphExecutionControl(), ignored -> { });
+
+        assertFalse(result.success());
+        assertEquals("TOOL_ARGUMENT_SCHEMA_INVALID", result.code());
+        assertEquals(0, result.toolCalls());
+        assertEquals(0, tools.calls.get());
+        assertEquals("$.x", result.value().path("path").asText());
+    }
+
     private static final class FakeGateway implements ToolGateway {
         private final boolean failFirst;
         private final List<String> callIds = new ArrayList<>();
@@ -229,6 +253,24 @@ class TaskGraphExecutorTest {
             } finally {
                 active.decrementAndGet();
             }
+        }
+    }
+
+    private static final class SchemaGateway implements ToolGateway {
+        private final AtomicInteger calls = new AtomicInteger();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("movement.navigate", "1.0", "navigate",
+                    Json.parse("""
+                            {"type":"object","additionalProperties":false,
+                             "required":["x","y","z"],
+                             "properties":{"x":{"type":"integer"},"y":{"type":"integer"},"z":{"type":"integer"}}}
+                            """), "LOW", "MOVE", Duration.ofSeconds(1), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            calls.incrementAndGet();
+            return new ToolResult(call.callId(), call.name(), true, "OK", Json.object(), true);
         }
     }
 }

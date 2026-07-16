@@ -1,6 +1,8 @@
 package com.mccompanion.runtime.taskgraph;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.mccompanion.runtime.tool.ToolDefinition;
+import com.mccompanion.runtime.tool.ToolInputSchemaValidator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -23,21 +25,32 @@ public final class TaskGraphValidator {
             "suggest_memory", "checkpoint", "emit_progress", "return", "fail");
     private static final Set<String> INPUT_TYPES = Set.of("string", "integer", "number", "boolean",
             "registry_item", "registry_block", "registry_entity", "position", "json");
+    private static final Set<String> KNOWN_PERMISSIONS = Set.of(
+            "READ_WORLD", "CONTROL_TASK", "VALIDATE_TASK_GRAPH", "EXECUTE_TASK_GRAPH",
+            "MOVE", "COLLECT", "MINE", "CRAFT", "COMBAT", "INVENTORY", "SURVIVAL",
+            "MEMORY", "SEARCH_WEB");
 
     public TaskGraphValidationResult validate(JsonNode graph, Set<String> availableTools) {
-        Map<String, String> definitions = availableTools == null ? Map.of()
+        Map<String, String> permissions = availableTools == null ? Map.of()
                 : availableTools.stream().collect(java.util.stream.Collectors.toMap(value -> value, value -> ""));
-        return validate(graph, definitions, NODE_TYPES);
+        return validate(graph, permissions, Map.of(), NODE_TYPES, false);
     }
 
-    public TaskGraphValidationResult validateExecutable(JsonNode graph, Map<String, String> availableTools,
+    public TaskGraphValidationResult validateExecutable(JsonNode graph, Map<String, ToolDefinition> availableTools,
                                                         Set<String> executableNodeTypes) {
-        return validate(graph, availableTools == null ? Map.of() : Map.copyOf(availableTools),
-                executableNodeTypes == null ? Set.of() : Set.copyOf(executableNodeTypes));
+        Map<String, ToolDefinition> definitions = availableTools == null ? Map.of() : Map.copyOf(availableTools);
+        Map<String, String> permissions = definitions.values().stream()
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
+        Map<String, JsonNode> schemas = definitions.values().stream()
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::inputSchema));
+        return validate(graph, permissions, schemas,
+                executableNodeTypes == null ? Set.of() : Set.copyOf(executableNodeTypes), true);
     }
 
     private TaskGraphValidationResult validate(JsonNode graph, Map<String, String> availableTools,
-                                               Set<String> executableNodeTypes) {
+                                               Map<String, JsonNode> toolSchemas,
+                                               Set<String> executableNodeTypes,
+                                               boolean rejectUnknownPermissions) {
         List<TaskGraphValidationIssue> issues = new ArrayList<>();
         if (graph == null || !graph.isObject()) {
             issues.add(issue("$", "INVALID_TYPE", "task graph must be an object"));
@@ -56,8 +69,20 @@ public final class TaskGraphValidator {
         if (!ID.matcher(graphId).matches()) issues.add(issue("$.id", "INVALID_ID", "graph id is invalid"));
         validateInputs(graph.path("inputs"), issues);
         Set<String> permissions = validatePermissions(graph.path("permissions"), issues);
+        if (rejectUnknownPermissions) {
+            Set<String> knownPermissions = new HashSet<>(KNOWN_PERMISSIONS);
+            knownPermissions.addAll(availableTools.values());
+            knownPermissions.remove("");
+            for (String permission : permissions) {
+                if (!knownPermissions.contains(permission)) {
+                    issues.add(issue("$.permissions", "UNKNOWN_PERMISSION",
+                            "permission is not exposed by any available Tool: " + permission));
+                }
+            }
+        }
         TaskGraphLimits limits = TaskGraphLimits.parse(graph.path("limits"), issues);
-        State state = new State(limits, availableTools, executableNodeTypes, permissions, issues);
+        State state = new State(limits, availableTools, toolSchemas,
+                executableNodeTypes, permissions, issues);
         validateNode(graph.path("root"), "$.root", 1, state);
         if (state.nodeCount > limits.maxNodes()) {
             issues.add(issue("$.root", "NODE_LIMIT_EXCEEDED", "graph exceeds maxNodes"));
@@ -123,6 +148,16 @@ public final class TaskGraphValidator {
                     state.issues.add(issue(path + ".arguments", "INVALID_TYPE", "arguments must be an object"));
                 } else if (node.has("arguments")) {
                     referenceValues(node.path("arguments"), path + ".arguments", state.issues);
+                }
+                if (state.toolSchemas.containsKey(tool)) {
+                    JsonNode arguments = node.has("arguments") ? node.path("arguments")
+                            : com.mccompanion.runtime.json.Json.object();
+                    for (ToolInputSchemaValidator.Violation violation :
+                            ToolInputSchemaValidator.validate(state.toolSchemas.get(tool), arguments, true)) {
+                        state.issues.add(issue(path + ".arguments" + violation.path().substring(1),
+                                "TOOL_INPUT_SCHEMA_INVALID",
+                                violation.code() + ": " + violation.message()));
+                    }
                 }
                 String permission = node.path("permission").asText("");
                 String requiredPermission = state.availableTools.getOrDefault(tool, "");
@@ -372,6 +407,7 @@ public final class TaskGraphValidator {
     private static final class State {
         private final TaskGraphLimits limits;
         private final Map<String, String> availableTools;
+        private final Map<String, JsonNode> toolSchemas;
         private final Set<String> executableNodeTypes;
         private final Set<String> permissions;
         private final List<TaskGraphValidationIssue> issues;
@@ -382,10 +418,12 @@ public final class TaskGraphValidator {
         private int parallelDepth;
 
         private State(TaskGraphLimits limits, Map<String, String> availableTools,
+                      Map<String, JsonNode> toolSchemas,
                       Set<String> executableNodeTypes, Set<String> permissions,
                       List<TaskGraphValidationIssue> issues) {
             this.limits = limits;
             this.availableTools = availableTools;
+            this.toolSchemas = toolSchemas;
             this.executableNodeTypes = executableNodeTypes;
             this.permissions = permissions;
             this.issues = issues;

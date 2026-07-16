@@ -82,6 +82,9 @@ The external Brain receives logical Workspace resources and bounded MCAC Tools, 
 No runtime Tool exposes arbitrary Shell, Git, Gradle, compiler/process execution, arbitrary files,
 production source, browser cookies, launcher credentials, Minecraft save mutation, direct inventory
 editing, or direct world editing. Search is a separate authorized gateway, not arbitrary networking.
+Task Graph permissions must be known MCAC permissions and must include each current
+`ToolDefinition.permission`. Literal arguments are checked against the current Tool schema during
+validation, and resolved arguments are checked again immediately before dispatch.
 
 ## Registry and Mod compatibility
 

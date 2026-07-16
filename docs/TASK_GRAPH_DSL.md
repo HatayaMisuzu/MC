@@ -157,7 +157,9 @@ never become an unbounded loop.
 The bounded codec, schema validator, safe expression parser and `task_graph.validate` Tool are locally
 verified. Both JSON objects and bounded JSON/YAML `document+format` inputs use the production Tool
 Gateway. Validation distinguishes DSL-valid nodes from nodes executable by the current Runtime and
-binds each `call_tool` to the current `ToolDefinition.permission`.
+binds each `call_tool` to the current `ToolDefinition.permission` and `inputSchema`. Required fields,
+literal types/ranges/enums, and additional-property rules are checked before acceptance; exact safe
+data references are deferred until their value exists. Unknown permission names are rejected.
 
 `task_graph.execute` creates a persistent asynchronous execution. Session-owned
 `task_graph.inspect`, `task_graph.pause`, `task_graph.resume`, and `task_graph.cancel` expose control
@@ -174,6 +176,10 @@ cancellation of every active child Tool and waits for a bounded durable confirma
 cancellation is returned as `TOOL_TIMEOUT_CANCELLED`; if cancellation cannot be confirmed, the
 execution is persisted as `RECONCILIATION_REQUIRED` and returned as
 `TOOL_TIMEOUT_RECONCILIATION_REQUIRED` rather than being reported as a verified stop.
+Immediately before Tool dispatch, resolved arguments are validated again against the same current
+`ToolDefinition.inputSchema`. A schema mismatch fails with `TOOL_ARGUMENT_SCHEMA_INVALID` without
+calling the Tool, so a graph cannot pass static validation and then bypass a changed or dynamically
+resolved Tool contract.
 Tool/wall-time/loop/concurrency budgets, bounded backoff/wait, uniformly rotated evidence, inputs,
 variables, durable node outputs, and exact `${inputs.*}`, `${state.*}`, and
 `${outputs.<node>.*}` references are enforced, including bounded literal array selection and length.

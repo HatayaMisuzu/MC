@@ -7,6 +7,7 @@ import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolGateway;
+import com.mccompanion.runtime.tool.ToolInputSchemaValidator;
 import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.tool.ToolDefinition;
 
@@ -73,9 +74,9 @@ public final class TaskGraphExecutor {
                                      TaskGraphExecutionRecord previous, TaskGraphExecutionControl control,
                                      Consumer<TaskGraphExecutionSnapshot> snapshots) {
         String id = required(executionId);
-        Map<String, String> available = tools.definitions(context).stream()
+        Map<String, ToolDefinition> available = tools.definitions(context).stream()
                 .filter(value -> !value.name().startsWith("task_graph."))
-                .collect(java.util.stream.Collectors.toMap(value -> value.name(), value -> value.permission()));
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
         TaskGraphValidationResult validation = validator.validateExecutable(graph, available, executableNodeTypes);
         if (!validation.valid()) {
             return new TaskGraphExecutionResult(id, "FAILED", "TASK_GRAPH_INVALID", 0, List.of(), Map.of(),
@@ -316,9 +317,18 @@ public final class TaskGraphExecutor {
             cached = state.toolResults.get(callId);
         }
         if (cached != null) return toolOutcome(nodeId, cached, state);
-        ToolCall call = new ToolCall(callId, node.path("tool").asText(),
-                node.has("arguments") ? TaskGraphValues.resolve(node.path("arguments"), state.valueContext())
-                        : Json.object());
+        JsonNode resolvedArguments = node.has("arguments")
+                ? TaskGraphValues.resolve(node.path("arguments"), state.valueContext()) : Json.object();
+        List<ToolInputSchemaValidator.Violation> schemaViolations =
+                ToolInputSchemaValidator.validate(definition.inputSchema(), resolvedArguments, false);
+        if (!schemaViolations.isEmpty()) {
+            ToolInputSchemaValidator.Violation violation = schemaViolations.getFirst();
+            return Outcome.failure("TOOL_ARGUMENT_SCHEMA_INVALID",
+                    Json.object().put("nodeId", nodeId).put("tool", definition.name())
+                            .put("path", violation.path()).put("schemaCode", violation.code())
+                            .put("message", violation.message()));
+        }
+        ToolCall call = new ToolCall(callId, node.path("tool").asText(), resolvedArguments);
         synchronized (state) {
             cached = state.toolResults.get(callId);
             if (cached != null) return toolOutcome(nodeId, cached, state);

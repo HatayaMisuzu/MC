@@ -146,6 +146,19 @@ class RuntimeToolGatewayTest {
                 assertFalse(missingPermission.success());
                 assertTrue(missingPermission.observation().path("issues").toString()
                         .contains("TOOL_PERMISSION_NOT_DECLARED"));
+
+                ToolResult invalidToolSchema = gateway.execute(context,
+                        new ToolCall("graph-6", "task_graph.validate",
+                                Json.object().set("graph", Json.parse("""
+                                        {"version":"mcac-task-graph/1","id":"invalid-tool-schema",
+                                         "permissions":["MOVE","SHELL"],
+                                         "root":{"id":"move","type":"call_tool","tool":"movement.navigate",
+                                          "arguments":{"x":"wrong","y":64,"unexpected":true}}}
+                                        """))));
+                assertFalse(invalidToolSchema.success());
+                String issues = invalidToolSchema.observation().path("issues").toString();
+                assertTrue(issues.contains("TOOL_INPUT_SCHEMA_INVALID"), issues);
+                assertTrue(issues.contains("UNKNOWN_PERMISSION"), issues);
                 gateway.close();
             }
         }

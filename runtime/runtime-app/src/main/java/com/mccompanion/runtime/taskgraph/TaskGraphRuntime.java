@@ -440,9 +440,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
-    private Map<String, String> ordinaryDefinitions(ToolContext context) {
+    private Map<String, ToolDefinition> ordinaryDefinitions(ToolContext context) {
         return tools.definitions(context).stream().filter(value -> !value.name().startsWith("task_graph."))
-                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
     }
 
     private RecoveryAssessment assessRecovery(TaskGraphExecutionRecord record) {
@@ -462,10 +462,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
         Map<String, ToolDefinition> definitions = tools.definitions(context).stream()
                 .filter(value -> !value.name().startsWith("task_graph."))
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
-        Map<String, String> permissions = definitions.values().stream()
-                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
         TaskGraphValidationResult validation =
-                validator.validateExecutable(record.graph(), permissions, executableNodeTypes);
+                validator.validateExecutable(record.graph(), definitions, executableNodeTypes);
         if (!validation.valid()) {
             return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_VALIDATION_FAILED",
                     "graph or Tool availability changed since the interrupted execution");

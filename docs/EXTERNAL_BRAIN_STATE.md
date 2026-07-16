@@ -269,8 +269,12 @@ product UI controls, and release/install verification remain incomplete.
   Runtime profiles always fell back to disabled defaults.
 - The Search & Privacy page states the no-cookie/no-login/no-coordinate boundary and the rule that
   external search content cannot become verified World Memory. Validation, YAML propagation,
-  Vitest, and the TypeScript production build pass. Provider connection testing, Search Doctor,
-  caching, source-click UI, and the full session lifecycle remain `PARTIAL`.
+  Vitest, and the TypeScript production build pass.
+- Search Doctor now contributes safe configuration/token-source readiness to the general Doctor and
+  offers an explicit live provider probe. The probe uses a fixed non-private query, requests at most
+  one result, rejects redirects and responses over 1 MiB, validates the result envelope, and never
+  returns a credential or provider body to the UI. Caching, source-click UI, and the full session
+  lifecycle remain `PARTIAL`.
 
 ## Craft item slice
 

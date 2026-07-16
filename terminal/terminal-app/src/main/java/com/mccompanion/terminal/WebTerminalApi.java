@@ -62,6 +62,8 @@ final class WebTerminalApi {
         send(exchange, 200, providerTest(body(exchange)));
       else if ("GET".equals(method) && "/api/search/status".equals(path))
         send(exchange, 200, searchStatus(requiredQuery(exchange, "instanceId")));
+      else if ("POST".equals(method) && "/api/search/test".equals(path))
+        send(exchange, 200, searchTest(body(exchange)));
       else if ("GET".equals(method) && "/api/session/status".equals(path))
         send(exchange, 200, sessionStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/companions".equals(path))
@@ -271,6 +273,14 @@ final class WebTerminalApi {
   private JsonNode searchStatus(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
     return new SearchConfigurationService().status(root.profile(instance));
+  }
+
+  private ObjectNode searchTest(JsonNode request) throws Exception {
+    MinecraftInstance instance = root.instance(required(request, "instanceId"));
+    var result = new SearchConfigurationService().test(root.profile(instance));
+    return JSON.createObjectNode().put("success", result.success())
+        .put("networkAttempted", result.networkAttempted()).put("latencyMillis", result.latencyMillis())
+        .put("code", result.code()).put("message", result.message());
   }
 
   private ObjectNode sessionStatus(String instanceId) throws Exception {

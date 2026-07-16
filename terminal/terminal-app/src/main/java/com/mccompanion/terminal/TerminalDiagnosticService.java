@@ -53,6 +53,16 @@ final class TerminalDiagnosticService {
                 Map.of("protocolVersion", mcp.protocolVersion(), "toolCount", Integer.toString(mcp.toolCount())),
                 "Start or update Runtime, then inspect MCP configuration"));
 
+        try {
+            var search = new SearchConfigurationService().inspect(profile);
+            results.add(result(search.healthy(), "search.configuration", search.message(),
+                    Map.of("mode", search.mode(), "tokenEnvironment", search.tokenEnvironment()),
+                    "Configure the Search token environment variable or disable Search"));
+        } catch (Exception failure) {
+            results.add(result(false, "search.configuration", "Search configuration could not be validated",
+                    Map.of("error", failure.getClass().getSimpleName()), "Review Search & Privacy settings"));
+        }
+
         String hook = new HookService().status(instance, controlHome);
         results.add(new DiagnosticResult("INSTALLED".equals(hook) ? DiagnosticResult.Severity.PASS : DiagnosticResult.Severity.WARNING,
                 "hook.state", hook, Map.of("launcher", launcher.type().name()),

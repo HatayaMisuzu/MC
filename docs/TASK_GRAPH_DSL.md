@@ -69,13 +69,43 @@ rejected instead of ignored.
 Expressions allow only:
 
 - field references such as `inputs.item`, `state.acquired`, and `outputs.scan.next`;
+- literal array selection such as `outputs.scan.candidates[0].position`, with indexes limited to
+  `0..255`;
+- array length such as `outputs.scan.candidates.length`;
 - string, number, boolean and null literals;
 - `!`, `&&`, `||`;
 - `==`, `!=`, `<`, `<=`, `>`, `>=`;
 - parentheses.
 
 `${...}` wrapping is optional. Expressions are parsed but never evaluated as source code. Function
-calls, indexing, assignment, imports and arbitrary operators are rejected.
+calls, dynamic indexes, assignment, imports and arbitrary operators are rejected. Literal selection
+also checks the actual array boundary at execution time.
+
+## Observation composition
+
+Tool observations can feed later generic Tools without a scenario-specific Handler:
+
+```yaml
+- id: scan
+  type: call_tool
+  tool: world.scan
+  arguments: {block: "examplemod:blue_ore", radius: 8}
+- id: has-candidate
+  type: if
+  condition: "${outputs.scan.candidates.length > 0}"
+  then:
+    id: navigate
+    type: call_tool
+    tool: movement.navigate
+    arguments:
+      x: "${outputs.scan.candidates[0].position.x}"
+      y: "${outputs.scan.candidates[0].position.y}"
+      z: "${outputs.scan.candidates[0].position.z}"
+      dimension: "${outputs.scan.candidates[0].dimension}"
+```
+
+References inside Tool arguments and `return` values are validated before execution. Malformed,
+dynamic or over-limit candidate selection is rejected explicitly instead of being treated as text.
 
 ## User questions
 
@@ -134,7 +164,7 @@ Tool call IDs, and loop cursors are persisted. Parallel branches use real bounde
 snapshots are serialized, and pause/cancel reaches every active Tool call.
 Tool/wall-time/loop/concurrency budgets, bounded backoff/wait, uniformly rotated evidence, inputs,
 variables, durable node outputs, and exact `${inputs.*}`, `${state.*}`, and
-`${outputs.<node>.*}` references are enforced.
+`${outputs.<node>.*}` references are enforced, including bounded literal array selection and length.
 
 Migrations 11–15 persist every supported node, Tool, checkpoint, loop and parallel boundary, terminal
 `return` values, all node outputs, and Task Graph-owned waiting questions. A safe pause resumes using

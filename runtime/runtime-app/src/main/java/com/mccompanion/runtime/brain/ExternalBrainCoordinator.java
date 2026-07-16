@@ -205,9 +205,9 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
 
     public void cancel(String controllerId, String companionId, String reason) {
         requireController(controllerId);
+        BrainSession session = sessions.remove(companionId);
         ActiveTool active = activeTools.get(companionId);
         if (active != null) tools.cancel(active.context(), active.call().callId(), reason);
-        BrainSession session = sessions.remove(companionId);
         if (session != null) {
             adapter.cancel(session.sessionId(), reason);
             if (audit != null) audit.state(session.sessionId(), "CANCELLED", reason == null ? "CANCELLED" : reason);
@@ -216,10 +216,11 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
 
     public void releaseController(String controllerId) {
         requireController(controllerId);
+        List<BrainSession> cancelledSessions = List.copyOf(sessions.values());
+        sessions.clear();
         activeTools.values().forEach(active -> tools.cancel(active.context(), active.call().callId(),
                 "CONTROLLER_RELEASED"));
-        for (BrainSession session : sessions.values()) adapter.cancel(session.sessionId(), "CONTROLLER_RELEASED");
-        sessions.clear();
+        for (BrainSession session : cancelledSessions) adapter.cancel(session.sessionId(), "CONTROLLER_RELEASED");
         activeControllerId = null;
     }
 

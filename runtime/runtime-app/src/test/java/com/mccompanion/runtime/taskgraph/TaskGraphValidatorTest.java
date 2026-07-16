@@ -128,4 +128,28 @@ class TaskGraphValidatorTest {
         assertThrows(IllegalArgumentException.class, () ->
                 TaskGraphCodec.parse("x".repeat(2 * 1024 * 1024 + 1), TaskGraphCodec.Format.JSON));
     }
+
+    @Test
+    void validatesLiteralBoundedArrayReferencesBeforeExecution() {
+        JsonNode valid = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"array-valid","permissions":["MOVE"],
+                 "root":{"id":"move","type":"call_tool","tool":"movement.navigate",
+                  "arguments":{"x":"${outputs.scan.candidates[0].position.x}","y":64,"z":0}}}
+                """);
+        assertTrue(validator.validate(valid, Set.of("movement.navigate")).valid());
+
+        JsonNode invalid = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"array-invalid","permissions":["MOVE"],
+                 "root":{"id":"root","type":"sequence","nodes":[
+                   {"id":"dynamic","type":"call_tool","tool":"movement.navigate",
+                    "arguments":{"x":"${outputs.scan.candidates[inputs.index].position.x}"}},
+                   {"id":"large","type":"return","value":"${outputs.scan.candidates[256]}"}
+                 ]}}
+                """);
+        TaskGraphValidationResult result = validator.validate(invalid, Set.of("movement.navigate"));
+
+        assertFalse(result.valid());
+        assertEquals(2, result.issues().stream()
+                .filter(issue -> issue.code().equals("INVALID_REFERENCE")).count());
+    }
 }

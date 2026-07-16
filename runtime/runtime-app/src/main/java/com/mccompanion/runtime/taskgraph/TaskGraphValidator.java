@@ -112,6 +112,8 @@ public final class TaskGraphValidator {
                 }
                 if (node.has("arguments") && !node.path("arguments").isObject()) {
                     state.issues.add(issue(path + ".arguments", "INVALID_TYPE", "arguments must be an object"));
+                } else if (node.has("arguments")) {
+                    referenceValues(node.path("arguments"), path + ".arguments", state.issues);
                 }
                 String permission = node.path("permission").asText("");
                 String requiredPermission = state.availableTools.getOrDefault(tool, "");
@@ -185,7 +187,10 @@ public final class TaskGraphValidator {
                 rejectUnknown(node, path, Set.of("id", "type", "message"), state.issues);
                 boundedText(node, "message", path, 1, 1_024, state.issues);
             }
-            case "return" -> rejectUnknown(node, path, Set.of("id", "type", "value"), state.issues);
+            case "return" -> {
+                rejectUnknown(node, path, Set.of("id", "type", "value"), state.issues);
+                if (node.has("value")) referenceValues(node.path("value"), path + ".value", state.issues);
+            }
             case "fail" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "code", "message"), state.issues);
                 boundedText(node, "code", path, 1, 128, state.issues);
@@ -278,6 +283,12 @@ public final class TaskGraphValidator {
         }
         String error = SafeExpressionValidator.validate(node.path(field).asText());
         if (error != null) issues.add(issue(path + "." + field, "UNSAFE_EXPRESSION", error));
+    }
+
+    private static void referenceValues(JsonNode value, String path,
+                                        List<TaskGraphValidationIssue> issues) {
+        String error = TaskGraphValues.validateReferences(value);
+        if (error != null) issues.add(issue(path, "INVALID_REFERENCE", error));
     }
 
     private static int boundedInt(JsonNode node, String field, String path, int minimum, int maximum,

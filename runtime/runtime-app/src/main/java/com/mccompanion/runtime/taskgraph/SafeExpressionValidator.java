@@ -81,15 +81,27 @@ final class SafeExpressionValidator {
                 index++;
                 while (index < source.length()) {
                     char next = source.charAt(index);
-                    if (!Character.isLetterOrDigit(next) && next != '_' && next != '.') break;
-                    index++;
+                    if (Character.isLetterOrDigit(next) || next == '_' || next == '.' || next == '-') {
+                        index++;
+                    } else if (next == '[') {
+                        index++;
+                        int digits = index;
+                        while (index < source.length() && Character.isDigit(source.charAt(index))) index++;
+                        if (digits == index || index >= source.length() || source.charAt(index) != ']') {
+                            throw new IllegalArgumentException("invalid array index at offset " + (index - 1));
+                        }
+                        index++;
+                    } else {
+                        break;
+                    }
                 }
                 String word = source.substring(start, index);
-                if (word.endsWith(".") || word.contains("..")) {
-                    throw new IllegalArgumentException("invalid field reference at offset " + start);
-                }
                 Type type = word.equals("true") || word.equals("false") ? Type.BOOLEAN
                         : word.equals("null") ? Type.NULL : Type.IDENTIFIER;
+                if (type == Type.IDENTIFIER) {
+                    String error = TaskGraphValues.validatePath(word);
+                    if (error != null) throw new IllegalArgumentException(error + " at offset " + start);
+                }
                 result.add(new Token(type, start));
                 continue;
             }

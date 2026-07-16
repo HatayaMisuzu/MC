@@ -63,6 +63,41 @@ class TaskGraphExecutorTest {
     }
 
     @Test
+    void composesWorldScanCandidateIntoNavigationWithBoundedArrayReferences() {
+        CandidateGateway tools = new CandidateGateway();
+        TaskGraphExecutor executor = new TaskGraphExecutor(tools);
+        var graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"scan-and-navigate",
+                 "permissions":["READ_WORLD","MOVE"],
+                 "root":{"id":"root","type":"sequence","nodes":[
+                   {"id":"scan","type":"call_tool","tool":"world.scan",
+                    "arguments":{"block":"examplemod:blue_ore","radius":8}},
+                   {"id":"candidate","type":"if",
+                    "condition":"${outputs.scan.candidates.length > 0}",
+                    "then":{"id":"navigate","type":"call_tool","tool":"movement.navigate",
+                      "arguments":{
+                        "x":"${outputs.scan.candidates[0].position.x}",
+                        "y":"${outputs.scan.candidates[0].position.y}",
+                        "z":"${outputs.scan.candidates[0].position.z}",
+                        "dimension":"${outputs.scan.candidates[0].dimension}"}},
+                    "else":{"id":"missing","type":"fail","code":"NO_CANDIDATE","message":"none"}},
+                   {"id":"done","type":"return","value":"${outputs.scan.candidates[0]}"}
+                 ]}}
+                """);
+
+        TaskGraphExecutionResult result = executor.execute("exec-array",
+                new ToolContext("hermes", "brain-1", "companion-1"), graph);
+
+        assertTrue(result.success(), result.toJson().toString());
+        assertEquals(2, result.toolCalls());
+        assertEquals(7, tools.navigation.path("x").asInt());
+        assertEquals(11, tools.navigation.path("y").asInt());
+        assertEquals(-4, tools.navigation.path("z").asInt());
+        assertEquals("examplemod:moon", tools.navigation.path("dimension").asText());
+        assertEquals("examplemod:blue_ore", result.value().path("block").asText());
+    }
+
+    @Test
     void unsupportedValidatedNodeFailsHonestlyWithoutCallingTools() {
         FakeGateway tools = new FakeGateway(false);
         TaskGraphExecutor executor = new TaskGraphExecutor(tools);
@@ -99,6 +134,32 @@ class TaskGraphExecutorTest {
             }
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("health", 20), true);
+        }
+    }
+
+    private static final class CandidateGateway implements ToolGateway {
+        private com.fasterxml.jackson.databind.JsonNode navigation = Json.object();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(
+                    new ToolDefinition("world.scan", "1.0", "scan",
+                            Json.object().put("type", "object"), "MEDIUM", "READ_WORLD",
+                            Duration.ofSeconds(1), true),
+                    new ToolDefinition("movement.navigate", "1.0", "navigate",
+                            Json.object().put("type", "object"), "LOW", "MOVE",
+                            Duration.ofSeconds(1), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            if (call.name().equals("world.scan")) {
+                return new ToolResult(call.callId(), call.name(), true, "OK", Json.parse("""
+                        {"candidates":[{"block":"examplemod:blue_ore","dimension":"examplemod:moon",
+                          "position":{"x":7,"y":11,"z":-4}}]}
+                        """), true);
+            }
+            navigation = call.arguments().deepCopy();
+            return new ToolResult(call.callId(), call.name(), true, "OK",
+                    Json.object().put("arrived", true), true);
         }
     }
 }

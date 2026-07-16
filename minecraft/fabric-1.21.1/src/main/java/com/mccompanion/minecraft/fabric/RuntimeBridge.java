@@ -152,6 +152,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)
                 .put("DepositToStorage", true)
+                .put("CraftItem", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);
@@ -312,7 +313,8 @@ final class RuntimeBridge implements AutoCloseable {
         JsonNode values = parameters.path("parameters");
         String item = values.path("item").asText(values.path("itemId").asText(""));
         int quantity = values.path("quantity").asInt(1);
-        JsonNode target = values.path("container").isObject() ? values.path("container") : values.path("target");
+        JsonNode target = values.path("container").isObject() ? values.path("container")
+                : values.path("station").isObject() ? values.path("station") : values.path("target");
         Integer x = target.path("x").canConvertToInt() ? target.path("x").asInt() : null;
         Integer y = target.path("y").canConvertToInt() ? target.path("y").asInt() : null;
         Integer z = target.path("z").canConvertToInt() ? target.path("z").asInt() : null;

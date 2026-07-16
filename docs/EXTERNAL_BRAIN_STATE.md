@@ -8,7 +8,7 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `DEPOSIT_TO_STORAGE_GAMETEST_VERIFIED`
+Current milestone: `CRAFT_ITEM_GAMETEST_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
 the complete generic Minecraft tool set, External Brain persistence/reconnect,
@@ -92,6 +92,18 @@ product UI controls, and release/install verification remain incomplete.
   before reporting success, and closes the container on completion, cancellation, or failure.
 - Fabric GameTests prove withdraw/deposit item conservation and prove a completely full
   container returns `CONTAINER_FULL` without changing either inventory.
+
+## Craft item slice
+
+- Added `item.craft` / `CraftItem` only when the connected Fabric body reports the
+  capability as `AVAILABLE_NOW`.
+- The body resolves server-side vanilla crafting recipes, calculates the bounded material
+  delta, and uses PICKUP menu transactions to place ingredients and retrieve output.
+- Both the personal 2x2 grid and a verified nearby crafting-table 3x3 menu are supported;
+  cancellation and failure return staged inputs through vanilla QUICK_MOVE transactions.
+- Fabric GameTests prove two logs become eight planks, three iron ingots plus two sticks
+  become one iron pickaxe, and missing inputs return structured `MATERIALS_INSUFFICIENT`
+  evidence without producing an item.
 
 ## Verification boundary
 

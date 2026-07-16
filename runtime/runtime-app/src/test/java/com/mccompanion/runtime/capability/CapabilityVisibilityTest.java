@@ -20,10 +20,9 @@ class CapabilityVisibilityTest {
 
         var snapshot = visibility.resolve(handshake("fabric", "1.21.1", capabilities), status);
 
-        assertEquals(List.of("DeliverItem", "EatAndRecover", "FollowOwner", "NavigateTo"),
+        assertEquals(List.of("CraftItem", "DeliverItem", "EatAndRecover", "FollowOwner", "NavigateTo"),
                 snapshot.availableNames());
-        assertEquals("DECLARED", snapshot.toJson().path("CraftItem").path("state").asText());
-        assertEquals("RUNTIME_NOT_IMPLEMENTED", snapshot.toJson().path("CraftItem").path("reason").asText());
+        assertEquals("AVAILABLE_NOW", snapshot.toJson().path("CraftItem").path("state").asText());
     }
 
     @Test

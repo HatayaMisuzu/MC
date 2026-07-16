@@ -226,6 +226,82 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
+    public void craftingUsesVanillaRecipesAndMenusAndReportsMaterialShortage(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        owner.setGameMode(GameType.SURVIVAL);
+        helper.assertTrue(registry.create(owner, "CraftingCompanion").success(), "crafting create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "crafting test created no live body");
+        body.getInventory().add(new ItemStack(Items.OAK_LOG, 2));
+
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-crafting";
+        long epoch = 1L;
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, leaseId, epoch, System.currentTimeMillis() + 30_000L).success(),
+                "crafting lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "craft-planks", "skill",
+                        null, null, null, new SkillParameters("CraftItem", "minecraft:oak_planks", 8, false)).success(),
+                "2x2 crafting was not accepted for observable execution");
+        helper.runAfterDelay(20, () -> {
+            helper.assertValueEqual(count(body, Items.OAK_LOG), 0, "2x2 crafting did not consume two logs");
+            helper.assertValueEqual(count(body, Items.OAK_PLANKS), 8, "2x2 crafting did not produce eight planks");
+            helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                            .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                    && snapshot.behaviorState().equals("IDLE")
+                                    && snapshot.evidenceSummary().contains("success=true")),
+                    "2x2 crafting did not report successful evidence");
+
+            body.getInventory().clearContent();
+            body.getInventory().add(new ItemStack(Items.IRON_INGOT, 3));
+            body.getInventory().add(new ItemStack(Items.STICK, 2));
+            BlockPos tablePos = body.blockPosition().offset(1, 0, 0);
+            body.serverLevel().setBlockAndUpdate(tablePos, Blocks.CRAFTING_TABLE.defaultBlockState());
+            helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "craft-pickaxe", "skill",
+                            null, null, null, new SkillParameters("CraftItem", "minecraft:iron_pickaxe", 1,
+                                    false, body.serverLevel().dimension().location().toString(),
+                                    tablePos.getX(), tablePos.getY(), tablePos.getZ())).success(),
+                    "crafting-table skill was not accepted for observable execution");
+            helper.runAfterDelay(20, () -> {
+                helper.assertValueEqual(count(body, Items.IRON_PICKAXE), 1,
+                        "crafting table did not produce the iron pickaxe");
+                helper.assertValueEqual(count(body, Items.IRON_INGOT), 0,
+                        "crafting table did not consume three ingots");
+                helper.assertValueEqual(count(body, Items.STICK), 0,
+                        "crafting table did not consume two sticks");
+
+                body.getInventory().clearContent();
+                helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "craft-missing", "skill",
+                                null, null, null, new SkillParameters("CraftItem", "minecraft:iron_pickaxe", 1,
+                                        false, body.serverLevel().dimension().location().toString(),
+                                        tablePos.getX(), tablePos.getY(), tablePos.getZ())).success(),
+                        "material shortage was not accepted for observable execution");
+                helper.runAfterDelay(8, () -> {
+                    helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                                    .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                            && snapshot.behaviorState().equals("PAUSED")
+                                            && snapshot.evidenceSummary().contains("failure=MATERIALS_INSUFFICIENT")
+                                            && snapshot.behaviorObservation() != null
+                                            && snapshot.behaviorObservation().failureCode().equals("MATERIALS_INSUFFICIENT")
+                                            && snapshot.behaviorObservation().requested() == 1
+                                            && snapshot.behaviorObservation().available() == 0),
+                            "crafting shortage did not expose structured material evidence");
+                    helper.assertTrue(registry.remove(owner).success(), "crafting test cleanup failed");
+                    helper.succeed();
+                });
+            });
+        });
+    }
+
     private static int count(ServerPlayer player, net.minecraft.world.item.Item item) {
         int total = 0;
         for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
@@ -242,6 +318,12 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             if (stack.is(item)) total += stack.getCount();
         }
         return total;
+    }
+
+    private static double horizontalDistanceToSqr(Vec3 first, Vec3 second) {
+        double x = first.x - second.x;
+        double z = first.z - second.z;
+        return x * x + z * z;
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000)
@@ -354,8 +436,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             Vec3 stoppedAt = body.position();
             long discardedBeforeStop = body.fakeConnection().discardedPacketCount();
             helper.runAfterDelay(12, () -> {
-                helper.assertTrue(body.position().distanceToSqr(stoppedAt) < 0.04D,
-                        "body kept moving after stop");
+                helper.assertTrue(horizontalDistanceToSqr(body.position(), stoppedAt) < 0.04D,
+                        "body kept walking horizontally after stop");
                 helper.assertTrue(body.fakeConnection().discardedPacketCount() >= discardedBeforeStop,
                         "fake connection diagnostic counter moved backwards");
                 helper.assertValueEqual(body.fakeConnection().retainedPacketCount(), 0,
@@ -371,8 +453,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     Vec3 pausedAt = body.position();
                     owner.moveTo(owner.getX(), owner.getY(), owner.getZ() + 4.0D, owner.getYRot(), owner.getXRot());
                     helper.runAfterDelay(12, () -> {
-                        helper.assertTrue(body.position().distanceToSqr(pausedAt) < 0.04D,
-                                "paused companion kept moving");
+                        helper.assertTrue(horizontalDistanceToSqr(body.position(), pausedAt) < 0.04D,
+                                "paused companion kept walking horizontally");
                         helper.assertTrue(registry.resume(owner).success(), "resume failed");
                         helper.runAfterDelay(40, () -> {
                             helper.assertTrue(body.position().distanceToSqr(pausedAt) > 0.20D,

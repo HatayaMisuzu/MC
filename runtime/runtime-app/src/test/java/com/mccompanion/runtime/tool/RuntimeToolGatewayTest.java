@@ -69,7 +69,7 @@ class RuntimeToolGatewayTest {
                         new TaskRepository(database, new TaskEventStore(database)), new LeaseService(database),
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
-                        ignored -> List.of("WithdrawFromStorage", "DepositToStorage", "DeliverItem", "EatAndRecover"));
+                        ignored -> List.of("WithdrawFromStorage", "DepositToStorage", "CraftItem", "DeliverItem", "EatAndRecover"));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
                 ToolDefinition withdraw = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("inventory.withdraw")).findFirst().orElseThrow();
@@ -79,6 +79,16 @@ class RuntimeToolGatewayTest {
                 ToolDefinition deposit = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("inventory.deposit")).findFirst().orElseThrow();
                 assertEquals(withdraw.inputSchema(), deposit.inputSchema());
+                ToolDefinition craft = gateway.definitions(context).stream()
+                        .filter(value -> value.name().equals("item.craft")).findFirst().orElseThrow();
+                assertEquals(List.of("item", "quantity"),
+                        java.util.stream.StreamSupport.stream(craft.inputSchema().path("required").spliterator(), false)
+                                .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
+                ToolResult invalidStation = gateway.execute(context, new ToolCall("craft-1", "item.craft",
+                        Json.object().put("item", "minecraft:iron_pickaxe").put("quantity", 1)
+                                .set("station", Json.object().put("x", 1).put("y", 64))));
+                assertFalse(invalidStation.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", invalidStation.code());
 
                 ToolResult rejected = gateway.execute(context, new ToolCall("withdraw-1", "inventory.withdraw",
                         Json.object().put("item", "minecraft:iron_ingot").put("quantity", 1)

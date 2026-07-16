@@ -81,7 +81,7 @@ class RuntimeApplicationTest {
             assertFalse(playerReply.path("payload").path("reply").asText().isBlank());
             assertEquals("AVAILABLE_NOW", playerReply.path("payload").path("capabilityStates")
                     .path("NavigateTo").path("state").asText());
-            assertEquals("DECLARED", playerReply.path("payload").path("capabilityStates")
+            assertEquals("AVAILABLE_NOW", playerReply.path("payload").path("capabilityStates")
                     .path("CraftItem").path("state").asText());
             assertTrue(application.plans().activeForCompanion("companion-1").isEmpty(),
                     "a conversational status response must not create an agent plan");

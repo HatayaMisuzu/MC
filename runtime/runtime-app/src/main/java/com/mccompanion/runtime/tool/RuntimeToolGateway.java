@@ -40,6 +40,7 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
+        if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
         if (available.contains("DeliverItem")) values.add(definition("inventory.deliver", "Deliver held items to the owner", itemQuantitySchema(), "LOW", "INVENTORY", false));
         if (available.contains("EatAndRecover")) values.add(definition("item.eat_and_recover", "Eat food using normal game interaction", foodSchema(), "LOW", "SURVIVAL", false));
         return List.copyOf(values);
@@ -76,6 +77,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "movement.navigate" -> navigate(call.arguments());
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
+            case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
             case "inventory.deliver" -> skill("DeliverItem", validatedItemQuantity(call.arguments(), false));
             case "item.eat_and_recover" -> skill("EatAndRecover", validatedFood(call.arguments()));
             case "task.pause" -> noArgumentsStop(call, "pause");
@@ -147,6 +149,36 @@ public final class RuntimeToolGateway implements ToolGateway {
         return arguments;
     }
 
+    private static JsonNode validatedCraft(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "quantity", "allowPartial", "station"));
+        String item = arguments.path("item").asText("");
+        if (!item.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException("item must be a namespaced item id");
+        }
+        if (!arguments.path("quantity").canConvertToInt()) {
+            throw new IllegalArgumentException("quantity must be an integer");
+        }
+        int quantity = arguments.path("quantity").asInt();
+        if (quantity < 1 || quantity > 2304) throw new IllegalArgumentException("quantity must be 1..2304");
+        if (arguments.has("allowPartial") && !arguments.path("allowPartial").isBoolean()) {
+            throw new IllegalArgumentException("allowPartial must be boolean");
+        }
+        if (!arguments.has("station")) return arguments;
+        JsonNode station = arguments.path("station");
+        if (!station.isObject()) throw new IllegalArgumentException("station must be an object");
+        rejectUnexpected(station, Set.of("dimension", "x", "y", "z"));
+        for (String field : List.of("x", "y", "z")) {
+            if (!station.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException("station." + field + " must be an integer");
+            }
+        }
+        int x = station.path("x").asInt(), y = station.path("y").asInt(), z = station.path("z").asInt();
+        if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000 || y < -2048 || y > 2048) {
+            throw new IllegalArgumentException("station coordinates are outside safe bounds");
+        }
+        return arguments;
+    }
+
     private static void rejectUnexpected(JsonNode object, Set<String> allowed) {
         if (!object.isObject()) throw new IllegalArgumentException("arguments must be an object");
         object.fieldNames().forEachRemaining(field -> {
@@ -172,7 +204,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
-        } else if (name.equals("inventory.deliver")) {
+        } else if (name.equals("inventory.deliver") || name.equals("item.craft")) {
             root.putArray("required").add("item").add("quantity");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
@@ -208,6 +240,17 @@ public final class RuntimeToolGateway implements ToolGateway {
     private static ObjectNode foodSchema() {
         ObjectNode properties = Json.object();
         properties.putObject("item").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        return properties;
+    }
+
+    private static ObjectNode craftSchema() {
+        ObjectNode properties = itemQuantitySchema();
+        ObjectNode station = properties.putObject("station");
+        station.put("type", "object").put("additionalProperties", false);
+        ObjectNode fields = station.putObject("properties");
+        fields.putObject("dimension").put("type", "string");
+        for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
+        station.putArray("required").add("x").add("y").add("z");
         return properties;
     }
 }

@@ -15,10 +15,19 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.Container;
 import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.CraftingMenu;
+import net.minecraft.world.inventory.RecipeBookMenu;
 import net.minecraft.world.inventory.Slot;
+import net.minecraft.world.entity.player.StackedContents;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Ingredient;
+import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.item.crafting.ShapedRecipe;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.BlockHitResult;
 import org.slf4j.Logger;
@@ -74,6 +83,10 @@ final class BehaviorDirector {
         SkillProgress skill = skills.get(entry.companionId);
         if (skill != null && (skill.parameters.capability().equals("WithdrawFromStorage")
                 || skill.parameters.capability().equals("DepositToStorage"))) body.closeContainer();
+        if (skill != null && skill.parameters.capability().equals("CraftItem")) {
+            returnCraftingInputs(body);
+            if (body.containerMenu != body.inventoryMenu) body.closeContainer();
+        }
         if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
                 || code.equals("LEASE_EXPIRED"))) skills.remove(entry.companionId);
     }
@@ -272,6 +285,45 @@ final class BehaviorDirector {
             return new SkillProgress(parameters, item, target, 0, body.getFoodData().getFoodLevel(),
                     available, server.getTickCount(), null, position, countStorageMenu(body, item));
         }
+        if (parameters.capability().equals("CraftItem")) {
+            Item item = resolveItem(parameters.itemId());
+            if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
+            int gridSize = parameters.hasBlockTarget() ? 3 : 2;
+            CraftingSelection selection = selectCraftingRecipe(body, item, parameters.quantity(), gridSize);
+            if (selection == null && gridSize == 2 && hasCraftingRecipe(body, item, 3)) {
+                return SkillProgress.failed(parameters, "CRAFTING_TABLE_REQUIRED");
+            }
+            if (selection == null) return SkillProgress.failed(parameters, "RECIPE_UNAVAILABLE");
+            if (selection.availableItems < parameters.quantity() && !parameters.allowPartial()) {
+                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                        "MATERIALS_INSUFFICIENT", parameters.itemId(), parameters.quantity(), selection.availableItems));
+                return SkillProgress.failed(parameters, "MATERIALS_INSUFFICIENT");
+            }
+            int target = Math.min(parameters.quantity(), selection.availableItems);
+            if (target == 0) return SkillProgress.failed(parameters, "MATERIALS_INSUFFICIENT");
+            BlockPos station = null;
+            if (parameters.hasBlockTarget()) {
+                if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+                    return SkillProgress.failed(parameters, "WORLD_CHANGED");
+                }
+                station = new BlockPos(parameters.x(), parameters.y(), parameters.z());
+                if (body.distanceToSqr(Vec3.atCenterOf(station)) > 25.0D) {
+                    return SkillProgress.failed(parameters, "CRAFTING_TABLE_OUT_OF_REACH");
+                }
+                if (!body.serverLevel().getBlockState(station).is(Blocks.CRAFTING_TABLE)) {
+                    return SkillProgress.failed(parameters, "CRAFTING_TABLE_MISSING");
+                }
+                BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(station), Direction.UP, station, false);
+                body.gameMode.useItemOn(body, body.serverLevel(), body.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+                if (!(body.containerMenu instanceof CraftingMenu)) {
+                    return SkillProgress.failed(parameters, "CRAFTING_TABLE_OPEN_FAILED");
+                }
+            } else if (body.containerMenu != body.inventoryMenu) {
+                body.closeContainer();
+            }
+            return new SkillProgress(parameters, item, target, 0, body.getFoodData().getFoodLevel(),
+                    count(body, item), server.getTickCount(), null, station, 0, selection.recipe);
+        }
         return SkillProgress.failed(parameters, "CAPABILITY_UNAVAILABLE");
     }
 
@@ -290,7 +342,55 @@ final class BehaviorDirector {
         if (progress.parameters.capability().equals("DeliverItem")) tickDelivery(entry, body, progress);
         else if (progress.parameters.capability().equals("WithdrawFromStorage")) tickWithdrawal(entry, body, progress);
         else if (progress.parameters.capability().equals("DepositToStorage")) tickDeposit(entry, body, progress);
+        else if (progress.parameters.capability().equals("CraftItem")) tickCraft(entry, body, progress);
         else tickEating(entry, body, progress);
+    }
+
+    private void tickCraft(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        int produced = count(body, progress.item) - progress.itemBaseline;
+        if (produced >= progress.target) {
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE; savedData.changed(); return;
+        }
+        if (progress.recipe == null || !(body.containerMenu instanceof RecipeBookMenu<?, ?> menu)) {
+            pauseSafely(entry, body, "CRAFTING_MENU_CLOSED"); return;
+        }
+        if (progress.containerPosition != null) {
+            if (!body.serverLevel().dimension().location().toString().equals(progress.parameters.dimension())) {
+                pauseSafely(entry, body, "WORLD_CHANGED"); return;
+            }
+            if (body.distanceToSqr(Vec3.atCenterOf(progress.containerPosition)) > 25.0D) {
+                pauseSafely(entry, body, "CRAFTING_TABLE_OUT_OF_REACH"); return;
+            }
+            if (!body.serverLevel().getBlockState(progress.containerPosition).is(Blocks.CRAFTING_TABLE)) {
+                pauseSafely(entry, body, "CRAFTING_TABLE_MISSING"); return;
+            }
+        }
+        if (server.getTickCount() - progress.lastActionTick < 2) return;
+        ItemStack result = progress.recipe.value().getResultItem(body.registryAccess());
+        if (inventoryCapacity(body, result) < result.getCount()) {
+            pauseSafely(entry, body, "INVENTORY_FULL"); return;
+        }
+        if (!placeRecipeInputs(body, menu, progress.recipe.value())) {
+            pauseSafely(entry, body, "CRAFTING_RECIPE_PLACEMENT_FAILED"); return;
+        }
+        int resultSlot = menu.getResultSlotIndex();
+        ItemStack visibleResult = body.containerMenu.getSlot(resultSlot).getItem();
+        if (!visibleResult.is(progress.item) || visibleResult.isEmpty()) {
+            pauseSafely(entry, body, "CRAFTING_RECIPE_PLACEMENT_FAILED"); return;
+        }
+        body.containerMenu.clicked(resultSlot, 0, ClickType.PICKUP, body);
+        ItemStack carried = body.containerMenu.getCarried();
+        if (!carried.is(progress.item) || carried.isEmpty()) {
+            pauseSafely(entry, body, "CRAFTING_RESULT_PICKUP_FAILED"); return;
+        }
+        int targetSlot = findInventorySlotWithCapacity(body, carried);
+        if (targetSlot < 0) { pauseSafely(entry, body, "INVENTORY_FULL"); return; }
+        body.containerMenu.clicked(targetSlot, 0, ClickType.PICKUP, body);
+        if (!body.containerMenu.getCarried().isEmpty()) {
+            pauseSafely(entry, body, "CRAFTING_RESULT_STORE_FAILED"); return;
+        }
+        progress.actions++; progress.lastActionTick = server.getTickCount();
     }
 
     private void tickDeposit(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -509,6 +609,99 @@ final class BehaviorDirector {
         return -1;
     }
 
+    private static int findInventorySlotWithCapacity(CompanionPlayer body, ItemStack stack) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container != body.getInventory() || !slot.mayPlace(stack)) continue;
+            ItemStack existing = slot.getItem();
+            if (existing.isEmpty() && slot.getMaxStackSize(stack) >= stack.getCount()) return index;
+            if (ItemStack.isSameItemSameComponents(existing, stack)
+                    && slot.getMaxStackSize(existing) - existing.getCount() >= stack.getCount()) return index;
+        }
+        return -1;
+    }
+
+    private static int inventoryCapacity(CompanionPlayer body, ItemStack stack) {
+        int capacity = 0;
+        for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+            ItemStack existing = body.getInventory().getItem(slot);
+            if (existing.isEmpty()) capacity += stack.getMaxStackSize();
+            else if (ItemStack.isSameItemSameComponents(existing, stack)) {
+                capacity += Math.max(0, existing.getMaxStackSize() - existing.getCount());
+            }
+        }
+        return capacity;
+    }
+
+    private static CraftingSelection selectCraftingRecipe(
+            CompanionPlayer body, Item item, int quantity, int gridSize) {
+        CraftingSelection best = null;
+        StackedContents contents = new StackedContents();
+        body.getInventory().fillStackedContents(contents);
+        for (RecipeHolder<CraftingRecipe> recipe
+                : body.serverLevel().getRecipeManager().getAllRecipesFor(RecipeType.CRAFTING)) {
+            ItemStack result = recipe.value().getResultItem(body.registryAccess());
+            if (!result.is(item) || !recipe.value().canCraftInDimensions(gridSize, gridSize)) continue;
+            int requestedCrafts = Math.max(1, (quantity + result.getCount() - 1) / result.getCount());
+            int craftable = contents.getBiggestCraftableStack(
+                    recipe, requestedCrafts, new it.unimi.dsi.fastutil.ints.IntArrayList());
+            CraftingSelection candidate = new CraftingSelection(recipe, craftable * result.getCount());
+            if (best == null || candidate.availableItems > best.availableItems) best = candidate;
+            if (candidate.availableItems >= quantity) return candidate;
+        }
+        return best;
+    }
+
+    private static boolean hasCraftingRecipe(CompanionPlayer body, Item item, int gridSize) {
+        return body.serverLevel().getRecipeManager().getAllRecipesFor(RecipeType.CRAFTING).stream()
+                .anyMatch(recipe -> recipe.value().getResultItem(body.registryAccess()).is(item)
+                        && recipe.value().canCraftInDimensions(gridSize, gridSize));
+    }
+
+    private static void returnCraftingInputs(CompanionPlayer body) {
+        if (!(body.containerMenu instanceof RecipeBookMenu<?, ?> menu)) return;
+        int end = menu.getResultSlotIndex() + 1 + menu.getGridWidth() * menu.getGridHeight();
+        for (int slot = menu.getResultSlotIndex() + 1; slot < end; slot++) {
+            if (!body.containerMenu.getSlot(slot).getItem().isEmpty()) {
+                body.containerMenu.clicked(slot, 0, ClickType.QUICK_MOVE, body);
+            }
+        }
+    }
+
+    private static boolean placeRecipeInputs(
+            CompanionPlayer body, RecipeBookMenu<?, ?> menu, CraftingRecipe recipe) {
+        returnCraftingInputs(body);
+        int gridWidth = menu.getGridWidth();
+        int recipeWidth = recipe instanceof ShapedRecipe shaped ? shaped.getWidth() : recipe.getIngredients().size();
+        int recipeHeight = recipe instanceof ShapedRecipe shaped ? shaped.getHeight() : 1;
+        if (recipeWidth > gridWidth || recipeHeight > menu.getGridHeight()) return false;
+        for (int ingredientIndex = 0; ingredientIndex < recipe.getIngredients().size(); ingredientIndex++) {
+            Ingredient ingredient = recipe.getIngredients().get(ingredientIndex);
+            if (ingredient.isEmpty()) continue;
+            int row = recipe instanceof ShapedRecipe ? ingredientIndex / recipeWidth : ingredientIndex / gridWidth;
+            int column = recipe instanceof ShapedRecipe ? ingredientIndex % recipeWidth : ingredientIndex % gridWidth;
+            int target = menu.getResultSlotIndex() + 1 + row * gridWidth + column;
+            int source = findIngredientSlot(body, ingredient);
+            if (source < 0) { returnCraftingInputs(body); return false; }
+            body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+            body.containerMenu.clicked(target, 1, ClickType.PICKUP, body);
+            body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+            if (!body.containerMenu.getCarried().isEmpty()) {
+                returnCraftingInputs(body); return false;
+            }
+        }
+        return true;
+    }
+
+    private static int findIngredientSlot(CompanionPlayer body, Ingredient ingredient) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container == body.getInventory() && slot.mayPickup(body)
+                    && ingredient.test(slot.getItem())) return index;
+        }
+        return -1;
+    }
+
     private static int findBodyItemSlot(CompanionPlayer body, Item item) {
         for (int index = 0; index < body.containerMenu.slots.size(); index++) {
             Slot slot = body.containerMenu.slots.get(index);
@@ -574,6 +767,7 @@ final class BehaviorDirector {
         private final String failureCode;
         private final BlockPos containerPosition;
         private final int containerBaseline;
+        private final RecipeHolder<CraftingRecipe> recipe;
         private final Set<UUID> droppedEntities = new HashSet<>();
         private int actions;
         private int lastActionTick;
@@ -585,13 +779,23 @@ final class BehaviorDirector {
         private SkillProgress(SkillParameters parameters, Item item, int target, int ownerBaseline,
                               int foodBaseline, int itemBaseline, int startedTick, String failureCode,
                               BlockPos containerPosition, int containerBaseline) {
+            this(parameters, item, target, ownerBaseline, foodBaseline, itemBaseline, startedTick, failureCode,
+                    containerPosition, containerBaseline, null);
+        }
+        private SkillProgress(SkillParameters parameters, Item item, int target, int ownerBaseline,
+                              int foodBaseline, int itemBaseline, int startedTick, String failureCode,
+                              BlockPos containerPosition, int containerBaseline,
+                              RecipeHolder<CraftingRecipe> recipe) {
             this.parameters = parameters; this.item = item; this.target = target; this.ownerBaseline = ownerBaseline;
             this.foodBaseline = foodBaseline; this.itemBaseline = itemBaseline;
             this.startedTick = startedTick; this.failureCode = failureCode;
             this.containerPosition = containerPosition; this.containerBaseline = containerBaseline;
+            this.recipe = recipe;
         }
         private static SkillProgress failed(SkillParameters parameters, String code) {
             return new SkillProgress(parameters, null, 0, 0, 0, 0, 0, code);
         }
     }
+
+    private record CraftingSelection(RecipeHolder<CraftingRecipe> recipe, int availableItems) { }
 }

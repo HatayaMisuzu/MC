@@ -384,7 +384,8 @@ public final class CompanionRegistry {
         } else if (normalized.equals("skill") && skill != null) {
             if (!skill.capability().equals("DeliverItem") && !skill.capability().equals("EatAndRecover")
                     && !skill.capability().equals("WithdrawFromStorage")
-                    && !skill.capability().equals("DepositToStorage")) {
+                    && !skill.capability().equals("DepositToStorage")
+                    && !skill.capability().equals("CraftItem")) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }
             entry.mode = CompanionEntry.Mode.SKILL;

@@ -23,7 +23,10 @@ class CapabilityIntentTranslatorTest {
         var withdraw = translator.translate(step("WithdrawFromStorage", withdrawParameters), "take iron").orElseThrow();
         assertEquals(TaskType.SKILL, withdraw.type());
         assertEquals("WithdrawFromStorage", withdraw.arguments().path("capability").asText());
-        assertTrue(translator.translate(step("CraftItem", Json.object()), "做铁镐").isEmpty());
+        var craft = translator.translate(step("CraftItem",
+                Json.object().put("item", "minecraft:iron_pickaxe").put("quantity", 1)), "做铁镐").orElseThrow();
+        assertEquals(TaskType.SKILL, craft.type());
+        assertEquals("CraftItem", craft.arguments().path("capability").asText());
     }
 
     @Test

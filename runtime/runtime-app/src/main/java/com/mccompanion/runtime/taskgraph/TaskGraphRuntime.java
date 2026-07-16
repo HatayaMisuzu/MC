@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
@@ -160,16 +161,24 @@ public final class TaskGraphRuntime implements AutoCloseable {
     public ToolResult resume(ToolContext context, ToolCall call, String executionId) {
         try {
             TaskGraphExecutionRecord record = owned(context, executionId);
-            if (!record.state().equals("PAUSED")) {
+            boolean recovery = record.state().equals("RECONCILIATION_REQUIRED");
+            if (!record.state().equals("PAUSED") && !recovery) {
                 return ToolResult.rejected(call, "TASK_GRAPH_NOT_PAUSED",
-                        "only a safely paused execution can resume");
+                        "only a safely paused or reconcilable execution can resume");
+            }
+            if (recovery) {
+                RecoveryAssessment assessment = assessRecovery(record);
+                if (!assessment.safe()) {
+                    return ToolResult.rejected(call, assessment.code(), assessment.message());
+                }
             }
             TaskGraphExecutionRecord ready = repository.save(record.executionId(), record.revision(),
                     "READY", record.currentNodeId(), record.completedNodes(), record.toolResults(),
                     record.variables(), record.outputs(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
-                    record.result(), "RESUME_REQUESTED");
+                    record.result(), recovery ? "RECOVERY_RESUME_REQUESTED" : "RESUME_REQUESTED");
             submit(context, ready);
-            return new ToolResult(call.callId(), call.name(), true, "RESUME_ACCEPTED",
+            return new ToolResult(call.callId(), call.name(), true,
+                    recovery ? "RECOVERY_RESUME_ACCEPTED" : "RESUME_ACCEPTED",
                     inspectJson(ready).put("state", "ACCEPTED"), true);
         } catch (SQLException | IllegalArgumentException failure) {
             return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
@@ -367,6 +376,137 @@ public final class TaskGraphRuntime implements AutoCloseable {
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
     }
 
+    private RecoveryAssessment assessRecovery(TaskGraphExecutionRecord record) {
+        String actualHash = Digests.sha256(Json.canonical(record.graph()));
+        if (!actualHash.equals(record.graphHash())) {
+            return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_CORRUPT",
+                    "graph hash does not match persisted execution");
+        }
+        if (!record.completedNodes().isArray() || !record.toolResults().isObject()
+                || !record.variables().isObject() || !record.outputs().isObject()
+                || !record.checkpoints().isArray() || !record.evidence().isArray()) {
+            return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_CORRUPT",
+                    "persisted graph state has an invalid shape");
+        }
+        ToolContext context = new ToolContext(
+                record.controllerId(), record.brainSessionId(), record.companionId());
+        Map<String, ToolDefinition> definitions = tools.definitions(context).stream()
+                .filter(value -> !value.name().startsWith("task_graph."))
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
+        Map<String, String> permissions = definitions.values().stream()
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
+        TaskGraphValidationResult validation =
+                validator.validateExecutable(record.graph(), permissions, executableNodeTypes);
+        if (!validation.valid()) {
+            return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_VALIDATION_FAILED",
+                    "graph or Tool availability changed since the interrupted execution");
+        }
+        JsonNode current = record.currentNodeId() == null
+                ? null : findNode(record.graph().path("root"), record.currentNodeId());
+        if (record.currentNodeId() != null && current == null) {
+            return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_CORRUPT",
+                    "current node is absent from the persisted graph");
+        }
+        if (containsNodeType(record.graph().path("root"), "parallel")) {
+            RecoveryAssessment parallel = allEffectsIdempotent(record.graph().path("root"), definitions);
+            if (!parallel.safe()) return parallel;
+        } else if (current != null) {
+            String tool = current.path("type").asText().equals("read_memory")
+                    ? "memory.search"
+                    : current.path("type").asText().equals("call_tool")
+                    ? current.path("tool").asText() : null;
+            if (tool != null) {
+                ToolDefinition definition = definitions.get(tool);
+                if (!hasConfirmedCompletedToolResult(record, current.path("id").asText(), tool)
+                        && (definition == null || !definition.idempotent())) {
+                    return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_UNCONFIRMED_EFFECT",
+                            "interrupted Tool is not currently available as idempotent");
+                }
+            }
+        }
+        return RecoveryAssessment.recoverable();
+    }
+
+    private static RecoveryAssessment allEffectsIdempotent(
+            JsonNode value, Map<String, ToolDefinition> definitions) {
+        String type = value.path("type").asText();
+        String tool = type.equals("read_memory") ? "memory.search"
+                : type.equals("call_tool") ? value.path("tool").asText() : null;
+        if (tool != null) {
+            ToolDefinition definition = definitions.get(tool);
+            if (definition == null || !definition.idempotent()) {
+                return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_UNCONFIRMED_EFFECT",
+                        "parallel graph contains a Tool that is not currently available as idempotent");
+            }
+        }
+        for (JsonNode child : nodeChildren(value)) {
+            RecoveryAssessment result = allEffectsIdempotent(child, definitions);
+            if (!result.safe()) return result;
+        }
+        return RecoveryAssessment.recoverable();
+    }
+
+    private static boolean hasConfirmedCompletedToolResult(
+            TaskGraphExecutionRecord record, String nodeId, String toolName) {
+        boolean completed = false;
+        for (JsonNode value : record.completedNodes()) {
+            if (nodeId.equals(value.asText())) {
+                completed = true;
+                break;
+            }
+        }
+        if (!completed) return false;
+        var results = record.toolResults().fields();
+        while (results.hasNext()) {
+            JsonNode value = results.next().getValue();
+            if (nodeId.equals(value.path("nodeId").asText())
+                    && toolName.equals(value.path("toolName").asText())
+                    && value.path("success").isBoolean() && value.path("code").isTextual()
+                    && value.has("observation")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static JsonNode findNode(JsonNode value, String nodeId) {
+        if (nodeId.equals(value.path("id").asText(null)) && value.hasNonNull("type")) return value;
+        for (JsonNode child : nodeChildren(value)) {
+            JsonNode found = findNode(child, nodeId);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    private static boolean containsNodeType(JsonNode value, String nodeType) {
+        if (nodeType.equals(value.path("type").asText())) return true;
+        for (JsonNode child : nodeChildren(value)) {
+            if (containsNodeType(child, nodeType)) return true;
+        }
+        return false;
+    }
+
+    private static List<JsonNode> nodeChildren(JsonNode node) {
+        ArrayList<JsonNode> children = new ArrayList<>();
+        switch (node.path("type").asText()) {
+            case "sequence", "fallback", "parallel" ->
+                    node.path("nodes").forEach(children::add);
+            case "retry" -> children.add(node.path("node"));
+            case "if" -> {
+                children.add(node.path("then"));
+                if (node.has("else")) children.add(node.path("else"));
+            }
+            case "switch" -> {
+                node.path("cases").forEach(value -> children.add(value.path("node")));
+                if (node.has("default")) children.add(node.path("default"));
+            }
+            case "repeat", "while" -> children.add(node.path("body"));
+            default -> {
+            }
+        }
+        return children;
+    }
+
     private TaskGraphExecutionRecord owned(ToolContext context, String executionId) throws SQLException {
         TaskGraphExecutionRecord record = repository.get(executionId)
                 .orElseThrow(() -> new IllegalArgumentException("execution not found"));
@@ -427,4 +567,13 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     private record Running(ToolContext context, TaskGraphExecutionControl control) { }
+    private record RecoveryAssessment(boolean safe, String code, String message) {
+        private static RecoveryAssessment recoverable() {
+            return new RecoveryAssessment(true, "OK", "");
+        }
+
+        private static RecoveryAssessment rejected(String code, String message) {
+            return new RecoveryAssessment(false, code, message);
+        }
+    }
 }

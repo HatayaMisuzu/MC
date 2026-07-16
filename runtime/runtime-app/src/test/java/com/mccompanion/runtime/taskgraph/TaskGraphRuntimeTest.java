@@ -328,6 +328,172 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void interruptedIdempotentToolCanResumeFromPersistedBoundaryAfterRestart() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("recovery-resume.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"recovery-resume",
+                     "permissions":["READ_WORLD"],
+                     "root":{"id":"observe","type":"call_tool","tool":"test.observe",
+                      "arguments":{"item":"minecraft:stone"}}}
+                    """);
+            TaskGraphExecutionRecord created = repository.create("execution-recovery", context, graph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(created.executionId(), created.revision(), "RUNNING", "observe",
+                    Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            assertEquals(1, repository.markUnfinishedForReconciliation());
+
+            FakeGateway gateway = new FakeGateway();
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(gateway, repository)) {
+                ToolResult accepted = restarted.resume(context,
+                        new ToolCall("resume-recovery", "task_graph.resume", Json.object()),
+                        "execution-recovery");
+                assertTrue(accepted.success(), accepted.observation().toString());
+                assertEquals("RECOVERY_RESUME_ACCEPTED", accepted.code());
+                ToolResult terminal = restarted.await(context,
+                        new ToolCall("execution-recovery", "task_graph.execute", Json.object()),
+                        Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("execution-recovery", terminal.observation().path("executionId").asText());
+                assertEquals(1, gateway.arguments.size());
+            }
+
+            var modArgumentsGraph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"recovery-mod-arguments",
+                     "permissions":["READ_WORLD"],
+                     "root":{"id":"parallel","type":"parallel","maxConcurrency":1,"nodes":[
+                       {"id":"observe","type":"call_tool","tool":"test.observe",
+                        "arguments":{"payload":{"id":"mod-data","type":"call_tool","tool":"test.move"}}}
+                     ]}}
+                    """);
+            TaskGraphExecutionRecord modCreated = repository.create(
+                    "execution-mod-arguments", context, modArgumentsGraph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(modCreated.executionId(), modCreated.revision(), "RUNNING", "observe",
+                    Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            FakeGateway modGateway = new FakeGateway();
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(modGateway, repository)) {
+                ToolResult accepted = restarted.resume(context,
+                        new ToolCall("resume-mod-arguments", "task_graph.resume", Json.object()),
+                        "execution-mod-arguments");
+                assertTrue(accepted.success(), accepted.observation().toString());
+                assertTrue(restarted.await(context,
+                        new ToolCall("execution-mod-arguments", "task_graph.execute", Json.object()),
+                        Duration.ofSeconds(2), ignored -> { }).success());
+                assertEquals("call_tool",
+                        modGateway.arguments.getFirst().path("payload").path("type").asText());
+            }
+        }
+    }
+
+    @Test
+    void interruptedNonIdempotentOrCorruptGraphRemainsInReconciliation() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("recovery-reject.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"recovery-reject",
+                     "permissions":["MOVE"],
+                     "root":{"id":"move","type":"call_tool","tool":"test.move"}}
+                    """);
+            TaskGraphExecutionRecord created = repository.create("execution-non-idempotent", context, graph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(created.executionId(), created.revision(), "RUNNING", "move",
+                    Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            AtomicGateway nonIdempotent = new AtomicGateway(false);
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(nonIdempotent, repository)) {
+                ToolResult rejected = restarted.resume(context,
+                        new ToolCall("resume-non-idempotent", "task_graph.resume", Json.object()),
+                        "execution-non-idempotent");
+                assertFalse(rejected.success());
+                assertEquals("TASK_GRAPH_RECOVERY_UNCONFIRMED_EFFECT", rejected.code());
+                assertEquals("RECONCILIATION_REQUIRED",
+                        repository.get("execution-non-idempotent").orElseThrow().state());
+                assertEquals(0, nonIdempotent.calls);
+            }
+
+            TaskGraphExecutionRecord confirmed = repository.create("execution-confirmed", context, graph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            var completed = Json.MAPPER.createArrayNode().add("move");
+            var observation = Json.object().put("moved", true);
+            var results = Json.object();
+            results.set("execution-confirmed:move:1", Json.object()
+                    .put("nodeId", "move").put("toolName", "test.move")
+                    .put("success", true).put("code", "OK").set("observation", observation));
+            repository.save(confirmed.executionId(), confirmed.revision(), "RUNNING", "move",
+                    completed, results, Json.object(), Json.object().set("move", observation),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            AtomicGateway confirmedGateway = new AtomicGateway(false);
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(confirmedGateway, repository)) {
+                ToolResult accepted = restarted.resume(context,
+                        new ToolCall("resume-confirmed", "task_graph.resume", Json.object()),
+                        "execution-confirmed");
+                assertTrue(accepted.success(), accepted.observation().toString());
+                ToolResult terminal = restarted.await(context,
+                        new ToolCall("execution-confirmed", "task_graph.execute", Json.object()),
+                        Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(0, confirmedGateway.calls, "confirmed Tool effect was repeated");
+            }
+
+            var safeGraph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"recovery-corrupt",
+                     "permissions":["READ_WORLD"],
+                     "root":{"id":"observe","type":"call_tool","tool":"test.observe"}}
+                    """);
+            TaskGraphExecutionRecord safe = repository.create("execution-corrupt", context, safeGraph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(safe.executionId(), safe.revision(), "RUNNING", "observe",
+                    Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(),
+                    Json.MAPPER.createArrayNode(), Json.object(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(new FakeGateway(), repository)) {
+                ToolResult corrupt = restarted.resume(context,
+                        new ToolCall("resume-corrupt", "task_graph.resume", Json.object()),
+                        "execution-corrupt");
+                assertFalse(corrupt.success());
+                assertEquals("TASK_GRAPH_RECOVERY_CORRUPT", corrupt.code());
+            }
+
+            TaskGraphExecutionRecord badHash = repository.create("execution-bad-hash", context, safeGraph,
+                    TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(badHash.executionId(), badHash.revision(), "RUNNING", "observe",
+                    Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            try (var connection = database.open();
+                 var statement = connection.prepareStatement(
+                         "UPDATE task_graph_execution SET graph_hash=? WHERE execution_id=?")) {
+                statement.setString(1, "0".repeat(64));
+                statement.setString(2, "execution-bad-hash");
+                assertEquals(1, statement.executeUpdate());
+            }
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(new FakeGateway(), repository)) {
+                ToolResult corrupt = restarted.resume(context,
+                        new ToolCall("resume-bad-hash", "task_graph.resume", Json.object()),
+                        "execution-bad-hash");
+                assertFalse(corrupt.success());
+                assertEquals("TASK_GRAPH_RECOVERY_CORRUPT", corrupt.code());
+            }
+        }
+    }
+
+    @Test
     void readMemoryUsesPermissionBoundGenericSearchTool() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("memory-node.db"))) {
             database.initialize();
@@ -545,6 +711,27 @@ class TaskGraphRuntimeTest {
         @Override public void cancel(ToolContext context, String callId, String reason) {
             cancelled.add(callId);
             if (cancelled.size() >= 2) release.countDown();
+        }
+    }
+
+    private static final class AtomicGateway implements ToolGateway {
+        private final boolean idempotent;
+        private int calls;
+
+        private AtomicGateway(boolean idempotent) {
+            this.idempotent = idempotent;
+        }
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.move", "1.0", "move",
+                    Json.object().put("type", "object"), "LOW", "MOVE",
+                    Duration.ofSeconds(1), idempotent));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            calls++;
+            return new ToolResult(call.callId(), call.name(), true, "OK",
+                    Json.object().put("moved", true), true);
         }
     }
 }

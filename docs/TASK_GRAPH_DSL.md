@@ -161,7 +161,8 @@ binds each `call_tool` to the current `ToolDefinition.permission`.
 
 `task_graph.execute` creates a persistent asynchronous execution. Session-owned
 `task_graph.inspect`, `task_graph.pause`, `task_graph.resume`, and `task_graph.cancel` expose control
-without adding planning behavior. The deterministic core executes `sequence`, `call_tool`, `if`,
+without adding planning behavior. `resume` also accepts an interrupted execution only after a
+conservative recovery assessment succeeds. The deterministic core executes `sequence`, `call_tool`, `if`,
 `switch`, `repeat`, `while`, `retry`, `fallback`, `parallel`, `wait`, `checkpoint`,
 `emit_progress`, `ask_user`, `read_memory`, `return`, and `fail`. Safe expressions can read graph
 inputs, persisted state, and prior Tool observations. Loop iterations receive stable scoped node and
@@ -178,9 +179,15 @@ completed scoped node IDs, loop cursors, and immutable Tool results, so complete
 repeated even when suspension occurs inside an iteration. A Runtime restart preserves safely waiting
 and paused executions; an answered `ask_user` question resumes the original execution once, including
 after restart. Startup still moves crash-left `READY` or `RUNNING` work to
-`RECONCILIATION_REQUIRED`; automatic reconciliation of an unconfirmed in-flight Tool is not yet
-claimed. A Tool transport or worker failure with unknown effect is also persisted as
-`RECONCILIATION_REQUIRED` rather than being left `RUNNING` or reported as a verified failure.
+`RECONCILIATION_REQUIRED`. A same-owner recovery resume rechecks the graph hash, persisted state
+shape, current graph validity, Tool availability, permission and idempotency before continuing from
+the durable boundary. An unconfirmed idempotent Tool may be reissued with its stable call ID; a
+confirmed completed Tool result is reused without repeating the effect. Unknown non-idempotent
+effects, changed Tool availability, malformed Evidence and graph-hash mismatch remain in
+`RECONCILIATION_REQUIRED`. Exact reconciliation of non-idempotent effects inside retry/loop scopes
+and live Mod status reconciliation are not yet claimed. A Tool transport or worker failure with
+unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
+reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic
 `memory.search` Tool; it requires `MEMORY`, filters by the declared memory kind, and retains
 provenance and verification metadata in its observation. `suggest_memory` remains tracked separately

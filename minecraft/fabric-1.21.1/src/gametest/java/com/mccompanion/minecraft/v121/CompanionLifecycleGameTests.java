@@ -87,12 +87,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "collect test created no live body");
         BlockPos origin = body.blockPosition();
-        for (int x = -1; x <= 7; x++) {
+        // Move away from the preceding combat batch. A failed earlier GameTest can leave a player
+        // body alive, and vanilla ItemEntity pickup must still be isolated to this collector.
+        for (int x = -7; x <= 1; x++) {
             for (int z = -2; z <= 2; z++) {
                 body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
             }
         }
-        ItemEntity first = new ItemEntity(body.serverLevel(), body.getX() + 4.0D, body.getY() + 0.25D, body.getZ(),
+        ItemEntity first = new ItemEntity(body.serverLevel(), body.getX() - 4.0D, body.getY() + 0.25D, body.getZ(),
                 new ItemStack(Items.COAL, 2));
         first.setNoPickUpDelay();
         helper.assertTrue(body.serverLevel().addFreshEntity(first),
@@ -214,7 +216,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
             helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for owner defense completion");
             helper.assertTrue(!husk.isAlive(), "vanilla attack did not defeat the hostile");
-            helper.assertTrue(sword.getDamageValue() >= 1, "vanilla attack did not consume weapon durability");
+            ItemStack usedSword = body.getInventory().getItem(0);
+            helper.assertTrue(usedSword.is(Items.IRON_SWORD) && usedSword.getDamageValue() >= 1,
+                    "vanilla attack did not consume weapon durability");
             helper.assertTrue(snapshot.behaviorObservation() != null, "defense produced no observation");
             helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "DEFEND_COMPLETE",
                     "defense observation code mismatch");

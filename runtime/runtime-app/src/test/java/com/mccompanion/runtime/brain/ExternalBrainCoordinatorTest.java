@@ -60,6 +60,49 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void acceptedMinecraftCommandIsNeverReturnedToBrainBeforeTerminalFabricObservation() {
+        AtomicInteger turns = new AtomicInteger();
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("movement.navigate", "1.0", "navigate", Json.object(),
+                        "LOW", "MOVE", Duration.ofSeconds(1), false));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "COMMAND_DISPATCHED",
+                        Json.object().put("state", "ACCEPTED").put("taskId", "task-1")
+                                .put("behaviorId", "behavior-1"), false);
+            }
+            @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                                      Duration timeout, java.util.function.Consumer<ToolResult> progress) {
+                assertFalse(accepted.terminal());
+                assertEquals("ACCEPTED", accepted.observation().path("state").asText());
+                return new ToolResult(call.callId(), call.name(), true, "OK",
+                        Json.object().put("state", "SUCCEEDED").put("taskId", "task-1")
+                                .put("behaviorId", "behavior-1")
+                                .set("fabricObservation", Json.object().put("arrived", true)), true);
+            }
+        };
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            if (turns.getAndIncrement() == 0) {
+                assertTrue(request.toolResults().isEmpty());
+                return BrainTurnResult.tools(List.of(new ToolCall("navigate-1", "movement.navigate",
+                        Json.object().put("x", 4).put("y", 64).put("z", 8))));
+            }
+            assertEquals(1, request.toolResults().size());
+            ToolResult result = request.toolResults().getFirst();
+            assertTrue(result.terminal());
+            assertEquals("SUCCEEDED", result.observation().path("state").asText());
+            assertTrue(result.observation().path("fabricObservation").path("arrived").asBoolean());
+            return BrainTurnResult.finalResponse("arrived");
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            BrainCoordinatorResult result = coordinator.continueTurn("hermes-1", "c1", "go", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+            assertEquals(2, turns.get());
+        }
+    }
+
+    @Test
     void enforcesSingleControllerAndToolBudgetWithoutInventingFallbackStrategy() {
         RecordingGateway gateway = new RecordingGateway();
         ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> BrainTurnResult.tools(List.of(

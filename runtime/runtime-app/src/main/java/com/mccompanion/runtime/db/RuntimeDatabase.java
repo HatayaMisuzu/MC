@@ -490,6 +490,13 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX brain_tool_call_session_idx ON brain_tool_call(session_id,created_at)");
+        List<String> asynchronousBrainTools = List.of(
+                "ALTER TABLE brain_tool_call ADD COLUMN state TEXT NOT NULL DEFAULT 'INTERRUPTED'",
+                "ALTER TABLE brain_tool_call ADD COLUMN task_id TEXT",
+                "ALTER TABLE brain_tool_call ADD COLUMN behavior_id TEXT",
+                "ALTER TABLE brain_tool_call ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE brain_tool_call ADD COLUMN delivered_at INTEGER",
+                "CREATE INDEX brain_tool_call_task_idx ON brain_tool_call(task_id)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -498,6 +505,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(5, "persist replan budgets, semantic revisions, and loop fingerprints", replanning),
                 new Migration(6, "persist companion conversation and waiting questions", companionInteraction),
                 new Migration(7, "record typed memory provenance", memoryProvenance),
-                new Migration(8, "persist external brain sessions and tool observations", brainAudit));
+                new Migration(8, "persist external brain sessions and tool observations", brainAudit),
+                new Migration(9, "bind asynchronous brain tools to durable tasks", asynchronousBrainTools));
     }
 }

@@ -506,6 +506,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                     "partial shortage delivery did not consume exactly the verified chest quantity");
                             helper.assertValueEqual(count(recovered, Items.IRON_INGOT), 0,
                                     "partial shortage delivery left duplicate iron in companion inventory");
+                            var deliveredSnapshot = registry.runtimeSnapshots(false).stream()
+                                    .filter(snapshot -> snapshot.companionId().equals(recovered.getUUID().toString()))
+                                    .findFirst().orElseThrow();
+                            helper.assertValueEqual(deliveredSnapshot.behaviorState(), "IDLE",
+                                    "waiting for delivery behavior to become terminal");
+                            helper.assertValueEqual(registry.runtimeLastPublishedBehaviorId(),
+                                    deliveredSnapshot.behaviorId(),
+                                    "waiting for RuntimeBridge to publish the terminal delivery observation");
                             LOGGER.info("runtime_e2e_conversation_complete companion={} delivered=6",
                                     recovered.getUUID());
                             CompanionRegistry.Result removed = registry.remove(owner);

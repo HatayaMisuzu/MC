@@ -461,6 +461,7 @@ final class RuntimeBridge implements AutoCloseable {
         if (failureCode != null) payload.put("failureCode", failureCode).put("message", "行为已安全停止：" + failureCode);
         payload.set("snapshot", evidence);
         sendEnvelope("behavior_event", payload);
+        registry.recordRuntimeLifecyclePublished(snapshot.behaviorId());
     }
 
     private static String failureCode(String evidence) {

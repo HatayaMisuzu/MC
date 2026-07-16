@@ -22,6 +22,14 @@ public final class ReplayBrainAdapter implements ExternalBrainAdapter {
         return session;
     }
 
+    @Override public boolean supportsResume() { return true; }
+
+    @Override public BrainSession resumeSession(BrainSessionRequest request, String sessionId) {
+        BrainSession session = new BrainSession(sessionId, request.controllerId(), request.companionId(), Instant.now());
+        sessions.put(sessionId, session);
+        return session;
+    }
+
     @Override public BrainTurnResult continueTurn(BrainTurnRequest request) {
         if (!sessions.containsKey(request.sessionId())) throw new IllegalStateException("BRAIN_SESSION_NOT_FOUND");
         return script.apply(request);

@@ -8,6 +8,9 @@ import com.mccompanion.runtime.intent.Intent;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.task.TaskType;
+import com.mccompanion.runtime.task.TaskRecord;
+import com.mccompanion.runtime.task.TaskRepository;
+import com.mccompanion.runtime.task.TaskState;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -19,13 +22,93 @@ import java.util.function.Function;
 public final class RuntimeToolGateway implements ToolGateway {
     private final CommandService commands;
     private final CompanionRepository companions;
+    private final TaskRepository tasks;
     private final Function<String, List<String>> availableCapabilities;
+    private final java.util.concurrent.ConcurrentMap<String, String> activeTasks =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public RuntimeToolGateway(CommandService commands, CompanionRepository companions,
                               Function<String, List<String>> availableCapabilities) {
+        this(commands, companions, null, availableCapabilities);
+    }
+
+    public RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
+                              Function<String, List<String>> availableCapabilities) {
         this.commands = java.util.Objects.requireNonNull(commands, "commands");
         this.companions = java.util.Objects.requireNonNull(companions, "companions");
+        this.tasks = tasks;
         this.availableCapabilities = java.util.Objects.requireNonNull(availableCapabilities, "availableCapabilities");
+    }
+
+    @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                              Duration timeout, java.util.function.Consumer<ToolResult> progress) {
+        if (accepted.terminal() || !accepted.success() || tasks == null) return accepted;
+        String taskId = accepted.observation().path("taskId").asText("");
+        if (taskId.isBlank()) return ToolResult.rejected(call, "TOOL_BINDING_MISSING",
+                "Accepted Minecraft tool did not return a durable task binding");
+        long deadline = System.nanoTime() + Math.max(1L, timeout.toNanos());
+        TaskState previous = null;
+        try {
+            while (System.nanoTime() < deadline) {
+                TaskRecord task = tasks.get(taskId).orElse(null);
+                if (task == null) return ToolResult.rejected(call, "TASK_NOT_FOUND", "Bound task disappeared");
+                if (task.state().terminal() || task.state() == TaskState.BLOCKED) {
+                    activeTasks.remove(key(context, call.callId()));
+                    return terminalResult(call, task);
+                }
+                if (task.state() != previous) {
+                    progress.accept(progressResult(call, task));
+                    previous = task.state();
+                }
+                Thread.sleep(25);
+            }
+            commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
+                    context.companionId(), stop("cancel"));
+            activeTasks.remove(key(context, call.callId()));
+            return new ToolResult(call.callId(), call.name(), false, "TOOL_TIMEOUT",
+                    Json.object().put("state", "INTERRUPTED").put("taskId", taskId)
+                            .put("message", "Tool timed out; cancellation was dispatched"), true);
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            return new ToolResult(call.callId(), call.name(), false, "TOOL_INTERRUPTED",
+                    Json.object().put("state", "INTERRUPTED").put("taskId", taskId), true);
+        } catch (java.sql.SQLException failure) {
+            return ToolResult.rejected(call, "PERSISTENCE_ERROR", "Bound task state is unavailable");
+        }
+    }
+
+    private ToolResult terminalResult(ToolCall call, TaskRecord task) throws java.sql.SQLException {
+        TaskState state = task.state();
+        ObjectNode observation = Json.object().put("state", switch (state) {
+                    case COMPLETED -> "SUCCEEDED";
+                    case FAILED -> "FAILED";
+                    case CANCELLED -> "CANCELLED";
+                    case BLOCKED -> "BLOCKED";
+                    default -> throw new IllegalStateException("Task is not terminal");
+                }).put("taskId", task.taskId()).put("behaviorId", task.behaviorId())
+                .put("taskRevision", task.revision()).put("behaviorRevision", task.behaviorRevision());
+        List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(task.taskId());
+        if (!events.isEmpty()) observation.set("fabricObservation", events.getLast().payload());
+        boolean success = state == TaskState.COMPLETED;
+        String code = success ? "OK" : state == TaskState.CANCELLED ? "TOOL_CANCELLED"
+                : state == TaskState.BLOCKED ? "TOOL_BLOCKED" : "TOOL_FAILED";
+        return new ToolResult(call.callId(), call.name(), success, code, observation, true);
+    }
+
+    private ToolResult progressResult(ToolCall call, TaskRecord task) throws java.sql.SQLException {
+        String state = switch (task.state()) {
+            case CREATED, ACCEPTED -> "ACCEPTED";
+            case RUNNING, WAITING -> "RUNNING";
+            case PAUSED, BLOCKED -> "BLOCKED";
+            case RECONCILIATION_REQUIRED -> "INTERRUPTED";
+            case COMPLETED, FAILED, CANCELLED -> throw new IllegalStateException("Terminal task used as progress");
+        };
+        ObjectNode observation = Json.object().put("state", state).put("taskId", task.taskId())
+                .put("behaviorId", task.behaviorId()).put("taskRevision", task.revision())
+                .put("behaviorRevision", task.behaviorRevision());
+        List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(task.taskId());
+        if (!events.isEmpty()) observation.set("fabricObservation", events.getLast().payload());
+        return new ToolResult(call.callId(), call.name(), true, "TOOL_PROGRESS", observation, false);
     }
 
     @Override public List<ToolDefinition> definitions(ToolContext context) {
@@ -59,8 +142,12 @@ public final class RuntimeToolGateway implements ToolGateway {
             Intent intent = intent(call);
             String commandId = "brain-" + context.brainSessionId() + '-' + call.callId();
             CommandReply reply = commands.execute(commandId, context.companionId(), intent);
-            return new ToolResult(call.callId(), call.name(), reply.accepted(), reply.code(), reply.toJson(),
-                    !reply.accepted());
+            ToolResult result = new ToolResult(call.callId(), call.name(), reply.accepted(), reply.code(),
+                    reply.toJson(), !reply.accepted());
+            if (reply.accepted() && reply.taskId() != null) {
+                activeTasks.put(key(context, call.callId()), reply.taskId());
+            }
+            return result;
         } catch (IllegalArgumentException failure) {
             return ToolResult.rejected(call, "INVALID_TOOL_ARGUMENTS", failure.getMessage());
         } catch (java.sql.SQLException failure) {
@@ -68,6 +155,17 @@ public final class RuntimeToolGateway implements ToolGateway {
         } catch (RuntimeException failure) {
             return ToolResult.rejected(call, "TOOL_GATEWAY_ERROR", "Tool execution stopped safely");
         }
+    }
+
+    @Override public void cancel(ToolContext context, String callId, String reason) {
+        if (activeTasks.containsKey(key(context, callId))) {
+            commands.execute("brain-cancel-" + context.brainSessionId() + '-' + callId,
+                    context.companionId(), stop("cancel"));
+        }
+    }
+
+    private static String key(ToolContext context, String callId) {
+        return context.brainSessionId() + ':' + callId;
     }
 
     private static Intent intent(ToolCall call) {

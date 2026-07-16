@@ -163,7 +163,7 @@ public final class RuntimeApplication implements AutoCloseable {
             ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
             CapabilityVisibility capabilityVisibility = new CapabilityVisibility(CapabilityRegistry.standard());
             SessionRegistry activeSessionRegistry = sessions;
-            RuntimeToolGateway minecraftTools = new RuntimeToolGateway(commands, companions, companionId -> {
+            RuntimeToolGateway minecraftTools = new RuntimeToolGateway(commands, companions, tasks, companionId -> {
                 try {
                     var companion = companions.get(companionId).orElse(null);
                     if (companion == null) return java.util.List.of();

@@ -21,6 +21,7 @@ if (Test-Path -LiteralPath $runtimeHome) {
 }
 New-Item -ItemType Directory -Force -Path $runtimeHome | Out-Null
 $env:MCAC_E2E_REPLAY_TOKEN = 'local-replay-fixture'
+$env:MCAC_E2E_BRAIN_TOKEN = 'local-hermes-replay-fixture'
 @"
 server:
   bind: 127.0.0.1
@@ -43,6 +44,14 @@ provider:
   max_calls_per_minute: 30
   max_concurrent: 2
   max_retries: 0
+brain:
+  mode: hermes
+  endpoint: http://127.0.0.1:18768
+  token_env: MCAC_E2E_BRAIN_TOKEN
+  model: replay
+  timeout_seconds: 10
+  max_output_tokens: 1400
+  max_tool_calls_per_turn: 8
 logging:
   file: ./logs/runtime.log
   console: true
@@ -122,6 +131,17 @@ function Invoke-AgentRequest([string]$pairingToken, [string]$companionId, [strin
     } -ContentType 'application/json' -Body $body -TimeoutSec 15
 }
 
+function Invoke-ExternalBrainRequest([string]$pairingToken, [string]$companionId, [string]$text) {
+    $body = @{
+        controllerId = 'runtime-primary'
+        companionId = $companionId
+        text = $text
+    } | ConvertTo-Json -Compress -Depth 10
+    return Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18766/brain' -Headers @{
+        Authorization = "Bearer $pairingToken"
+    } -ContentType 'application/json' -Body $body -TimeoutSec 60
+}
+
 function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     do {
@@ -161,13 +181,17 @@ function Wait-AgentPlan(
 $runtime = $null
 $game = $null
 $provider = $null
+$brainProvider = $null
 $runtimeOut = $null
 $runtimeErr = $null
 $providerOut = $null
 $providerErr = $null
+$brainProviderOut = $null
+$brainProviderErr = $null
 $commandEvidence = @()
 $conversationEvidence = $null
 $goalModificationEvidence = $null
+$externalBrainEvidence = $null
 try {
     Write-Output '[runtime-e2e] starting Runtime'
     $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
@@ -276,7 +300,7 @@ try {
     }
     $modifiedRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 1 'FollowOwner'
     $cancelModified = Invoke-RuntimeCommand $pairingToken $companionId 'STOP' @{ action = 'cancel' } 'cancel modified probe'
-    if (-not $cancelModified.accepted) { throw 'Modified follow plan could not be cancelled before shortage scenario.' }
+    if (-not $cancelModified.accepted) { throw 'Modified follow plan could not be cancelled before Brain scenario.' }
     $modifiedCancelled = Wait-AgentPlan $pairingToken $probePlan.planId 'CANCELLED' 1 ''
     $goalModificationEvidence = [pscustomobject]@{
         initial = $probePlan; paused = $probePaused; modification = $modified
@@ -284,42 +308,37 @@ try {
     }
     Write-Output '[runtime-e2e] same-plan target modification activated and cancelled safely'
 
-    $initialPlan = Invoke-AgentRequest $pairingToken $companionId 'Get 16 iron from the specified chest and tell me if not enough'
-    if (-not $initialPlan.accepted -or -not $initialPlan.planId) {
-        throw "Replay-backed agent plan was rejected: $($initialPlan.code) $($initialPlan.message)"
-    }
-    $conversation = Wait-WaitingQuestion $pairingToken $companionId
-    $question = $conversation.waitingQuestion
-    Write-Output "[runtime-e2e] durable question observed: $($question.questionId)"
-    if ($question.planId -ne $initialPlan.planId) { throw 'Waiting question was not associated with the original plan.' }
-    if ($question.prompt -notmatch '6' -or $question.prompt -notmatch '10') {
-        throw "Shortage prompt did not expose available quantity and gap: $($question.prompt)"
-    }
-    $optionIds = @($question.options | ForEach-Object { $_.id })
-    if ('deliver_partial' -notin $optionIds -or $optionIds.Count -gt 3) {
-        throw 'Shortage question did not expose the bounded stable partial-delivery option.'
-    }
-    Write-Output '[runtime-e2e] shortage quantities and stable options verified'
-    $deliveryDeadline = [DateTime]::UtcNow.AddSeconds(5)
-    while ((Get-Content -Raw -LiteralPath $gameLog) -notmatch 'conversation_delivered_to_game' -and
-           [DateTime]::UtcNow -lt $deliveryDeadline) { Start-Sleep -Milliseconds 100 }
-    if ((Get-Content -Raw -LiteralPath $gameLog) -notmatch 'conversation_delivered_to_game') {
-        throw 'The persisted shortage question was not delivered to the game owner.'
-    }
+    Write-Output '[runtime-e2e] starting Hermes replay and exercising asynchronous External Brain chain'
+    $brainScript = Join-Path $root 'tools\hermes-replay-server.ps1'
+    $brainArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$brainScript`" -X $chestX -Y $chestY -Z $chestZ"
+    $brainProvider = Start-TestProcess 'powershell.exe' $brainArgs $root $true
+    $brainProviderOut = $brainProvider.StandardOutput.ReadToEndAsync()
+    $brainProviderErr = $brainProvider.StandardError.ReadToEndAsync()
+    Start-Sleep -Milliseconds 500
+    if ($brainProvider.HasExited) { throw "Hermes replay exited before the Brain turn ($($brainProvider.ExitCode))." }
 
-    Write-Output '[runtime-e2e] game delivery verified; submitting partial answer'
-    $answer = Invoke-AgentRequest $pairingToken $companionId 'deliver_partial'
-    Write-Output "[runtime-e2e] partial answer response: accepted=$($answer.accepted) plan=$($answer.planId) state=$($answer.planState)"
-    if (-not $answer.accepted -or -not $answer.resumedOriginalPlan -or $answer.planId -ne $initialPlan.planId) {
-        throw 'Partial answer did not resume the original durable plan.'
+    $brainReply = Invoke-ExternalBrainRequest $pairingToken $companionId 'Bring me the six iron ingots from that chest.'
+    if (-not $brainReply.accepted -or $brainReply.result.kind -ne 'FINAL_RESPONSE') {
+        throw "External Brain did not reach a final response: $($brainReply.code) $($brainReply.result.kind)"
     }
-    $conversationEvidence = [pscustomobject]@{
-        initialPlan = $initialPlan
-        waitingConversation = $conversation
-        answer = $answer
+    $brainTools = @($brainReply.result.toolResults)
+    $expectedBrainTools = @('movement.navigate', 'inventory.withdraw', 'movement.return', 'inventory.deliver')
+    if ($brainTools.Count -ne $expectedBrainTools.Count) { throw 'External Brain did not execute exactly four tools.' }
+    for ($index = 0; $index -lt $expectedBrainTools.Count; $index++) {
+        if ($brainTools[$index].toolName -ne $expectedBrainTools[$index] -or
+            -not $brainTools[$index].terminal -or -not $brainTools[$index].success -or
+            $brainTools[$index].observation.state -ne 'SUCCEEDED' -or
+            -not $brainTools[$index].observation.fabricObservation) {
+            throw "External Brain tool $index lacked its terminal Fabric observation."
+        }
     }
+    $brainAudit = Invoke-RestMethod -Uri "http://127.0.0.1:18766/brain/audit?companionId=$companionId" -Headers @{
+        Authorization = "Bearer $pairingToken"
+    } -TimeoutSec 5
+    $externalBrainEvidence = [pscustomobject]@{ reply = $brainReply; audit = $brainAudit }
+    Write-Output '[runtime-e2e] External Brain completed navigate, withdraw, return, and deliver from terminal Fabric observations'
 
-    Write-Output '[runtime-e2e] shortage answer resumed original plan; waiting for verified delivery'
+    if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     Write-Output '[runtime-e2e] Fabric GameTest exited; stopping Runtime'
     $runtime.StandardInput.WriteLine('quit')
@@ -342,8 +361,8 @@ try {
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\runtime-cli.err.log'), $runtimeStderr, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\runtime-commands.json'),
         ($commandEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\shortage-conversation.json'),
-        ($conversationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\external-brain-chain.json'),
+        ($externalBrainEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\goal-modification.json'),
         ($goalModificationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
     if ($provider) {
@@ -356,6 +375,16 @@ try {
         [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\provider-replay.err.log'),
             $providerErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
     }
+    if ($brainProvider) {
+        if (-not $brainProvider.HasExited) {
+            $brainProvider.Kill()
+            $null = $brainProvider.WaitForExit(5000)
+        }
+        [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\hermes-replay.out.log'),
+            $brainProviderOut.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\hermes-replay.err.log'),
+            $brainProviderErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
 
     if ($game.ExitCode -ne 0) { throw "Fabric GameTest failed with exit code $($game.ExitCode)." }
     if ($runtime.ExitCode -ne 0) { throw "Runtime failed with exit code $($runtime.ExitCode)." }
@@ -365,10 +394,10 @@ try {
         throw 'Runtime command evidence did not complete the safe cancellation path.'
     }
     if ($gameStdout -notmatch 'runtime_e2e_conversation_complete.*delivered=6') {
-        throw 'Fabric did not verify the final six-item partial delivery.'
+        throw 'Fabric did not verify the final six-item External Brain delivery.'
     }
-    if (-not $conversationEvidence -or $conversationEvidence.answer.planId -ne $conversationEvidence.initialPlan.planId) {
-        throw 'Conversation evidence did not retain one durable plan id.'
+    if (-not $externalBrainEvidence -or $externalBrainEvidence.reply.result.toolResults.Count -ne 4) {
+        throw 'External Brain evidence did not retain the four terminal tool observations.'
     }
     if (-not $goalModificationEvidence -or
         $goalModificationEvidence.modification.planId -ne $goalModificationEvidence.initial.planId -or
@@ -384,9 +413,9 @@ try {
     if ($runtimeStderr -match '(?m)^.*SEVERE.*$') {
         throw 'Runtime emitted a SEVERE error during E2E.'
     }
-    Write-Output 'Runtime/Fabric E2E passed: controls plus shortage question, game delivery, original-plan resume, and verified partial handoff.'
+    Write-Output 'Runtime/Fabric E2E passed: controls plus External Brain navigate, withdraw, return, deliver, and final reply from verified observations.'
 } catch {
-    foreach ($process in @($game, $provider, $runtime)) {
+    foreach ($process in @($game, $provider, $brainProvider, $runtime)) {
         if ($process -and -not $process.HasExited) {
             $process.Kill()
             $null = $process.WaitForExit(5000)
@@ -414,6 +443,14 @@ try {
         [IO.File]::WriteAllText((Join-Path $failureEvidence 'provider-replay.err.log'),
             $providerErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
     }
+    if ($brainProviderOut) {
+        [IO.File]::WriteAllText((Join-Path $failureEvidence 'hermes-replay.out.log'),
+            $brainProviderOut.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
+    if ($brainProviderErr) {
+        [IO.File]::WriteAllText((Join-Path $failureEvidence 'hermes-replay.err.log'),
+            $brainProviderErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+    }
     $failurePath = Join-Path $runtimeHome 'e2e-failure.txt'
     $failureText = $_.Exception.ToString() + [Environment]::NewLine + $_.ScriptStackTrace
     [IO.File]::WriteAllText($failurePath, $failureText, [Text.UTF8Encoding]::new($false))
@@ -421,6 +458,7 @@ try {
 } finally {
     if ($game -and -not $game.HasExited) { $game.Kill() }
     if ($provider -and -not $provider.HasExited) { $provider.Kill() }
+    if ($brainProvider -and -not $brainProvider.HasExited) { $brainProvider.Kill() }
     if ($runtime -and -not $runtime.HasExited) { $runtime.Kill() }
     Remove-Item -LiteralPath $gameToken -Force -ErrorAction SilentlyContinue
 }

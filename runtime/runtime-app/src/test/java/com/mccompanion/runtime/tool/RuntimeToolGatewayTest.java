@@ -12,11 +12,17 @@ import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
 import com.mccompanion.runtime.task.TaskRepository;
+import com.mccompanion.runtime.task.TaskState;
+import com.mccompanion.runtime.task.TaskType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -116,6 +122,69 @@ class RuntimeToolGatewayTest {
                                 Json.object().put("x", 40_000_000).put("y", 64).put("z", 0)));
                 assertFalse(result.success());
                 assertEquals("INVALID_TOOL_ARGUMENTS", result.code());
+            }
+        }
+    }
+
+    @Test
+    void waitsForDurableTaskTerminalStateAndReturnsLastFabricObservation() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("terminal.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("terminal.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateTo"));
+                var task = tasks.create("c1", TaskType.TRAVEL, "go", Json.object());
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                var acceptedTask = task;
+                CompletableFuture<Void> fabric = CompletableFuture.runAsync(() -> {
+                    try {
+                        Thread.sleep(50);
+                        var running = tasks.transition(acceptedTask.taskId(), acceptedTask.revision(), TaskState.RUNNING,
+                                "BehaviorStarted", Json.object().put("running", true));
+                        Thread.sleep(50);
+                        tasks.transition(running.taskId(), running.revision(), TaskState.COMPLETED,
+                                "BehaviorCompleted", Json.object().put("arrived", true).put("verifiedBy", "fabric"));
+                    } catch (Exception failure) {
+                        throw new RuntimeException(failure);
+                    }
+                });
+                ToolCall call = new ToolCall("navigate-1", "movement.navigate", Json.object());
+                ToolResult accepted = new ToolResult(call.callId(), call.name(), true, "COMMAND_DISPATCHED",
+                        Json.object().put("state", "ACCEPTED").put("taskId", task.taskId())
+                                .put("behaviorId", task.behaviorId()), false);
+                List<String> progressStates = new ArrayList<>();
+                ToolResult result = gateway.awaitTerminal(new ToolContext("hermes", "session-1", "c1"),
+                        call, accepted, Duration.ofSeconds(2),
+                        progress -> progressStates.add(progress.observation().path("state").asText()));
+                fabric.get(2, TimeUnit.SECONDS);
+                assertTrue(result.success());
+                assertTrue(result.terminal());
+                assertEquals("SUCCEEDED", result.observation().path("state").asText());
+                assertTrue(result.observation().path("fabricObservation").path("arrived").asBoolean());
+                assertEquals("fabric", result.observation().path("fabricObservation").path("verifiedBy").asText());
+                assertTrue(progressStates.contains("ACCEPTED"));
+                assertTrue(progressStates.contains("RUNNING"));
+
+                var blockedTask = tasks.create("c2", TaskType.TRAVEL, "blocked", Json.object());
+                blockedTask = tasks.transition(blockedTask.taskId(), blockedTask.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                blockedTask = tasks.transition(blockedTask.taskId(), blockedTask.revision(), TaskState.BLOCKED,
+                        "BehaviorBlocked", Json.object().put("code", "PATH_BLOCKED"));
+                ToolCall blockedCall = new ToolCall("navigate-blocked", "movement.navigate", Json.object());
+                ToolResult blockedAccepted = new ToolResult(blockedCall.callId(), blockedCall.name(), true,
+                        "COMMAND_DISPATCHED", Json.object().put("taskId", blockedTask.taskId()), false);
+                ToolResult blocked = gateway.awaitTerminal(new ToolContext("hermes", "session-2", "c2"),
+                        blockedCall, blockedAccepted, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(blocked.terminal());
+                assertFalse(blocked.success());
+                assertEquals("TOOL_BLOCKED", blocked.code());
+                assertEquals("BLOCKED", blocked.observation().path("state").asText());
             }
         }
     }

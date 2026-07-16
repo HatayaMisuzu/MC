@@ -45,6 +45,19 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         return new BrainSession(sessionId, request.controllerId(), request.companionId(), Instant.now());
     }
 
+    @Override public boolean supportsResume() { return true; }
+
+    @Override public BrainSession resumeSession(BrainSessionRequest request, String sessionId) {
+        requireSessionId(sessionId);
+        ObjectNode body = Json.object().put("protocol", "mcac-brain/1")
+                .put("controllerId", request.controllerId()).put("companionId", request.companionId());
+        body.set("context", Json.MAPPER.valueToTree(request.context()));
+        body.set("tools", Json.MAPPER.valueToTree(request.tools()));
+        JsonNode response = post("sessions/" + sessionId + "/resume", body);
+        if (!response.path("resumed").asBoolean(false)) throw new IllegalStateException("HERMES_RESUME_REJECTED");
+        return new BrainSession(sessionId, request.controllerId(), request.companionId(), Instant.now());
+    }
+
     @Override public BrainTurnResult continueTurn(BrainTurnRequest request) {
         requireSessionId(request.sessionId());
         ObjectNode body = Json.object().put("protocol", "mcac-brain/1")

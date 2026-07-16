@@ -29,6 +29,7 @@ public final class CompanionRegistry {
     private final Map<UUID, CompanionPlayer> liveBodies = new HashMap<>();
     private final Map<UUID, RuntimeControl> runtimeControls = new HashMap<>();
     private long runtimeCommandCount;
+    private String runtimeLastPublishedBehaviorId;
     private boolean runtimeConnected;
     private final BehaviorDirector behaviorDirector;
     private final CompanionDeathController deathController;
@@ -480,6 +481,14 @@ public final class CompanionRegistry {
 
     public long runtimeCommandCount() {
         return runtimeCommandCount;
+    }
+
+    public void recordRuntimeLifecyclePublished(String behaviorId) {
+        runtimeLastPublishedBehaviorId = behaviorId;
+    }
+
+    public String runtimeLastPublishedBehaviorId() {
+        return runtimeLastPublishedBehaviorId;
     }
 
     public void setRuntimeConnected(boolean connected) {

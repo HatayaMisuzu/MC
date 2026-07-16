@@ -1,6 +1,6 @@
 # External Brain productization state
 
-Updated: 2026-07-15
+Updated: 2026-07-16
 
 ## Current status
 
@@ -8,10 +8,10 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `CRAFT_ITEM_GAMETEST_VERIFIED`
+Current milestone: `ASYNC_EXTERNAL_BRAIN_TOOL_LOOP_REPLAY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
-the complete generic Minecraft tool set, External Brain persistence/reconnect,
+the complete generic Minecraft tool set, External Brain ASK_USER migration,
 product UI controls, and release/install verification remain incomplete.
 
 ## Completed in this slice
@@ -56,13 +56,33 @@ product UI controls, and release/install verification remain incomplete.
 
 ## Brain persistence and restart slice
 
-- Schema migration 8 persists external Brain sessions and each bounded tool call result.
+- Schema migrations 8 and 9 persist external Brain sessions, each bounded tool call result,
+  its durable Task/Behavior binding, lifecycle state, and delivery acknowledgement.
 - Audits store tool arguments, verified observations, result codes, and lifecycle state;
   hidden model reasoning is intentionally not stored.
-- Runtime startup marks crash-left active Brain sessions `INTERRUPTED` with
-  `RUNTIME_RESTARTED`; it does not pretend a remote session survived a process restart.
+- Runtime startup atomically marks crash-left nonterminal calls `INTERRUPTED` with
+  `RUNTIME_RESTARTED`. Hermes resumes the same remote session ID and receives only terminal
+  observations not previously acknowledged; providers without resumable history open safely
+  as a new session instead of pretending recovery succeeded.
 - Normal cancellation and tool-budget exhaustion are durably recorded.
 - Added authenticated `/brain/audit` inspection for UI/diagnostics and Replay coverage.
+
+## Asynchronous Tool to Fabric loop slice
+
+- Minecraft action tools now return `ACCEPTED` only to the Runtime coordinator. They are not
+  returned to the Brain until the bound durable Task reaches `SUCCEEDED`, `FAILED`, `BLOCKED`,
+  `CANCELLED`, or `INTERRUPTED`; `RUNNING` progress is persisted for audit.
+- The binding uses one stable `brainSessionId + callId + taskId + behaviorId`. Stable command
+  IDs and the existing command idempotency store prevent duplicate Fabric execution.
+- Tool timeout dispatches a real cancellation and reports `INTERRUPTED`; concurrent controller
+  cancellation reaches the active Tool Gateway without waiting for the Brain turn lock.
+- `BLOCKED` is returned immediately with the last Fabric observation so the external Brain can
+  ask the owner rather than waiting until timeout.
+- The local Hermes Replay E2E proves `movement.navigate -> inventory.withdraw -> movement.return
+  -> inventory.deliver -> FINAL_RESPONSE` against a real Fabric 1.21.1 GameTest body. Every step
+  carries terminal Fabric evidence; the chest loses six ingots, the owner gains six, and the
+  companion retains none. Evidence is written under `build/e2e-runtime/evidence/` and is
+  explicitly `REPLAY_PASS`, never Live evidence.
 
 ## Game and Web ingress slice
 

@@ -151,10 +151,12 @@ final class SearchConfigurationService {
                     || uri.getFragment() != null) {
                 throw new IOException("Search endpoint must be an absolute URL without credentials, query, or fragment");
             }
-            boolean loopback = InetAddress.getByName(uri.getHost()).isLoopbackAddress();
-            if (!"https".equalsIgnoreCase(uri.getScheme())
-                    && !(loopback && "http".equalsIgnoreCase(uri.getScheme()))) {
-                throw new IOException("Search endpoint must use HTTPS (HTTP is allowed only for loopback testing)");
+            if (!"https".equalsIgnoreCase(uri.getScheme())) {
+                boolean loopback = "http".equalsIgnoreCase(uri.getScheme())
+                        && InetAddress.getByName(uri.getHost()).isLoopbackAddress();
+                if (!loopback) {
+                    throw new IOException("Search endpoint must use HTTPS (HTTP is allowed only for loopback testing)");
+                }
             }
             return uri;
         } catch (IllegalArgumentException invalid) {

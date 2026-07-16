@@ -12,6 +12,7 @@ import com.mccompanion.runtime.task.TaskRecord;
 import com.mccompanion.runtime.task.TaskRepository;
 import com.mccompanion.runtime.task.TaskState;
 import com.mccompanion.runtime.taskgraph.TaskGraphValidator;
+import com.mccompanion.runtime.taskgraph.TaskGraphExecutor;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -143,6 +144,9 @@ public final class RuntimeToolGateway implements ToolGateway {
         values.add(definition("task_graph.validate",
                 "Statically validate a bounded declarative task graph without executing it",
                 taskGraphSchema(), "LOW", "VALIDATE_TASK_GRAPH", true));
+        values.add(definition("task_graph.execute",
+                "Deterministically execute the currently supported nodes of a validated task graph",
+                taskGraphSchema(), "MEDIUM", "EXECUTE_TASK_GRAPH", false));
         if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
@@ -181,6 +185,14 @@ public final class RuntimeToolGateway implements ToolGateway {
                 var validation = taskGraphs.validate(graph, tools);
                 return new ToolResult(call.callId(), call.name(), validation.valid(),
                         validation.valid() ? "OK" : "TASK_GRAPH_INVALID", validation.toJson(), true);
+            }
+            if (call.name().equals("task_graph.execute")) {
+                rejectUnexpected(call.arguments(), Set.of("graph"));
+                JsonNode graph = call.arguments().path("graph");
+                if (!graph.isObject()) throw new IllegalArgumentException("graph must be an object");
+                var execution = new TaskGraphExecutor(this).execute(call.callId(), context, graph);
+                return new ToolResult(call.callId(), call.name(), execution.success(), execution.code(),
+                        execution.toJson(), true);
             }
             if (call.name().equals("world.observe")) {
                 rejectUnexpected(call.arguments(), Set.of());
@@ -370,7 +382,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("block").add("maxBlocks").add("origin");
         } else if (name.equals("item.smelt")) {
             root.putArray("required").add("item").add("quantity").add("station");
-        } else if (name.equals("task_graph.validate")) {
+        } else if (name.equals("task_graph.validate") || name.equals("task_graph.execute")) {
             root.putArray("required").add("graph");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,

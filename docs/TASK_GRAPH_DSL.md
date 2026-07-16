@@ -99,5 +99,9 @@ never become an unbounded loop.
 ## Current implementation state
 
 The bounded codec, schema validator, safe expression parser and `task_graph.validate` Tool are locally
-verified. Deterministic execution and durable checkpoint/resume remain tracked separately in
-`docs/RC_COMPLETION_MATRIX.md` and are not implied by validation success.
+verified. `task_graph.execute` now deterministically executes the first bounded core:
+`sequence`, `call_tool`, `retry`, `fallback`, `wait`, `checkpoint`, `emit_progress`, `return`, and
+`fail`, with stable Tool call IDs, a Tool-call budget, bounded backoff/wait, evidence, and explicit
+failure for accepted-but-not-yet-executable node types. Conditions, loops, parallel execution,
+ASK_USER/memory nodes, durable checkpoints, reconciliation, and restart recovery remain tracked
+separately in `docs/RC_COMPLETION_MATRIX.md`.

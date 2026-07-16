@@ -47,7 +47,7 @@ class RuntimeToolGatewayTest {
 
                 var names = gateway.definitions(context).stream().map(ToolDefinition::name).toList();
                 assertTrue(names.containsAll(List.of("world.observe", "movement.navigate", "movement.follow",
-                        "task_graph.validate")));
+                        "task_graph.validate", "task_graph.execute")));
                 assertFalse(names.contains("inventory.withdraw"));
                 ToolResult observed = gateway.execute(context,
                         new ToolCall("observe-1", "world.observe", Json.object()));
@@ -98,6 +98,21 @@ class RuntimeToolGatewayTest {
                         Json.object().set("graph", graph)));
                 assertFalse(invalid.success());
                 assertEquals("TASK_GRAPH_INVALID", invalid.code());
+
+                var executable = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"observe-only","permissions":["READ_WORLD"],
+                         "root":{"id":"root","type":"sequence","nodes":[
+                           {"id":"observe","type":"call_tool","tool":"world.observe"},
+                           {"id":"done","type":"return","value":"observed"}
+                         ]}}
+                        """);
+                companions.upsert("c1", "session", "world", "owner", "Misuzu",
+                        Json.object().put("health", 20));
+                ToolResult executed = gateway.execute(context, new ToolCall("graph-3", "task_graph.execute",
+                        Json.object().set("graph", executable)));
+                assertTrue(executed.success(), executed.observation().toString());
+                assertEquals(1, executed.observation().path("toolCalls").asInt());
+                assertEquals(20, executed.observation().path("outputs").path("observe").path("health").asInt());
             }
         }
     }

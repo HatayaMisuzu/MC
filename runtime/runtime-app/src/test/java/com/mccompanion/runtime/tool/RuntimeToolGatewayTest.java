@@ -76,7 +76,7 @@ class RuntimeToolGatewayTest {
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
                         ignored -> List.of("WithdrawFromStorage", "DepositToStorage", "CraftItem", "DeliverItem",
-                                "EatAndRecover", "CollectResource", "MineResourceVein", "SmeltItem"));
+                                "EatAndRecover", "CollectResource", "MineResourceVein", "SmeltItem", "DefendOwner"));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
                 ToolDefinition withdraw = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("inventory.withdraw")).findFirst().orElseThrow();
@@ -116,6 +116,9 @@ class RuntimeToolGatewayTest {
                                 .set("station", Json.object().put("x", 1).put("y", 64).put("z", 1))));
                 assertFalse(invalidSmelt.success());
                 assertEquals("INVALID_TOOL_ARGUMENTS", invalidSmelt.code());
+                ToolDefinition defend = gateway.definitions(context).stream()
+                        .filter(value -> value.name().equals("combat.defend_owner")).findFirst().orElseThrow();
+                assertEquals(0, defend.inputSchema().path("properties").size());
                 ToolResult invalidStation = gateway.execute(context, new ToolCall("craft-1", "item.craft",
                         Json.object().put("item", "minecraft:iron_pickaxe").put("quantity", 1)
                                 .set("station", Json.object().put("x", 1).put("y", 64))));

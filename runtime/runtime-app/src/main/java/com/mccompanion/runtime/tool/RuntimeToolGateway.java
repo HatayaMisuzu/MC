@@ -152,6 +152,9 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("SmeltItem")) values.add(definition("item.smelt",
                 "Smelt a bounded quantity in a verified nearby furnace using held input and fuel",
                 smeltSchema(), "LOW", "CRAFT", false));
+        if (available.contains("DefendOwner")) values.add(definition("combat.defend_owner",
+                "Defend the owner from one nearby hostile using vanilla movement and attacks",
+                Json.object(), "MEDIUM", "COMBAT", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
@@ -208,6 +211,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "resource.mine_vein" -> skill("MineResourceVein", validatedMine(call.arguments()));
             case "item.smelt" -> skill("SmeltItem", validatedSmelt(call.arguments()));
+            case "combat.defend_owner" -> skill("DefendOwner", noArgumentsNode(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
@@ -228,6 +232,11 @@ public final class RuntimeToolGateway implements ToolGateway {
     private static Intent noArgumentsStop(ToolCall call, String action) {
         rejectUnexpected(call.arguments(), Set.of());
         return stop(action);
+    }
+
+    private static JsonNode noArgumentsNode(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of());
+        return arguments;
     }
 
     private static Intent navigate(JsonNode arguments) {

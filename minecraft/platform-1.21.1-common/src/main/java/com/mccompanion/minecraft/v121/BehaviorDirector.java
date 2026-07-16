@@ -58,6 +58,7 @@ final class BehaviorDirector {
     private final Map<UUID, MineProgress> mines = new HashMap<>();
     private final Map<UUID, SmeltProgress> smelts = new HashMap<>();
     private final Map<UUID, RetreatProgress> retreats = new HashMap<>();
+    private final Map<UUID, DefendProgress> defends = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
@@ -77,21 +78,31 @@ final class BehaviorDirector {
             skills.remove(entry.companionId);
             mines.remove(entry.companionId);
             smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
             scans.put(entry.companionId, createScan(body, parameters));
         } else if (parameters.capability().equals("MineResourceVein")) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
             smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
             mines.put(entry.companionId, createMine(body, parameters));
         } else if (parameters.capability().equals("SmeltItem")) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
+            defends.remove(entry.companionId);
             smelts.put(entry.companionId, createSmelt(body, entry, parameters));
+        } else if (parameters.capability().equals("DefendOwner")) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
+            defends.put(entry.companionId, createDefend(body, entry, parameters));
         } else {
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
             smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
             skills.put(entry.companionId, createSkill(body, entry, parameters));
         }
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
@@ -99,7 +110,8 @@ final class BehaviorDirector {
 
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
         if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)
-                && !mines.containsKey(entry.companionId) && !smelts.containsKey(entry.companionId)) {
+                && !mines.containsKey(entry.companionId) && !smelts.containsKey(entry.companionId)
+                && !defends.containsKey(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -127,6 +139,7 @@ final class BehaviorDirector {
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
             smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
         }
     }
 
@@ -138,6 +151,7 @@ final class BehaviorDirector {
         mines.remove(companionId);
         smelts.remove(companionId);
         retreats.remove(companionId);
+        defends.remove(companionId);
         observations.remove(companionId);
     }
 
@@ -155,7 +169,7 @@ final class BehaviorDirector {
             tickRetreat(entry, body, retreat);
             return;
         }
-        if (entry.mode != CompanionEntry.Mode.PAUSED) {
+        if (entry.mode != CompanionEntry.Mode.PAUSED && !defends.containsKey(entry.companionId)) {
             var threat = reflexController.nearestRetreatThreat(body);
             if (threat.isPresent() && threat.get().distanceToSqr(body) <= 9.0D) {
                 beginRetreat(entry, body, threat.get());
@@ -279,7 +293,7 @@ final class BehaviorDirector {
             return;
         }
         retreat.clearTicks = 0;
-        if (server.getTickCount() - retreat.startedTick > 100) {
+        if (server.getTickCount() - retreat.startedTick > 200) {
             actionGateway.stopInput(body);
             actionGateway.completeBehavior(body, false, "SAFETY_RETREAT_STUCK", server.getTickCount());
             retreats.remove(entry.companionId);
@@ -461,6 +475,8 @@ final class BehaviorDirector {
         if (mine != null) { tickMine(entry, body, mine); return; }
         SmeltProgress smelt = smelts.get(entry.companionId);
         if (smelt != null) { tickSmelt(entry, body, smelt); return; }
+        DefendProgress defend = defends.get(entry.companionId);
+        if (defend != null) { tickDefend(entry, body, defend); return; }
         SkillProgress progress = skills.get(entry.companionId);
         if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
         if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
@@ -739,6 +755,65 @@ final class BehaviorDirector {
         int inputs = (target + selection.outputPerInput - 1) / selection.outputPerInput;
         return new SmeltProgress(parameters, output, selection.ingredient, target, inputs,
                 count(body, output), station, server.getTickCount(), null);
+    }
+
+    private DefendProgress createDefend(
+            CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (owner == null) return DefendProgress.failed(parameters, "OWNER_OFFLINE");
+        if (owner.serverLevel() != body.serverLevel()) return DefendProgress.failed(parameters, "WORLD_CHANGED");
+        if (body.getHealth() <= Math.min(4.0F, body.getMaxHealth() * 0.2F)) {
+            return DefendProgress.failed(parameters, "LOW_HEALTH");
+        }
+        Entity threat = body.serverLevel().getEntities(owner, owner.getBoundingBox().inflate(8.0D),
+                        entity -> entity.isAlive() && entity instanceof net.minecraft.world.entity.monster.Enemy)
+                .stream().min(java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(owner)))
+                .orElse(null);
+        if (threat == null) return DefendProgress.failed(parameters, "NO_OWNER_THREAT");
+        return new DefendProgress(parameters, threat.getUUID(), server.getTickCount(), null);
+    }
+
+    private void tickDefend(CompanionEntry entry, CompanionPlayer body, DefendProgress progress) {
+        if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (owner == null) { pauseSafely(entry, body, "OWNER_OFFLINE"); return; }
+        if (owner.serverLevel() != body.serverLevel()) { pauseSafely(entry, body, "WORLD_CHANGED"); return; }
+        if (server.getTickCount() - progress.startedTick > 200) {
+            pauseSafely(entry, body, "DEFEND_TIMEOUT"); return;
+        }
+        Entity threat = body.serverLevel().getEntity(progress.threatId);
+        if (threat == null || !threat.isAlive()) {
+            finishDefend(entry, body, "THREAT_DEFEATED");
+            return;
+        }
+        if (threat.distanceToSqr(owner) > 100.0D) {
+            actionGateway.stopInput(body);
+            if (++progress.clearTicks >= 20) finishDefend(entry, body, "OWNER_CLEAR");
+            return;
+        }
+        progress.clearTicks = 0;
+        Vec3 delta = threat.position().subtract(body.position());
+        if (delta.lengthSqr() > 7.0D) {
+            actionGateway.applyMoveInput(body,
+                    (float) Math.toDegrees(Math.atan2(-delta.x, delta.z)), body.horizontalCollision);
+            return;
+        }
+        actionGateway.stopInput(body);
+        body.setYRot((float) Math.toDegrees(Math.atan2(-delta.x, delta.z)));
+        if (body.getAttackStrengthScale(0.5F) < 0.9F) return;
+        body.attack(threat);
+        body.swing(InteractionHand.MAIN_HAND);
+        progress.attacks++;
+    }
+
+    private void finishDefend(CompanionEntry entry, CompanionPlayer body, String result) {
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                "DEFEND_COMPLETE", result, 1, 1));
+        actionGateway.stopInput(body);
+        stop(entry, body, true, "NONE");
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        savedData.changed();
     }
 
     private void tickSmelt(CompanionEntry entry, CompanionPlayer body, SmeltProgress progress) {
@@ -1396,6 +1471,24 @@ final class BehaviorDirector {
         private static SmeltProgress failed(SkillParameters parameters, String code) {
             return new SmeltProgress(parameters, null, Ingredient.EMPTY, 0, 0, 0,
                     BlockPos.ZERO, 0, code);
+        }
+    }
+
+    private static final class DefendProgress {
+        private final SkillParameters parameters;
+        private final UUID threatId;
+        private final int startedTick;
+        private final String failureCode;
+        private int clearTicks;
+        private int attacks;
+
+        private DefendProgress(SkillParameters parameters, UUID threatId, int startedTick, String failureCode) {
+            this.parameters = parameters; this.threatId = threatId;
+            this.startedTick = startedTick; this.failureCode = failureCode;
+        }
+
+        private static DefendProgress failed(SkillParameters parameters, String code) {
+            return new DefendProgress(parameters, new UUID(0L, 0L), 0, code);
         }
     }
 

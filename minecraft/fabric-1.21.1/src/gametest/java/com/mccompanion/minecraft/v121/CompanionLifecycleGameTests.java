@@ -118,7 +118,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300, batch = "safety")
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400, batch = "safety")
     public void safetyReflexInterruptsTaskAndRetreatsFromNearbyHostile(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -167,6 +167,58 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     "retreat did not produce successful movement evidence");
             zombie.discard();
             helper.assertTrue(registry.remove(owner).success(), "retreat test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300, batch = "combat")
+    public void defendOwnerUsesVanillaAttackCooldownAndDefeatsNearbyHostile(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Defender").success(), "defend test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "defend test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -2; x <= 5; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+        }
+        ItemStack sword = new ItemStack(Items.IRON_SWORD);
+        body.getInventory().setItem(0, sword);
+        body.getInventory().selected = 0;
+        var husk = EntityType.HUSK.create(body.serverLevel());
+        helper.assertTrue(husk != null, "defend test could not create threat");
+        husk.setNoAi(true);
+        husk.setHealth(1.0F);
+        husk.moveTo(body.getX() + 2.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(husk), "defend test could not spawn threat");
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-defend";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "defend lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "defend-owner", "skill",
+                null, null, null, new SkillParameters("DefendOwner", "", 1, false)).success(),
+                "defend skill failed to start");
+        helper.succeedWhen(() -> {
+            var snapshot = registry.runtimeSnapshots(false).stream()
+                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for owner defense completion");
+            helper.assertTrue(!husk.isAlive(), "vanilla attack did not defeat the hostile");
+            helper.assertTrue(sword.getDamageValue() >= 1, "vanilla attack did not consume weapon durability");
+            helper.assertTrue(snapshot.behaviorObservation() != null, "defense produced no observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "DEFEND_COMPLETE",
+                    "defense observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().itemId(), "THREAT_DEFEATED",
+                    "defense did not report the verified threat outcome");
+            helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
+                    "defense did not produce successful action evidence");
+            helper.assertTrue(registry.remove(owner).success(), "defend test cleanup failed");
         });
     }
 

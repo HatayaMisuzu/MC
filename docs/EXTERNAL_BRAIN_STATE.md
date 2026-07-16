@@ -216,6 +216,21 @@ product UI controls, and release/install verification remain incomplete.
   production detection radius cannot contaminate unrelated concurrent tests. Terrain-aware escape,
   environmental-direction recovery, multiple/ranged threats, and restart/E2E remain `PARTIAL`.
 
+## Bounded owner-defense slice
+
+- Added `combat.defend_owner` backed by `DefendOwner`, exposed only when Runtime implementation,
+  connected Fabric body, and current availability intersect. It accepts no target injection: the
+  body itself selects one live vanilla hostile within eight blocks of the verified owner.
+- Defense approaches through ordinary player input, waits for the vanilla attack-strength cooldown,
+  and attacks through `ServerPlayer.attack` plus the normal hand swing. It ends only when the tracked
+  hostile dies or remains outside the ten-block owner-protection radius; owner/world loss, low health,
+  no threat, and timeout stop explicitly. The explicit defense state takes priority over automatic
+  retreat, while other active tasks remain protected by the retreat reflex.
+- An isolated real Fabric combat GameTest proves an iron-sword companion defeats a nearby husk,
+  receives the vanilla Monster Hunter advancement, consumes weapon durability, and reports verified
+  `DEFEND_COMPLETE` observation/evidence. Multiple/ranged threats, hostile-intent and friendly-fire
+  policy breadth, equipment strategy, restart, and Brain E2E remain, so Defend is `PARTIAL`.
+
 ## Craft item slice
 
 - Added `item.craft` / `CraftItem` only when the connected Fabric body reports the

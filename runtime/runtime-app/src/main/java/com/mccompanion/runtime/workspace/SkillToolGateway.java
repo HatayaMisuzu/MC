@@ -5,12 +5,14 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.taskgraph.TaskGraphCodec;
 import com.mccompanion.runtime.taskgraph.TaskGraphExecutor;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.mccompanion.runtime.taskgraph.TaskGraphValidator;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolDefinition;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
+import com.mccompanion.runtime.security.Digests;
 
 import java.io.IOException;
 import java.sql.SQLException;
@@ -27,9 +29,12 @@ public final class SkillToolGateway implements ToolGateway {
     private static final Pattern SKILL_ID = Pattern.compile("[a-z][a-z0-9_-]{2,63}");
     private final AgentWorkspace workspace;
     private final SkillRepository skills;
+    private final BuiltinSkillCatalog builtins = new BuiltinSkillCatalog();
     private final String profileId;
     private final Function<ToolContext, List<ToolDefinition>> availableTools;
     private final TaskGraphValidator validator = new TaskGraphValidator();
+    private final Set<String> activeExecutions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private volatile TaskGraphRuntime taskGraphRuntime;
 
     public SkillToolGateway(AgentWorkspace workspace, SkillRepository skills, String profileId,
                             Function<ToolContext, List<ToolDefinition>> availableTools) {
@@ -37,6 +42,11 @@ public final class SkillToolGateway implements ToolGateway {
         this.skills = java.util.Objects.requireNonNull(skills, "skills");
         this.profileId = requiredIdentifier(profileId, "profileId");
         this.availableTools = java.util.Objects.requireNonNull(availableTools, "availableTools");
+    }
+
+    public void attachTaskGraphRuntime(TaskGraphRuntime runtime) {
+        if (taskGraphRuntime != null) throw new IllegalStateException("Task Graph Runtime is already attached");
+        taskGraphRuntime = java.util.Objects.requireNonNull(runtime, "runtime");
     }
 
     @Override
@@ -54,7 +64,10 @@ public final class SkillToolGateway implements ToolGateway {
                         draftSchema(), true),
                 definition("skill.disable", "Disable the active approved Skill version", disableSchema(), true),
                 definition("skill.rollback", "Rollback to a previously approved Skill version",
-                        rollbackSchema(), true));
+                        rollbackSchema(), true),
+                new ToolDefinition("skill.execute", "1.0",
+                        "Execute the current approved Skill through the persistent Task Graph Runtime",
+                        executeSchema(), "MEDIUM", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(30), false));
     }
 
     @Override
@@ -68,6 +81,7 @@ public final class SkillToolGateway implements ToolGateway {
                 case "skill.request_promotion" -> requestPromotion(context, call);
                 case "skill.disable" -> disable(context, call);
                 case "skill.rollback" -> rollback(context, call);
+                case "skill.execute" -> executeApproved(context, call);
                 default -> ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Skill tool is unavailable");
             };
         } catch (IllegalArgumentException failure) {
@@ -79,10 +93,32 @@ public final class SkillToolGateway implements ToolGateway {
         }
     }
 
+    @Override
+    public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted, Duration timeout,
+                                    java.util.function.Consumer<ToolResult> progress) {
+        if (call.name().equals("skill.execute") && taskGraphRuntime != null && !accepted.terminal()) {
+            try {
+                return taskGraphRuntime.await(context, call, timeout, progress);
+            } finally {
+                activeExecutions.remove(executionKey(context, call.callId()));
+            }
+        }
+        return accepted;
+    }
+
+    @Override
+    public void cancel(ToolContext context, String callId, String reason) {
+        if (taskGraphRuntime != null && activeExecutions.remove(executionKey(context, callId))) {
+            taskGraphRuntime.cancel(context, callId, reason);
+        }
+    }
+
     private ToolResult list(ToolContext context, ToolCall call) throws IOException, SQLException {
         rejectUnexpected(call.arguments(), Set.of());
         ObjectNode observation = Json.object();
         observation.set("drafts", Json.MAPPER.valueToTree(workspace.list(context.companionId(), "skills/")));
+        observation.set("builtins", Json.MAPPER.valueToTree(builtins.list().stream()
+                .map(SkillToolGateway::withoutBuiltinDocument).toList()));
         observation.set("versions", Json.MAPPER.valueToTree(skills.list(profileId, context.companionId()).stream()
                 .map(SkillToolGateway::withoutDocument).toList()));
         return ok(call, observation);
@@ -92,6 +128,14 @@ public final class SkillToolGateway implements ToolGateway {
         rejectUnexpected(call.arguments(), Set.of("skillId", "format", "version"));
         String skillId = skillId(call.arguments());
         String format = format(call.arguments());
+        var builtin = builtins.get(skillId);
+        if (builtin.isPresent()) {
+            if (call.arguments().has("version")) {
+                throw new IllegalArgumentException("built-in Skills do not have generated version numbers");
+            }
+            if (!builtin.get().format().equals(format)) throw new IllegalArgumentException("skill format does not match");
+            return ok(call, Json.MAPPER.valueToTree(builtin.get()));
+        }
         if (call.arguments().has("version")) {
             long version = integer(call.arguments(), "version", 1, Integer.MAX_VALUE);
             SkillVersion stored = skills.version(profileId, context.companionId(), skillId, version)
@@ -105,6 +149,7 @@ public final class SkillToolGateway implements ToolGateway {
     private ToolResult save(ToolContext context, ToolCall call) throws IOException {
         rejectUnexpected(call.arguments(), Set.of("skillId", "format", "document"));
         String skillId = skillId(call.arguments());
+        rejectBuiltinId(skillId);
         String format = format(call.arguments());
         String document = text(call.arguments(), "document", 1, 65_536);
         WorkspaceResource resource = workspace.save(context.companionId(), path(skillId, format), document);
@@ -116,6 +161,7 @@ public final class SkillToolGateway implements ToolGateway {
 
     private ToolResult validate(ToolContext context, ToolCall call) throws IOException {
         rejectUnexpected(call.arguments(), Set.of("skillId", "format"));
+        rejectBuiltinId(skillId(call.arguments()));
         ValidatedDraft draft = validatedDraft(context, call.arguments());
         var result = draft.validation();
         ObjectNode observation = Json.object().put("skillId", draft.skillId()).put("valid", result.valid())
@@ -129,6 +175,7 @@ public final class SkillToolGateway implements ToolGateway {
 
     private ToolResult requestPromotion(ToolContext context, ToolCall call) throws IOException, SQLException {
         rejectUnexpected(call.arguments(), Set.of("skillId", "format"));
+        rejectBuiltinId(skillId(call.arguments()));
         ValidatedDraft draft = validatedDraft(context, call.arguments());
         if (!draft.validation().valid()) {
             return ToolResult.rejected(call, "SKILL_INVALID", "Skill must pass current validation before review");
@@ -152,7 +199,9 @@ public final class SkillToolGateway implements ToolGateway {
 
     private ToolResult disable(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), Set.of("skillId", "reason"));
-        SkillVersion disabled = skills.disable(profileId, context.companionId(), skillId(call.arguments()),
+        String skillId = skillId(call.arguments());
+        rejectBuiltinId(skillId);
+        SkillVersion disabled = skills.disable(profileId, context.companionId(), skillId,
                 context.controllerId(), text(call.arguments(), "reason", 1, 256));
         return new ToolResult(call.callId(), call.name(), true, "SKILL_DISABLED",
                 withoutDocument(disabled), true);
@@ -160,11 +209,53 @@ public final class SkillToolGateway implements ToolGateway {
 
     private ToolResult rollback(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), Set.of("skillId", "version", "reason"));
-        SkillVersion active = skills.rollback(profileId, context.companionId(), skillId(call.arguments()),
+        String skillId = skillId(call.arguments());
+        rejectBuiltinId(skillId);
+        SkillVersion active = skills.rollback(profileId, context.companionId(), skillId,
                 integer(call.arguments(), "version", 1, Integer.MAX_VALUE), context.controllerId(),
                 text(call.arguments(), "reason", 1, 256));
         return new ToolResult(call.callId(), call.name(), true, "SKILL_ROLLED_BACK",
                 withoutDocument(active), true);
+    }
+
+    private ToolResult executeApproved(ToolContext context, ToolCall call) throws SQLException {
+        if (taskGraphRuntime == null) {
+            return ToolResult.rejected(call, "SKILL_RUNTIME_UNAVAILABLE", "Task Graph Runtime is unavailable");
+        }
+        rejectUnexpected(call.arguments(), Set.of("skillId", "inputs"));
+        String skillId = skillId(call.arguments());
+        SkillVersion active = skills.active(profileId, context.companionId(), skillId).orElse(null);
+        BuiltinSkillCatalog.BuiltinSkill builtin = active == null ? builtins.get(skillId).orElse(null) : null;
+        if (active == null && builtin == null) {
+            throw new IllegalArgumentException("skill has no active approved or built-in version");
+        }
+        String document = active == null ? builtin.document() : active.document();
+        String sha256 = active == null ? builtin.sha256() : active.sha256();
+        String format = active == null ? builtin.format() : active.format();
+        if (!Digests.sha256(document).equals(sha256)) {
+            return ToolResult.rejected(call, "SKILL_INTEGRITY_FAILED", "Approved Skill hash does not match");
+        }
+        JsonNode graph = TaskGraphCodec.parse(document, format.equals("json")
+                ? TaskGraphCodec.Format.JSON : TaskGraphCodec.Format.YAML);
+        if (containsSkillTool(graph)) {
+            return ToolResult.rejected(call, "SKILL_RECURSION_FORBIDDEN",
+                    "Generated Skills cannot call Skill lifecycle or execution Tools");
+        }
+        JsonNode inputs = call.arguments().path("inputs");
+        if (inputs.isMissingNode()) inputs = Json.object();
+        if (!inputs.isObject()) throw new IllegalArgumentException("inputs must be an object");
+        ObjectNode provenance = Json.object().put("source",
+                        active == null ? "BUILT_IN_SKILL" : "APPROVED_GENERATED_SKILL")
+                .put("skillId", skillId).put("skillSha256", sha256);
+        if (active != null) {
+            provenance.put("skillVersion", active.version())
+                    .put("promotionRequestId", active.requestId());
+        }
+        ToolResult started = taskGraphRuntime.start(context, call, graph, inputs, provenance);
+        if (started.success() && !started.terminal()) {
+            activeExecutions.add(executionKey(context, call.callId()));
+        }
+        return started;
     }
 
     private ValidatedDraft validatedDraft(ToolContext context, JsonNode arguments) throws IOException {
@@ -174,6 +265,7 @@ public final class SkillToolGateway implements ToolGateway {
         JsonNode graph = TaskGraphCodec.parse(document.content(), format.equals("json")
                 ? TaskGraphCodec.Format.JSON : TaskGraphCodec.Format.YAML);
         Map<String, ToolDefinition> definitions = availableTools.apply(context).stream()
+                .filter(value -> !value.name().startsWith("skill."))
                 .collect(Collectors.toMap(ToolDefinition::name, value -> value, (left, right) -> left));
         var result = validator.validateExecutable(graph, definitions, TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
         return new ValidatedDraft(skillId, format, document, graph, result);
@@ -228,6 +320,15 @@ public final class SkillToolGateway implements ToolGateway {
         return schema;
     }
 
+    private static ObjectNode executeSchema() {
+        ObjectNode schema = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("skillId").put("type", "string").put("minLength", 3).put("maxLength", 64);
+        properties.putObject("inputs").put("type", "object");
+        schema.putArray("required").add("skillId");
+        return schema;
+    }
+
     private static String skillId(JsonNode arguments) {
         String value = text(arguments, "skillId", 3, 64);
         if (!SKILL_ID.matcher(value).matches()) throw new IllegalArgumentException("skillId is invalid");
@@ -277,6 +378,40 @@ public final class SkillToolGateway implements ToolGateway {
         ObjectNode node = Json.MAPPER.valueToTree(value);
         node.remove("document");
         return node;
+    }
+
+    private static ObjectNode withoutBuiltinDocument(BuiltinSkillCatalog.BuiltinSkill value) {
+        ObjectNode node = Json.MAPPER.valueToTree(value);
+        node.remove("document");
+        return node;
+    }
+
+    private void rejectBuiltinId(String skillId) {
+        if (builtins.get(skillId).isPresent()) {
+            throw new IllegalArgumentException("built-in Skill IDs are read-only");
+        }
+    }
+
+    private static boolean containsSkillTool(JsonNode value) {
+        if (value == null) return false;
+        if (value.isObject()) {
+            if (value.path("type").asText().equals("call_tool")
+                    && value.path("tool").asText().startsWith("skill.")) {
+                return true;
+            }
+            var fields = value.fields();
+            while (fields.hasNext()) {
+                if (containsSkillTool(fields.next().getValue())) return true;
+            }
+        } else if (value.isArray()) {
+            for (JsonNode child : value) if (containsSkillTool(child)) return true;
+        }
+        return false;
+    }
+
+    private static String executionKey(ToolContext context, String callId) {
+        return context.controllerId() + '\u0000' + context.brainSessionId() + '\u0000'
+                + context.companionId() + '\u0000' + callId;
     }
 
     private static void rejectUnexpected(JsonNode arguments, Set<String> allowed) {

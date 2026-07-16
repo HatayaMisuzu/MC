@@ -4,10 +4,13 @@ import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
+import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,7 +30,7 @@ class SkillToolGatewayTest {
             SkillToolGateway gateway = holder[0];
             ToolContext context = new ToolContext("controller", "brain-session", "companion-a");
             assertEquals(List.of("skill.list", "skill.read", "skill.save_draft", "skill.validate",
-                            "skill.request_promotion", "skill.disable", "skill.rollback"),
+                            "skill.request_promotion", "skill.disable", "skill.rollback", "skill.execute"),
                     gateway.definitions(context).stream().map(value -> value.name()).toList());
 
             String graph = """
@@ -91,11 +94,63 @@ class SkillToolGatewayTest {
             var listed = gateway.execute(context, new ToolCall("list", "skill.list", Json.object()));
             assertTrue(listed.success());
             assertEquals(1, listed.observation().path("drafts").size());
+            assertEquals(6, listed.observation().path("builtins").size());
             assertEquals(2, listed.observation().path("versions").size());
             var other = gateway.execute(new ToolContext("controller", "other-session", "companion-b"),
                     new ToolCall("other", "skill.list", Json.object()));
             assertTrue(other.observation().path("drafts").isEmpty());
+            assertEquals(6, other.observation().path("builtins").size());
             assertTrue(other.observation().path("versions").isEmpty());
+        }
+    }
+
+    @Test
+    void executesOnlyActiveApprovedVersionThroughTaskGraphRuntime() throws Exception {
+        AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("execute-workspace"), "profile");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("execute.db"))) {
+            database.initialize();
+            SkillRepository repository = new SkillRepository(database);
+            SkillToolGateway[] holder = new SkillToolGateway[1];
+            holder[0] = new SkillToolGateway(workspace, repository, "profile",
+                    context -> holder[0].definitions(context));
+            SkillToolGateway gateway = holder[0];
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
+                    new TaskGraphExecutionRepository(database))) {
+                gateway.attachTaskGraphRuntime(runtime);
+                ToolContext context = new ToolContext("controller", "brain-session", "c1");
+                String graph = """
+                        version: mcac-task-graph/1
+                        id: approved_return
+                        permissions: []
+                        root:
+                          id: done
+                          type: return
+                          value: approved-result
+                        """;
+                gateway.execute(context, new ToolCall("save", "skill.save_draft", Json.object()
+                        .put("skillId", "approved_return").put("format", "yaml").put("document", graph)));
+                var pendingExecution = gateway.execute(context, new ToolCall("too-early", "skill.execute",
+                        Json.object().put("skillId", "approved_return")));
+                assertFalse(pendingExecution.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", pendingExecution.code());
+
+                var request = gateway.execute(context, new ToolCall("request", "skill.request_promotion",
+                        Json.object().put("skillId", "approved_return").put("format", "yaml")));
+                repository.approve(request.observation().path("requestId").asText(), "user:owner");
+                ToolCall execute = new ToolCall("execute-approved", "skill.execute",
+                        Json.object().put("skillId", "approved_return"));
+                var accepted = gateway.execute(context, execute);
+                assertTrue(accepted.success(), accepted.observation().toString());
+                assertFalse(accepted.terminal());
+                var terminal = gateway.awaitTerminal(context, execute, accepted, Duration.ofSeconds(5),
+                        progress -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("SUCCEEDED", terminal.observation().path("state").asText());
+                assertEquals("approved-result", terminal.observation().path("value").asText());
+                assertEquals("APPROVED_GENERATED_SKILL",
+                        new TaskGraphExecutionRepository(database).get("execute-approved").orElseThrow()
+                                .provenance().path("source").asText());
+            }
         }
     }
 

@@ -201,6 +201,7 @@ public final class RuntimeApplication implements AutoCloseable {
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
                     conversationRepository);
             minecraftTools.attachTaskGraphRuntime(taskGraphRuntime);
+            skillTools.attachTaskGraphRuntime(taskGraphRuntime);
             externalBrain = brainOverride == null
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,

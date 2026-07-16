@@ -236,6 +236,13 @@ public final class SkillRepository {
         }
     }
 
+    public Optional<SkillVersion> active(String profileId, String companionId, String skillId)
+            throws SQLException {
+        try (Connection connection = database.open()) {
+            return active(connection, profileId, companionId, skillId);
+        }
+    }
+
     private static Optional<SkillVersion> get(Connection connection, String requestId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT * FROM skill_version WHERE request_id=?")) {

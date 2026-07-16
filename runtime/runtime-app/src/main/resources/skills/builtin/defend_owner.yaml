@@ -1,0 +1,10 @@
+version: mcac-task-graph/1
+id: builtin_defend_owner
+permissions:
+  - COMBAT
+root:
+  id: defend
+  type: call_tool
+  tool: combat.defend_owner
+  permission: COMBAT
+  arguments: {}

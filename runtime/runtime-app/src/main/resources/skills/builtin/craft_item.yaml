@@ -1,0 +1,27 @@
+version: mcac-task-graph/1
+id: builtin_craft_item
+inputs:
+  item:
+    type: registry_item
+    required: true
+  quantity:
+    type: integer
+    required: true
+  station:
+    type: position
+    required: true
+  allowPartial:
+    type: boolean
+    default: false
+permissions:
+  - CRAFT
+root:
+  id: craft
+  type: call_tool
+  tool: item.craft
+  permission: CRAFT
+  arguments:
+    item: ${inputs.item}
+    quantity: ${inputs.quantity}
+    station: ${inputs.station}
+    allowPartial: ${inputs.allowPartial}

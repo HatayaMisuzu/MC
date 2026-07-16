@@ -1,0 +1,27 @@
+version: mcac-task-graph/1
+id: builtin_withdraw_storage
+inputs:
+  item:
+    type: registry_item
+    required: true
+  quantity:
+    type: integer
+    required: true
+  container:
+    type: position
+    required: true
+  allowPartial:
+    type: boolean
+    default: false
+permissions:
+  - INVENTORY
+root:
+  id: withdraw
+  type: call_tool
+  tool: inventory.withdraw
+  permission: INVENTORY
+  arguments:
+    item: ${inputs.item}
+    quantity: ${inputs.quantity}
+    container: ${inputs.container}
+    allowPartial: ${inputs.allowPartial}

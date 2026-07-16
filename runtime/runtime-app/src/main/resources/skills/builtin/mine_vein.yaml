@@ -1,0 +1,27 @@
+version: mcac-task-graph/1
+id: builtin_mine_vein
+inputs:
+  block:
+    type: registry_block
+    required: true
+  maxBlocks:
+    type: integer
+    required: true
+  origin:
+    type: position
+    required: true
+  allowPartial:
+    type: boolean
+    default: false
+permissions:
+  - MINE
+root:
+  id: mine
+  type: call_tool
+  tool: resource.mine_vein
+  permission: MINE
+  arguments:
+    block: ${inputs.block}
+    maxBlocks: ${inputs.maxBlocks}
+    origin: ${inputs.origin}
+    allowPartial: ${inputs.allowPartial}

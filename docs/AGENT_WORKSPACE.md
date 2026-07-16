@@ -14,6 +14,7 @@ skill.validate
 skill.request_promotion
 skill.disable
 skill.rollback
+skill.execute
 ```
 
 `skill.save_draft` accepts only a bounded declarative JSON/YAML Task Graph document and stores it
@@ -30,6 +31,17 @@ rejecting a request, disabling an active version, and rolling back to a previous
 version. Approval records `LOCAL_MANAGEMENT_USER`; rollback cannot activate a draft that was never
 approved.
 
+`skill.execute` loads only the current ACTIVE generated version or a read-only built-in resource,
+rechecks the document SHA-256, and starts it through the same persistent asynchronous Task Graph
+Runtime. It therefore inherits current Tool availability, permission/schema validation,
+checkpoints, pause/cancel, recovery, Evidence budgets, and result reconciliation. Generated Skills
+cannot call any `skill.*` Tool, preventing recursive execution and self-modifying lifecycle actions.
+
+The initial built-in catalog packages six existing composite capabilities as declarative,
+read-only compatibility Skills: `collect_resource`, `mine_vein`, `smelt_item`,
+`withdraw_storage`, `craft_item`, and `defend_owner`. They are not new scenario Handlers and do not
+replace the Primitive Tool work; each is a Task Graph wrapper over the existing bounded Tool.
+
 Workspace invariants:
 
 - physical roots are selected by Runtime configuration and are never returned by a Tool;
@@ -44,5 +56,5 @@ Workspace invariants:
 - reads verify the persisted SHA-256 before returning content.
 
 This slice does not yet implement the terminal review UI, signed/administrator promotion policies,
-temporary execution policy, direct Task Graph Skill invocation, workspace migration tooling, or
-backup retention controls. Those remain visible in `docs/RC_COMPLETION_MATRIX.md`.
+temporary execution policy, workspace migration tooling, or backup retention controls. Those
+remain visible in `docs/RC_COMPLETION_MATRIX.md`.

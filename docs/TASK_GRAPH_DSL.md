@@ -208,5 +208,7 @@ unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being 
 reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic
 `memory.search` Tool; it requires `MEMORY`, filters by the declared memory kind, and retains
-provenance and verification metadata in its observation. `suggest_memory` remains tracked separately
-in `docs/RC_COMPLETION_MATRIX.md`.
+provenance and verification metadata in its observation. `suggest_memory` is a permission-bound
+convenience node over `memory.suggest`. It accepts only `EPISODIC`, `WORLD`, or `PREFERENCE`, creates
+a stable Task Graph-derived suggestion key, and writes only a `QUARANTINED` expiring candidate in
+the separate suggestion store. It never writes a `MemoryFact` or verified World Memory.

@@ -22,7 +22,8 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "conversation_event", "waiting_question", "brain_session", "brain_tool_call",
+            "memory_fact", "memory_suggestion", "conversation_event", "waiting_question",
+            "brain_session", "brain_tool_call",
             "task_graph_execution", "schema_migration");
 
     private final Path path;
@@ -612,6 +613,24 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "CREATE UNIQUE INDEX waiting_question_one_brain_active_idx ON waiting_question(brain_session_id) WHERE state='WAITING' AND brain_session_id IS NOT NULL",
                 "CREATE UNIQUE INDEX waiting_question_one_graph_active_idx ON waiting_question(task_graph_execution_id) WHERE state='WAITING' AND task_graph_execution_id IS NOT NULL",
                 "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
+        List<String> memorySuggestionQuarantine = List.of(
+                """
+                CREATE TABLE memory_suggestion (
+                  suggestion_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  suggestion_key TEXT NOT NULL,
+                  value_json TEXT NOT NULL,
+                  confidence REAL NOT NULL,
+                  status TEXT NOT NULL,
+                  source TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX memory_suggestion_review_idx ON memory_suggestion(companion_id,status,updated_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -627,6 +646,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(12, "persist task graph inputs and bounded evidence", taskGraphRuntimeState),
                 new Migration(13, "persist task graph terminal result", taskGraphResult),
                 new Migration(14, "persist task graph node outputs", taskGraphOutputs),
-                new Migration(15, "bind waiting questions to task graph executions", taskGraphQuestions));
+                new Migration(15, "bind waiting questions to task graph executions", taskGraphQuestions),
+                new Migration(16, "quarantine external memory suggestions", memorySuggestionQuarantine));
     }
 }

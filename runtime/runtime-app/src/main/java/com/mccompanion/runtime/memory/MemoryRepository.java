@@ -61,6 +61,75 @@ public final class MemoryRepository {
         return relevant(companionId, kind, limit);
     }
 
+    public MemorySuggestion suggest(String companionId, MemoryKind kind, String key, JsonNode value,
+                                    double confidence, Duration ttl, String source,
+                                    String brainSessionId) throws SQLException {
+        if (kind == MemoryKind.WORKING) throw new IllegalArgumentException("working memory cannot be suggested");
+        if (confidence < 0 || confidence > 0.9 || Double.isNaN(confidence)) {
+            throw new IllegalArgumentException("suggestion confidence must be 0..0.9");
+        }
+        if (ttl == null || ttl.compareTo(Duration.ofSeconds(60)) < 0
+                || ttl.compareTo(Duration.ofDays(365)) > 0) {
+            throw new IllegalArgumentException("suggestion ttl must be 60 seconds..365 days");
+        }
+        JsonNode boundedValue = value == null ? Json.MAPPER.nullNode() : value;
+        if (Json.write(boundedValue).length() > 4_096) {
+            throw new IllegalArgumentException("suggestion value exceeds 4096 characters");
+        }
+        long now = clock.millis();
+        long expires = Math.addExact(now, ttl.toMillis());
+        String id = UUID.randomUUID().toString();
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO memory_suggestion(suggestion_id,companion_id,kind,suggestion_key,value_json,
+                confidence,status,source,brain_session_id,expires_at,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,'QUARANTINED',?,?,?,?,?)
+                """)) {
+            statement.setString(1, id);
+            statement.setString(2, required(companionId));
+            statement.setString(3, java.util.Objects.requireNonNull(kind, "kind").name());
+            statement.setString(4, required(key));
+            statement.setString(5, Json.write(boundedValue));
+            statement.setDouble(6, confidence);
+            statement.setString(7, required(source));
+            statement.setString(8, required(brainSessionId));
+            statement.setLong(9, expires);
+            statement.setLong(10, now);
+            statement.setLong(11, now);
+            statement.executeUpdate();
+        }
+        return suggestion(id).orElseThrow();
+    }
+
+    public List<MemorySuggestion> suggestions(String companionId, String status, int limit) throws SQLException {
+        int bounded = Math.max(1, Math.min(limit, 100));
+        long now = clock.millis();
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM memory_suggestion
+                WHERE companion_id=? AND status=? AND expires_at>?
+                ORDER BY updated_at DESC LIMIT ?
+                """)) {
+            statement.setString(1, required(companionId));
+            statement.setString(2, required(status));
+            statement.setLong(3, now);
+            statement.setInt(4, bounded);
+            List<MemorySuggestion> values = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) values.add(readSuggestion(result));
+            }
+            return List.copyOf(values);
+        }
+    }
+
+    private java.util.Optional<MemorySuggestion> suggestion(String suggestionId) throws SQLException {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM memory_suggestion WHERE suggestion_id=?")) {
+            statement.setString(1, required(suggestionId));
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? java.util.Optional.of(readSuggestion(result)) : java.util.Optional.empty();
+            }
+        }
+    }
+
     public List<MemoryFact> search(String companionId, String text, int limit) throws SQLException {
         return search(companionId, null, text, limit);
     }
@@ -112,7 +181,14 @@ public final class MemoryRepository {
     public int expire() throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
                 "DELETE FROM memory_fact WHERE expires_at IS NOT NULL AND expires_at<=?")) {
-            statement.setLong(1, clock.millis()); return statement.executeUpdate();
+            long now = clock.millis();
+            statement.setLong(1, now);
+            int expired = statement.executeUpdate();
+            try (PreparedStatement suggestions = connection.prepareStatement(
+                    "DELETE FROM memory_suggestion WHERE expires_at<=?")) {
+                suggestions.setLong(1, now);
+                return expired + suggestions.executeUpdate();
+            }
         }
     }
 
@@ -179,6 +255,16 @@ public final class MemoryRepository {
                 result.getDouble("confidence"), result.getString("source"),
                 noExpiry ? null : Instant.ofEpochMilli(expires),
                 Instant.ofEpochMilli(result.getLong("created_at")), Instant.ofEpochMilli(result.getLong("updated_at")));
+    }
+
+    private static MemorySuggestion readSuggestion(ResultSet result) throws SQLException {
+        return new MemorySuggestion(result.getString("suggestion_id"), result.getString("companion_id"),
+                MemoryKind.valueOf(result.getString("kind")), result.getString("suggestion_key"),
+                Json.parse(result.getString("value_json")), result.getDouble("confidence"),
+                result.getString("status"), result.getString("source"),
+                result.getString("brain_session_id"), Instant.ofEpochMilli(result.getLong("expires_at")),
+                Instant.ofEpochMilli(result.getLong("created_at")),
+                Instant.ofEpochMilli(result.getLong("updated_at")));
     }
 
     private static String required(String value) {

@@ -13,7 +13,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 
-/** Read-only typed memory access plus unverified preference suggestions from an external Brain. */
+/** Read-only typed memory access plus quarantined suggestions from an external Brain. */
 public final class MemoryToolGateway implements ToolGateway {
     private final MemoryRepository memories;
     public MemoryToolGateway(MemoryRepository memories) { this.memories = java.util.Objects.requireNonNull(memories); }
@@ -23,7 +23,11 @@ public final class MemoryToolGateway implements ToolGateway {
                         "List only body-verified known containers, with dimension compatibility", containerSchema()),
                 definition("memory.list", "List one typed memory category with provenance", listSchema()),
                 definition("memory.search", "Search bounded memory keys and values", searchSchema()),
-                definition("memory.suggest_preference", "Store an unverified preference suggestion for user review", preferenceSchema()));
+                definition("memory.suggest", "Quarantine an unverified typed memory suggestion for review",
+                        suggestionSchema()),
+                definition("memory.suggest_preference",
+                        "Compatibility wrapper that quarantines an unverified preference suggestion",
+                        preferenceSchema()));
     }
 
     @Override public ToolResult execute(ToolContext context, ToolCall call) {
@@ -32,7 +36,8 @@ public final class MemoryToolGateway implements ToolGateway {
                 case "world.locate_known_container" -> locateContainers(context, call);
                 case "memory.list" -> list(context, call);
                 case "memory.search" -> search(context, call);
-                case "memory.suggest_preference" -> suggest(context, call);
+                case "memory.suggest" -> suggest(context, call, false);
+                case "memory.suggest_preference" -> suggest(context, call, true);
                 default -> ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Memory tool is unavailable");
             };
         } catch (IllegalArgumentException failure) {
@@ -88,19 +93,27 @@ public final class MemoryToolGateway implements ToolGateway {
                 boundedLimit(call.arguments().path("limit").asInt(25)))));
     }
 
-    private ToolResult suggest(ToolContext context, ToolCall call) throws java.sql.SQLException {
-        rejectUnexpected(call.arguments(), Set.of("key", "value", "confidence", "ttlSeconds"));
+    private ToolResult suggest(ToolContext context, ToolCall call, boolean preferenceOnly)
+            throws java.sql.SQLException {
+        rejectUnexpected(call.arguments(), preferenceOnly
+                ? Set.of("key", "value", "confidence", "ttlSeconds")
+                : Set.of("kind", "key", "value", "confidence", "ttlSeconds"));
+        MemoryKind kind = preferenceOnly ? MemoryKind.PREFERENCE
+                : kind(call.arguments().path("kind").asText(""));
+        if (kind == MemoryKind.WORKING) throw new IllegalArgumentException("WORKING suggestions are not supported");
         String key = text(call.arguments(), "key", 1, 128);
         JsonNode value = call.arguments().path("value");
         if (value.isMissingNode() || Json.write(value).length() > 4096) throw new IllegalArgumentException("value is required and bounded");
-        rejectSensitive(Json.write(value));
+        rejectSensitive(key + ' ' + Json.write(value));
         double confidence = call.arguments().path("confidence").asDouble(0.5);
         if (confidence < 0 || confidence > 0.9 || Double.isNaN(confidence)) throw new IllegalArgumentException("confidence must be 0..0.9");
         long ttlSeconds = call.arguments().path("ttlSeconds").asLong(2_592_000L);
         if (ttlSeconds < 60 || ttlSeconds > 31_536_000L) throw new IllegalArgumentException("ttlSeconds must be 60..31536000");
-        MemoryFact fact = memories.remember(context.companionId(), MemoryKind.PREFERENCE, key, value,
-                false, confidence, Duration.ofSeconds(ttlSeconds), "EXTERNAL_BRAIN_SUGGESTION");
-        return ok(call, Json.MAPPER.valueToTree(fact));
+        MemorySuggestion suggestion = memories.suggest(context.companionId(), kind, key, value,
+                confidence, Duration.ofSeconds(ttlSeconds), "EXTERNAL_BRAIN_SUGGESTION",
+                context.brainSessionId());
+        return new ToolResult(call.callId(), call.name(), true, "MEMORY_SUGGESTION_QUARANTINED",
+                Json.MAPPER.valueToTree(suggestion), true);
     }
 
     private static ToolResult ok(ToolCall call, JsonNode value) {
@@ -112,6 +125,7 @@ public final class MemoryToolGateway implements ToolGateway {
         schema.set("properties", properties);
         if (name.equals("memory.list")) schema.putArray("required").add("kind");
         if (name.equals("memory.search")) schema.putArray("required").add("query");
+        if (name.equals("memory.suggest")) schema.putArray("required").add("kind").add("key").add("value");
         if (name.equals("memory.suggest_preference")) schema.putArray("required").add("key").add("value");
         return new ToolDefinition(name, "1.0", description, schema, "LOW", "MEMORY",
                 Duration.ofSeconds(5), name.equals("memory.list") || name.equals("memory.search"));
@@ -142,6 +156,12 @@ public final class MemoryToolGateway implements ToolGateway {
         ObjectNode p = Json.object(); p.putObject("key").put("type", "string").put("maxLength", 128);
         p.putObject("value"); p.putObject("confidence").put("type", "number").put("minimum", 0).put("maximum", 0.9);
         p.putObject("ttlSeconds").put("type", "integer").put("minimum", 60).put("maximum", 31_536_000); return p;
+    }
+    private static ObjectNode suggestionSchema() {
+        ObjectNode p = preferenceSchema();
+        p.putObject("kind").put("type", "string").putArray("enum")
+                .add("EPISODIC").add("WORLD").add("PREFERENCE");
+        return p;
     }
     private static MemoryKind kind(String value) {
         try { return MemoryKind.valueOf(value); } catch (IllegalArgumentException failure) { throw new IllegalArgumentException("kind is invalid"); }

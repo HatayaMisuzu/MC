@@ -139,7 +139,7 @@ class TaskGraphExecutorTest {
     }
 
     @Test
-    void unsupportedValidatedNodeFailsHonestlyWithoutCallingTools() {
+    void missingBackingToolFailsHonestlyWithoutCallingTools() {
         FakeGateway tools = new FakeGateway(false);
         TaskGraphExecutor executor = new TaskGraphExecutor(tools);
         var graph = Json.parse("""
@@ -153,7 +153,7 @@ class TaskGraphExecutorTest {
         assertFalse(result.success());
         assertEquals("TASK_GRAPH_INVALID", result.code());
         assertEquals(0, result.toolCalls());
-        assertTrue(result.evidence().toString().contains("NODE_NOT_EXECUTABLE"));
+        assertTrue(result.evidence().toString().contains("TOOL_UNAVAILABLE"));
     }
 
     @Test

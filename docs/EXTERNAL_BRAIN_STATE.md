@@ -48,12 +48,14 @@ release/install verification remain incomplete.
 ## Typed memory management slice
 
 - All four memory categories carry durable provenance in schema migration 7.
-- External Brain tools can list/search typed memories and submit only unverified,
-  expiring preference suggestions. They cannot write verified World facts or delete memory.
+- External Brain tools can list/search typed memories and submit only quarantined, expiring
+  `EPISODIC`, `WORLD`, or `PREFERENCE` suggestions. Suggestions are stored separately from
+  `memory_fact`; they cannot write verified World facts, enter normal memory search/context, or
+  delete memory. The legacy preference Tool is a compatibility wrapper over the same quarantine.
 - Body observations remain the trusted source for verified container World memory;
   user edits are stored with `USER` provenance and take precedence over inference.
 - Added authenticated loopback memory list/search/export, user correction, delete, and
-  per-category clear operations. Secret-shaped values are rejected from Brain suggestions.
+  per-category clear operations. Secret-shaped keys/values are rejected from Brain suggestions.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,
   exposes verification provenance/time, marks same- versus cross-dimension candidates, and
   filters unverified inferences instead of presenting them as world facts.

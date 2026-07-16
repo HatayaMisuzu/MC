@@ -222,6 +222,7 @@ public final class TaskGraphValidator {
                 rejectUnknown(node, path, Set.of("id", "type", "kind", "content"), state.issues);
                 enumText(node, "kind", path, Set.of("EPISODIC", "WORLD", "PREFERENCE"), state.issues);
                 boundedText(node, "content", path, 1, 4_096, state.issues);
+                requireBackingTool(state, path, "memory.suggest");
             }
             case "checkpoint" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "label"), state.issues);

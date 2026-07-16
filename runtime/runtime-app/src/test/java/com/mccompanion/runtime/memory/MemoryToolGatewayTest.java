@@ -24,7 +24,7 @@ class MemoryToolGatewayTest {
             MemoryToolGateway gateway = new MemoryToolGateway(repository);
             ToolContext context = new ToolContext("controller", "brain-session", "c1");
             assertEquals(java.util.List.of("world.locate_known_container", "memory.list", "memory.search",
-                            "memory.suggest_preference"),
+                            "memory.suggest", "memory.suggest_preference"),
                     gateway.definitions(context).stream().map(value -> value.name()).toList());
 
             var listed = gateway.execute(context, new ToolCall("l1", "memory.list",
@@ -35,9 +35,21 @@ class MemoryToolGatewayTest {
             var suggestion = gateway.execute(context, new ToolCall("p1", "memory.suggest_preference",
                     Json.object().put("key", "reply_style").put("value", "concise").put("confidence", 0.7)));
             assertTrue(suggestion.success());
-            assertFalse(suggestion.observation().path("verified").asBoolean());
+            assertEquals("MEMORY_SUGGESTION_QUARANTINED", suggestion.code());
+            assertEquals("QUARANTINED", suggestion.observation().path("status").asText());
             assertEquals("EXTERNAL_BRAIN_SUGGESTION", suggestion.observation().path("source").asText());
-            assertEquals(MemoryKind.PREFERENCE, repository.search("c1", "concise", 10).getFirst().kind());
+            assertTrue(repository.search("c1", "concise", 10).isEmpty());
+            assertEquals(MemoryKind.PREFERENCE,
+                    repository.suggestions("c1", "QUARANTINED", 10).getFirst().kind());
+
+            var worldSuggestion = gateway.execute(context, new ToolCall("w-suggest", "memory.suggest",
+                    Json.object().put("kind", "WORLD").put("key", "landmark:untrusted")
+                            .set("value", Json.object().put("dimension", "examplemod:moon")
+                                    .put("x", 1).put("y", 2).put("z", 3))));
+            assertTrue(worldSuggestion.success());
+            assertEquals("QUARANTINED", worldSuggestion.observation().path("status").asText());
+            assertTrue(repository.relevant("c1", MemoryKind.WORLD, 100).stream()
+                    .noneMatch(value -> value.key().equals("landmark:untrusted")));
 
             repository.remember("c1", MemoryKind.WORLD, "ore:iron",
                     Json.object().put("dimension", "minecraft:overworld"), true, 1.0, null,
@@ -90,6 +102,19 @@ class MemoryToolGatewayTest {
             var result = gateway.execute(new ToolContext("controller", "brain-session", "c1"),
                     new ToolCall("p1", "memory.suggest_preference", Json.object()
                             .put("key", "secret").put("value", "C:\\Users\\Player\\token.txt")));
+            assertFalse(result.success());
+            assertEquals("INVALID_TOOL_ARGUMENTS", result.code());
+        }
+    }
+
+    @Test
+    void workingMemorySuggestionIsRejected() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("working-suggestion.db"))) {
+            database.initialize();
+            MemoryToolGateway gateway = new MemoryToolGateway(new MemoryRepository(database));
+            var result = gateway.execute(new ToolContext("controller", "brain-session", "c1"),
+                    new ToolCall("working", "memory.suggest", Json.object()
+                            .put("kind", "WORKING").put("key", "temporary").put("value", "unsafe")));
             assertFalse(result.success());
             assertEquals("INVALID_TOOL_ARGUMENTS", result.code());
         }

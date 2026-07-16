@@ -580,6 +580,45 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void suggestMemoryQuarantinesContentOutsideVerifiedMemory() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("suggest-memory-node.db"))) {
+            database.initialize();
+            var memories = new com.mccompanion.runtime.memory.MemoryRepository(database);
+            ToolGateway memory = new com.mccompanion.runtime.memory.MemoryToolGateway(memories);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(memory,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall execute = new ToolCall("execution-suggest", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"suggest-world-memory",
+                         "permissions":["MEMORY"],
+                         "root":{"id":"root","type":"sequence","nodes":[
+                           {"id":"suggest","type":"suggest_memory","kind":"WORLD",
+                            "content":"examplemod moon landmark at 1 2 3"},
+                           {"id":"read","type":"read_memory","kind":"WORLD","query":"moon"},
+                           {"id":"done","type":"return","value":"${outputs.read.length}"}
+                         ]}}
+                        """);
+
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(0, terminal.observation().path("value").asInt());
+                assertEquals("QUARANTINED", terminal.observation().path("outputs")
+                        .path("suggest").path("status").asText());
+                assertTrue(memories.relevant("companion-1",
+                        com.mccompanion.runtime.memory.MemoryKind.WORLD, 100).isEmpty());
+                var suggestions = memories.suggestions("companion-1", "QUARANTINED", 10);
+                assertEquals(1, suggestions.size());
+                assertEquals("brain-1", suggestions.getFirst().brainSessionId());
+                assertEquals(com.mccompanion.runtime.memory.MemoryKind.WORLD,
+                        suggestions.getFirst().kind());
+            }
+        }
+    }
+
+    @Test
     void askUserPersistsQuestionAndResumesSameExecutionWithDurableAnswerOutput() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-user.db"))) {
             database.initialize();

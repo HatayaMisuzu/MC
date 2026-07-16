@@ -97,4 +97,23 @@ class MemoryRepositoryTest {
             assertTrue(repository.search("c1", "quiet", 10).isEmpty());
         }
     }
+
+    @Test
+    void quarantinedSuggestionsNeverAppearAsMemoryFacts() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("suggestions.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+
+            MemorySuggestion suggestion = repository.suggest("c1", MemoryKind.WORLD, "landmark:claimed",
+                    Json.object().put("dimension", "examplemod:moon"), 0.5,
+                    Duration.ofDays(30), "EXTERNAL_BRAIN_SUGGESTION", "brain-1");
+
+            assertEquals("QUARANTINED", suggestion.status());
+            assertEquals("brain-1", suggestion.brainSessionId());
+            assertTrue(repository.relevant("c1", MemoryKind.WORLD, 100).isEmpty());
+            assertTrue(repository.search("c1", "moon", 10).isEmpty());
+            assertEquals(suggestion.suggestionId(),
+                    repository.suggestions("c1", "QUARANTINED", 10).getFirst().suggestionId());
+        }
+    }
 }

@@ -75,7 +75,8 @@ class TaskGraphValidatorTest {
                     - {id: done, type: return, value: ok}
                 """, TaskGraphCodec.Format.YAML);
 
-        TaskGraphValidationResult result = validator.validate(graph, Set.of("world.observe", "memory.search"));
+        TaskGraphValidationResult result = validator.validate(
+                graph, Set.of("world.observe", "memory.search", "memory.suggest"));
 
         assertTrue(result.valid(), result.issues().toString());
         assertEquals("generic-composition", result.graphId());

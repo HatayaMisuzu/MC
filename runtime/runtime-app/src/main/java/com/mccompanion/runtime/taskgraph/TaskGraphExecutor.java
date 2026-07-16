@@ -35,7 +35,7 @@ import java.util.function.Consumer;
 public final class TaskGraphExecutor {
     public static final Set<String> EXECUTABLE_NODE_TYPES = Set.of("sequence", "call_tool", "if", "switch",
             "repeat", "while", "retry", "fallback", "parallel", "wait", "checkpoint", "emit_progress",
-            "ask_user", "read_memory", "return", "fail");
+            "ask_user", "read_memory", "suggest_memory", "return", "fail");
     private final ToolGateway tools;
     private final TaskGraphValidator validator;
     private final Set<String> executableNodeTypes;
@@ -132,6 +132,7 @@ public final class TaskGraphExecutor {
                 case "parallel" -> parallelNode(node, path, state, scope);
                 case "ask_user" -> askUser(node, state);
                 case "read_memory" -> readMemory(node, path, state, nodeKey);
+                case "suggest_memory" -> suggestMemory(node, path, state, nodeKey);
                 case "wait" -> waitNode(node, state);
                 case "checkpoint" -> event(nodeId, "CHECKPOINT", node.path("label"), state);
                 case "emit_progress" -> event(nodeId, "PROGRESS", node.path("message"), state);
@@ -365,6 +366,18 @@ public final class TaskGraphExecutor {
                 .put("permission", "MEMORY");
         call.set("arguments", Json.object().put("kind", node.path("kind").asText())
                 .put("query", node.path("query").asText()).put("limit", 25));
+        return callTool(call, path, state, nodeKey);
+    }
+
+    private Outcome suggestMemory(JsonNode node, String path, State state, String nodeKey) {
+        String nodeId = node.path("id").asText();
+        ObjectNode call = Json.object().put("id", nodeId)
+                .put("type", "call_tool").put("tool", "memory.suggest")
+                .put("permission", "MEMORY");
+        String key = "task_graph:" + Digests.sha256(state.executionId + ':' + nodeId);
+        call.set("arguments", Json.object().put("kind", node.path("kind").asText())
+                .put("key", key).put("value", node.path("content").asText())
+                .put("confidence", 0.5).put("ttlSeconds", 2_592_000));
         return callTool(call, path, state, nodeKey);
     }
 

@@ -201,6 +201,21 @@ product UI controls, and release/install verification remain incomplete.
   `SMELT_COMPLETE` observation plus successful action evidence. Fuel-duration preflight,
   alternate furnaces/fuels, cancellation/restart, and Brain E2E remain, so Smelt is `PARTIAL`.
 
+## Deterministic hostile-retreat reflex slice
+
+- Safety evaluation now runs before every active skill/navigation tick. A live hostile within
+  three blocks preempts the current behavior locally without waiting for Runtime or the Brain;
+  the interrupted behavior is closed through the normal action/evidence gateway.
+- Retreat uses ordinary forward player input directly away from the tracked threat. It succeeds
+  only after at least a three-block body displacement and six-block threat clearance remain stable,
+  then records `SAFETY_RETREAT_COMPLETE` and leaves interrupted work explicitly `PAUSED` rather
+  than silently resuming a now-invalid task. A bounded stuck outcome also pauses safely.
+- An isolated real Fabric GameTest begins travel toward a stationary zombie and proves the active
+  task is interrupted, distance from the hostile increases, the body actually moves, and terminal
+  observation/evidence are present. The hostile fixture uses a separate GameTest batch so its
+  production detection radius cannot contaminate unrelated concurrent tests. Terrain-aware escape,
+  environmental-direction recovery, multiple/ranged threats, and restart/E2E remain `PARTIAL`.
+
 ## Craft item slice
 
 - Added `item.craft` / `CraftItem` only when the connected Fabric body reports the

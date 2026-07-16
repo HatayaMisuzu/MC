@@ -12,6 +12,7 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -114,6 +115,58 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertValueEqual(snapshot.behaviorObservation().available(), 2,
                     "collection observation quantity mismatch");
             helper.assertTrue(registry.remove(owner).success(), "collect test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300, batch = "safety")
+    public void safetyReflexInterruptsTaskAndRetreatsFromNearbyHostile(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Retreater").success(), "retreat test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "retreat test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -9; x <= 9; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+        }
+        var zombie = EntityType.ZOMBIE.create(body.serverLevel());
+        helper.assertTrue(zombie != null, "retreat test could not create threat");
+        zombie.setNoAi(true);
+        zombie.moveTo(body.getX() + 2.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(zombie), "retreat test could not spawn threat");
+        Vec3 start = body.position();
+        double initialThreatDistance = zombie.distanceToSqr(body);
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-retreat";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "retreat lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "unsafe-travel", "goto",
+                body.getX() + 8.0D, body.getY(), body.getZ(), null).success(),
+                "retreat test travel failed to start");
+        helper.succeedWhen(() -> {
+            var snapshot = registry.runtimeSnapshots(false).stream()
+                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+            helper.assertValueEqual(snapshot.behaviorState(), "PAUSED",
+                    "active task was not interrupted after safety retreat");
+            helper.assertTrue(body.position().distanceToSqr(start) >= 9.0D,
+                    "retreat did not create a verified movement delta");
+            helper.assertTrue(zombie.distanceToSqr(body) > initialThreatDistance,
+                    "retreat did not increase distance from the hostile");
+            helper.assertTrue(snapshot.behaviorObservation() != null, "retreat produced no observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
+                    "retreat observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
+                    "retreat did not produce successful movement evidence");
+            zombie.discard();
+            helper.assertTrue(registry.remove(owner).success(), "retreat test cleanup failed");
         });
     }
 

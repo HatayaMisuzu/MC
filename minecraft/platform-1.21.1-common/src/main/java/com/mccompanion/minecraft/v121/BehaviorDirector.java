@@ -21,6 +21,7 @@ import net.minecraft.world.inventory.RecipeBookMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.entity.player.StackedContents;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
@@ -56,6 +57,7 @@ final class BehaviorDirector {
     private final Map<UUID, ScanProgress> scans = new HashMap<>();
     private final Map<UUID, MineProgress> mines = new HashMap<>();
     private final Map<UUID, SmeltProgress> smelts = new HashMap<>();
+    private final Map<UUID, RetreatProgress> retreats = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
@@ -135,6 +137,7 @@ final class BehaviorDirector {
         scans.remove(companionId);
         mines.remove(companionId);
         smelts.remove(companionId);
+        retreats.remove(companionId);
         observations.remove(companionId);
     }
 
@@ -147,16 +150,28 @@ final class BehaviorDirector {
     }
 
     void tick(CompanionEntry entry, CompanionPlayer body) {
-        if (entry.mode == CompanionEntry.Mode.IDLE || entry.mode == CompanionEntry.Mode.PAUSED) {
+        RetreatProgress retreat = retreats.get(entry.companionId);
+        if (retreat != null) {
+            tickRetreat(entry, body, retreat);
             return;
         }
-        if (entry.mode == CompanionEntry.Mode.SKILL) {
-            tickSkill(entry, body);
+        if (entry.mode != CompanionEntry.Mode.PAUSED) {
+            var threat = reflexController.nearestRetreatThreat(body);
+            if (threat.isPresent() && threat.get().distanceToSqr(body) <= 9.0D) {
+                beginRetreat(entry, body, threat.get());
+                return;
+            }
+        }
+        if (entry.mode == CompanionEntry.Mode.IDLE || entry.mode == CompanionEntry.Mode.PAUSED) {
             return;
         }
         var reflex = reflexController.blockingReason(body);
         if (reflex.isPresent()) {
             pauseSafely(entry, body, reflex.get());
+            return;
+        }
+        if (entry.mode == CompanionEntry.Mode.SKILL) {
+            tickSkill(entry, body);
             return;
         }
 
@@ -231,6 +246,54 @@ final class BehaviorDirector {
         }
         boolean jumpRequested = delta.y > 0.6D || body.horizontalCollision;
         actionGateway.applyMoveInput(body, yaw, jumpRequested);
+    }
+
+    private void beginRetreat(CompanionEntry entry, CompanionPlayer body, Entity threat) {
+        CompanionEntry.Mode interruptedMode = entry.mode;
+        if (interruptedMode != CompanionEntry.Mode.IDLE && interruptedMode != CompanionEntry.Mode.PAUSED) {
+            stop(entry, body, false, "SAFETY_RETREAT_TRIGGERED");
+        }
+        retreats.put(entry.companionId, new RetreatProgress(
+                threat.getUUID(), interruptedMode, body.position(), server.getTickCount()));
+        actionGateway.startBehavior(body, CompanionEntry.Mode.GOTO, server.getTickCount());
+        savedData.changed();
+        logger.warn("companion_safety_retreat owner={} companion={} threat={}",
+                entry.ownerId, entry.companionId, threat.getUUID());
+    }
+
+    private void tickRetreat(CompanionEntry entry, CompanionPlayer body, RetreatProgress retreat) {
+        Entity threat = body.serverLevel().getEntity(retreat.threatId);
+        double displacement = body.position().distanceToSqr(retreat.startPosition);
+        boolean clear = threat == null || !threat.isAlive() || threat.distanceToSqr(body) >= 36.0D;
+        if (clear && displacement >= 9.0D) {
+            if (++retreat.clearTicks < 5) { actionGateway.stopInput(body); return; }
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "SAFETY_RETREAT_COMPLETE", "", 1, 1));
+            actionGateway.stopInput(body);
+            actionGateway.completeBehavior(body, true, "NONE", server.getTickCount());
+            retreats.remove(entry.companionId);
+            entry.mode = retreat.interruptedMode == CompanionEntry.Mode.IDLE
+                    ? CompanionEntry.Mode.IDLE : CompanionEntry.Mode.PAUSED;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed();
+            return;
+        }
+        retreat.clearTicks = 0;
+        if (server.getTickCount() - retreat.startedTick > 100) {
+            actionGateway.stopInput(body);
+            actionGateway.completeBehavior(body, false, "SAFETY_RETREAT_STUCK", server.getTickCount());
+            retreats.remove(entry.companionId);
+            entry.mode = CompanionEntry.Mode.PAUSED;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "SAFETY_RETREAT_STUCK", "", 1, 0));
+            savedData.changed();
+            return;
+        }
+        if (threat == null) { actionGateway.stopInput(body); return; }
+        Vec3 away = body.position().subtract(threat.position());
+        float yaw = (float) Math.toDegrees(Math.atan2(-away.x, away.z));
+        actionGateway.applyMoveInput(body, yaw, body.horizontalCollision);
     }
 
     private SkillProgress createSkill(CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
@@ -1205,6 +1268,20 @@ final class BehaviorDirector {
 
         private NavigationProgress(int startedTick) {
             this.startedTick = startedTick;
+        }
+    }
+
+    private static final class RetreatProgress {
+        private final UUID threatId;
+        private final CompanionEntry.Mode interruptedMode;
+        private final Vec3 startPosition;
+        private final int startedTick;
+        private int clearTicks;
+
+        private RetreatProgress(UUID threatId, CompanionEntry.Mode interruptedMode,
+                                Vec3 startPosition, int startedTick) {
+            this.threatId = threatId; this.interruptedMode = interruptedMode;
+            this.startPosition = startPosition; this.startedTick = startedTick;
         }
     }
 

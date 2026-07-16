@@ -251,9 +251,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 var activeTask = commands.activeTaskFor(companionId);
                 var activePlan = plans.activeForCompanion(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
+                var incoming = incomingMessages.classify(text, waiting.orElse(null));
                 var recent = conversations.recentTranscript(companionId, 12);
-                conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
-                        "MESSAGE", text, Json.object().put("channel", "EXTERNAL_BRAIN"));
                 var session = sessions.forCompanion(companionId).orElse(null);
                 var visible = capabilityVisibility.resolve(session == null ? null : session.handshake(), companion.status());
                 JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
@@ -263,12 +262,28 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 AgentContext context = new AgentContext(companionId, verifiedWorld, recent, taskContext,
                         memories.verifiedLandmarkKeys(companionId), visible.availableNames(),
                         memories.preferenceContext(companionId, 24), 5);
-                var result = externalBrain.continueTurn(controllerId, companionId, text, context);
-                if ((result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE
-                        || result.kind() == BrainTurnResult.Kind.ASK_USER) && !result.response().isBlank()) {
+                if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
+                        && incoming.kind() == IncomingMessageKind.CONTROL) {
+                    conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
+                    externalBrain.cancel(controllerId, companionId, "OWNER_CANCELLED");
+                    sendJson(exchange, 200, Json.object().put("accepted", true).put("code", "BRAIN_CANCELLED"));
+                    return;
+                }
+                if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
+                        && incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                    conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                }
+                if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
+                    conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                            "MESSAGE", text, Json.object().put("channel", "EXTERNAL_BRAIN"));
+                }
+                var result = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
+                        && incoming.kind() == IncomingMessageKind.WAITING_ANSWER
+                        ? externalBrain.answer(controllerId, waiting.orElseThrow(), incoming, context)
+                        : externalBrain.continueTurn(controllerId, companionId, text, context);
+                if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE && !result.response().isBlank()) {
                     conversations.say(companionId, activePlan.map(value -> value.planId()).orElse(null),
-                            result.kind() == BrainTurnResult.Kind.ASK_USER ? "QUESTION" : "CHAT",
-                            result.response(), Json.object().put("channel", "EXTERNAL_BRAIN")
+                            "CHAT", result.response(), Json.object().put("channel", "EXTERNAL_BRAIN")
                                     .put("brainSessionId", result.sessionId()));
                 }
                 ObjectNode body = Json.object().put("accepted", true).put("code", result.code());

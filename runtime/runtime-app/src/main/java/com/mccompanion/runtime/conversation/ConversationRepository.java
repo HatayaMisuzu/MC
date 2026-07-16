@@ -37,8 +37,28 @@ public final class ConversationRepository {
     public WaitingQuestion ask(String companionId, String planId, String prompt, String reason,
                                List<ConversationOption> options, boolean freeTextAllowed,
                                JsonNode context, Instant expiresAt) throws SQLException {
+        return askInternal(companionId, required(planId), null, null, prompt, reason, options,
+                freeTextAllowed, context, expiresAt);
+    }
+
+    public WaitingQuestion askBrain(String companionId, String brainSessionId, String taskId,
+                                    String prompt, String reason, List<ConversationOption> options,
+                                    boolean freeTextAllowed, JsonNode context, Instant expiresAt) throws SQLException {
+        String sessionId = required(brainSessionId);
+        Optional<WaitingQuestion> existing = activeForBrainSession(sessionId);
+        if (existing.isPresent()) return existing.get();
+        return askInternal(companionId, null, sessionId, taskId, prompt, reason, options,
+                freeTextAllowed, context, expiresAt);
+    }
+
+    private WaitingQuestion askInternal(String companionId, String planId, String brainSessionId, String taskId,
+                                        String prompt, String reason, List<ConversationOption> options,
+                                        boolean freeTextAllowed, JsonNode context, Instant expiresAt) throws SQLException {
         if (options == null || options.isEmpty() || options.size() > 3) {
             throw new IllegalArgumentException("A waiting question requires 1..3 options");
+        }
+        if (options.stream().map(ConversationOption::id).distinct().count() != options.size()) {
+            throw new IllegalArgumentException("Waiting question option ids must be unique");
         }
         String questionId = UUID.randomUUID().toString();
         String eventId = UUID.randomUUID().toString();
@@ -47,19 +67,21 @@ public final class ConversationRepository {
             connection.setAutoCommit(false);
             try {
                 try (PreparedStatement statement = connection.prepareStatement("""
-                        INSERT INTO waiting_question(question_id,plan_id,companion_id,prompt,reason,options_json,
-                          free_text_allowed,state,context_json,answer_json,created_at,updated_at,expires_at)
-                        VALUES(?,?,?,?,?,?,?,'WAITING',?,NULL,?,?,?)
+                        INSERT INTO waiting_question(question_id,plan_id,brain_session_id,task_id,companion_id,
+                          prompt,reason,options_json,free_text_allowed,state,context_json,answer_json,
+                          created_at,updated_at,expires_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,'WAITING',?,NULL,?,?,?)
                         """)) {
-                    statement.setString(1, questionId); statement.setString(2, required(planId));
-                    statement.setString(3, required(companionId)); statement.setString(4, required(prompt));
-                    statement.setString(5, required(reason));
-                    statement.setString(6, Json.write(Json.MAPPER.valueToTree(options)));
-                    statement.setInt(7, freeTextAllowed ? 1 : 0);
-                    statement.setString(8, Json.write(context == null ? Json.object() : context));
-                    statement.setLong(9, now); statement.setLong(10, now);
-                    if (expiresAt == null) statement.setNull(11, java.sql.Types.BIGINT);
-                    else statement.setLong(11, expiresAt.toEpochMilli());
+                    statement.setString(1, questionId); statement.setString(2, planId);
+                    statement.setString(3, brainSessionId); statement.setString(4, taskId);
+                    statement.setString(5, required(companionId)); statement.setString(6, required(prompt));
+                    statement.setString(7, required(reason));
+                    statement.setString(8, Json.write(Json.MAPPER.valueToTree(options)));
+                    statement.setInt(9, freeTextAllowed ? 1 : 0);
+                    statement.setString(10, Json.write(context == null ? Json.object() : context));
+                    statement.setLong(11, now); statement.setLong(12, now);
+                    if (expiresAt == null) statement.setNull(13, java.sql.Types.BIGINT);
+                    else statement.setLong(13, expiresAt.toEpochMilli());
                     statement.executeUpdate();
                 }
                 JsonNode payload = Json.object().put("reason", reason).put("freeTextAllowed", freeTextAllowed)
@@ -80,13 +102,17 @@ public final class ConversationRepository {
             try {
                 WaitingQuestion question = waiting(connection, questionId).orElseThrow(
                         () -> new IllegalArgumentException("QUESTION_NOT_FOUND"));
-                if (!question.state().equals("WAITING")) throw new IllegalStateException("QUESTION_NOT_WAITING");
                 boolean knownOption = optionId != null && question.options().stream().anyMatch(v -> v.id().equals(optionId));
                 if (!knownOption && (!question.freeTextAllowed() || text == null || text.isBlank())) {
                     throw new IllegalArgumentException("ANSWER_NOT_ALLOWED");
                 }
                 JsonNode answer = Json.object().put("text", text == null ? "" : text.strip())
                         .put("optionId", knownOption ? optionId : "");
+                if (question.state().equals("ANSWERED")) {
+                    if (answer.equals(question.answer())) return question;
+                    throw new IllegalStateException("QUESTION_ALREADY_ANSWERED");
+                }
+                if (!question.state().equals("WAITING")) throw new IllegalStateException("QUESTION_NOT_WAITING");
                 try (PreparedStatement update = connection.prepareStatement("""
                         UPDATE waiting_question SET state='ANSWERED',answer_json=?,updated_at=?
                         WHERE question_id=? AND state='WAITING'
@@ -95,7 +121,8 @@ public final class ConversationRepository {
                     if (update.executeUpdate() != 1) throw new IllegalStateException("QUESTION_NOT_WAITING");
                 }
                 insertEvent(connection, UUID.randomUUID().toString(), question.companionId(), question.planId(),
-                        questionId, "USER", "ANSWER", text == null ? optionId : text, answer, now);
+                        questionId, "USER", "ANSWER",
+                        text == null || text.isBlank() ? optionId : text.strip(), answer, now);
                 connection.commit();
             } catch (SQLException | RuntimeException failure) { connection.rollback(); throw failure; }
             finally { connection.setAutoCommit(true); }
@@ -124,6 +151,18 @@ public final class ConversationRepository {
                 """)) {
             statement.setString(1, companionId); statement.setLong(2, clock.millis());
             try (ResultSet result = statement.executeQuery()) { return result.next() ? Optional.of(readQuestion(result)) : Optional.empty(); }
+        }
+    }
+
+    public Optional<WaitingQuestion> activeForBrainSession(String brainSessionId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM waiting_question WHERE brain_session_id=? AND state='WAITING'
+                  AND (expires_at IS NULL OR expires_at>?) ORDER BY updated_at DESC LIMIT 1
+                """)) {
+            statement.setString(1, required(brainSessionId)); statement.setLong(2, clock.millis());
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(readQuestion(result)) : Optional.empty();
+            }
         }
     }
 
@@ -165,6 +204,14 @@ public final class ConversationRepository {
                 "UPDATE conversation_event SET game_delivered=1 WHERE event_id=? AND companion_id=?")) {
             statement.setString(1, eventId);
             statement.setString(2, companionId);
+            statement.executeUpdate();
+        }
+    }
+
+    public void markQuestionGameDelivered(String questionId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "UPDATE conversation_event SET game_delivered=1 WHERE question_id=? AND direction='ASSISTANT'")) {
+            statement.setString(1, required(questionId));
             statement.executeUpdate();
         }
     }
@@ -217,6 +264,7 @@ public final class ConversationRepository {
         long expires = result.getLong("expires_at"); Instant expiresAt = result.wasNull() ? null : Instant.ofEpochMilli(expires);
         String answer = result.getString("answer_json");
         return new WaitingQuestion(result.getString("question_id"), result.getString("plan_id"),
+                result.getString("brain_session_id"), result.getString("task_id"),
                 result.getString("companion_id"), result.getString("prompt"), result.getString("reason"),
                 List.copyOf(options), result.getInt("free_text_allowed") != 0, result.getString("state"),
                 Json.parse(result.getString("context_json")), answer == null ? null : Json.parse(answer),

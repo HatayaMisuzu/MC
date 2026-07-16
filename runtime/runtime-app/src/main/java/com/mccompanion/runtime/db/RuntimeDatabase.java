@@ -497,6 +497,41 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "ALTER TABLE brain_tool_call ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE brain_tool_call ADD COLUMN delivered_at INTEGER",
                 "CREATE INDEX brain_tool_call_task_idx ON brain_tool_call(task_id)");
+        List<String> externalBrainQuestions = List.of(
+                "ALTER TABLE waiting_question RENAME TO waiting_question_legacy",
+                """
+                CREATE TABLE waiting_question (
+                  question_id TEXT PRIMARY KEY,
+                  plan_id TEXT,
+                  brain_session_id TEXT,
+                  task_id TEXT,
+                  companion_id TEXT NOT NULL,
+                  prompt TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  options_json TEXT NOT NULL,
+                  free_text_allowed INTEGER NOT NULL,
+                  state TEXT NOT NULL,
+                  context_json TEXT NOT NULL,
+                  answer_json TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  expires_at INTEGER,
+                  CHECK ((plan_id IS NOT NULL) <> (brain_session_id IS NOT NULL)),
+                  FOREIGN KEY(plan_id) REFERENCES agent_plan(plan_id) ON DELETE CASCADE,
+                  FOREIGN KEY(brain_session_id) REFERENCES brain_session(session_id) ON DELETE CASCADE,
+                  FOREIGN KEY(task_id) REFERENCES task(task_id) ON DELETE SET NULL
+                )
+                """,
+                """
+                INSERT INTO waiting_question(question_id,plan_id,brain_session_id,task_id,companion_id,prompt,
+                  reason,options_json,free_text_allowed,state,context_json,answer_json,created_at,updated_at,expires_at)
+                SELECT question_id,plan_id,NULL,NULL,companion_id,prompt,reason,options_json,free_text_allowed,state,
+                  context_json,answer_json,created_at,updated_at,expires_at FROM waiting_question_legacy
+                """,
+                "DROP TABLE waiting_question_legacy",
+                "CREATE UNIQUE INDEX waiting_question_one_active_idx ON waiting_question(plan_id) WHERE state='WAITING' AND plan_id IS NOT NULL",
+                "CREATE UNIQUE INDEX waiting_question_one_brain_active_idx ON waiting_question(brain_session_id) WHERE state='WAITING' AND brain_session_id IS NOT NULL",
+                "CREATE INDEX waiting_question_companion_idx ON waiting_question(companion_id,state,updated_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -506,6 +541,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(6, "persist companion conversation and waiting questions", companionInteraction),
                 new Migration(7, "record typed memory provenance", memoryProvenance),
                 new Migration(8, "persist external brain sessions and tool observations", brainAudit),
-                new Migration(9, "bind asynchronous brain tools to durable tasks", asynchronousBrainTools));
+                new Migration(9, "bind asynchronous brain tools to durable tasks", asynchronousBrainTools),
+                new Migration(10, "persist external brain waiting questions", externalBrainQuestions));
     }
 }

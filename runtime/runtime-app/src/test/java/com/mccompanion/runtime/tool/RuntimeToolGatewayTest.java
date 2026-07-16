@@ -185,6 +185,26 @@ class RuntimeToolGatewayTest {
                 assertFalse(blocked.success());
                 assertEquals("TOOL_BLOCKED", blocked.code());
                 assertEquals("BLOCKED", blocked.observation().path("state").asText());
+
+                for (TaskState immediate : List.of(TaskState.PAUSED, TaskState.RECONCILIATION_REQUIRED)) {
+                    String id = immediate.name().toLowerCase(java.util.Locale.ROOT);
+                    var waitingTask = tasks.create("c-" + id, TaskType.TRAVEL, id, Json.object());
+                    waitingTask = tasks.transition(waitingTask.taskId(), waitingTask.revision(), TaskState.ACCEPTED,
+                            "CommandAccepted", Json.object());
+                    waitingTask = tasks.transition(waitingTask.taskId(), waitingTask.revision(), immediate,
+                            "Behavior" + immediate, Json.object().put("state", immediate.name()));
+                    ToolCall waitingCall = new ToolCall("call-" + id, "movement.navigate", Json.object());
+                    ToolResult waitingAccepted = new ToolResult(waitingCall.callId(), waitingCall.name(), true,
+                            "COMMAND_DISPATCHED", Json.object().put("taskId", waitingTask.taskId()), false);
+                    long started = System.nanoTime();
+                    ToolResult immediateResult = gateway.awaitTerminal(new ToolContext("hermes", "session-" + id,
+                                    "c-" + id), waitingCall, waitingAccepted, Duration.ofSeconds(5), ignored -> { });
+                    assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
+                            immediate + " waited for the tool timeout");
+                    assertTrue(immediateResult.terminal());
+                    assertEquals(immediate == TaskState.PAUSED ? "BLOCKED" : "INTERRUPTED",
+                            immediateResult.observation().path("state").asText());
+                }
             }
         }
     }

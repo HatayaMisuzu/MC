@@ -272,7 +272,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 var activePlan = plans.activeForCompanion(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
-                if (waiting.isPresent() && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
+                if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() == null
+                        && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
                     var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
                     reply.put("accepted", true).put("source", "waiting-answer")
                             .put("reply", "已收到你的回答，并继续原来的任务。")
@@ -286,8 +287,10 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     return;
                 }
                 var recentConversation = conversations.recentTranscript(companionId, 12);
-                conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
-                        "MESSAGE", text, Json.object().put("channel", "GAME"));
+                if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
+                    conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                            "MESSAGE", text, Json.object().put("channel", "GAME"));
+                }
                 var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
                 JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
                 AgentContext context = new AgentContext(companionId, verifiedWorld, recentConversation,
@@ -295,13 +298,35 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         memories.verifiedLandmarkKeys(companionId),
                         visible.availableNames(), memories.preferenceContext(companionId, 24), 5);
                 if (externalBrain != null) {
-                    var brainResult = externalBrain.continueTurn("runtime-primary", companionId, text, context);
+                    if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
+                            && incoming.kind() == IncomingMessageKind.CONTROL) {
+                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
+                        externalBrain.cancel("runtime-primary", companionId, "OWNER_CANCELLED");
+                        reply.put("accepted", true).put("source", "external-brain")
+                                .put("code", "BRAIN_CANCELLED").put("decision", BrainTurnResult.Kind.CANCEL.name())
+                                .put("reply", "Cancelled.");
+                        ObjectNode brainMessage = envelope(session, "player_reply");
+                        brainMessage.set("payload", reply);
+                        if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
+                        return;
+                    }
+                    if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
+                            && incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                    }
+                    var brainResult = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
+                            && incoming.kind() == IncomingMessageKind.WAITING_ANSWER
+                            ? externalBrain.answer("runtime-primary", waiting.orElseThrow(), incoming, context)
+                            : externalBrain.continueTurn("runtime-primary", companionId, text, context);
                     reply.put("accepted", true).put("source", "external-brain").put("code", brainResult.code())
                             .put("decision", brainResult.kind().name()).put("reply", brainResult.response());
                     reply.set("capabilityStates", visible.toJson());
                     reply.set("toolResults", Json.MAPPER.valueToTree(brainResult.toolResults()));
+                    if (brainResult.question() != null) {
+                        reply.set("waitingQuestion", Json.MAPPER.valueToTree(brainResult.question()));
+                    }
                     com.mccompanion.runtime.conversation.ConversationEvent brainReply = null;
-                    if (!brainResult.response().isBlank()) {
+                    if (brainResult.kind() == BrainTurnResult.Kind.FINAL_RESPONSE && !brainResult.response().isBlank()) {
                         brainReply = conversations.recordDirectReply(companionId, null,
                                 brainResult.kind() == BrainTurnResult.Kind.ASK_USER ? "QUESTION" : "CHAT",
                                 brainResult.response(), Json.object().put("channel", "GAME")
@@ -314,6 +339,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     if (session.peer().isOpen()) {
                         session.peer().send(Json.write(brainMessage));
                         if (brainReply != null) conversations.markDirectReplyDelivered(brainReply.eventId());
+                        if (brainResult.question() != null) conversations.repository()
+                                .markQuestionGameDelivered(brainResult.question().questionId());
                     }
                     return;
                 }

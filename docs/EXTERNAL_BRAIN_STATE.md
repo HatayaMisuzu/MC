@@ -8,10 +8,10 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `ASYNC_EXTERNAL_BRAIN_TOOL_LOOP_REPLAY_VERIFIED`
+Current milestone: `EXTERNAL_ASK_USER_CORE_REPLAY_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
-the complete generic Minecraft tool set, External Brain ASK_USER migration,
+the complete generic Minecraft tool set, the full partial-delivery ASK_USER scenario,
 product UI controls, and release/install verification remain incomplete.
 
 ## Completed in this slice
@@ -76,7 +76,10 @@ product UI controls, and release/install verification remain incomplete.
   IDs and the existing command idempotency store prevent duplicate Fabric execution.
 - Tool timeout dispatches a real cancellation and reports `INTERRUPTED`; concurrent controller
   cancellation reaches the active Tool Gateway without waiting for the Brain turn lock.
-- `BLOCKED` is returned immediately with the last Fabric observation so the external Brain can
+- Tool timeout waits briefly for durable Fabric cancellation confirmation and distinguishes
+  confirmed `CANCELLED` from an honestly `INTERRUPTED` result.
+- `PAUSED` is returned immediately as `BLOCKED`, and `RECONCILIATION_REQUIRED` immediately as
+  `INTERRUPTED`, with the last Fabric observation so the external Brain can
   ask the owner rather than waiting until timeout.
 - The local Hermes Replay E2E proves `movement.navigate -> inventory.withdraw -> movement.return
   -> inventory.deliver -> FINAL_RESPONSE` against a real Fabric 1.21.1 GameTest body. Every step
@@ -101,6 +104,24 @@ product UI controls, and release/install verification remain incomplete.
   delivery. Unacknowledged events retry on status updates, and the body deduplicates event
   IDs before displaying them so a retry cannot produce duplicate chat messages.
 - This is Replay automation evidence only; no Live provider or human-playtest claim is made.
+
+## External Brain ASK_USER core slice
+
+- Hermes `mcac-brain/1` accepts a validated structured `ASK_USER` result. The
+  OpenAI-compatible adapter exposes a bounded `ask_user` function that Runtime intercepts;
+  it is never dispatched as a Minecraft tool.
+- Schema migration 10 stores a question against exactly one legacy plan or external
+  `brainSessionId`, with optional verified Task binding, 1–3 stable option IDs, free-text policy,
+  context, answer, expiry, and lifecycle state.
+- The same Brain session reuses the same active `questionId`. Identical answer retries are
+  idempotent, conflicting second answers are rejected, and only one ANSWER event is recorded.
+- Authenticated Web ingress and Fabric game chat classify answer, ordinary chat, goal change,
+  and cancellation separately. Ordinary chat does not consume a bounded option question;
+  cancellation clears it; a valid answer resumes the original Brain session without opening a
+  competing session.
+- Repository restart, coordinator interruption/resume, Hermes/OpenAI-compatible adapter,
+  HTTP, and game-delivery Replay tests pass locally. The complete `6/16 -> withdraw 6 -> return
+  -> deliver` combined ASK_USER/Fabric E2E remains open and is not claimed complete.
 
 ## Deposit to storage slice
 

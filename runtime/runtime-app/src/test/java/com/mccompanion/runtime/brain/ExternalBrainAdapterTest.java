@@ -89,6 +89,57 @@ class ExternalBrainAdapterTest {
     }
 
     @Test
+    void openAiCompatibleAdapterReturnsStructuredAskUserWithoutExecutingItAsATool() throws Exception {
+        try (TestServer server = new TestServer(exchange -> {
+            var arguments = Json.object().put("prompt", "Only 6 ingots exist. What next?")
+                    .put("reason", "RESOURCE_SHORTAGE").put("freeTextAllowed", false);
+            var options = arguments.putArray("options");
+            options.addObject().put("id", "deliver_partial").put("label", "Deliver 6");
+            options.addObject().put("id", "collect_missing").put("label", "Collect 10");
+            arguments.set("context", Json.object().put("available", 6));
+            var response = Json.object();
+            var function = response.putArray("choices").addObject().putObject("message")
+                    .put("role", "assistant").putNull("content").putArray("tool_calls").addObject()
+                    .put("id", "question_1").put("type", "function").putObject("function");
+            function.put("name", "ask_user").put("arguments", Json.write(arguments));
+            respond(exchange, 200, Json.write(response));
+        }); OpenAiCompatibleBrainAdapter adapter = new OpenAiCompatibleBrainAdapter(
+                server.baseUrl(), "fixture-token", "replay-model", Duration.ofSeconds(5), 512)) {
+            BrainSession session = adapter.openSession(sessionRequest());
+            BrainTurnResult result = adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                    "Bring 16 ingots", context(), List.of(), 4));
+            assertEquals(BrainTurnResult.Kind.ASK_USER, result.kind());
+            assertEquals("RESOURCE_SHORTAGE", result.question().reason());
+            assertEquals(List.of("deliver_partial", "collect_missing"), result.question().options().stream()
+                    .map(com.mccompanion.runtime.conversation.ConversationOption::id).toList());
+        }
+    }
+
+    @Test
+    void hermesAdapterValidatesStructuredAskUser() throws Exception {
+        try (TestServer server = new TestServer(exchange -> {
+            if (exchange.getRequestURI().getPath().equals("/sessions")) {
+                respond(exchange, 200, "{\"sessionId\":\"hermes_question_1\"}");
+            } else {
+                respond(exchange, 200, """
+                        {"kind":"ASK_USER","question":{"prompt":"Deliver 6 or collect 10?",
+                        "reason":"RESOURCE_SHORTAGE","options":[
+                        {"id":"deliver_partial","label":"Deliver 6"},
+                        {"id":"collect_missing","label":"Collect 10"}],
+                        "freeTextAllowed":false,"context":{"available":6}}}
+                        """);
+            }
+        }); HermesBrainAdapter adapter = new HermesBrainAdapter(
+                server.baseUrl(), "fixture-token", Duration.ofSeconds(5))) {
+            BrainSession session = adapter.openSession(sessionRequest());
+            BrainTurnResult result = adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                    "Bring 16", context(), List.of(), 4));
+            assertEquals(BrainTurnResult.Kind.ASK_USER, result.kind());
+            assertEquals(2, result.question().options().size());
+        }
+    }
+
+    @Test
     void adaptersRejectClearTextNonLoopbackEndpoints() {
         assertThrows(IllegalArgumentException.class, () -> new OpenAiCompatibleBrainAdapter(
                 "http://192.0.2.1", "fixture-token", "model", Duration.ofSeconds(1), 128));

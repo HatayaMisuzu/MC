@@ -182,6 +182,7 @@ public final class BrainAuditRepository {
                                     .put("terminal", toolRows.getInt("terminal") != 0)
                                     .put("taskId", toolRows.getString("task_id"))
                                     .put("behaviorId", toolRows.getString("behavior_id"))
+                                    .put("delivered", toolRows.getObject("delivered_at") != null)
                                     .set("observation", Json.parse(toolRows.getString("observation_json")));
                         }
                     }

@@ -7,16 +7,26 @@ import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolDefinition;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
+import com.mccompanion.runtime.conversation.ConversationOption;
+import com.mccompanion.runtime.conversation.ConversationRepository;
+import com.mccompanion.runtime.conversation.IncomingMessageKind;
+import com.mccompanion.runtime.conversation.IncomingMessageResolution;
+import com.mccompanion.runtime.conversation.WaitingQuestion;
+import com.mccompanion.runtime.db.RuntimeDatabase;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class ExternalBrainCoordinatorTest {
+    @TempDir Path temporary;
+
     @Test
     void replayBrainCanChatWithoutCreatingOrCallingAnyTool() {
         RecordingGateway gateway = new RecordingGateway();
@@ -117,6 +127,82 @@ class ExternalBrainCoordinatorTest {
         }
     }
 
+    @Test
+    void askUserIsDurableAndAnswerResumesTheSameBrainSessionExactlyOnce() throws Exception {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            if (turns.getAndIncrement() == 0) {
+                return BrainTurnResult.askUser(new BrainQuestion(
+                        "Only 6 of 16 iron ingots are available. What should I do?", "RESOURCE_SHORTAGE",
+                        List.of(new ConversationOption("deliver_partial", "Deliver 6", "Deliver existing stock"),
+                                new ConversationOption("collect_missing", "Collect 10", "Mine the remainder")),
+                        false, Json.object().put("available", 6).put("requested", 16), null));
+            }
+            JsonNodeView answer = new JsonNodeView(request.userMessage());
+            assertEquals("user_answer", answer.json.path("type").asText());
+            assertEquals("deliver_partial", answer.json.path("optionId").asText());
+            return BrainTurnResult.finalResponse("I will deliver the available 6 ingots.");
+        });
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-user.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            ConversationRepository conversations = new ConversationRepository(database);
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, new RecordingGateway(), 4, audit, conversations)) {
+                BrainCoordinatorResult asked = coordinator.continueTurn("hermes-1", "c1", "Bring 16 iron", context());
+                assertEquals(BrainTurnResult.Kind.ASK_USER, asked.kind());
+                assertNotNull(asked.question());
+                assertEquals(asked.sessionId(), asked.question().brainSessionId());
+                assertEquals(asked.question().questionId(), conversations.activeForCompanion("c1").orElseThrow().questionId());
+
+                BrainCoordinatorResult resumed = coordinator.answer("hermes-1", asked.question(),
+                        new IncomingMessageResolution(IncomingMessageKind.WAITING_ANSWER,
+                                "deliver_partial", "Deliver 6"), context());
+                assertEquals(asked.sessionId(), resumed.sessionId());
+                assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, resumed.kind());
+                assertTrue(conversations.activeForCompanion("c1").isEmpty());
+                assertEquals(1, conversations.list("c1", 10).stream()
+                        .filter(event -> event.kind().equals("ANSWER")).count());
+            }
+        }
+    }
+
+    @Test
+    void answerAfterRuntimeInterruptionResumesPersistedBrainSession() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-restart.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            ConversationRepository conversations = new ConversationRepository(database);
+            ReplayBrainAdapter beforeRestart = new ReplayBrainAdapter(request -> BrainTurnResult.askUser(
+                    new BrainQuestion("Continue with 6?", "RESOURCE_SHORTAGE",
+                            List.of(new ConversationOption("yes", "Yes", "Continue with six")),
+                            false, Json.object(), null)));
+            ExternalBrainCoordinator first = new ExternalBrainCoordinator(
+                    beforeRestart, new RecordingGateway(), 4, audit, conversations);
+            try {
+                BrainCoordinatorResult asked = first.continueTurn("hermes-1", "c1", "Bring 16", context());
+                String originalSession = asked.sessionId();
+                assertEquals(1, audit.interruptActiveSessions());
+
+                ReplayBrainAdapter afterRestart = new ReplayBrainAdapter(request -> {
+                    assertEquals(originalSession, request.sessionId());
+                    assertTrue(request.userMessage().contains("\"optionId\":\"yes\""));
+                    return BrainTurnResult.finalResponse("Continuing with six.");
+                });
+                try (ExternalBrainCoordinator recovered = new ExternalBrainCoordinator(
+                        afterRestart, new RecordingGateway(), 4, audit, conversations)) {
+                    WaitingQuestion persisted = conversations.activeForCompanion("c1").orElseThrow();
+                    BrainCoordinatorResult result = recovered.answer("hermes-1", persisted,
+                            new IncomingMessageResolution(IncomingMessageKind.WAITING_ANSWER, "yes", "yes"), context());
+                    assertEquals(originalSession, result.sessionId());
+                    assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+                }
+            } finally {
+                first.close();
+            }
+        }
+    }
+
     private static AgentContext context() {
         return AgentContext.empty("c1", List.of("NavigateTo", "FollowOwner"));
     }
@@ -134,5 +220,10 @@ class ExternalBrainCoordinatorTest {
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("health", 18), true);
         }
+    }
+
+    private static final class JsonNodeView {
+        private final com.fasterxml.jackson.databind.JsonNode json;
+        private JsonNodeView(String value) { json = Json.parse(value); }
     }
 }

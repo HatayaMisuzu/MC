@@ -179,9 +179,9 @@ public final class RuntimeApplication implements AutoCloseable {
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains)));
             externalBrain = brainOverride == null
-                    ? createExternalBrain(config, redactor, log, toolGateway, brainAudit)
+                    ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
-                    config.brain.maxToolCallsPerTurn, brainAudit);
+                    config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
             kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
                     capabilityVisibility, memories, conversations);
             commands.setTaskLifecycleListener(kernel);
@@ -300,7 +300,8 @@ public final class RuntimeApplication implements AutoCloseable {
 
     private static ExternalBrainCoordinator createExternalBrain(RuntimeConfig config, Redactor redactor,
                                                                  RuntimeLog log, ToolGateway tools,
-                                                                 BrainAuditRepository brainAudit) {
+                                                                 BrainAuditRepository brainAudit,
+                                                                 ConversationRepository conversations) {
         if ("disabled".equals(config.brain.mode)) return null;
         String token = config.brain.resolveToken().orElse(null);
         if (token == null) {
@@ -314,7 +315,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     config.brain.model, config.brain.timeout(), config.brain.maxOutputTokens);
             default -> throw new IllegalArgumentException("Unsupported external Brain mode");
         };
-        return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn, brainAudit);
+        return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn, brainAudit, conversations);
     }
 
     private static SearchProvider createSearchProvider(RuntimeConfig config, Redactor redactor, RuntimeLog log) {

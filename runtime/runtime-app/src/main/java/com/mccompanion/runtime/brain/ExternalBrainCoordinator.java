@@ -5,6 +5,11 @@ import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
+import com.mccompanion.runtime.conversation.ConversationRepository;
+import com.mccompanion.runtime.conversation.IncomingMessageKind;
+import com.mccompanion.runtime.conversation.IncomingMessageResolution;
+import com.mccompanion.runtime.conversation.WaitingQuestion;
+import com.mccompanion.runtime.json.Json;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,17 +23,23 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     private final ToolGateway tools;
     private final int maxToolCallsPerTurn;
     private final BrainAuditRepository audit;
+    private final ConversationRepository conversations;
     private final Map<String, BrainSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Object> companionLocks = new ConcurrentHashMap<>();
     private final Map<String, ActiveTool> activeTools = new ConcurrentHashMap<>();
     private volatile String activeControllerId;
 
     public ExternalBrainCoordinator(ExternalBrainAdapter adapter, ToolGateway tools, int maxToolCallsPerTurn) {
-        this(adapter, tools, maxToolCallsPerTurn, null);
+        this(adapter, tools, maxToolCallsPerTurn, null, null);
     }
 
     public ExternalBrainCoordinator(ExternalBrainAdapter adapter, ToolGateway tools, int maxToolCallsPerTurn,
                                     BrainAuditRepository audit) {
+        this(adapter, tools, maxToolCallsPerTurn, audit, null);
+    }
+
+    public ExternalBrainCoordinator(ExternalBrainAdapter adapter, ToolGateway tools, int maxToolCallsPerTurn,
+                                    BrainAuditRepository audit, ConversationRepository conversations) {
         this.adapter = java.util.Objects.requireNonNull(adapter, "adapter");
         this.tools = java.util.Objects.requireNonNull(tools, "tools");
         if (maxToolCallsPerTurn < 1 || maxToolCallsPerTurn > 32) {
@@ -36,6 +47,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
         this.maxToolCallsPerTurn = maxToolCallsPerTurn;
         this.audit = audit;
+        this.conversations = conversations;
     }
 
     public BrainCoordinatorResult continueTurn(String controllerId, String companionId,
@@ -43,6 +55,34 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         Object lock = companionLocks.computeIfAbsent(companionId, ignored -> new Object());
         synchronized (lock) {
             return continueTurnLocked(controllerId, companionId, userMessage, context);
+        }
+    }
+
+    public BrainCoordinatorResult answer(String controllerId, WaitingQuestion question,
+                                         IncomingMessageResolution resolution, AgentContext context) {
+        if (question == null || question.brainSessionId() == null) {
+            throw new IllegalArgumentException("External Brain question is required");
+        }
+        if (resolution == null || resolution.kind() != IncomingMessageKind.WAITING_ANSWER) {
+            throw new IllegalArgumentException("WAITING_ANSWER resolution is required");
+        }
+        if (conversations == null) throw new IllegalStateException("BRAIN_QUESTION_PERSISTENCE_DISABLED");
+        try {
+            WaitingQuestion answered = conversations.answer(question.questionId(), resolution.text(), resolution.optionId());
+            var payload = Json.object().put("type", "user_answer")
+                    .put("questionId", answered.questionId())
+                    .put("optionId", answered.answer().path("optionId").asText(""))
+                    .put("text", answered.answer().path("text").asText(""));
+            Object lock = companionLocks.computeIfAbsent(question.companionId(), ignored -> new Object());
+            synchronized (lock) {
+                BrainSession active = sessions.get(question.companionId());
+                if (active != null && !active.sessionId().equals(question.brainSessionId())) {
+                    throw new IllegalStateException("BRAIN_QUESTION_SESSION_MISMATCH");
+                }
+                return continueTurnLocked(controllerId, question.companionId(), Json.write(payload), context);
+            }
+        } catch (java.sql.SQLException failure) {
+            throw new IllegalStateException("BRAIN_QUESTION_PERSISTENCE_ERROR", failure);
         }
     }
 
@@ -89,8 +129,23 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             if (result.kind() != BrainTurnResult.Kind.TOOL_CALLS) {
                 if (audit != null) audit.state(session.sessionId(), "ACTIVE",
                         result.kind() == BrainTurnResult.Kind.CANCEL ? "BRAIN_CANCELLED" : result.kind().name());
+                WaitingQuestion question = null;
+                if (result.kind() == BrainTurnResult.Kind.ASK_USER) {
+                    if (conversations == null) throw new IllegalStateException("BRAIN_QUESTION_PERSISTENCE_DISABLED");
+                    try {
+                        BrainQuestion requested = result.question();
+                        String taskId = requested.taskId() != null && observations.stream().anyMatch(value ->
+                                requested.taskId().equals(value.observation().path("taskId").asText(null)))
+                                ? requested.taskId() : null;
+                        question = conversations.askBrain(companionId, session.sessionId(), taskId,
+                                requested.prompt(), requested.reason(), requested.options(), requested.freeTextAllowed(),
+                                requested.context(), null);
+                    } catch (java.sql.SQLException failure) {
+                        throw new IllegalStateException("BRAIN_QUESTION_PERSISTENCE_ERROR", failure);
+                    }
+                }
                 return new BrainCoordinatorResult(session.sessionId(), result.kind(), result.response(),
-                        result.kind() == BrainTurnResult.Kind.CANCEL ? "BRAIN_CANCELLED" : "OK", observations);
+                        result.kind() == BrainTurnResult.Kind.CANCEL ? "BRAIN_CANCELLED" : "OK", observations, question);
             }
             if (result.toolCalls().size() > remaining) {
                 adapter.cancel(session.sessionId(), "TOOL_BUDGET_EXHAUSTED");

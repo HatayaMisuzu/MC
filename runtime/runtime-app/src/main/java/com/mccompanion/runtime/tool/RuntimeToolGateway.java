@@ -52,7 +52,9 @@ public final class RuntimeToolGateway implements ToolGateway {
             while (System.nanoTime() < deadline) {
                 TaskRecord task = tasks.get(taskId).orElse(null);
                 if (task == null) return ToolResult.rejected(call, "TASK_NOT_FOUND", "Bound task disappeared");
-                if (task.state().terminal() || task.state() == TaskState.BLOCKED) {
+                if (task.state().terminal() || task.state() == TaskState.BLOCKED
+                        || task.state() == TaskState.PAUSED
+                        || task.state() == TaskState.RECONCILIATION_REQUIRED) {
                     activeTasks.remove(key(context, call.callId()));
                     return terminalResult(call, task);
                 }
@@ -62,12 +64,28 @@ public final class RuntimeToolGateway implements ToolGateway {
                 }
                 Thread.sleep(25);
             }
-            commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
+            CommandReply cancellation = commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
                     context.companionId(), stop("cancel"));
             activeTasks.remove(key(context, call.callId()));
+            long cancelDeadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (cancellation.accepted() && System.nanoTime() < cancelDeadline) {
+                TaskRecord cancelled = tasks.get(taskId).orElse(null);
+                if (cancelled == null) break;
+                if (cancelled.state() == TaskState.CANCELLED) {
+                    ToolResult confirmed = terminalResult(call, cancelled);
+                    ObjectNode observation = (ObjectNode) confirmed.observation().deepCopy();
+                    observation.put("timedOut", true).put("cancellationConfirmed", true);
+                    return new ToolResult(call.callId(), call.name(), false, "TOOL_TIMEOUT_CANCELLED",
+                            observation, true);
+                }
+                Thread.sleep(25);
+            }
             return new ToolResult(call.callId(), call.name(), false, "TOOL_TIMEOUT",
                     Json.object().put("state", "INTERRUPTED").put("taskId", taskId)
-                            .put("message", "Tool timed out; cancellation was dispatched"), true);
+                            .put("cancellationConfirmed", false)
+                            .put("message", cancellation.accepted()
+                                    ? "Tool timed out; cancellation was dispatched but not confirmed"
+                                    : "Tool timed out; cancellation could not be dispatched"), true);
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();
             return new ToolResult(call.callId(), call.name(), false, "TOOL_INTERRUPTED",
@@ -83,7 +101,8 @@ public final class RuntimeToolGateway implements ToolGateway {
                     case COMPLETED -> "SUCCEEDED";
                     case FAILED -> "FAILED";
                     case CANCELLED -> "CANCELLED";
-                    case BLOCKED -> "BLOCKED";
+                    case BLOCKED, PAUSED -> "BLOCKED";
+                    case RECONCILIATION_REQUIRED -> "INTERRUPTED";
                     default -> throw new IllegalStateException("Task is not terminal");
                 }).put("taskId", task.taskId()).put("behaviorId", task.behaviorId())
                 .put("taskRevision", task.revision()).put("behaviorRevision", task.behaviorRevision());
@@ -91,7 +110,8 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (!events.isEmpty()) observation.set("fabricObservation", events.getLast().payload());
         boolean success = state == TaskState.COMPLETED;
         String code = success ? "OK" : state == TaskState.CANCELLED ? "TOOL_CANCELLED"
-                : state == TaskState.BLOCKED ? "TOOL_BLOCKED" : "TOOL_FAILED";
+                : state == TaskState.BLOCKED || state == TaskState.PAUSED ? "TOOL_BLOCKED"
+                : state == TaskState.RECONCILIATION_REQUIRED ? "TOOL_INTERRUPTED" : "TOOL_FAILED";
         return new ToolResult(call.callId(), call.name(), success, code, observation, true);
     }
 

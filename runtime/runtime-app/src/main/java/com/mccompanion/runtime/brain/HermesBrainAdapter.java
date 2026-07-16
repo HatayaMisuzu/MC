@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
+import com.mccompanion.runtime.conversation.ConversationOption;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -78,6 +79,22 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
                 values.add(new ToolCall(required(call, "callId"), required(call, "name"), call.path("arguments")));
             }
             return BrainTurnResult.tools(values);
+        }
+        if (kind == BrainTurnResult.Kind.ASK_USER) {
+            JsonNode question = response.path("question");
+            JsonNode options = question.path("options");
+            if (!question.isObject() || !options.isArray() || options.isEmpty() || options.size() > 3) {
+                throw new IllegalStateException("HERMES_INVALID_QUESTION");
+            }
+            List<ConversationOption> values = new ArrayList<>();
+            for (JsonNode option : options) {
+                values.add(new ConversationOption(required(option, "id"), required(option, "label"),
+                        option.path("description").asText("")));
+            }
+            BrainQuestion structured = new BrainQuestion(required(question, "prompt"), required(question, "reason"),
+                    values, question.path("freeTextAllowed").asBoolean(false), question.path("context"),
+                    question.path("taskId").asText(null));
+            return BrainTurnResult.askUser(structured);
         }
         return new BrainTurnResult(kind, response.path("response").asText(""), List.of(),
                 response.path("reason").asText(""));

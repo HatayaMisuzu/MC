@@ -29,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -129,7 +130,27 @@ class RuntimeApplicationTest {
         config.logging.console = false;
         CountDownLatch blockedBrainEntered = new CountDownLatch(1);
         CountDownLatch releaseBlockedBrain = new CountDownLatch(1);
+        AtomicReference<String> askedSession = new AtomicReference<>();
         ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            if (request.userMessage().equals("Bring 16 iron ingots")
+                    || request.userMessage().equals("Game needs a choice")) {
+                askedSession.set(request.sessionId());
+                return BrainTurnResult.askUser(new com.mccompanion.runtime.brain.BrainQuestion(
+                        "Only 6 ingots are available. What should I do?", "RESOURCE_SHORTAGE",
+                        List.of(new com.mccompanion.runtime.conversation.ConversationOption(
+                                        "deliver_partial", "Deliver 6", "Deliver available stock"),
+                                new com.mccompanion.runtime.conversation.ConversationOption(
+                                        "collect_missing", "Collect 10", "Collect the remainder")),
+                        false, Json.object().put("available", 6).put("requested", 16), null));
+            }
+            if (request.userMessage().contains("\"type\":\"user_answer\"")) {
+                assertEquals(askedSession.get(), request.sessionId());
+                assertTrue(request.userMessage().contains("\"optionId\":\"deliver_partial\""));
+                return BrainTurnResult.finalResponse("I will deliver the available 6 ingots.");
+            }
+            if (request.userMessage().equals("How are you?")) {
+                return BrainTurnResult.finalResponse("I am ready; the earlier choice is still waiting.");
+            }
             if (request.userMessage().equals("Hold this Brain request")) {
                 blockedBrainEntered.countDown();
                 try {
@@ -217,6 +238,53 @@ class RuntimeApplicationTest {
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 
+            HttpResponse<String> asked = HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+                    .uri(new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"controllerId":"runtime-primary","companionId":"brain-companion",
+                             "text":"Bring 16 iron ingots"}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, asked.statusCode(), asked.body());
+            JsonNode askedBody = Json.parse(asked.body()).path("result");
+            assertEquals("ASK_USER", askedBody.path("kind").asText());
+            String questionId = askedBody.path("question").path("questionId").asText();
+            String brainSessionId = askedBody.path("sessionId").asText();
+            assertFalse(questionId.isBlank());
+            assertEquals(brainSessionId, askedBody.path("question").path("brainSessionId").asText());
+            assertEquals("deliver_partial", askedBody.path("question").path("options").path(0).path("id").asText());
+
+            HttpResponse<String> ordinaryChat = HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+                    .uri(new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"controllerId":"runtime-primary","companionId":"brain-companion",
+                             "text":"How are you?"}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, ordinaryChat.statusCode(), ordinaryChat.body());
+            assertEquals("FINAL_RESPONSE", Json.parse(ordinaryChat.body()).path("result").path("kind").asText());
+            assertEquals(questionId, new com.mccompanion.runtime.conversation.ConversationRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()))
+                    .activeForCompanion("brain-companion").orElseThrow().questionId());
+
+            HttpResponse<String> answered = HttpClient.newHttpClient().send(HttpRequest.newBuilder()
+                    .uri(new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"controllerId":"runtime-primary","companionId":"brain-companion",
+                             "text":"deliver_partial"}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, answered.statusCode(), answered.body());
+            JsonNode answeredBody = Json.parse(answered.body()).path("result");
+            assertEquals("FINAL_RESPONSE", answeredBody.path("kind").asText());
+            assertEquals(brainSessionId, answeredBody.path("sessionId").asText());
+            var conversationRepository = new com.mccompanion.runtime.conversation.ConversationRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()));
+            assertTrue(conversationRepository.activeForCompanion("brain-companion").isEmpty());
+            assertEquals(1, conversationRepository.list("brain-companion", 20).stream()
+                    .filter(event -> event.kind().equals("ANSWER")
+                            && questionId.equals(event.questionId())).count());
+
             HttpRequest blockedRequest = HttpRequest.newBuilder()
                     .uri(new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
                     .header("Authorization", "Bearer " + token)
@@ -255,6 +323,24 @@ class RuntimeApplicationTest {
             assertEquals("external-brain", gameReply.path("payload").path("source").asText());
             assertEquals("FINAL_RESPONSE", gameReply.path("payload").path("decision").asText());
 
+            client.send("""
+                    {"type":"player_request","sessionId":"%s","sequence":2,"payload":{
+                      "requestId":"brain-game-question","companionId":"brain-companion","ownerId":"owner-1",
+                      "text":"Game needs a choice"}}
+                    """.formatted(sessionId));
+            JsonNode gameQuestion = client.awaitPlayerReply("brain-game-question", 5);
+            assertEquals("ASK_USER", gameQuestion.path("payload").path("decision").asText());
+            String gameQuestionId = gameQuestion.path("payload").path("waitingQuestion").path("questionId").asText();
+            assertFalse(gameQuestionId.isBlank());
+            client.send("""
+                    {"type":"player_request","sessionId":"%s","sequence":3,"payload":{
+                      "requestId":"brain-game-answer","companionId":"brain-companion","ownerId":"owner-1",
+                      "text":"deliver_partial"}}
+                    """.formatted(sessionId));
+            JsonNode gameAnswer = client.awaitPlayerReply("brain-game-answer", 5);
+            assertEquals("FINAL_RESPONSE", gameAnswer.path("payload").path("decision").asText());
+            assertEquals("I will deliver the available 6 ingots.", gameAnswer.path("payload").path("reply").asText());
+
             URI memoryUri = new URI("http://127.0.0.1:" + config.server.managementPort
                     + "/memories?companionId=brain-companion");
             HttpResponse<String> savedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(memoryUri)
@@ -274,9 +360,13 @@ class RuntimeApplicationTest {
             assertTrue(Json.parse(deletedMemory.body()).path("deleted").asBoolean());
 
             var transcript = new com.mccompanion.runtime.conversation.ConversationRepository(
-                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())).list("brain-companion", 10);
-            assertEquals(List.of("MESSAGE", "CHAT", "MESSAGE", "CHAT", "MESSAGE", "CHAT"), transcript.stream().map(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())).list("brain-companion", 20);
+            assertEquals(List.of("MESSAGE", "CHAT", "MESSAGE", "QUESTION", "MESSAGE", "CHAT", "ANSWER", "CHAT",
+                    "MESSAGE", "CHAT", "MESSAGE", "CHAT", "MESSAGE", "QUESTION", "ANSWER", "CHAT"),
+                    transcript.stream().map(
                     com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
+            assertTrue(transcript.stream().filter(event -> gameQuestionId.equals(event.questionId()))
+                    .findFirst().orElseThrow().gameDelivered());
             client.closeBlocking();
         }
     }
@@ -312,6 +402,19 @@ class RuntimeApplicationTest {
                 messageArrived.await(20, TimeUnit.MILLISECONDS);
             }
             fail("Timed out waiting for WebSocket message type " + type + "; received=" + messages);
+            return Json.object();
+        }
+
+        private JsonNode awaitPlayerReply(String requestId, int seconds) throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+            while (System.nanoTime() < deadline) {
+                for (JsonNode message : messages) {
+                    if ("player_reply".equals(message.path("type").asText())
+                            && requestId.equals(message.path("payload").path("requestId").asText())) return message;
+                }
+                messageArrived.await(20, TimeUnit.MILLISECONDS);
+            }
+            fail("Timed out waiting for player_reply " + requestId + "; received=" + messages);
             return Json.object();
         }
     }

@@ -106,16 +106,19 @@ binds each `call_tool` to the current `ToolDefinition.permission`.
 `task_graph.execute` creates a persistent asynchronous execution. Session-owned
 `task_graph.inspect`, `task_graph.pause`, `task_graph.resume`, and `task_graph.cancel` expose control
 without adding planning behavior. The deterministic core executes `sequence`, `call_tool`, `if`,
-`switch`, `repeat`, `while`, `retry`, `fallback`, `wait`, `checkpoint`, `emit_progress`, `return`,
-and `fail`. Safe expressions can read graph inputs, persisted state, and prior Tool observations.
-Loop iterations receive stable scoped node and Tool call IDs, and loop cursors are persisted.
-Tool/wall-time/loop budgets, bounded backoff/wait, uniformly rotated evidence, inputs, variables,
-and exact `${inputs.*}`, `${state.*}`, and `${outputs.<node>.*}` references are enforced.
+`switch`, `repeat`, `while`, `retry`, `fallback`, `parallel`, `wait`, `checkpoint`,
+`emit_progress`, `return`, and `fail`. Safe expressions can read graph inputs, persisted state, and
+prior Tool observations. Loop iterations receive stable scoped node and Tool call IDs, and loop
+cursors are persisted. Parallel branches use real bounded concurrency; state snapshots are
+serialized, and pause/cancel reaches every active Tool call. Tool/wall-time/loop/concurrency budgets,
+bounded backoff/wait, uniformly rotated evidence, inputs, variables, and exact `${inputs.*}`,
+`${state.*}`, and `${outputs.<node>.*}` references are enforced.
 
 Migrations 11–13 persist every supported node/Tool/checkpoint/loop boundary and the terminal
 `return` value. A safe pause resumes using completed scoped node IDs, loop cursors, and immutable
 Tool results, so completed effects are not repeated even when suspension occurs inside an iteration.
 Runtime startup still moves crash-left work to `RECONCILIATION_REQUIRED`; automatic reconciliation
-of an unconfirmed in-flight Tool is not yet claimed. Parallel execution and ASK_USER/memory nodes
-remain tracked separately in
+of an unconfirmed in-flight Tool is not yet claimed. A Tool transport/worker failure with unknown
+effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or reported
+as a verified failure. ASK_USER/memory nodes remain tracked separately in
 `docs/RC_COMPLETION_MATRIX.md`.

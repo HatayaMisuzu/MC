@@ -127,8 +127,7 @@ class RuntimeToolGatewayTest {
                 ToolResult unsupported = gateway.execute(context, new ToolCall("graph-4", "task_graph.validate",
                         Json.object().set("graph", Json.parse("""
                                 {"version":"mcac-task-graph/1","id":"future-node","permissions":[],
-                                 "root":{"id":"parallel","type":"parallel","maxConcurrency":2,
-                                  "nodes":[{"id":"done","type":"return"}]}}
+                                 "root":{"id":"ask","type":"ask_user","prompt":"Continue?"}}
                                 """))));
                 assertFalse(unsupported.success());
                 assertTrue(unsupported.observation().path("issues").toString().contains("NODE_NOT_EXECUTABLE"));

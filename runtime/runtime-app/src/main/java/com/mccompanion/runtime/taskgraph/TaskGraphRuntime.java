@@ -199,10 +199,29 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                 throw new IllegalStateException("TASK_GRAPH_PERSISTENCE_ERROR", failure);
                             }
                         });
+            } catch (RuntimeException failure) {
+                reconcileWorkerFailure(record.executionId(), failure);
             } finally {
                 active.remove(record.executionId(), running);
             }
         });
+    }
+
+    private void reconcileWorkerFailure(String executionId, RuntimeException failure) {
+        try {
+            TaskGraphExecutionRecord latest = repository.get(executionId).orElse(null);
+            if (latest == null || TERMINAL.contains(latest.state())) return;
+            String message = failure.getMessage();
+            if (message == null || message.isBlank()) message = failure.getClass().getSimpleName();
+            if (message.length() > 1_024) message = message.substring(0, 1_024);
+            repository.save(executionId, latest.revision(), "RECONCILIATION_REQUIRED",
+                    latest.currentNodeId(), latest.completedNodes(), latest.toolResults(), latest.variables(),
+                    latest.checkpoints(), latest.evidence(), latest.waitingQuestion(),
+                    Json.object().put("message", message), "TASK_GRAPH_WORKER_FAILED");
+        } catch (SQLException | RuntimeException ignored) {
+            // The original failure remains observable through Runtime logs/health. If persistence itself
+            // is unavailable, fabricating a durable terminal state would be unsafe.
+        }
     }
 
     private Map<String, String> ordinaryDefinitions(ToolContext context) {
@@ -226,8 +245,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     private void cancelActiveTool(Running running, String reason) {
-        String callId = running.control.activeCallId();
-        if (callId != null) tools.cancel(running.context, callId, reason);
+        running.control.activeCallIds().forEach(callId -> tools.cancel(running.context, callId, reason));
     }
 
     private static ToolResult terminal(ToolCall call, TaskGraphExecutionRecord record) {

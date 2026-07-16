@@ -67,9 +67,8 @@ class TaskGraphExecutorTest {
         FakeGateway tools = new FakeGateway(false);
         TaskGraphExecutor executor = new TaskGraphExecutor(tools);
         var graph = Json.parse("""
-                {"version":"mcac-task-graph/1","id":"parallel","permissions":[],
-                 "root":{"id":"parallel","type":"parallel","maxConcurrency":2,
-                  "nodes":[{"id":"done","type":"return"}]}}
+                {"version":"mcac-task-graph/1","id":"ask","permissions":[],
+                 "root":{"id":"ask","type":"ask_user","prompt":"Continue?"}}
                 """);
 
         TaskGraphExecutionResult result = executor.execute("exec-3",

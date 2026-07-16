@@ -13,7 +13,11 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -258,6 +262,71 @@ class TaskGraphRuntimeTest {
         }
     }
 
+    @Test
+    void parallelRunsConcurrentlyAndCancellationReachesEveryActiveTool() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("parallel.db"))) {
+            database.initialize();
+            BlockingParallelGateway gateway = new BlockingParallelGateway();
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall execute = new ToolCall("execution-8", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"parallel-cancel",
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"parallel","type":"parallel","maxConcurrency":2,"nodes":[
+                          {"id":"left","type":"call_tool","tool":"test.block","arguments":{"side":"left"}},
+                          {"id":"right","type":"call_tool","tool":"test.block","arguments":{"side":"right"}}
+                         ]}}
+                        """);
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                assertTrue(gateway.entered.await(2, TimeUnit.SECONDS),
+                        "parallel branches did not have two Tools active concurrently");
+
+                ToolResult cancellation = runtime.cancel(context, "execution-8", "test parallel cancel");
+                assertTrue(cancellation.success());
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("CANCELLED", terminal.observation().path("state").asText());
+                assertEquals(Set.of("execution-8:left:1", "execution-8:right:1"), gateway.cancelled);
+            }
+        }
+    }
+
+    @Test
+    void unknownToolFailureRequiresReconciliationInsteadOfLeavingRunningState() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("reconcile.db"))) {
+            database.initialize();
+            ToolGateway throwing = new ToolGateway() {
+                @Override public List<ToolDefinition> definitions(ToolContext context) {
+                    return List.of(new ToolDefinition("test.throw", "1.0", "throws after dispatch",
+                            Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                            Duration.ofSeconds(1), true));
+                }
+
+                @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                    throw new IllegalStateException("transport disconnected after dispatch");
+                }
+            };
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(throwing,
+                    new TaskGraphExecutionRepository(database))) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall execute = new ToolCall("execution-9", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"reconcile",
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"unknown","type":"call_tool","tool":"test.throw"}}
+                        """);
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertFalse(terminal.success());
+                assertEquals("RECONCILIATION_REQUIRED", terminal.observation().path("state").asText());
+                assertEquals("TOOL_RECONCILIATION_REQUIRED", terminal.code());
+                assertEquals("execution-9:unknown:1",
+                        terminal.observation().path("value").path("callId").asText());
+            }
+        }
+    }
+
     private static void waitForState(TaskGraphRuntime runtime, ToolContext context, String executionId,
                                      String expected) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
@@ -285,6 +354,45 @@ class TaskGraphRuntimeTest {
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("item", call.arguments().path("item").asText())
                             .put("count", arguments.size()), true);
+        }
+    }
+
+    private static final class BlockingParallelGateway implements ToolGateway {
+        private final CountDownLatch entered = new CountDownLatch(2);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final Set<String> cancelled = ConcurrentHashMap.newKeySet();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.block", "1.0", "blocking observation",
+                    Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                    Duration.ofSeconds(2), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            entered.countDown();
+            return new ToolResult(call.callId(), call.name(), true, "ACCEPTED", Json.object(), false);
+        }
+
+        @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                                  Duration timeout,
+                                                  java.util.function.Consumer<ToolResult> progress) {
+            try {
+                if (!release.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                    return new ToolResult(call.callId(), call.name(), false, "TIMEOUT", Json.object(), true);
+                }
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                return new ToolResult(call.callId(), call.name(), false, "INTERRUPTED", Json.object(), true);
+            }
+            boolean wasCancelled = cancelled.contains(call.callId());
+            return new ToolResult(call.callId(), call.name(), !wasCancelled,
+                    wasCancelled ? "CANCELLED" : "OK",
+                    Json.object().put("side", call.arguments().path("side").asText()), true);
+        }
+
+        @Override public void cancel(ToolContext context, String callId, String reason) {
+            cancelled.add(callId);
+            if (cancelled.size() >= 2) release.countDown();
         }
     }
 }

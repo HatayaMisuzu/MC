@@ -152,7 +152,7 @@ product UI controls, and release/install verification remain incomplete.
   candidates sorted by squared distance. The terminal Tool observation carries the exact block,
   dimension, coordinates, scanned-position budget, and candidate count.
 - A real Fabric 1.21.1 GameTest proves the scan remains RUNNING immediately after dispatch,
-  completes across later ticks, finds two placed diamond-ore candidates once each, and ranks the
+  completes across later ticks, finds two placed ore candidates once each, and ranks the
   nearer candidate first. Route exploration and restart/unreachable breadth remain incomplete,
   so the matrix truthfully keeps Explore at `PARTIAL`.
 
@@ -185,6 +185,21 @@ product UI controls, and release/install verification remain incomplete.
   iron pickaxe consumes at least two durability, and audit evidence records the vanilla server
   player game-mode path. Distant navigation, broader ores/tools, restart, and Brain E2E remain,
   so Mine is intentionally `PARTIAL` rather than complete.
+
+## Vanilla furnace smelting slice
+
+- Added `item.smelt` backed by `SmeltItem`, with a namespaced output item, quantity 1..64,
+  partial-work policy, and explicit nearby furnace coordinates. The body resolves a real vanilla
+  smelting recipe against held ingredients and rejects missing recipes, materials, fuel, capacity,
+  a changed world/station, and a furnace that already contains another player's items.
+- Input and fuel move only through validated `FurnaceMenu` clicks. Runtime then waits for the
+  furnace's real burn/cook lifecycle and retrieves its result slot through `QUICK_MOVE`; success
+  requires the companion output inventory delta to cover the requested result. Unused inputs and
+  fuel are returned through the same menu path on completion or safe stop.
+- A real Fabric GameTest proves two raw iron and coal produce two iron ingots after the actual
+  furnace lifecycle, consume both inputs, clear the furnace input/result slots, and emit terminal
+  `SMELT_COMPLETE` observation plus successful action evidence. Fuel-duration preflight,
+  alternate furnaces/fuels, cancellation/restart, and Brain E2E remain, so Smelt is `PARTIAL`.
 
 ## Craft item slice
 

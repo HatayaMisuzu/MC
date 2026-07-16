@@ -149,6 +149,9 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("MineResourceVein")) values.add(definition("resource.mine_vein",
                 "Mine a bounded connected vein through vanilla block breaking and collect its drops",
                 mineSchema(), "MEDIUM", "MINE", false));
+        if (available.contains("SmeltItem")) values.add(definition("item.smelt",
+                "Smelt a bounded quantity in a verified nearby furnace using held input and fuel",
+                smeltSchema(), "LOW", "CRAFT", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
@@ -204,6 +207,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "resource.mine_vein" -> skill("MineResourceVein", validatedMine(call.arguments()));
+            case "item.smelt" -> skill("SmeltItem", validatedSmelt(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
@@ -340,6 +344,8 @@ public final class RuntimeToolGateway implements ToolGateway {
             root.putArray("required").add("block").add("radius");
         } else if (name.equals("resource.mine_vein")) {
             root.putArray("required").add("block").add("maxBlocks").add("origin");
+        } else if (name.equals("item.smelt")) {
+            root.putArray("required").add("item").add("quantity").add("station");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
                 Duration.ofSeconds(30), idempotent);
@@ -423,6 +429,50 @@ public final class RuntimeToolGateway implements ToolGateway {
         fields.putObject("dimension").put("type", "string");
         for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
         origin.putArray("required").add("x").add("y").add("z");
+        return properties;
+    }
+
+    private static JsonNode validatedSmelt(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "quantity", "allowPartial", "station"));
+        String item = arguments.path("item").asText("");
+        if (!item.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException("item must be a namespaced output item id");
+        }
+        if (!arguments.path("quantity").canConvertToInt()) {
+            throw new IllegalArgumentException("quantity must be an integer");
+        }
+        int quantity = arguments.path("quantity").asInt();
+        if (quantity < 1 || quantity > 64) throw new IllegalArgumentException("quantity must be 1..64");
+        if (arguments.has("allowPartial") && !arguments.path("allowPartial").isBoolean()) {
+            throw new IllegalArgumentException("allowPartial must be boolean");
+        }
+        JsonNode station = arguments.path("station");
+        if (!station.isObject()) throw new IllegalArgumentException("station must be an object");
+        rejectUnexpected(station, Set.of("dimension", "x", "y", "z"));
+        for (String field : List.of("x", "y", "z")) {
+            if (!station.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException("station." + field + " must be an integer");
+            }
+        }
+        int x = station.path("x").asInt(), y = station.path("y").asInt(), z = station.path("z").asInt();
+        if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000 || y < -2048 || y > 2048) {
+            throw new IllegalArgumentException("station coordinates are outside safe bounds");
+        }
+        return arguments;
+    }
+
+    private static ObjectNode smeltSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("quantity").put("type", "integer").put("minimum", 1).put("maximum", 64);
+        properties.putObject("allowPartial").put("type", "boolean");
+        ObjectNode station = properties.putObject("station");
+        station.put("type", "object").put("additionalProperties", false);
+        ObjectNode fields = station.putObject("properties");
+        fields.putObject("dimension").put("type", "string");
+        for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
+        station.putArray("required").add("x").add("y").add("z");
         return properties;
     }
 

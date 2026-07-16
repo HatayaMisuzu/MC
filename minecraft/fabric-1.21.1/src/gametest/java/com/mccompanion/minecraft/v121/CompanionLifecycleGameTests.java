@@ -37,15 +37,17 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         BlockPos origin = body.blockPosition();
         BlockPos near = origin.offset(2, 0, 0);
         BlockPos far = origin.offset(4, 1, 0);
-        body.serverLevel().setBlockAndUpdate(near, Blocks.DIAMOND_ORE.defaultBlockState());
-        body.serverLevel().setBlockAndUpdate(far, Blocks.DIAMOND_ORE.defaultBlockState());
+        // Use a block unique to this concurrent GameTest batch so another capability's fixture
+        // cannot become a legitimate extra scan candidate when structures are packed nearby.
+        body.serverLevel().setBlockAndUpdate(near, Blocks.EMERALD_ORE.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(far, Blocks.EMERALD_ORE.defaultBlockState());
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-explore";
         helper.assertTrue(registry.runtimeAcquireLease(
                 companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
                 "explore lease acquisition failed");
-        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "scan-diamond", "skill",
-                null, null, null, new SkillParameters("ExploreArea", "minecraft:diamond_ore", 6, false,
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "scan-emerald", "skill",
+                null, null, null, new SkillParameters("ExploreArea", "minecraft:emerald_ore", 6, false,
                         body.serverLevel().dimension().location().toString(),
                         origin.getX(), origin.getY(), origin.getZ())).success(), "explore skill failed to start");
         helper.assertTrue(registry.runtimeSnapshots(false).stream()
@@ -162,6 +164,54 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
                     "mining evidence did not identify the vanilla ServerPlayerGameMode path");
             helper.assertTrue(registry.remove(owner).success(), "mine test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 700)
+    public void smeltItemUsesRealFurnaceFuelTimeAndMenuResultPickup(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Smelter").success(), "smelt test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "smelt test created no live body");
+        BlockPos furnacePos = body.blockPosition().offset(1, 0, 0);
+        body.serverLevel().setBlockAndUpdate(furnacePos, Blocks.FURNACE.defaultBlockState());
+        Container furnace = (Container) body.serverLevel().getBlockEntity(furnacePos);
+        body.getInventory().add(new ItemStack(Items.RAW_IRON, 2));
+        body.getInventory().add(new ItemStack(Items.COAL, 1));
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-smelt";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 60_000L).success(),
+                "smelt lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "smelt-iron", "skill",
+                null, null, null, new SkillParameters("SmeltItem", "minecraft:iron_ingot", 2, false,
+                        body.serverLevel().dimension().location().toString(),
+                        furnacePos.getX(), furnacePos.getY(), furnacePos.getZ())).success(),
+                "smelt skill failed to start");
+        helper.succeedWhen(() -> {
+            var snapshot = registry.runtimeSnapshots(false).stream()
+                    .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+            helper.assertValueEqual(snapshot.behaviorState(), "IDLE", "waiting for real furnace completion");
+            helper.assertValueEqual(count(body, Items.IRON_INGOT), 2, "furnace results were not picked up");
+            helper.assertValueEqual(count(body, Items.RAW_IRON), 0, "furnace did not consume both raw inputs");
+            helper.assertTrue(furnace.getItem(0).isEmpty() && furnace.getItem(2).isEmpty(),
+                    "completed furnace retained input or result items");
+            helper.assertTrue(snapshot.behaviorObservation() != null, "smelting produced no observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SMELT_COMPLETE",
+                    "smelting observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().available(), 2,
+                    "smelting observation quantity mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
+                    "smelting did not produce successful action evidence");
+            helper.assertTrue(registry.remove(owner).success(), "smelt test cleanup failed");
         });
     }
 

@@ -76,7 +76,7 @@ class RuntimeToolGatewayTest {
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
                         ignored -> List.of("WithdrawFromStorage", "DepositToStorage", "CraftItem", "DeliverItem",
-                                "EatAndRecover", "CollectResource", "MineResourceVein"));
+                                "EatAndRecover", "CollectResource", "MineResourceVein", "SmeltItem"));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
                 ToolDefinition withdraw = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("inventory.withdraw")).findFirst().orElseThrow();
@@ -106,6 +106,16 @@ class RuntimeToolGatewayTest {
                                 .set("origin", Json.object().put("x", 1).put("y", 64).put("z", 1))));
                 assertFalse(invalidMine.success());
                 assertEquals("INVALID_TOOL_ARGUMENTS", invalidMine.code());
+                ToolDefinition smelt = gateway.definitions(context).stream()
+                        .filter(value -> value.name().equals("item.smelt")).findFirst().orElseThrow();
+                assertEquals(List.of("item", "quantity", "station"), java.util.stream.StreamSupport.stream(
+                        smelt.inputSchema().path("required").spliterator(), false)
+                        .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
+                ToolResult invalidSmelt = gateway.execute(context, new ToolCall("smelt-1", "item.smelt",
+                        Json.object().put("item", "minecraft:iron_ingot").put("quantity", 65)
+                                .set("station", Json.object().put("x", 1).put("y", 64).put("z", 1))));
+                assertFalse(invalidSmelt.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", invalidSmelt.code());
                 ToolResult invalidStation = gateway.execute(context, new ToolCall("craft-1", "item.craft",
                         Json.object().put("item", "minecraft:iron_pickaxe").put("quantity", 1)
                                 .set("station", Json.object().put("x", 1).put("y", 64))));

@@ -16,6 +16,7 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.Container;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.CraftingMenu;
+import net.minecraft.world.inventory.FurnaceMenu;
 import net.minecraft.world.inventory.RecipeBookMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.entity.player.StackedContents;
@@ -27,8 +28,10 @@ import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.item.crafting.ShapedRecipe;
+import net.minecraft.world.item.crafting.SmeltingRecipe;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.AbstractFurnaceBlock;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.BlockHitResult;
 import org.slf4j.Logger;
@@ -52,6 +55,7 @@ final class BehaviorDirector {
     private final Map<UUID, SkillProgress> skills = new HashMap<>();
     private final Map<UUID, ScanProgress> scans = new HashMap<>();
     private final Map<UUID, MineProgress> mines = new HashMap<>();
+    private final Map<UUID, SmeltProgress> smelts = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
@@ -70,14 +74,22 @@ final class BehaviorDirector {
         if (parameters.capability().equals("ExploreArea")) {
             skills.remove(entry.companionId);
             mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
             scans.put(entry.companionId, createScan(body, parameters));
         } else if (parameters.capability().equals("MineResourceVein")) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
+            smelts.remove(entry.companionId);
             mines.put(entry.companionId, createMine(body, parameters));
+        } else if (parameters.capability().equals("SmeltItem")) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.put(entry.companionId, createSmelt(body, entry, parameters));
         } else {
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
             skills.put(entry.companionId, createSkill(body, entry, parameters));
         }
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
@@ -85,7 +97,7 @@ final class BehaviorDirector {
 
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
         if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)
-                && !mines.containsKey(entry.companionId)) {
+                && !mines.containsKey(entry.companionId) && !smelts.containsKey(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -103,11 +115,16 @@ final class BehaviorDirector {
             returnCraftingInputs(body);
             if (body.containerMenu != body.inventoryMenu) body.closeContainer();
         }
+        if (smelts.containsKey(entry.companionId) && body.containerMenu instanceof FurnaceMenu) {
+            returnFurnaceInputs(body);
+            body.closeContainer();
+        }
         if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
                 || code.equals("LEASE_EXPIRED"))) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
         }
     }
 
@@ -117,6 +134,7 @@ final class BehaviorDirector {
         skills.remove(companionId);
         scans.remove(companionId);
         mines.remove(companionId);
+        smelts.remove(companionId);
         observations.remove(companionId);
     }
 
@@ -378,6 +396,8 @@ final class BehaviorDirector {
         if (scan != null) { tickScan(entry, body, scan); return; }
         MineProgress mine = mines.get(entry.companionId);
         if (mine != null) { tickMine(entry, body, mine); return; }
+        SmeltProgress smelt = smelts.get(entry.companionId);
+        if (smelt != null) { tickSmelt(entry, body, smelt); return; }
         SkillProgress progress = skills.get(entry.companionId);
         if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
         if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
@@ -609,6 +629,108 @@ final class BehaviorDirector {
         Vec3 delta = nearest.position().subtract(body.position());
         actionGateway.applyMoveInput(body, (float) Math.toDegrees(Math.atan2(-delta.x, delta.z)),
                 delta.y > 0.6D || body.horizontalCollision);
+    }
+
+    private SmeltProgress createSmelt(CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
+        Item output = resolveItem(parameters.itemId());
+        if (output == null) return SmeltProgress.failed(parameters, "ITEM_UNKNOWN");
+        if (!parameters.hasBlockTarget()) return SmeltProgress.failed(parameters, "FURNACE_TARGET_MISSING");
+        if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+            return SmeltProgress.failed(parameters, "WORLD_CHANGED");
+        }
+        BlockPos station = new BlockPos(parameters.x(), parameters.y(), parameters.z());
+        if (body.distanceToSqr(Vec3.atCenterOf(station)) > 25.0D) {
+            return SmeltProgress.failed(parameters, "FURNACE_OUT_OF_REACH");
+        }
+        if (!body.serverLevel().getBlockState(station).is(Blocks.FURNACE)) {
+            return SmeltProgress.failed(parameters, "FURNACE_MISSING");
+        }
+        SmeltingSelection selection = selectSmeltingRecipe(body, output);
+        if (selection == null) return SmeltProgress.failed(parameters, "SMELTING_RECIPE_UNAVAILABLE");
+        int availableOutput = selection.availableInputs * selection.outputPerInput;
+        if (availableOutput < parameters.quantity() && !parameters.allowPartial()) {
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "MATERIALS_INSUFFICIENT", parameters.itemId(), parameters.quantity(), availableOutput));
+            return SmeltProgress.failed(parameters, "MATERIALS_INSUFFICIENT");
+        }
+        int target = Math.min(parameters.quantity(), availableOutput);
+        if (target < 1) return SmeltProgress.failed(parameters, "MATERIALS_INSUFFICIENT");
+        if (inventoryCapacity(body, new ItemStack(output, target)) < target) {
+            return SmeltProgress.failed(parameters, "INVENTORY_FULL");
+        }
+        BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(station), Direction.UP, station, false);
+        body.gameMode.useItemOn(body, body.serverLevel(), body.getMainHandItem(), InteractionHand.MAIN_HAND, hit);
+        if (!(body.containerMenu instanceof FurnaceMenu)) {
+            return SmeltProgress.failed(parameters, "FURNACE_OPEN_FAILED");
+        }
+        if (!body.containerMenu.getSlot(0).getItem().isEmpty()
+                || !body.containerMenu.getSlot(1).getItem().isEmpty()
+                || !body.containerMenu.getSlot(2).getItem().isEmpty()) {
+            body.closeContainer();
+            return SmeltProgress.failed(parameters, "FURNACE_BUSY");
+        }
+        if (findFurnaceFuelSlot(body) < 0) {
+            body.closeContainer();
+            return SmeltProgress.failed(parameters, "FUEL_MISSING");
+        }
+        int inputs = (target + selection.outputPerInput - 1) / selection.outputPerInput;
+        return new SmeltProgress(parameters, output, selection.ingredient, target, inputs,
+                count(body, output), station, server.getTickCount(), null);
+    }
+
+    private void tickSmelt(CompanionEntry entry, CompanionPlayer body, SmeltProgress progress) {
+        if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
+        if (server.getTickCount() - progress.startedTick > 20 * 60 * 5) {
+            pauseSafely(entry, body, "SMELT_TIMEOUT"); return;
+        }
+        if (!body.serverLevel().dimension().location().toString().equals(progress.parameters.dimension())) {
+            pauseSafely(entry, body, "WORLD_CHANGED"); return;
+        }
+        if (body.distanceToSqr(Vec3.atCenterOf(progress.station)) > 25.0D) {
+            pauseSafely(entry, body, "FURNACE_OUT_OF_REACH"); return;
+        }
+        if (!body.serverLevel().getBlockState(progress.station).is(Blocks.FURNACE)) {
+            pauseSafely(entry, body, "FURNACE_MISSING"); return;
+        }
+        if (!(body.containerMenu instanceof FurnaceMenu)) {
+            pauseSafely(entry, body, "FURNACE_CLOSED"); return;
+        }
+        if (!progress.setup) {
+            int source = findIngredientSlot(body, progress.ingredient);
+            if (source < 0) { pauseSafely(entry, body, "MATERIALS_INSUFFICIENT"); return; }
+            if (!moveExactToMenuSlot(body, source, 0, progress.inputCount)) {
+                pauseSafely(entry, body, "FURNACE_INPUT_FAILED"); return;
+            }
+            int fuel = findFurnaceFuelSlot(body);
+            if (fuel < 0) { pauseSafely(entry, body, "FUEL_MISSING"); return; }
+            body.containerMenu.clicked(fuel, 0, ClickType.PICKUP, body);
+            body.containerMenu.clicked(1, 0, ClickType.PICKUP, body);
+            if (!body.containerMenu.getCarried().isEmpty()) {
+                pauseSafely(entry, body, "FURNACE_FUEL_FAILED"); return;
+            }
+            progress.setup = true;
+            return;
+        }
+        ItemStack result = body.containerMenu.getSlot(2).getItem();
+        if (result.is(progress.output) && result.getCount() >= progress.target) {
+            body.containerMenu.clicked(2, 0, ClickType.QUICK_MOVE, body);
+            int produced = count(body, progress.output) - progress.outputBaseline;
+            if (produced < progress.target) {
+                pauseSafely(entry, body, "FURNACE_RESULT_PICKUP_FAILED"); return;
+            }
+            returnFurnaceInputs(body);
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "SMELT_COMPLETE", progress.parameters.itemId(), progress.parameters.quantity(), produced));
+            stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE; savedData.changed(); return;
+        }
+        var state = body.serverLevel().getBlockState(progress.station);
+        boolean lit = state.hasProperty(AbstractFurnaceBlock.LIT) && state.getValue(AbstractFurnaceBlock.LIT);
+        if (!lit && body.containerMenu.getSlot(1).getItem().isEmpty()
+                && !body.containerMenu.getSlot(0).getItem().isEmpty()
+                && server.getTickCount() - progress.startedTick > 20) {
+            pauseSafely(entry, body, "FUEL_MISSING");
+        }
     }
 
     private void tickCraft(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -937,6 +1059,57 @@ final class BehaviorDirector {
                         && recipe.value().canCraftInDimensions(gridSize, gridSize));
     }
 
+    private static SmeltingSelection selectSmeltingRecipe(CompanionPlayer body, Item output) {
+        SmeltingSelection best = null;
+        for (RecipeHolder<SmeltingRecipe> recipe
+                : body.serverLevel().getRecipeManager().getAllRecipesFor(RecipeType.SMELTING)) {
+            ItemStack result = recipe.value().getResultItem(body.registryAccess());
+            if (!result.is(output) || recipe.value().getIngredients().isEmpty()) continue;
+            Ingredient ingredient = recipe.value().getIngredients().getFirst();
+            int available = 0;
+            for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+                ItemStack stack = body.getInventory().getItem(slot);
+                if (ingredient.test(stack)) available += stack.getCount();
+            }
+            SmeltingSelection candidate = new SmeltingSelection(ingredient, available, result.getCount());
+            if (best == null || candidate.availableInputs > best.availableInputs) best = candidate;
+        }
+        return best;
+    }
+
+    private static int findFurnaceFuelSlot(CompanionPlayer body) {
+        if (!(body.containerMenu instanceof FurnaceMenu)) return -1;
+        Slot fuelSlot = body.containerMenu.getSlot(1);
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container == body.getInventory() && slot.mayPickup(body)
+                    && fuelSlot.mayPlace(slot.getItem())) return index;
+        }
+        return -1;
+    }
+
+    private static boolean moveExactToMenuSlot(
+            CompanionPlayer body, int source, int target, int quantity) {
+        if (quantity < 1 || !body.containerMenu.getSlot(target).getItem().isEmpty()
+                || body.containerMenu.getSlot(source).getItem().getCount() < quantity) return false;
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        for (int moved = 0; moved < quantity; moved++) {
+            body.containerMenu.clicked(target, 1, ClickType.PICKUP, body);
+        }
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        return body.containerMenu.getCarried().isEmpty()
+                && body.containerMenu.getSlot(target).getItem().getCount() == quantity;
+    }
+
+    private static void returnFurnaceInputs(CompanionPlayer body) {
+        if (!(body.containerMenu instanceof FurnaceMenu)) return;
+        for (int slot = 0; slot <= 2; slot++) {
+            if (!body.containerMenu.getSlot(slot).getItem().isEmpty()) {
+                body.containerMenu.clicked(slot, 0, ClickType.QUICK_MOVE, body);
+            }
+        }
+    }
+
     private static void returnCraftingInputs(CompanionPlayer body) {
         if (!(body.containerMenu instanceof RecipeBookMenu<?, ?> menu)) return;
         int end = menu.getResultSlotIndex() + 1 + menu.getGridWidth() * menu.getGridHeight();
@@ -1123,5 +1296,32 @@ final class BehaviorDirector {
         }
     }
 
+    private static final class SmeltProgress {
+        private final SkillParameters parameters;
+        private final Item output;
+        private final Ingredient ingredient;
+        private final int target;
+        private final int inputCount;
+        private final int outputBaseline;
+        private final BlockPos station;
+        private final int startedTick;
+        private final String failureCode;
+        private boolean setup;
+
+        private SmeltProgress(SkillParameters parameters, Item output, Ingredient ingredient, int target,
+                              int inputCount, int outputBaseline, BlockPos station, int startedTick,
+                              String failureCode) {
+            this.parameters = parameters; this.output = output; this.ingredient = ingredient; this.target = target;
+            this.inputCount = inputCount; this.outputBaseline = outputBaseline; this.station = station;
+            this.startedTick = startedTick; this.failureCode = failureCode;
+        }
+
+        private static SmeltProgress failed(SkillParameters parameters, String code) {
+            return new SmeltProgress(parameters, null, Ingredient.EMPTY, 0, 0, 0,
+                    BlockPos.ZERO, 0, code);
+        }
+    }
+
     private record CraftingSelection(RecipeHolder<CraftingRecipe> recipe, int availableItems) { }
+    private record SmeltingSelection(Ingredient ingredient, int availableInputs, int outputPerInput) { }
 }

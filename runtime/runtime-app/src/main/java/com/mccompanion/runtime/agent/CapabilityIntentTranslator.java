@@ -14,7 +14,8 @@ public final class CapabilityIntentTranslator {
         return switch (step.capability()) {
             case "FollowOwner" -> Optional.of(new Intent(TaskType.FOLLOW, Json.object(), requestText));
             case "NavigateTo" -> Optional.ofNullable(navigate(step.parameters(), requestText));
-            case "WithdrawFromStorage", "DeliverItem", "EatAndRecover" -> Optional.of(skill(step, requestText));
+            case "WithdrawFromStorage", "DepositToStorage", "DeliverItem", "EatAndRecover" ->
+                    Optional.of(skill(step, requestText));
             default -> Optional.empty();
         };
     }

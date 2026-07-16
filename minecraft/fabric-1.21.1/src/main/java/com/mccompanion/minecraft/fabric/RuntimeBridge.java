@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -53,6 +54,12 @@ final class RuntimeBridge implements AutoCloseable {
     private final Map<String, String> observedBehaviorStates = new HashMap<>();
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
     private final Map<UUID, Long> playerRequestTimes = new HashMap<>();
+    private final Map<String, Boolean> deliveredConversationEvents = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>() {
+                @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+                    return size() > 512;
+                }
+            });
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -144,6 +151,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)
+                .put("DepositToStorage", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
                 .put("runtime_safe_idle", true);
@@ -220,19 +228,31 @@ final class RuntimeBridge implements AutoCloseable {
 
     private void deliverConversationEvent(JsonNode payload) {
         String companionId = payload.path("companionId").asText("");
+        String eventId = payload.path("eventId").asText("");
         String reply = payload.path("reply").asText("").strip();
-        if (reply.isEmpty()) return;
+        if (eventId.isEmpty() || reply.isEmpty()) return;
         if (reply.length() > 512) reply = reply.substring(0, 512);
         String finalReply = reply;
         server.execute(() -> registry.runtimeSnapshots(true).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().ifPresent(snapshot -> {
                     ServerPlayer owner = server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
                     if (owner != null) {
+                        if (deliveredConversationEvents.containsKey(eventId)) {
+                            sendConversationDeliveryAck(eventId, companionId);
+                            return;
+                        }
                         owner.sendSystemMessage(Component.literal("[伙伴] " + finalReply));
                         logger.info("conversation_delivered_to_game event={} kind={} companion={}",
                                 payload.path("eventId").asText("unknown"), payload.path("kind").asText("MESSAGE"), companionId);
+                        deliveredConversationEvents.put(eventId, true);
+                        sendConversationDeliveryAck(eventId, companionId);
                     }
                 }));
+    }
+
+    private void sendConversationDeliveryAck(String eventId, String companionId) {
+        sendEnvelope("conversation_delivery_ack", JSON.createObjectNode()
+                .put("eventId", eventId).put("companionId", companionId));
     }
 
     private void processCommand(JsonNode command) {

@@ -61,6 +61,8 @@ class ConversationServiceTest {
                 var envelope = Json.parse(peer.messages.getFirst());
                 assertEquals("conversation_event", envelope.path("type").asText());
                 assertTrue(envelope.path("payload").path("reply").asText().contains("6"));
+                assertFalse(repository.list("c1", 10).getFirst().gameDelivered());
+                service.acknowledgeGameDelivery("c1", envelope.path("payload").path("eventId").asText());
                 assertTrue(repository.list("c1", 10).getFirst().gameDelivered());
             }
         }

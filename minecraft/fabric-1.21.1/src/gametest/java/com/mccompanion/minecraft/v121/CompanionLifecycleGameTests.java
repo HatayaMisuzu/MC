@@ -96,7 +96,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
-    public void withdrawUsesVanillaContainerMenuAndReportsInsufficientStock(GameTestHelper helper) {
+    public void storageSkillsUseVanillaContainerMenuAndPreserveItemCounts(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
                 || Boolean.getBoolean("mccompanion.runtime.e2e")
@@ -138,28 +138,91 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                     && snapshot.evidenceSummary().contains("success=true")),
                     "withdraw did not report successful evidence");
 
-            helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "withdraw-too-many", "skill",
-                            null, null, null, new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 4,
+            helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "deposit-iron", "skill",
+                            null, null, null, new SkillParameters("DepositToStorage", "minecraft:iron_ingot", 2,
                                     false, body.serverLevel().dimension().location().toString(),
                                     chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
-                    "insufficient withdrawal was not accepted for observable execution");
-            helper.runAfterDelay(8, () -> {
-                helper.assertValueEqual(count(body, Items.IRON_INGOT), 3,
-                        "insufficient withdrawal changed companion inventory");
-                helper.assertValueEqual(count(chest, Items.IRON_INGOT), 2,
-                        "insufficient withdrawal changed container inventory");
-                helper.assertTrue(registry.runtimeSnapshots(false).stream()
-                                .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
-                                        && snapshot.behaviorState().equals("PAUSED")
-                                        && snapshot.evidenceSummary().contains("failure=ITEM_INSUFFICIENT")
-                                        && snapshot.behaviorObservation() != null
-                                        && snapshot.behaviorObservation().failureCode().equals("ITEM_INSUFFICIENT")
-                                        && snapshot.behaviorObservation().requested() == 4
-                                        && snapshot.behaviorObservation().available() == 2),
-                        "insufficient withdrawal did not expose structured shortage evidence");
-                helper.assertTrue(registry.remove(owner).success(), "storage test cleanup failed");
-                helper.succeed();
+                    "deposit skill failed to start");
+            helper.runAfterDelay(20, () -> {
+                helper.assertValueEqual(count(body, Items.IRON_INGOT), 1,
+                        "deposit did not produce the verified companion inventory delta");
+                helper.assertValueEqual(count(chest, Items.IRON_INGOT), 4,
+                        "deposit did not produce the verified container inventory delta");
+
+                helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "withdraw-too-many", "skill",
+                                null, null, null, new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 5,
+                                        false, body.serverLevel().dimension().location().toString(),
+                                        chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
+                        "insufficient withdrawal was not accepted for observable execution");
+                helper.runAfterDelay(8, () -> {
+                    helper.assertValueEqual(count(body, Items.IRON_INGOT), 1,
+                            "insufficient withdrawal changed companion inventory");
+                    helper.assertValueEqual(count(chest, Items.IRON_INGOT), 4,
+                            "insufficient withdrawal changed container inventory");
+                    helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                                    .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                            && snapshot.behaviorState().equals("PAUSED")
+                                            && snapshot.evidenceSummary().contains("failure=ITEM_INSUFFICIENT")
+                                            && snapshot.behaviorObservation() != null
+                                            && snapshot.behaviorObservation().failureCode().equals("ITEM_INSUFFICIENT")
+                                            && snapshot.behaviorObservation().requested() == 5
+                                            && snapshot.behaviorObservation().available() == 4),
+                            "insufficient withdrawal did not expose structured shortage evidence");
+                    helper.assertTrue(registry.remove(owner).success(), "storage test cleanup failed");
+                    helper.succeed();
+                });
             });
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
+    public void depositStopsSafelyWhenContainerIsFull(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        owner.setGameMode(GameType.SURVIVAL);
+        helper.assertTrue(registry.create(owner, "FullStorageCompanion").success(), "full storage create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "full storage test created no live body");
+        body.getInventory().setItem(0, new ItemStack(Items.IRON_INGOT));
+        BlockPos chestPos = body.blockPosition().offset(1, 0, 0);
+        body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+        Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+        for (int slot = 0; slot < chest.getContainerSize(); slot++) {
+            chest.setItem(slot, new ItemStack(Items.IRON_INGOT, 64));
+        }
+
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-full-storage";
+        long epoch = 1L;
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, leaseId, epoch, System.currentTimeMillis() + 30_000L).success(),
+                "full storage lease acquisition failed");
+        int bodyBefore = count(body, Items.IRON_INGOT);
+        int chestBefore = count(chest, Items.IRON_INGOT);
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "deposit-full", "skill",
+                        null, null, null, new SkillParameters("DepositToStorage", "minecraft:iron_ingot", 1,
+                                false, body.serverLevel().dimension().location().toString(),
+                                chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
+                "full container deposit was not accepted for observable execution");
+        helper.runAfterDelay(8, () -> {
+            helper.assertValueEqual(count(body, Items.IRON_INGOT), bodyBefore,
+                    "full container deposit changed companion inventory");
+            helper.assertValueEqual(count(chest, Items.IRON_INGOT), chestBefore,
+                    "full container deposit changed storage inventory");
+            helper.assertTrue(registry.runtimeSnapshots(false).stream()
+                            .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                    && snapshot.behaviorState().equals("PAUSED")
+                                    && snapshot.evidenceSummary().contains("failure=CONTAINER_FULL")),
+                    "full container deposit did not report CONTAINER_FULL");
+            helper.assertTrue(registry.remove(owner).success(), "full storage cleanup failed");
+            helper.succeed();
         });
     }
 
@@ -276,6 +339,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             return;
         }
 
+        BlockPos movementOrigin = body.blockPosition();
+        owner.moveTo(movementOrigin.getX() - 1.5D, movementOrigin.getY(), movementOrigin.getZ() + 0.5D,
+                owner.getYRot(), owner.getXRot());
         Vec3 before = body.position();
         CompanionRegistry.Result moving = registry.goTo(owner, before.x + 4.0D, before.y, before.z);
         helper.assertTrue(moving.success(), "goto failed: " + moving.code());

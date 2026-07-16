@@ -56,6 +56,11 @@ public final class ConversationService {
         repository.markGameDelivered(eventId);
     }
 
+    /** Marks durable outbox delivery only after the Fabric body confirms owner-visible display. */
+    public void acknowledgeGameDelivery(String companionId, String eventId) throws SQLException {
+        repository.markGameDelivered(companionId, eventId);
+    }
+
     /** Oldest-to-newest, bounded transcript suitable for model context. */
     public List<String> recentTranscript(String companionId, int limit) throws SQLException {
         return repository.list(companionId, limit).stream()
@@ -90,7 +95,6 @@ public final class ConversationService {
                         .put("timestamp", Instant.now().toEpochMilli());
                 envelope.set("payload", payload);
                 session.peer().send(Json.write(envelope));
-                repository.markGameDelivered(event.eventId());
             }
         } catch (SQLException | RuntimeException failure) {
             log.error("Conversation outbox delivery failed: companion=" + companionId, failure);

@@ -39,6 +39,7 @@ public final class RuntimeToolGateway implements ToolGateway {
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
+        if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DeliverItem")) values.add(definition("inventory.deliver", "Deliver held items to the owner", itemQuantitySchema(), "LOW", "INVENTORY", false));
         if (available.contains("EatAndRecover")) values.add(definition("item.eat_and_recover", "Eat food using normal game interaction", foodSchema(), "LOW", "SURVIVAL", false));
         return List.copyOf(values);
@@ -74,6 +75,7 @@ public final class RuntimeToolGateway implements ToolGateway {
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
+            case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "inventory.deliver" -> skill("DeliverItem", validatedItemQuantity(call.arguments(), false));
             case "item.eat_and_recover" -> skill("EatAndRecover", validatedFood(call.arguments()));
             case "task.pause" -> noArgumentsStop(call, "pause");
@@ -168,7 +170,7 @@ public final class RuntimeToolGateway implements ToolGateway {
         root.set("properties", schema);
         if (name.equals("movement.navigate")) {
             root.putArray("required").add("x").add("y").add("z");
-        } else if (name.equals("inventory.withdraw")) {
+        } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
         } else if (name.equals("inventory.deliver")) {
             root.putArray("required").add("item").add("quantity");

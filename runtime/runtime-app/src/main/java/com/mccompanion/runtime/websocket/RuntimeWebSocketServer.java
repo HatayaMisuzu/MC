@@ -240,9 +240,18 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             case "behavior_event", "event" -> commands.onBehaviorEvent(convert(payload, BehaviorEvent.class));
             case "protocol_error", "error" -> commands.onProtocolError(convert(payload, ErrorEnvelope.class));
             case "player_request" -> handlePlayerRequest(session, payload);
+            case "conversation_delivery_ack" -> acknowledgeConversationDelivery(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }
             default -> sendError(session.peer(), session, "UNKNOWN_MESSAGE_TYPE", "Unsupported message type");
         }
+    }
+
+    private void acknowledgeConversationDelivery(RuntimeSession session, JsonNode payload) throws SQLException {
+        String companionId = required(payload, "companionId");
+        String eventId = required(payload, "eventId");
+        RuntimeSession owner = sessions.forCompanion(companionId).orElse(null);
+        if (owner != session) throw new IllegalArgumentException("conversation ack does not belong to this session");
+        conversations.acknowledgeGameDelivery(companionId, eventId);
     }
 
     private void handlePlayerRequest(RuntimeSession session, JsonNode payload) {

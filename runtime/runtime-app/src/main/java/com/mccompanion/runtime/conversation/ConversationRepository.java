@@ -160,6 +160,15 @@ public final class ConversationRepository {
         }
     }
 
+    public void markGameDelivered(String companionId, String eventId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "UPDATE conversation_event SET game_delivered=1 WHERE event_id=? AND companion_id=?")) {
+            statement.setString(1, eventId);
+            statement.setString(2, companionId);
+            statement.executeUpdate();
+        }
+    }
+
     private Optional<ConversationEvent> event(String id) throws SQLException {
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
                 "SELECT * FROM conversation_event WHERE event_id=?")) {

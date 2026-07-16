@@ -23,7 +23,7 @@ public final class CapabilityRegistry {
         return new CapabilityRegistry(List.of(
                 implemented("NavigateTo", RiskLevel.LOW), implemented("FollowOwner", RiskLevel.LOW),
                 capability("ExploreArea", RiskLevel.MEDIUM), capability("LocateKnownContainer", RiskLevel.LOW),
-                implemented("WithdrawFromStorage", RiskLevel.LOW), capability("DepositToStorage", RiskLevel.LOW),
+                implemented("WithdrawFromStorage", RiskLevel.LOW), implemented("DepositToStorage", RiskLevel.LOW),
                 capability("CollectResource", RiskLevel.MEDIUM), capability("MineResourceVein", RiskLevel.MEDIUM),
                 capability("CraftItem", RiskLevel.LOW), capability("SmeltItem", RiskLevel.LOW),
                 implemented("DeliverItem", RiskLevel.LOW), implemented("EatAndRecover", RiskLevel.LOW),

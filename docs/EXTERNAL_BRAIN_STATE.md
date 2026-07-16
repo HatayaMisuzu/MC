@@ -8,7 +8,7 @@ The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
 updating the Codex Goal UI.
 
-Current milestone: `EXTERNAL_BRAIN_GAME_AND_WEB_INGRESS_REPLAY_VERIFIED`
+Current milestone: `DEPOSIT_TO_STORAGE_GAMETEST_VERIFIED`
 
 The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST` because Search Gateway,
 the complete generic Minecraft tool set, External Brain persistence/reconnect,
@@ -77,7 +77,21 @@ product UI controls, and release/install verification remain incomplete.
 - Slow `/brain` and migration-only `/agent` calls run on a dedicated bounded executor;
   authenticated health, task inspection, cancellation, and diagnostics remain responsive
   while an external provider call is blocked.
+- Durable game conversation events remain pending until Fabric confirms owner-visible
+  delivery. Unacknowledged events retry on status updates, and the body deduplicates event
+  IDs before displaying them so a retry cannot produce duplicate chat messages.
 - This is Replay automation evidence only; no Live provider or human-playtest claim is made.
+
+## Deposit to storage slice
+
+- Added `inventory.deposit` / `DepositToStorage` only when the connected Fabric body
+  reports the capability as `AVAILABLE_NOW`.
+- Deposits use the opened vanilla container menu and validated PICKUP/right-click slot
+  transactions. Production code does not edit either inventory or create items.
+- The body verifies both the companion inventory decrease and container inventory increase
+  before reporting success, and closes the container on completion, cancellation, or failure.
+- Fabric GameTests prove withdraw/deposit item conservation and prove a completely full
+  container returns `CONTAINER_FULL` without changing either inventory.
 
 ## Verification boundary
 

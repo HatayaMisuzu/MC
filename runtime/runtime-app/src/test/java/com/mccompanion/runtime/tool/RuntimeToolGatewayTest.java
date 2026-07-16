@@ -69,13 +69,16 @@ class RuntimeToolGatewayTest {
                         new TaskRepository(database, new TaskEventStore(database)), new LeaseService(database),
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
-                        ignored -> List.of("WithdrawFromStorage", "DeliverItem", "EatAndRecover"));
+                        ignored -> List.of("WithdrawFromStorage", "DepositToStorage", "DeliverItem", "EatAndRecover"));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
                 ToolDefinition withdraw = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("inventory.withdraw")).findFirst().orElseThrow();
                 assertEquals(List.of("item", "quantity", "container"),
                         java.util.stream.StreamSupport.stream(withdraw.inputSchema().path("required").spliterator(), false)
                                 .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
+                ToolDefinition deposit = gateway.definitions(context).stream()
+                        .filter(value -> value.name().equals("inventory.deposit")).findFirst().orElseThrow();
+                assertEquals(withdraw.inputSchema(), deposit.inputSchema());
 
                 ToolResult rejected = gateway.execute(context, new ToolCall("withdraw-1", "inventory.withdraw",
                         Json.object().put("item", "minecraft:iron_ingot").put("quantity", 1)

@@ -30,6 +30,11 @@ import com.mccompanion.runtime.conversation.ConversationService;
 import com.mccompanion.runtime.conversation.IncomingMessageClassifier;
 import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.task.TaskType;
+import com.mccompanion.runtime.tool.ToolCall;
+import com.mccompanion.runtime.tool.ToolContext;
+import com.mccompanion.runtime.tool.ToolDefinition;
+import com.mccompanion.runtime.tool.ToolGateway;
+import com.mccompanion.runtime.tool.ToolResult;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -38,6 +43,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -57,6 +63,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final MemoryRepository memories;
     private final ExternalBrainCoordinator externalBrain;
     private final BrainAuditRepository brainAudit;
+    private final ToolGateway toolGateway;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -78,6 +85,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             MemoryRepository memories,
             ExternalBrainCoordinator externalBrain,
             BrainAuditRepository brainAudit,
+            ToolGateway toolGateway,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -92,6 +100,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.memories = memories;
         this.externalBrain = externalBrain;
         this.brainAudit = brainAudit;
+        this.toolGateway = toolGateway;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -103,6 +112,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
         server.createContext("/memories", this::memoryManagement);
+        server.createContext("/mcp", this::mcp);
         executor = Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-management");
             thread.setDaemon(true);
@@ -114,6 +124,137 @@ public final class RuntimeHealthServer implements AutoCloseable {
             return thread;
         });
         server.setExecutor(executor);
+    }
+
+    private void mcp(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (!"POST".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().set("Allow", "POST");
+                sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
+                return;
+            }
+            JsonNode request;
+            try {
+                request = Json.MAPPER.readTree(exchange.getRequestBody());
+            } catch (IOException | RuntimeException invalid) {
+                sendJson(exchange, 200, mcpError(null, -32700, "Parse error"));
+                return;
+            }
+            JsonNode id = request == null ? null : request.get("id");
+            if (request == null || !request.isObject() || !"2.0".equals(request.path("jsonrpc").asText())
+                    || !request.path("method").isTextual()) {
+                sendJson(exchange, 200, mcpError(id, -32600, "Invalid Request"));
+                return;
+            }
+            String method = request.path("method").asText();
+            if (method.equals("notifications/initialized")) {
+                exchange.sendResponseHeaders(202, -1);
+                return;
+            }
+            if (method.equals("notifications/cancelled")) {
+                JsonNode cancelledId = request.path("params").get("requestId");
+                if (cancelledId != null && !cancelledId.isNull()) {
+                    ToolContext context = mcpContext(exchange);
+                    String reason = request.path("params").path("reason").asText("MCP_REQUEST_CANCELLED");
+                    toolGateway.cancel(context, mcpCallId(context, cancelledId), reason);
+                }
+                exchange.sendResponseHeaders(202, -1);
+                return;
+            }
+            if (id == null || id.isNull()) {
+                sendJson(exchange, 200, mcpError(null, -32600, "Requests require an id"));
+                return;
+            }
+            try {
+                ObjectNode result = switch (method) {
+                    case "initialize" -> mcpInitialize(request.path("params"));
+                    case "ping" -> Json.object();
+                    case "tools/list" -> mcpTools(exchange);
+                    case "tools/call" -> mcpToolCall(exchange, request.path("params"), id);
+                    default -> null;
+                };
+                if (result == null) {
+                    sendJson(exchange, 200, mcpError(id, -32601, "Method not found"));
+                    return;
+                }
+                sendJson(exchange, 200, mcpResult(id, result));
+            } catch (IllegalArgumentException invalid) {
+                sendJson(exchange, 200, mcpError(id, -32602, invalid.getMessage()));
+            }
+        }
+    }
+
+    private static ObjectNode mcpInitialize(JsonNode params) {
+        String requested = params.path("protocolVersion").asText("");
+        String negotiated = requested.equals("2025-03-26") || requested.equals("2025-06-18")
+                ? requested : "2025-06-18";
+        ObjectNode result = Json.object().put("protocolVersion", negotiated);
+        ObjectNode capabilities = Json.object();
+        capabilities.set("tools", Json.object().put("listChanged", false));
+        result.set("capabilities", capabilities);
+        result.set("serverInfo", Json.object().put("name", "mcac-runtime").put("version", "0.3.0"));
+        return result;
+    }
+
+    private ObjectNode mcpTools(HttpExchange exchange) {
+        ToolContext context = mcpContext(exchange);
+        var tools = Json.MAPPER.createArrayNode();
+        toolGateway.definitions(context).stream().sorted(java.util.Comparator.comparing(ToolDefinition::name))
+                .forEach(definition -> tools.add(Json.object()
+                        .put("name", definition.name()).put("description", definition.description())
+                        .set("inputSchema", definition.inputSchema())));
+        return Json.object().set("tools", tools);
+    }
+
+    private ObjectNode mcpToolCall(HttpExchange exchange, JsonNode params, JsonNode requestId) {
+        ToolContext context = mcpContext(exchange);
+        String name = requiredText(params, "name", 64);
+        JsonNode arguments = params.path("arguments");
+        if (arguments.isMissingNode()) arguments = Json.object();
+        String callId = mcpCallId(context, requestId);
+        ToolCall call = new ToolCall(callId, name, arguments);
+        ToolResult accepted = toolGateway.execute(context, call);
+        ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
+                context, call, accepted, Duration.ofSeconds(30), ignored -> { });
+        ObjectNode envelope = Json.object().put("callId", terminal.callId()).put("code", terminal.code())
+                .put("terminal", terminal.terminal()).set("observation", terminal.observation());
+        var content = Json.MAPPER.createArrayNode().add(
+                Json.object().put("type", "text").put("text", Json.write(envelope)));
+        ObjectNode result = Json.object().put("isError", !terminal.success());
+        result.set("content", content);
+        result.set("structuredContent", envelope);
+        return result;
+    }
+
+    private static String mcpCallId(ToolContext context, JsonNode requestId) {
+        String identity = context.controllerId() + '\n' + context.brainSessionId() + '\n'
+                + context.companionId() + '\n' + Json.write(requestId);
+        return "mcp-" + java.util.UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static ToolContext mcpContext(HttpExchange exchange) {
+        String companionId = exchange.getRequestHeaders().getFirst("X-MCAC-Companion-Id");
+        String brainSessionId = exchange.getRequestHeaders().getFirst("X-MCAC-Brain-Session-Id");
+        String controllerId = exchange.getRequestHeaders().getFirst("X-MCAC-Controller-Id");
+        if (companionId == null || brainSessionId == null) {
+            throw new IllegalArgumentException("X-MCAC-Companion-Id and X-MCAC-Brain-Session-Id are required");
+        }
+        return new ToolContext(controllerId == null ? "mcp" : controllerId, brainSessionId, companionId);
+    }
+
+    private static ObjectNode mcpResult(JsonNode id, JsonNode result) {
+        ObjectNode response = Json.object().put("jsonrpc", "2.0");
+        response.set("id", id.deepCopy());
+        response.set("result", result);
+        return response;
+    }
+
+    private static ObjectNode mcpError(JsonNode id, int code, String message) {
+        ObjectNode response = Json.object().put("jsonrpc", "2.0");
+        response.set("id", id == null ? Json.MAPPER.nullNode() : id.deepCopy());
+        response.set("error", Json.object().put("code", code).put("message", message));
+        return response;
     }
 
     private void brainDispatch(HttpExchange exchange) throws IOException {

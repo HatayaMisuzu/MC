@@ -123,6 +123,85 @@ class RuntimeApplicationTest {
     }
 
     @Test
+    void exposesAuthenticatedSessionBoundMcpToolsOverStreamableHttp() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("mcp"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        config.provider.mode = "rules";
+        try (RuntimeApplication application = RuntimeApplication.start(config, false)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            URI endpoint = new URI("http://127.0.0.1:" + config.server.managementPort + "/mcp");
+            HttpClient http = HttpClient.newHttpClient();
+
+            HttpResponse<String> unauthorized = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(401, unauthorized.statusCode(), unauthorized.body());
+
+            HttpResponse<String> initialized = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{
+                              "protocolVersion":"2025-06-18","capabilities":{},
+                              "clientInfo":{"name":"Hermes","version":"test"}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, initialized.statusCode(), initialized.body());
+            JsonNode initializeBody = Json.parse(initialized.body());
+            assertEquals("init-1", initializeBody.path("id").asText());
+            assertEquals("2025-06-18", initializeBody.path("result").path("protocolVersion").asText());
+            assertTrue(initializeBody.path("result").path("capabilities").has("tools"));
+
+            HttpResponse<String> unbound = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(-32602, Json.parse(unbound.body()).path("error").path("code").asInt());
+
+            HttpRequest.Builder bound = HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .header("X-MCAC-Controller-Id", "hermes-test")
+                    .header("X-MCAC-Brain-Session-Id", "brain-session-1")
+                    .header("X-MCAC-Companion-Id", "missing-companion");
+            HttpResponse<String> listed = http.send(bound.copy()
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, listed.statusCode(), listed.body());
+            List<String> names = new java.util.ArrayList<>();
+            Json.parse(listed.body()).path("result").path("tools")
+                    .forEach(tool -> names.add(tool.path("name").asText()));
+            assertTrue(names.contains("world.observe"), names.toString());
+            assertTrue(names.contains("memory.search"), names.toString());
+            assertTrue(names.stream().noneMatch(name -> name.contains("shell") || name.contains("file")),
+                    names.toString());
+
+            HttpResponse<String> called = http.send(bound.copy()
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"observe-1","method":"tools/call","params":{
+                              "name":"world.observe","arguments":{}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            JsonNode callResult = Json.parse(called.body()).path("result");
+            assertTrue(callResult.path("isError").asBoolean(), called.body());
+            assertEquals("INVALID_TOOL_ARGUMENTS",
+                    callResult.path("structuredContent").path("code").asText());
+            assertTrue(callResult.path("structuredContent").path("callId").asText().startsWith("mcp-"));
+
+            HttpResponse<String> cancelled = http.send(bound.copy()
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","method":"notifications/cancelled","params":{
+                              "requestId":"observe-1","reason":"owner changed goal"}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(202, cancelled.statusCode(), cancelled.body());
+            assertTrue(cancelled.body().isEmpty());
+        }
+    }
+
+    @Test
     void externalBrainEndpointRunsReplayToolLoopAndPersistsFinalReply() throws Exception {
         RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("external-brain"));
         config.server.port = 0;

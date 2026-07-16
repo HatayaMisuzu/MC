@@ -231,6 +231,23 @@ product UI controls, and release/install verification remain incomplete.
   `DEFEND_COMPLETE` observation/evidence. Multiple/ranged threats, hostile-intent and friendly-fire
   policy breadth, equipment strategy, restart, and Brain E2E remain, so Defend is `PARTIAL`.
 
+## MCP Streamable HTTP tool-protocol slice
+
+- Added an authenticated JSON-RPC 2.0 `/mcp` endpoint on the Runtime management server. It
+  negotiates MCP `2025-03-26` and `2025-06-18`, implements `initialize`, `ping`, `tools/list`,
+  `tools/call`, initialization notification, and cancellation notification over HTTP POST.
+- Public tool discovery delegates to the existing context-sensitive MCAC Tool Gateway, so the
+  endpoint does not add shell, filesystem, code execution, or arbitrary-network capabilities.
+  Every discovery/call/cancel request is bound by explicit controller, Brain-session, and
+  companion headers in addition to the Runtime pairing token.
+- MCP request IDs map deterministically to bounded internal call IDs. This lets a concurrent
+  `notifications/cancelled` request reach the same durable task/tool execution, while completed
+  calls return both MCP text content and structured terminal observations. Runtime integration
+  verifies authentication, protocol negotiation, binding rejection, filtered discovery, failed
+  execution evidence, and cancellation acceptance. SSE progress/resumption, strict protocol
+  header lifecycle, concurrent cancellation E2E, Hermes native MCP setup, and a protocol doctor
+  remain, so the protocol is intentionally `PARTIAL`.
+
 ## Craft item slice
 
 - Added `item.craft` / `CraftItem` only when the connected Fabric body reports the

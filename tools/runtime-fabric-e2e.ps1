@@ -2,6 +2,7 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Net.Http
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $runtimeHome = Join-Path $root 'build\e2e-runtime'
 $fabric = Join-Path $root 'minecraft\fabric-1.21.1'
@@ -184,6 +185,57 @@ function Invoke-McpTool(
     return $result
 }
 
+function Get-McpCallId(
+    [string]$controllerId,
+    [string]$brainSessionId,
+    [string]$companionId,
+    [string]$requestId
+) {
+    $identity = "$controllerId`n$brainSessionId`n$companionId`n$($requestId | ConvertTo-Json -Compress)"
+    $md5 = [Security.Cryptography.MD5]::Create()
+    try {
+        $hash = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity))
+    } finally {
+        $md5.Dispose()
+    }
+    $hash[6] = ($hash[6] -band 0x0f) -bor 0x30
+    $hash[8] = ($hash[8] -band 0x3f) -bor 0x80
+    $hex = -join ($hash | ForEach-Object { $_.ToString('x2') })
+    return "mcp-$($hex.Substring(0,8))-$($hex.Substring(8,4))-$($hex.Substring(12,4))-$($hex.Substring(16,4))-$($hex.Substring(20,12))"
+}
+
+function Start-McpToolRequest(
+    [string]$pairingToken,
+    [string]$companionId,
+    [string]$brainSessionId,
+    [string]$name,
+    [hashtable]$arguments,
+    [string]$requestId
+) {
+    $body = @{
+        jsonrpc = '2.0'
+        id = $requestId
+        method = 'tools/call'
+        params = @{ name = $name; arguments = $arguments }
+    } | ConvertTo-Json -Compress -Depth 40
+    $client = [Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromSeconds(40)
+    $request = [Net.Http.HttpRequestMessage]::new(
+        [Net.Http.HttpMethod]::Post, 'http://127.0.0.1:18766/mcp')
+    $null = $request.Headers.TryAddWithoutValidation('Authorization', "Bearer $pairingToken")
+    $null = $request.Headers.TryAddWithoutValidation('MCP-Protocol-Version', '2025-06-18')
+    $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Controller-Id', 'representative-e2e')
+    $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Brain-Session-Id', $brainSessionId)
+    $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Companion-Id', $companionId)
+    $request.Content = [Net.Http.StringContent]::new($body, [Text.Encoding]::UTF8, 'application/json')
+    return [pscustomobject]@{
+        client = $client
+        request = $request
+        task = $client.SendAsync($request)
+        callId = Get-McpCallId 'representative-e2e' $brainSessionId $companionId $requestId
+    }
+}
+
 function Wait-TaskGraphExecution(
     [string]$pairingToken,
     [string]$companionId,
@@ -202,6 +254,29 @@ function Wait-TaskGraphExecution(
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     throw "Task Graph $executionId did not reach a terminal state."
+}
+
+function Wait-TaskGraphState(
+    [string]$pairingToken,
+    [string]$companionId,
+    [string]$brainSessionId,
+    [string]$executionId,
+    [string]$expectedState
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $last = $null
+    do {
+        $last = Invoke-McpTool $pairingToken $companionId $brainSessionId 'task_graph.inspect' @{
+            executionId = $executionId
+        } "state-$([Guid]::NewGuid())"
+        if ($last.observation.state -eq $expectedState) { return $last }
+        if ($last.observation.state -in @('SUCCEEDED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) {
+            throw "Task Graph $executionId reached $($last.observation.state) before $expectedState."
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $actual = if ($last) { $last.observation.state } else { 'unavailable' }
+    throw "Task Graph $executionId did not reach $expectedState (last=$actual)."
 }
 
 function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
@@ -262,6 +337,8 @@ $provider = $null
 $brainProvider = $null
 $runtimeOut = $null
 $runtimeErr = $null
+$priorRuntimeStdout = ''
+$priorRuntimeStderr = ''
 $providerOut = $null
 $providerErr = $null
 $brainProviderOut = $null
@@ -597,13 +674,241 @@ try {
         started = $correctedStarted
         terminal = $correctedTerminal
     }
+    Write-Output '[runtime-e2e] exercising Task Graph ASK_USER ownership and resume'
+    $askBrainSession = "representative-ask-$([Guid]::NewGuid())"
+    $askGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'ask-before-live-query'
+        permissions = @('READ_WORLD')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'choice'
+                    type = 'ask_user'
+                    prompt = 'Inspect the selected live Registry item?'
+                    options = @('Inspect', 'Stop')
+                    freeTextAllowed = $false
+                },
+                @{
+                    id = 'accepted'
+                    type = 'if'
+                    condition = '${outputs.choice.optionId == "option_1"}'
+                    then = @{
+                        id = 'described'
+                        type = 'call_tool'
+                        tool = 'registry.describe'
+                        arguments = @{
+                            kind = 'ITEM'
+                            id = 'mcac_registry_fixture:blue_block'
+                        }
+                    }
+                    else = @{
+                        id = 'answer-declined'
+                        type = 'fail'
+                        code = 'OWNER_DECLINED'
+                        message = 'deterministic test owner declined the query'
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        answer = '${outputs.choice}'
+                        source = '${outputs.described.source}'
+                        entry = '${outputs.described.entry}'
+                    }
+                }
+            )
+        }
+    }
+    $askStarted = Invoke-McpTool $pairingToken $companionId $askBrainSession 'task_graph.execute' @{
+        graph = $askGraph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+            deterministicTestAnswer = $true
+        }
+    } "ask-$([Guid]::NewGuid())"
+    $askExecutionId = $askStarted.observation.executionId
+    if (-not $askExecutionId) { throw 'ASK_USER graph did not return an execution id.' }
+    $askConversation = Wait-WaitingQuestion $pairingToken $companionId
+    if ($askConversation.waitingQuestion.taskGraphExecutionId -ne $askExecutionId -or
+        $askConversation.waitingQuestion.brainSessionId -or
+        $askConversation.waitingQuestion.options[0].id -ne 'option_1') {
+        throw "ASK_USER graph did not own the expected durable question: $($askConversation | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $askAnswer = Invoke-ExternalBrainRequest $pairingToken $companionId 'option_1'
+    if (-not $askAnswer.accepted -or $askAnswer.source -ne 'task-graph' -or
+        $askAnswer.executionId -ne $askExecutionId) {
+        throw "Deterministic user answer did not resume the owning Task Graph: $($askAnswer | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $askTerminal = Wait-TaskGraphExecution $pairingToken $companionId $askBrainSession $askExecutionId
+    if ($askTerminal.observation.state -ne 'SUCCEEDED' -or
+        $askTerminal.observation.value.answer.optionId -ne 'option_1' -or
+        $askTerminal.observation.value.source -ne 'LIVE_SERVER_REGISTRY' -or
+        $askTerminal.observation.value.entry.id -ne 'mcac_registry_fixture:blue_block') {
+        throw "ASK_USER graph did not resume into its selected live Tool branch: $($askTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $askGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        deterministicTestAnswer = $true
+        started = $askStarted
+        waiting = $askConversation
+        answer = $askAnswer
+        terminal = $askTerminal
+    }
+    Write-Output '[runtime-e2e] exercising paused Task Graph across a real Runtime restart'
+    $restartBrainSession = "representative-restart-$([Guid]::NewGuid())"
+    $restartGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'paused-restart-effect'
+        permissions = @('READ_WORLD', 'MOVE')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'inspectBeforeRestart'
+                    type = 'call_tool'
+                    tool = 'block.inspect'
+                    arguments = @{
+                        position = @{
+                            dimension = 'minecraft:overworld'
+                            x = $chestX
+                            y = $chestY
+                            z = $chestZ
+                        }
+                    }
+                },
+                @{
+                    id = 'restartBoundary'
+                    type = 'wait'
+                    durationMillis = 2500
+                },
+                @{
+                    id = 'lookAfterRestart'
+                    type = 'call_tool'
+                    tool = 'movement.look'
+                    arguments = @{
+                        dimension = '${outputs.inspectBeforeRestart.position.dimension}'
+                        x = '${outputs.inspectBeforeRestart.position.x}'
+                        y = '${outputs.inspectBeforeRestart.position.y}'
+                        z = '${outputs.inspectBeforeRestart.position.z}'
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        block = '${outputs.inspectBeforeRestart.block}'
+                        effectState = '${outputs.lookAfterRestart.state}'
+                        effectEvidence = '${outputs.lookAfterRestart.fabricObservation.snapshot.evidence}'
+                    }
+                }
+            )
+        }
+    }
+    $restartRequestId = "restart-$([Guid]::NewGuid())"
+    $restartRequest = Start-McpToolRequest $pairingToken $companionId $restartBrainSession 'task_graph.execute' @{
+        graph = $restartGraph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+            runtimeRestarted = $true
+        }
+    } $restartRequestId
+    $restartExecutionId = $restartRequest.callId
+    $restartWaiting = Wait-TaskGraphState $pairingToken $companionId $restartBrainSession `
+        $restartExecutionId 'WAITING'
+    $restartPaused = Invoke-McpTool $pairingToken $companionId $restartBrainSession 'task_graph.pause' @{
+        executionId = $restartExecutionId
+    } "pause-restart-$([Guid]::NewGuid())"
+    if ($restartPaused.observation.state -ne 'PAUSED') {
+        throw "Restart graph did not persist PAUSED before shutdown: $($restartPaused | ConvertTo-Json -Compress -Depth 20)"
+    }
+    try {
+        $restartHttpResponse = $restartRequest.task.GetAwaiter().GetResult()
+        $restartHttpBody = $restartHttpResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult() |
+            ConvertFrom-Json
+        $restartRequestResult = $restartHttpBody.result.structuredContent
+        if ($restartRequestResult.callId -ne $restartExecutionId -or
+            $restartRequestResult.observation.state -ne 'PAUSED') {
+            throw "Original MCP execution request did not finish at PAUSED: $($restartHttpBody | ConvertTo-Json -Compress -Depth 20)"
+        }
+    } finally {
+        $restartRequest.request.Dispose()
+        $restartRequest.client.Dispose()
+    }
+
+    $runtime.StandardInput.WriteLine('quit')
+    $runtime.StandardInput.Flush()
+    if (-not $runtime.WaitForExit(15000)) {
+        $runtime.Kill()
+        $null = $runtime.WaitForExit(5000)
+        throw 'Runtime did not shut down at the representative restart boundary.'
+    }
+    if ($runtime.ExitCode -ne 0) { throw "Runtime restart-boundary process exited with $($runtime.ExitCode)." }
+    $priorRuntimeStdout += $runtimeOut.GetAwaiter().GetResult()
+    $priorRuntimeStderr += $runtimeErr.GetAwaiter().GetResult()
+
+    $runtime = Start-TestProcess $java $runtimeArgs $root $true
+    $runtimeOut = $runtime.StandardOutput.ReadToEndAsync()
+    $runtimeErr = $runtime.StandardError.ReadToEndAsync()
+    $reconnectDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    $reconnected = $false
+    do {
+        if ($runtime.HasExited) { throw "Restarted Runtime exited before Fabric reconnected ($($runtime.ExitCode))." }
+        try {
+            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:18766/health' -Headers @{
+                Authorization = "Bearer $pairingToken"
+            } -TimeoutSec 2
+            $reconnected = $health.onlineCompanionCount -ge 1
+        } catch {
+            $reconnected = $false
+        }
+        if (-not $reconnected) { Start-Sleep -Milliseconds 200 }
+    } while (-not $reconnected -and [DateTime]::UtcNow -lt $reconnectDeadline)
+    if (-not $reconnected) { throw 'Fabric body did not reconnect to the restarted Runtime.' }
+
+    $restartStillPaused = Wait-TaskGraphState $pairingToken $companionId $restartBrainSession `
+        $restartExecutionId 'PAUSED'
+    $restartResumed = Invoke-McpTool $pairingToken $companionId $restartBrainSession 'task_graph.resume' @{
+        executionId = $restartExecutionId
+    } "resume-restart-$([Guid]::NewGuid())"
+    if (-not $restartResumed.success -and $restartResumed.code -notin @('RESUME_ACCEPTED', 'RECOVERY_RESUME_ACCEPTED')) {
+        throw "Restart graph resume was rejected: $($restartResumed | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $restartTerminal = Wait-TaskGraphExecution $pairingToken $companionId $restartBrainSession $restartExecutionId
+    if ($restartTerminal.observation.state -ne 'SUCCEEDED' -or
+        $restartTerminal.observation.value.block -ne 'minecraft:chest' -or
+        $restartTerminal.observation.value.effectState -ne 'SUCCEEDED' -or
+        $restartTerminal.observation.value.effectEvidence -notmatch 'VANILLA_ENTITY_LOOK') {
+        throw "Restart graph did not continue into its verified primitive effect: $($restartTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $restartGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        runtimeRestarted = $true
+        requestResult = $restartRequestResult
+        waiting = $restartWaiting
+        pausedBeforeShutdown = $restartPaused
+        pausedAfterRestart = $restartStillPaused
+        resumed = $restartResumed
+        terminal = $restartTerminal
+    }
     $representativeTaskGraphEvidence = [pscustomobject]@{
         classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
         liveModel = $false
-        graphs = @($registryGraphEvidence, $effectGraphEvidence, $correctedGraphEvidence)
+        graphs = @($registryGraphEvidence, $effectGraphEvidence, $correctedGraphEvidence, $askGraphEvidence,
+            $restartGraphEvidence)
     }
     Write-Output '[runtime-e2e] Task Graph inspected a live block and aimed the body at its observed position'
     Write-Output '[runtime-e2e] External client corrected a rejected graph and executed its declared fallback'
+    Write-Output '[runtime-e2e] Task Graph resumed its exact ASK_USER execution and ran the selected live Tool'
+    Write-Output '[runtime-e2e] Paused Task Graph survived Runtime restart and completed its primitive effect'
 
     $follow = Invoke-RuntimeCommand $pairingToken $companionId 'FOLLOW' @{} 'follow'
     if (-not $follow.accepted -or -not $follow.taskId) { throw "FOLLOW was rejected: $($follow.code)" }
@@ -719,8 +1024,8 @@ try {
 
     $gameStdout = Read-ProcessLog $gameOutFile
     $gameStderr = Read-ProcessLog $gameErrFile
-    $runtimeStdout = $runtimeOut.GetAwaiter().GetResult()
-    $runtimeStderr = $runtimeErr.GetAwaiter().GetResult()
+    $runtimeStdout = $priorRuntimeStdout + $runtimeOut.GetAwaiter().GetResult()
+    $runtimeStderr = $priorRuntimeStderr + $runtimeErr.GetAwaiter().GetResult()
     New-Item -ItemType Directory -Force -Path (Join-Path $runtimeHome 'evidence') | Out-Null
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\fabric-gametest.out.log'), $gameStdout, [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\fabric-gametest.err.log'), $gameStderr, [Text.UTF8Encoding]::new($false))
@@ -769,11 +1074,13 @@ try {
         throw 'External Brain evidence did not retain the four terminal tool observations.'
     }
     if (-not $representativeTaskGraphEvidence -or
-        $representativeTaskGraphEvidence.graphs.Count -ne 3 -or
+        $representativeTaskGraphEvidence.graphs.Count -ne 5 -or
         ($representativeTaskGraphEvidence.graphs | Where-Object {
             $_.terminal.observation.state -ne 'SUCCEEDED' -or $_.liveModel
         }).Count -ne 0 -or
         $representativeTaskGraphEvidence.graphs[2].rejectedRevision.code -ne 'TASK_GRAPH_INVALID' -or
+        -not $representativeTaskGraphEvidence.graphs[3].deterministicTestAnswer -or
+        -not $representativeTaskGraphEvidence.graphs[4].runtimeRestarted -or
         $representativeTaskGraphEvidence.liveModel) {
         throw 'Representative Task Graph evidence is missing or has an invalid verification classification.'
     }

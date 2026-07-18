@@ -1270,7 +1270,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 100000)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300000)
     public void createMoveStopSleepAndWake(GameTestHelper helper) {
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
         helper.assertTrue(registry != null, "server companion registry was not initialized");

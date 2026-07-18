@@ -251,5 +251,15 @@ Tool argument. Runtime rejects it with the real `TOOL_INPUT_SCHEMA_INVALID` issu
 or plan around it. The external client supplies a corrected second revision under a new execution ID;
 its declared `fallback` bypasses an explicit failed primary and returns the live Registry entry. This
 tests graph correction ownership and deterministic fallback without turning Runtime into a Planner.
-Two additional structurally different representative graphs and the
-external verification gates remain open in `RC_COMPLETION_MATRIX.md`.
+A fourth graph persists `ask_user`, verifies that the waiting question is bound only to its originating
+Task Graph execution, and sends a deterministic automation answer through the normal user request
+ingress. The same execution resumes and uses the answer to select a live Registry Tool branch. Its
+evidence records `deterministicTestAnswer=true`; this is not a human answer or human-playtest claim.
+
+The fifth graph reaches a persisted timed `WAITING` boundary after a live inspection. Its owning
+external client pauses it, the production Runtime process exits normally and is replaced, and the
+same Fabric body reconnects. Inspection proves the execution remains `PAUSED` after restart; only an
+external `task_graph.resume` continues it into `movement.look`, whose terminal evidence again requires
+`VANILLA_ENTITY_LOOK`. The five local representative structures are therefore complete, while remote
+CI for their exact SHA, Live Brain verification, and human playtest remain separate gates in
+`RC_COMPLETION_MATRIX.md`.

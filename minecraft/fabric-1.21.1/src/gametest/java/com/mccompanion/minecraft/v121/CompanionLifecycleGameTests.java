@@ -600,6 +600,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "Collector").success(), "collect test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "collect test created no live body");
+        owner.moveTo(body.getX() + 8.0D, body.getY(), body.getZ() + 8.0D,
+                owner.getYRot(), owner.getXRot());
         BlockPos origin = body.blockPosition();
         // Move away from the preceding combat batch. A failed earlier GameTest can leave a player
         // body alive, and vanilla ItemEntity pickup must still be isolated to this collector.
@@ -830,6 +832,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         body.serverLevel().setBlockAndUpdate(origin, Blocks.DIAMOND_ORE.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(second, Blocks.DIAMOND_ORE.defaultBlockState());
+        // Mock player data can survive another concurrently scheduled fixture. This isolated
+        // mining acceptance case owns only the pickaxe and the two vanilla ore drops below.
+        body.getInventory().clearContent();
         ItemStack pickaxe = new ItemStack(Items.IRON_PICKAXE);
         body.getInventory().setItem(0, pickaxe);
         body.getInventory().selected = 0;
@@ -998,6 +1003,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "StorageCompanion").success(), "storage test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "storage test created no live body");
+        body.getInventory().clearContent();
         BlockPos chestPos = body.blockPosition().offset(1, 0, 0);
         body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
         Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);

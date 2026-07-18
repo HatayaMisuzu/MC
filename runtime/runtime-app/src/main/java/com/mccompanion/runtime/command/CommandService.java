@@ -98,6 +98,17 @@ public final class CommandService implements SessionRegistry.Listener {
         }
     }
 
+    public boolean matchesRecordedRequest(String commandId, String companionId, Intent intent) {
+        if (intent == null) return false;
+        ObjectNode request = Json.object().put("companionId", companionId).put("type", intent.type().name());
+        request.set("arguments", intent.arguments());
+        try {
+            return idempotency.matchesRequest(commandId, idempotency.requestHash(request));
+        } catch (SQLException | IllegalArgumentException failure) {
+            return false;
+        }
+    }
+
     private CommandReply route(String commandId, String companionId, Intent intent) throws SQLException {
         if (intent.type() == TaskType.STATUS) {
             return status(commandId, companionId);

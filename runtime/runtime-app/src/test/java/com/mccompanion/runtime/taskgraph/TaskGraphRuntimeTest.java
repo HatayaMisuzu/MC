@@ -13,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -577,6 +578,49 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void recoveryImportsExactDurableGatewayResultBeforeResumingNonIdempotentTool() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("gateway-reconciliation.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-reconcile", "companion-1");
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"gateway-reconciliation",
+                     "inputs":{"distance":{"type":"integer","required":true}},
+                     "permissions":["MOVE"],
+                     "root":{"id":"move","type":"call_tool","tool":"test.move",
+                      "arguments":{"distance":"${inputs.distance}"}}}
+                    """);
+            TaskGraphExecutionRecord created = repository.create(
+                    "gateway-reconcile", context, graph, TaskGraphLimits.DEFAULTS,
+                    Json.object().put("distance", 3), Json.object());
+            var variables = Json.object().put("distance", 3);
+            variables.set("_mcac", Json.object().put("currentNodeKey", "move"));
+            repository.save(created.executionId(), created.revision(), "RUNNING", "move",
+                    Json.MAPPER.createArrayNode(), Json.object(), variables, Json.object(),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+
+            ReconciliationGateway gateway = new ReconciliationGateway();
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(gateway, repository)) {
+                ToolResult accepted = restarted.resume(context,
+                        new ToolCall("resume-gateway-result", "task_graph.resume", Json.object()),
+                        "gateway-reconcile");
+                assertTrue(accepted.success(), accepted.observation().toString());
+                ToolResult terminal = restarted.await(context,
+                        new ToolCall("gateway-reconcile", "task_graph.execute", Json.object()),
+                        Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(0, gateway.executeCalls);
+                assertEquals(1, gateway.reconcileCalls);
+                assertEquals(3, gateway.reconciledArguments.path("distance").asInt());
+                assertTrue(repository.get("gateway-reconcile").orElseThrow().toolResults()
+                        .has("gateway-reconcile:move:1"));
+            }
+        }
+    }
+
+    @Test
     void timeoutConfirmsWaitCancellationAndQuarantinesUnconfirmedToolCancellation() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("timeout-confirmation.db"))) {
             database.initialize();
@@ -1081,6 +1125,32 @@ class TaskGraphRuntimeTest {
             calls++;
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("moved", true), true);
+        }
+    }
+
+    private static final class ReconciliationGateway implements ToolGateway {
+        private int executeCalls;
+        private int reconcileCalls;
+        private com.fasterxml.jackson.databind.JsonNode reconciledArguments = Json.object();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.move", "1.0", "move",
+                    Json.object().put("type", "object")
+                            .set("properties", Json.object().set("distance",
+                                    Json.object().put("type", "integer"))),
+                    "LOW", "MOVE", Duration.ofSeconds(1), false));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            executeCalls++;
+            return ToolResult.rejected(call, "UNEXPECTED_REPLAY", "must not dispatch during reconciliation");
+        }
+
+        @Override public Optional<ToolResult> reconcile(ToolContext context, ToolCall call) {
+            reconcileCalls++;
+            reconciledArguments = call.arguments().deepCopy();
+            return Optional.of(new ToolResult(call.callId(), call.name(), true, "OK",
+                    Json.object().put("state", "SUCCEEDED").put("taskId", "durable-task-1"), true));
         }
     }
 

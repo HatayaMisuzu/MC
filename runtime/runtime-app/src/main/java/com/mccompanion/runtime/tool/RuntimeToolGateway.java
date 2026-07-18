@@ -19,6 +19,7 @@ import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
@@ -209,6 +210,34 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(task.taskId());
         if (!events.isEmpty()) observation.set("fabricObservation", events.getLast().payload());
         return new ToolResult(call.callId(), call.name(), true, "TOOL_PROGRESS", observation, false);
+    }
+
+    @Override public Optional<ToolResult> reconcile(ToolContext context, ToolCall call) {
+        if (tasks == null) return Optional.empty();
+        String commandId = "brain-" + context.brainSessionId() + '-' + call.callId();
+        try {
+            Intent intent = call.name().equals("movement.step")
+                    ? step(context, call.arguments()) : intent(call);
+            if (!commands.matchesRecordedRequest(commandId, context.companionId(), intent)) {
+                return Optional.empty();
+            }
+            TaskRecord task = tasks.forCommand(commandId).orElse(null);
+            if (task == null || !task.companionId().equals(context.companionId())) {
+                return Optional.empty();
+            }
+            if (!task.state().terminal() && task.state() != TaskState.BLOCKED
+                    && task.state() != TaskState.PAUSED
+                    && task.state() != TaskState.RECONCILIATION_REQUIRED) {
+                return Optional.empty();
+            }
+            if (commands.leaseFor(task.companionId())
+                    .filter(lease -> lease.epoch() == task.controlEpoch()).isPresent()) {
+                return Optional.empty();
+            }
+            return Optional.of(terminalResult(call, task));
+        } catch (java.sql.SQLException | RuntimeException failure) {
+            return Optional.empty();
+        }
     }
 
     @Override public List<ToolDefinition> definitions(ToolContext context) {

@@ -18,6 +18,9 @@ public final class CompositeToolGateway implements ToolGateway, AutoCloseable {
         return delegate(context, call).map(value -> value.awaitTerminal(context, call, accepted, timeout, progress))
                 .orElse(accepted);
     }
+    @Override public java.util.Optional<ToolResult> reconcile(ToolContext context, ToolCall call) {
+        return delegate(context, call).flatMap(value -> value.reconcile(context, call));
+    }
     @Override public void cancel(ToolContext context, String callId, String reason) {
         delegates.forEach(value -> value.cancel(context, callId, reason));
     }

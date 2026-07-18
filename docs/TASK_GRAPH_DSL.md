@@ -211,15 +211,20 @@ and paused executions; an answered `ask_user` question resumes the original exec
 after restart. Startup still moves crash-left `READY` or `RUNNING` work to
 `RECONCILIATION_REQUIRED`. A same-owner recovery resume rechecks the graph hash, persisted state
 shape, current graph validity, Tool availability, permission and idempotency before continuing from
-the durable boundary. An unconfirmed idempotent Tool may be reissued with its stable call ID. A
+the durable boundary. Before that assessment, a Gateway may return a previously confirmed terminal
+result for the exact call without dispatching new work. The production Minecraft Gateway requires
+the original command request hash, Brain session, companion, call ID, durable task binding, terminal
+behavior state and released control epoch to match; otherwise it returns no reconciliation result.
+An unconfirmed idempotent Tool may then be reissued with its stable call ID. A
 persisted terminal Tool result is reused only when its execution ID, exact scoped node key (including
 every loop iteration), attempt and Tool name match the interrupted boundary; a result from another
 iteration cannot confirm a non-idempotent effect. Unknown non-idempotent
 effects, changed Tool availability, malformed Evidence and graph-hash mismatch remain in
 `RECONCILIATION_REQUIRED`. Persisted retry attempt cursors and backoff deadlines resume at the next
 stable scoped call ID rather than replaying a prior attempt. Automatic retry of non-idempotent
-effects is rejected rather than treated as reconciliation. Live Mod status reconciliation is not
-yet claimed. A Tool transport or worker failure with
+effects is rejected rather than treated as reconciliation. The durable Minecraft task reconciliation
+path is locally verified; a real Runtime-process crash between live Mod completion and Graph result
+persistence remains pending end-to-end verification. A Tool transport or worker failure with
 unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
 reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic

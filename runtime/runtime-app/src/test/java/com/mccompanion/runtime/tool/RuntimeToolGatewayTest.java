@@ -706,6 +706,57 @@ class RuntimeToolGatewayTest {
     }
 
     @Test
+    void reconcilesOnlyExactDurableTerminalMinecraftCallWithoutDispatch() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("durable-reconcile.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("durable-reconcile.log"),
+                     false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            LeaseService leases = new LeaseService(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                IdempotencyStore idempotency = new IdempotencyStore(database);
+                CommandService commands = new CommandService(sessions, companions, tasks, leases,
+                        idempotency, new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateTo"));
+                ToolContext context = new ToolContext("hermes", "session-reconcile", "c-reconcile");
+                ToolCall call = new ToolCall("graph-exec:move:1", "movement.navigate",
+                        Json.object().put("x", 1).put("y", 64).put("z", 2));
+                String commandId = "brain-" + context.brainSessionId() + '-' + call.callId();
+                var recordedRequest = Json.object().put("companionId", context.companionId())
+                        .put("type", "TRAVEL");
+                recordedRequest.set("arguments", Json.object().set("target", Json.object()
+                        .put("dimension", "minecraft:overworld").put("x", 1).put("y", 64).put("z", 2)));
+                String requestHash = idempotency.requestHash(recordedRequest);
+                assertEquals(IdempotencyStore.ClaimState.NEW,
+                        idempotency.claim(commandId, requestHash).state());
+                idempotency.complete(commandId, requestHash,
+                        Json.object().put("accepted", true).put("code", "COMMAND_DISPATCHED"), true);
+                var task = tasks.create(context.companionId(), TaskType.TRAVEL, "go", Json.object(),
+                        commandId, "START_BEHAVIOR", 0);
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                tasks.transition(task.taskId(), task.revision(), TaskState.COMPLETED,
+                        "BehaviorCompleted", Json.object().put("arrived", true).put("verifiedBy", "fabric"));
+
+                ToolResult reconciled = gateway.reconcile(context, call).orElseThrow();
+                assertTrue(reconciled.success(), reconciled.observation().toString());
+                assertEquals(call.callId(), reconciled.callId());
+                assertEquals("SUCCEEDED", reconciled.observation().path("state").asText());
+                assertTrue(reconciled.observation().path("fabricObservation").path("arrived").asBoolean());
+                assertTrue(gateway.reconcile(
+                        new ToolContext("hermes", "session-reconcile", "other-companion"), call).isEmpty());
+                assertTrue(gateway.reconcile(context,
+                        new ToolCall("graph-exec:other:1", call.name(), call.arguments())).isEmpty());
+                assertTrue(gateway.reconcile(context,
+                        new ToolCall(call.callId(), call.name(),
+                                Json.object().put("x", 9).put("y", 64).put("z", 2))).isEmpty());
+            }
+        }
+    }
+
+    @Test
     void terminalToolWaitsForItsControlLeaseReleaseBoundary() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("terminal-lease-release.db"));
              RuntimeLog log = new RuntimeLog(temporary.resolve("terminal-lease-release.log"),

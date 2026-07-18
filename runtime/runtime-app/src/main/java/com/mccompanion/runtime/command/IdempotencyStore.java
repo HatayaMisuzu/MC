@@ -80,6 +80,17 @@ public final class IdempotencyStore {
         }
     }
 
+    public boolean matchesRequest(String commandId, String requestHash) throws SQLException {
+        validateCommandId(commandId);
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT request_hash FROM command_result WHERE command_id=?")) {
+            statement.setString(1, commandId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() && result.getString(1).equals(requestHash);
+            }
+        }
+    }
+
     /** Commands interrupted by process death remain non-replayable until task reconciliation decides their outcome. */
     public int markInterruptedForReconciliation() throws SQLException {
         JsonNode response = Json.object().put("accepted", false).put("code", "RECONCILIATION_REQUIRED")

@@ -1,6 +1,7 @@
 package com.mccompanion.runtime.taskgraph;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
@@ -293,6 +294,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                         "only a safely paused or reconcilable execution can resume");
             }
             if (recovery) {
+                record = reconcileConfirmedToolResult(record);
                 RecoveryAssessment assessment = assessRecovery(record);
                 if (!assessment.safe()) {
                     return ToolResult.rejected(call, assessment.code(), assessment.message());
@@ -325,6 +327,49 @@ public final class TaskGraphRuntime implements AutoCloseable {
         } catch (SQLException | IllegalArgumentException failure) {
             return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
         }
+    }
+
+    private TaskGraphExecutionRecord reconcileConfirmedToolResult(TaskGraphExecutionRecord record)
+            throws SQLException {
+        if (!Digests.sha256(Json.canonical(record.graph())).equals(record.graphHash())
+                || !record.completedNodes().isArray() || !record.toolResults().isObject()
+                || !record.variables().isObject() || !record.outputs().isObject()
+                || !record.checkpoints().isArray() || !record.evidence().isArray()) {
+            return record;
+        }
+        if (record.currentNodeId() == null) return record;
+        JsonNode current = findNode(record.graph().path("root"), record.currentNodeId());
+        if (current == null || !current.path("type").asText().equals("call_tool")) return record;
+        String nodeId = current.path("id").asText();
+        String nodeKey = record.variables().path("_mcac").path("currentNodeKey").asText(nodeId);
+        String callId = record.executionId() + ':' + nodeKey + ":1";
+        if (record.toolResults().has(callId)) return record;
+
+        var valueContext = Json.object();
+        valueContext.set("inputs", record.inputs());
+        valueContext.set("variables", record.variables());
+        valueContext.set("state", record.variables());
+        valueContext.set("outputs", record.outputs());
+        JsonNode arguments = current.has("arguments")
+                ? TaskGraphValues.resolve(current.path("arguments"), valueContext) : Json.object();
+        ToolContext context = new ToolContext(
+                record.controllerId(), record.brainSessionId(), record.companionId());
+        ToolCall toolCall = new ToolCall(callId, current.path("tool").asText(), arguments);
+        ToolResult reconciled = tools.reconcile(context, toolCall).orElse(null);
+        if (reconciled == null || !reconciled.terminal()
+                || !reconciled.callId().equals(callId) || !reconciled.toolName().equals(toolCall.name())) {
+            return record;
+        }
+
+        ObjectNode results = (ObjectNode) record.toolResults().deepCopy();
+        results.set(callId, Json.object().put("nodeId", nodeId)
+                .put("toolName", reconciled.toolName())
+                .put("success", reconciled.success()).put("code", reconciled.code())
+                .set("observation", reconciled.observation()));
+        return repository.save(record.executionId(), record.revision(), record.state(),
+                record.currentNodeId(), record.completedNodes(), results, record.variables(),
+                record.outputs(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
+                record.result(), "TOOL_RESULT_RECONCILED");
     }
 
     public ToolResult cancel(ToolContext context, String executionId, String reason) {

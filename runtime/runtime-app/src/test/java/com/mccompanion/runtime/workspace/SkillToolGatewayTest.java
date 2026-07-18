@@ -29,7 +29,8 @@ class SkillToolGatewayTest {
                     context -> holder[0].definitions(context));
             SkillToolGateway gateway = holder[0];
             ToolContext context = new ToolContext("controller", "brain-session", "companion-a");
-            assertEquals(List.of("skill.list", "skill.read", "skill.save_draft", "skill.validate",
+            assertEquals(List.of("skill.list", "skill.read", "skill.save_draft", "skill.restore_draft",
+                            "skill.validate",
                             "skill.request_promotion", "skill.disable", "skill.rollback", "skill.execute"),
                     gateway.definitions(context).stream().map(value -> value.name()).toList());
 
@@ -56,6 +57,21 @@ class SkillToolGatewayTest {
             assertTrue(read.success());
             assertEquals(graph, read.observation().path("content").asText());
             assertFalse(read.observation().toString().contains(temporary.toString()));
+
+            assertTrue(gateway.execute(context, new ToolCall("edit-draft", "skill.save_draft", Json.object()
+                    .put("skillId", "reusable_wait").put("format", "yaml")
+                    .put("document", graph.replace("value: complete", "value: unreviewed-edit")))).success());
+            var restoredDraft = gateway.execute(context,
+                    new ToolCall("restore-draft", "skill.restore_draft", Json.object()
+                            .put("skillId", "reusable_wait").put("format", "yaml").put("version", 1)));
+            assertTrue(restoredDraft.success(), restoredDraft.observation().toString());
+            assertEquals("SKILL_DRAFT_RESTORED", restoredDraft.code());
+            assertEquals(3, restoredDraft.observation().path("version").asInt());
+            assertEquals(1, restoredDraft.observation().path("restoredFromVersion").asInt());
+            assertEquals("QUARANTINED", restoredDraft.observation().path("trust").asText());
+            assertEquals(graph, gateway.execute(context, new ToolCall("read-restored", "skill.read",
+                    Json.object().put("skillId", "reusable_wait").put("format", "yaml")))
+                    .observation().path("content").asText());
 
             var validated = gateway.execute(context, new ToolCall("validate", "skill.validate", Json.object()
                     .put("skillId", "reusable_wait").put("format", "yaml")));

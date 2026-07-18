@@ -208,6 +208,12 @@ durable execution totals grouped by state. It never exposes execution IDs, Brain
 companion IDs, graph documents, arguments, observations, or Evidence. Durable telemetry failure is
 reported as `DEGRADED` instead of being silently treated as zero activity.
 
+Generated Skill drafts remain inside the hashed profile/companion Agent Workspace. `skill.save_draft`
+creates monotonic quarantined versions, while `skill.restore_draft` may copy only a retained version
+of the same logical Skill back into a new quarantined version. Each resource retains at most eight
+Runtime-only backups with separate SHA-256 checksums; checksum mismatch fails closed. Draft restore
+does not approve, promote, activate, or execute a Skill, and never exposes a host filesystem path.
+
 Migrations 11–15 persist every supported node, Tool, checkpoint, loop and parallel boundary, terminal
 `return` values, all node outputs, and Task Graph-owned waiting questions. A safe pause resumes using
 completed scoped node IDs, loop cursors, and immutable Tool results, so completed effects are not

@@ -30,6 +30,7 @@ import java.util.regex.Pattern;
  */
 public final class AgentWorkspace {
     public static final Quota DEFAULT_QUOTA = new Quota(128, 2 * 1024 * 1024, 64 * 1024);
+    static final int BACKUP_RETENTION = 8;
     private static final Set<String> EXTENSIONS = Set.of(".yaml", ".yml", ".json", ".md");
     private static final Pattern SEGMENT = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{0,63}");
     private static final Pattern DRIVE = Pattern.compile("(?i)^[a-z]:.*");
@@ -123,6 +124,44 @@ public final class AgentWorkspace {
         return new WorkspaceDocument(metadata(path, value), content);
     }
 
+    /**
+     * Restores retained content as a new monotonic version. Historical version numbers are never
+     * made current again, so audit consumers cannot confuse a rollback with the original write.
+     */
+    public synchronized WorkspaceResource restore(String companionId, String logicalPath, long version)
+            throws IOException {
+        String path = validateLogicalPath(logicalPath);
+        if (version < 1) throw new IllegalArgumentException("workspace version is invalid");
+        Scope scope = scopeFor(companionId);
+        ensureScope(scope);
+        JsonNode current = loadIndex(scope).path(path);
+        if (current.isMissingNode()) throw new IllegalArgumentException("workspace resource does not exist");
+        long currentVersion = current.path("version").asLong();
+        if (version > currentVersion) throw new IllegalArgumentException("workspace version does not exist");
+        if (version == currentVersion) return read(companionId, path).resource();
+
+        Path directory = backupDirectory(scope, path);
+        rejectLink(directory, scope.root());
+        Path backup = directory.resolve(version + ".bak");
+        Path checksum = directory.resolve(version + ".sha256");
+        rejectLink(backup, scope.root());
+        rejectLink(checksum, scope.root());
+        if (Files.notExists(backup, LinkOption.NOFOLLOW_LINKS)
+                || Files.notExists(checksum, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IllegalArgumentException("workspace version is no longer retained");
+        }
+        byte[] bytes = Files.readAllBytes(backup);
+        if (bytes.length == 0 || bytes.length > quota.maxFileBytes()) {
+            throw new IOException("workspace backup exceeds file quota");
+        }
+        String content = new String(bytes, StandardCharsets.UTF_8);
+        String expectedHash = Files.readString(checksum, StandardCharsets.US_ASCII).strip();
+        if (!Digests.sha256(content).equals(expectedHash)) {
+            throw new IOException("workspace backup integrity check failed");
+        }
+        return save(companionId, path, content);
+    }
+
     public synchronized List<WorkspaceResource> list(String companionId, String prefix) throws IOException {
         String boundedPrefix = prefix == null || prefix.isBlank() ? "" : validatePrefix(prefix);
         Scope scope = scopeFor(companionId);
@@ -206,10 +245,63 @@ public final class AgentWorkspace {
     }
 
     private void backup(Scope scope, String logicalPath, long version, byte[] content) throws IOException {
-        Path directory = scope.backups().resolve(Digests.sha256(logicalPath));
+        Path directory = backupDirectory(scope, logicalPath);
         ensureSecureDirectories(scope.root(), directory);
         Path backup = directory.resolve(version + ".bak");
-        Files.write(backup, content, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        Path checksum = directory.resolve(version + ".sha256");
+        if (Files.exists(backup, LinkOption.NOFOLLOW_LINKS)) {
+            rejectLink(backup, scope.root());
+            if (!java.util.Arrays.equals(Files.readAllBytes(backup), content)) {
+                throw new IOException("workspace backup version conflicts with retained content");
+            }
+        } else {
+            Files.write(backup, content, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        }
+        String hash = Digests.sha256(new String(content, StandardCharsets.UTF_8));
+        if (Files.exists(checksum, LinkOption.NOFOLLOW_LINKS)) {
+            rejectLink(checksum, scope.root());
+            if (!Files.readString(checksum, StandardCharsets.US_ASCII).strip().equals(hash)) {
+                throw new IOException("workspace backup checksum conflicts with retained content");
+            }
+        } else {
+            Files.writeString(checksum, hash, StandardCharsets.US_ASCII,
+                    StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+        }
+        pruneBackups(scope, directory);
+    }
+
+    private static Path backupDirectory(Scope scope, String logicalPath) {
+        Path directory = scope.backups().resolve(Digests.sha256(logicalPath)).normalize();
+        if (!directory.startsWith(scope.backups())) {
+            throw new IllegalArgumentException("workspace backup path escaped its scope");
+        }
+        return directory;
+    }
+
+    private static void pruneBackups(Scope scope, Path directory) throws IOException {
+        try (var files = Files.list(directory)) {
+            List<Path> backups = files
+                    .filter(path -> path.getFileName().toString().matches("[1-9][0-9]*\\.bak"))
+                    .sorted(Comparator.comparingLong(AgentWorkspace::backupVersion))
+                    .toList();
+            for (int index = 0; index < backups.size() - BACKUP_RETENTION; index++) {
+                Path backup = backups.get(index);
+                rejectLink(backup, scope.root());
+                Files.delete(backup);
+                Path checksum = backup.resolveSibling(backupVersion(backup) + ".sha256");
+                rejectLink(checksum, scope.root());
+                Files.deleteIfExists(checksum);
+            }
+        }
+    }
+
+    private static long backupVersion(Path path) {
+        String name = path.getFileName().toString();
+        try {
+            return Long.parseLong(name.substring(0, name.length() - 4));
+        } catch (NumberFormatException invalid) {
+            return Long.MAX_VALUE;
+        }
     }
 
     private static void moveAtomically(Path source, Path target) throws IOException {

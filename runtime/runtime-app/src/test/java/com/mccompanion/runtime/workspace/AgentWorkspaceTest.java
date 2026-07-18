@@ -66,6 +66,42 @@ class AgentWorkspaceTest {
     }
 
     @Test
+    void restoresRetainedContentAsNewVersionAndPrunesOldBackupsPerScope() throws Exception {
+        AgentWorkspace workspace = workspace("profile");
+        String path = "skills/restore/draft.yaml";
+        for (int version = 1; version <= 11; version++) {
+            workspace.save("c1", path, "version: " + version);
+        }
+
+        Path backupDirectory = temporary.resolve("workspace")
+                .resolve(Digests.sha256("profile").substring(0, 32))
+                .resolve(Digests.sha256("c1").substring(0, 32))
+                .resolve(".mcac-backups").resolve(Digests.sha256(path));
+        try (var backups = Files.list(backupDirectory)) {
+            assertEquals(AgentWorkspace.BACKUP_RETENTION,
+                    backups.filter(file -> file.getFileName().toString().endsWith(".bak")).count());
+        }
+        assertThrows(IllegalArgumentException.class, () -> workspace.restore("c1", path, 2),
+                "a version outside the retention window must not be fabricated");
+
+        WorkspaceResource restored = workspace.restore("c1", path, 3);
+        assertEquals(12, restored.version(), "restore must create a new monotonic audit version");
+        assertEquals("version: 3", workspace.read("c1", path).content());
+        assertEquals(Digests.sha256("version: 3"), restored.sha256());
+        try (var backups = Files.list(backupDirectory)) {
+            assertEquals(AgentWorkspace.BACKUP_RETENTION,
+                    backups.filter(file -> file.getFileName().toString().endsWith(".bak")).count());
+        }
+
+        Files.writeString(backupDirectory.resolve("4.bak"), "tampered");
+        IOException tampered = assertThrows(IOException.class, () -> workspace.restore("c1", path, 4));
+        assertTrue(tampered.getMessage().contains("integrity"));
+        assertThrows(IllegalArgumentException.class, () -> workspace.restore("c2", path, 3));
+        assertThrows(IllegalArgumentException.class, () -> workspace.restore("c1", path, 99));
+        assertEquals(12, workspace.restore("c1", path, 12).version());
+    }
+
+    @Test
     void rejectsSymbolicLinkEscapeWhenPlatformCanCreateLinks() throws Exception {
         Path root = temporary.resolve("links");
         AgentWorkspace workspace = new AgentWorkspace(root, "profile",

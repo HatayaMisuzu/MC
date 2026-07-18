@@ -57,6 +57,9 @@ public final class SkillToolGateway implements ToolGateway {
                         readSchema(), true),
                 definition("skill.save_draft", "Atomically save a quarantined declarative Skill draft",
                         saveSchema(), true),
+                definition("skill.restore_draft",
+                        "Restore a retained draft as a new quarantined workspace version",
+                        restoreDraftSchema(), true),
                 definition("skill.validate", "Validate a Skill draft against current Task Graph and Tool contracts",
                         draftSchema(), true),
                 definition("skill.request_promotion",
@@ -77,6 +80,7 @@ public final class SkillToolGateway implements ToolGateway {
                 case "skill.list" -> list(context, call);
                 case "skill.read" -> read(context, call);
                 case "skill.save_draft" -> save(context, call);
+                case "skill.restore_draft" -> restoreDraft(context, call);
                 case "skill.validate" -> validate(context, call);
                 case "skill.request_promotion" -> requestPromotion(context, call);
                 case "skill.disable" -> disable(context, call);
@@ -156,6 +160,20 @@ public final class SkillToolGateway implements ToolGateway {
         ObjectNode observation = Json.MAPPER.valueToTree(resource);
         observation.put("trust", "QUARANTINED");
         return new ToolResult(call.callId(), call.name(), true, "SKILL_DRAFT_QUARANTINED",
+                observation, true);
+    }
+
+    private ToolResult restoreDraft(ToolContext context, ToolCall call) throws IOException {
+        rejectUnexpected(call.arguments(), Set.of("skillId", "format", "version"));
+        String skillId = skillId(call.arguments());
+        rejectBuiltinId(skillId);
+        String format = format(call.arguments());
+        long version = integer(call.arguments(), "version", 1, Integer.MAX_VALUE);
+        WorkspaceResource resource = workspace.restore(
+                context.companionId(), path(skillId, format), version);
+        ObjectNode observation = Json.MAPPER.valueToTree(resource);
+        observation.put("restoredFromVersion", version).put("trust", "QUARANTINED");
+        return new ToolResult(call.callId(), call.name(), true, "SKILL_DRAFT_RESTORED",
                 observation, true);
     }
 
@@ -301,6 +319,13 @@ public final class SkillToolGateway implements ToolGateway {
         schema.withObject("properties").putObject("document").put("type", "string")
                 .put("minLength", 1).put("maxLength", 65_536);
         schema.withArray("required").add("document");
+        return schema;
+    }
+
+    private static ObjectNode restoreDraftSchema() {
+        ObjectNode schema = draftSchema();
+        schema.withObject("properties").putObject("version").put("type", "integer").put("minimum", 1);
+        schema.withArray("required").add("version");
         return schema;
     }
 

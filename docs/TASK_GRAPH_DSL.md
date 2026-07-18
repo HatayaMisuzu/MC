@@ -223,8 +223,11 @@ effects, changed Tool availability, malformed Evidence and graph-hash mismatch r
 `RECONCILIATION_REQUIRED`. Persisted retry attempt cursors and backoff deadlines resume at the next
 stable scoped call ID rather than replaying a prior attempt. Automatic retry of non-idempotent
 effects is rejected rather than treated as reconciliation. The durable Minecraft task reconciliation
-path is locally verified; a real Runtime-process crash between live Mod completion and Graph result
-persistence remains pending end-to-end verification. A Tool transport or worker failure with
+path is locally verified. An injected repository failure at the exact
+`TOOL_RESULT_RECORDED` boundary proves that a completed non-idempotent effect is quarantined,
+survives Runtime replacement, is imported from the Gateway's durable terminal result, and is not
+dispatched a second time. A real OS-level Runtime-process crash between live Mod completion and
+Graph result persistence remains pending end-to-end verification. A Tool transport or worker failure with
 unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
 reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic

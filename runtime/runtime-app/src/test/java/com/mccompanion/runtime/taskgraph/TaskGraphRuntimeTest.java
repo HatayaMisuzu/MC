@@ -621,6 +621,72 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void repositoryFailureAfterNonIdempotentEffectRecoversWithoutReplayAfterRuntimeRestart() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("effect-crash-window.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-crash-window", "companion-1");
+            ToolCall execute = new ToolCall("effect-crash-window", "task_graph.execute", Json.object());
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"effect-crash-window",
+                     "inputs":{"distance":{"type":"integer","required":true}},
+                     "permissions":["MOVE"],
+                     "root":{"id":"move","type":"call_tool","tool":"test.move",
+                      "arguments":{"distance":"${inputs.distance}"}}}
+                    """);
+            DurableEffectGateway gateway = new DurableEffectGateway();
+
+            try (var connection = database.open(); var statement = connection.createStatement()) {
+                statement.executeUpdate("""
+                        CREATE TRIGGER inject_tool_result_write_failure
+                        BEFORE UPDATE ON task_graph_execution
+                        WHEN NEW.execution_id = 'effect-crash-window'
+                         AND NEW.result_code = 'TOOL_RESULT_RECORDED'
+                        BEGIN
+                          SELECT RAISE(ABORT, 'injected crash-window persistence failure');
+                        END
+                        """);
+            }
+
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, repository)) {
+                ToolResult accepted = runtime.start(context, execute, graph,
+                        Json.object().put("distance", 4), Json.object());
+                assertFalse(accepted.terminal());
+                ToolResult quarantined = runtime.await(
+                        context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("RECONCILIATION_REQUIRED",
+                        quarantined.observation().path("state").asText());
+                assertEquals("TASK_GRAPH_WORKER_FAILED", quarantined.code());
+                assertEquals(1, gateway.executeCalls);
+                assertEquals(0, gateway.reconcileCalls);
+                assertTrue(repository.get(execute.callId()).orElseThrow().toolResults().isEmpty(),
+                        "the injected write failure must leave the completed effect absent from Graph state");
+            }
+
+            try (var connection = database.open(); var statement = connection.createStatement()) {
+                statement.executeUpdate("DROP TRIGGER inject_tool_result_write_failure");
+            }
+
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(gateway, repository)) {
+                ToolResult accepted = restarted.resume(context,
+                        new ToolCall("resume-effect-crash-window", "task_graph.resume", Json.object()),
+                        execute.callId());
+                assertTrue(accepted.success(), accepted.observation().toString());
+                ToolResult terminal = restarted.await(
+                        context, execute, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("SUCCEEDED", terminal.observation().path("state").asText());
+                assertEquals(1, gateway.executeCalls,
+                        "the already completed non-idempotent effect must not be dispatched again");
+                assertEquals(1, gateway.reconcileCalls);
+                assertEquals(4, gateway.reconciledArguments.path("distance").asInt());
+                assertTrue(repository.get(execute.callId()).orElseThrow().toolResults()
+                        .has("effect-crash-window:move:1"));
+            }
+        }
+    }
+
+    @Test
     void timeoutConfirmsWaitCancellationAndQuarantinesUnconfirmedToolCancellation() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("timeout-confirmation.db"))) {
             database.initialize();
@@ -1151,6 +1217,40 @@ class TaskGraphRuntimeTest {
             reconciledArguments = call.arguments().deepCopy();
             return Optional.of(new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("state", "SUCCEEDED").put("taskId", "durable-task-1"), true));
+        }
+    }
+
+    private static final class DurableEffectGateway implements ToolGateway {
+        private int executeCalls;
+        private int reconcileCalls;
+        private ToolResult durableResult;
+        private com.fasterxml.jackson.databind.JsonNode reconciledArguments = Json.object();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.move", "1.0", "move",
+                    Json.object().put("type", "object")
+                            .set("properties", Json.object().set("distance",
+                                    Json.object().put("type", "integer"))),
+                    "LOW", "MOVE", Duration.ofSeconds(1), false));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            executeCalls++;
+            durableResult = new ToolResult(call.callId(), call.name(), true, "OK",
+                    Json.object().put("state", "SUCCEEDED")
+                            .put("distance", call.arguments().path("distance").asInt()), true);
+            return durableResult;
+        }
+
+        @Override public Optional<ToolResult> reconcile(ToolContext context, ToolCall call) {
+            reconcileCalls++;
+            reconciledArguments = call.arguments().deepCopy();
+            if (durableResult == null
+                    || !durableResult.callId().equals(call.callId())
+                    || !durableResult.toolName().equals(call.name())) {
+                return Optional.empty();
+            }
+            return Optional.of(durableResult);
         }
     }
 

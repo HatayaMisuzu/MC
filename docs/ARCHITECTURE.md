@@ -154,7 +154,7 @@ features extend these surfaces rather than creating parallel products.
   `ServerPlayer.attack`, and accepts only observed damage/death. Neither the Tool Gateway nor Task
   Graph Runtime chooses a target or develops combat strategy.
 - Menu mutation is a two-stage capability flow: live `menu.inspect` issues a random, process-local
-  ten-second handle bound to the exact `AbstractContainerMenu` instance and container ID; each
+  sixty-second handle bound to the exact `AbstractContainerMenu` instance and container ID; each
   click, quick-move, or close revalidates that handle at execution time. Menu replacement, close,
   expiry, reconnect, or Runtime/Mod process restart invalidates the handle.
 - Generic item use and drop select declared Registry items through vanilla inventory-menu state,

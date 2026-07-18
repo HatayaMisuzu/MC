@@ -263,3 +263,12 @@ external `task_graph.resume` continues it into `movement.look`, whose terminal e
 `VANILLA_ENTITY_LOOK`. The five local representative structures are therefore complete, while remote
 CI for their exact SHA, Live Brain verification, and human playtest remain separate gates in
 `RC_COMPLETION_MATRIX.md`.
+
+The same production-path test also records `evidence/primitive-equivalence.json`. One external-client
+graph withdraws and restores one live chest item using the bidirectional `inventory.transfer`
+primitive. A second graph opens that chest with `block.interact`, reads the live `menu.inspect`
+Observation, passes `${outputs.inspectMenu.sessionToken}` into `menu.close`, and requires the exact
+scoped capability to be consumed successfully. The later compatibility shortage chain still
+withdraws and delivers the chest's original six items, which checks that the primitive round trip
+did not manufacture, lose, or strand inventory. This is local deterministic external-client
+evidence (`liveModel=false`), not Live Brain or human-play evidence.

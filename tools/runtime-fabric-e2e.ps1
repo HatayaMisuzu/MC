@@ -348,6 +348,7 @@ $conversationEvidence = $null
 $goalModificationEvidence = $null
 $externalBrainEvidence = $null
 $representativeTaskGraphEvidence = $null
+$primitiveEquivalenceEvidence = $null
 try {
     Write-Output '[runtime-e2e] starting Runtime'
     $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
@@ -899,6 +900,174 @@ try {
         resumed = $restartResumed
         terminal = $restartTerminal
     }
+    Write-Output '[runtime-e2e] exercising generic inventory.transfer round trip'
+    $transferBrainSession = "primitive-transfer-$([Guid]::NewGuid())"
+    $container = @{
+        dimension = 'minecraft:overworld'
+        x = $chestX
+        y = $chestY
+        z = $chestZ
+    }
+    $transferGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'generic-transfer-round-trip'
+        permissions = @('INVENTORY')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'withdrawGeneric'
+                    type = 'call_tool'
+                    tool = 'inventory.transfer'
+                    arguments = @{
+                        direction = 'FROM_CONTAINER'
+                        item = 'minecraft:iron_ingot'
+                        quantity = 1
+                        allowPartial = $false
+                        container = $container
+                    }
+                },
+                @{
+                    id = 'depositGeneric'
+                    type = 'call_tool'
+                    tool = 'inventory.transfer'
+                    arguments = @{
+                        direction = 'TO_CONTAINER'
+                        item = 'minecraft:iron_ingot'
+                        quantity = 1
+                        allowPartial = $false
+                        container = $container
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        withdrawState = '${outputs.withdrawGeneric.state}'
+                        depositState = '${outputs.depositGeneric.state}'
+                        withdrawEpoch = '${outputs.withdrawGeneric.fabricObservation.snapshot.controlEpoch}'
+                        depositEpoch = '${outputs.depositGeneric.fabricObservation.snapshot.controlEpoch}'
+                        withdrawEvidence = '${outputs.withdrawGeneric.fabricObservation.snapshot.evidence}'
+                        depositEvidence = '${outputs.depositGeneric.fabricObservation.snapshot.evidence}'
+                    }
+                }
+            )
+        }
+    }
+    $transferStarted = Invoke-McpTool $pairingToken $companionId $transferBrainSession 'task_graph.execute' @{
+        graph = $transferGraph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+            primitiveEquivalence = 'inventory.transfer'
+        }
+    } "transfer-$([Guid]::NewGuid())"
+    $transferExecutionId = $transferStarted.observation.executionId
+    if (-not $transferExecutionId) { throw 'Generic transfer graph did not return an execution id.' }
+    $transferTerminal = if ($transferStarted.observation.state -eq 'SUCCEEDED') {
+        $transferStarted
+    } else {
+        Wait-TaskGraphExecution $pairingToken $companionId $transferBrainSession $transferExecutionId
+    }
+    $transferValue = $transferTerminal.observation.value
+    if ($transferTerminal.observation.state -ne 'SUCCEEDED' -or
+        $transferValue.withdrawState -ne 'SUCCEEDED' -or
+        $transferValue.depositState -ne 'SUCCEEDED' -or
+        [long]$transferValue.depositEpoch -le [long]$transferValue.withdrawEpoch -or
+        $transferValue.withdrawEvidence -notmatch 'success=true' -or
+        $transferValue.depositEvidence -notmatch 'success=true') {
+        throw "Generic inventory.transfer did not complete a verified round trip: $($transferTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $transferEquivalenceEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        primitive = 'inventory.transfer'
+        terminal = $transferTerminal
+    }
+    Write-Output '[runtime-e2e] exercising generic block interaction and scoped menu capability'
+    $menuBrainSession = "primitive-menu-$([Guid]::NewGuid())"
+    $menuGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'generic-block-menu-session'
+        permissions = @('INTERACT', 'INVENTORY')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'interactGeneric'
+                    type = 'call_tool'
+                    tool = 'block.interact'
+                    arguments = @{
+                        position = $container
+                        face = 'UP'
+                        hand = 'MAIN_HAND'
+                    }
+                },
+                @{
+                    id = 'inspectMenu'
+                    type = 'call_tool'
+                    tool = 'menu.inspect'
+                    arguments = @{}
+                },
+                @{
+                    id = 'closeMenu'
+                    type = 'call_tool'
+                    tool = 'menu.close'
+                    arguments = @{
+                        sessionToken = '${outputs.inspectMenu.sessionToken}'
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        interactionState = '${outputs.interactGeneric.state}'
+                        menuType = '${outputs.inspectMenu.menuType}'
+                        slotCount = '${outputs.inspectMenu.slotCount}'
+                        closeState = '${outputs.closeMenu.state}'
+                        closeEvidence = '${outputs.closeMenu.fabricObservation.snapshot.evidence}'
+                    }
+                }
+            )
+        }
+    }
+    $menuStarted = Invoke-McpTool $pairingToken $companionId $menuBrainSession 'task_graph.execute' @{
+        graph = $menuGraph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+            primitiveEquivalence = 'block.interact+menu.inspect+menu.close'
+        }
+    } "menu-$([Guid]::NewGuid())"
+    $menuExecutionId = $menuStarted.observation.executionId
+    if (-not $menuExecutionId) { throw 'Generic block/menu graph did not return an execution id.' }
+    $menuTerminal = if ($menuStarted.observation.state -eq 'SUCCEEDED') {
+        $menuStarted
+    } else {
+        Wait-TaskGraphExecution $pairingToken $companionId $menuBrainSession $menuExecutionId
+    }
+    $menuValue = $menuTerminal.observation.value
+    if ($menuTerminal.observation.state -ne 'SUCCEEDED' -or
+        $menuValue.interactionState -ne 'SUCCEEDED' -or
+        $menuValue.menuType -notmatch '^minecraft:generic_9x' -or
+        [int]$menuValue.slotCount -lt 27 -or
+        $menuValue.closeState -ne 'SUCCEEDED' -or
+        $menuValue.closeEvidence -notmatch 'success=true') {
+        throw "Generic block/menu primitives did not complete through a scoped live menu: $($menuTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $menuEquivalenceEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        primitive = 'block.interact+menu.inspect+menu.close'
+        terminal = $menuTerminal
+    }
+    $primitiveEquivalenceEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        graphs = @($transferEquivalenceEvidence, $menuEquivalenceEvidence)
+    }
     $representativeTaskGraphEvidence = [pscustomobject]@{
         classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
         liveModel = $false
@@ -909,6 +1078,8 @@ try {
     Write-Output '[runtime-e2e] External client corrected a rejected graph and executed its declared fallback'
     Write-Output '[runtime-e2e] Task Graph resumed its exact ASK_USER execution and ran the selected live Tool'
     Write-Output '[runtime-e2e] Paused Task Graph survived Runtime restart and completed its primitive effect'
+    Write-Output '[runtime-e2e] Generic inventory.transfer withdrew and restored one verified live item'
+    Write-Output '[runtime-e2e] Generic block interaction issued and consumed one scoped live menu capability'
 
     $follow = Invoke-RuntimeCommand $pairingToken $companionId 'FOLLOW' @{} 'follow'
     if (-not $follow.accepted -or -not $follow.taskId) { throw "FOLLOW was rejected: $($follow.code)" }
@@ -1039,6 +1210,8 @@ try {
         ($goalModificationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\representative-task-graph.json'),
         ($representativeTaskGraphEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\primitive-equivalence.json'),
+        ($primitiveEquivalenceEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
     if ($provider) {
         if (-not $provider.HasExited) {
             $provider.Kill()
@@ -1083,6 +1256,14 @@ try {
         -not $representativeTaskGraphEvidence.graphs[4].runtimeRestarted -or
         $representativeTaskGraphEvidence.liveModel) {
         throw 'Representative Task Graph evidence is missing or has an invalid verification classification.'
+    }
+    if (-not $primitiveEquivalenceEvidence -or
+        $primitiveEquivalenceEvidence.graphs.Count -ne 2 -or
+        ($primitiveEquivalenceEvidence.graphs | Where-Object {
+            $_.terminal.observation.state -ne 'SUCCEEDED' -or $_.liveModel
+        }).Count -ne 0 -or
+        $primitiveEquivalenceEvidence.liveModel) {
+        throw 'Primitive equivalence evidence is missing or has an invalid verification classification.'
     }
     if (-not $goalModificationEvidence -or
         $goalModificationEvidence.modification.planId -ne $goalModificationEvidence.initial.planId -or

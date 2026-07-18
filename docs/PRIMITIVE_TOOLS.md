@@ -55,7 +55,7 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `entity.attack` | Attacks one externally selected UUID-bound living entity within five blocks through `ServerPlayer.attack`; alive/range/visibility are revalidated and success requires an observed health decrease or death |
 | `inventory.transfer` | Selects the existing verified-container withdraw or deposit executor from the declared direction; arbitrary container or filesystem access is impossible |
-| `menu.inspect` | Reads the exact live open menu and issues a process-local 192-bit opaque capability bound to that menu instance for ten seconds |
+| `menu.inspect` | Reads the exact live open menu and issues a process-local 192-bit opaque capability bound to that menu instance for sixty seconds |
 | `menu.click` | Performs one bounded left/right vanilla pickup click using the exact unexpired menu capability and rejects no-effect actions |
 | `menu.quick_move` | Performs one bounded vanilla quick-move using the exact unexpired menu capability and verifies a menu/inventory delta |
 | `menu.close` | Closes only the menu bound to the exact unexpired capability and invalidates that capability immediately |

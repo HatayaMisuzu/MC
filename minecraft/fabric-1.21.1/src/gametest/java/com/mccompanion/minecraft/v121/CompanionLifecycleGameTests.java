@@ -311,6 +311,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(body != null, "item-use test created no live body");
         body.getInventory().setItem(0, new ItemStack(Items.SNOWBALL, 2));
         body.getInventory().selected = 0;
+        body.setXRot(-30.0F);
+        body.xRotO = -30.0F;
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-item-use";
         helper.assertTrue(registry.runtimeAcquireLease(
@@ -395,9 +397,11 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         var cow = EntityType.COW.create(body.serverLevel());
         helper.assertTrue(cow != null, "entity interaction test could not create cow");
         cow.setNoAi(true);
-        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        cow.moveTo(body.getX() + 2.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
         helper.assertTrue(body.serverLevel().addFreshEntity(cow),
                 "entity interaction test could not add cow");
+        helper.assertTrue(body.hasLineOfSight(cow),
+                "entity interaction fixture did not place the cow in verified line of sight");
         body.getInventory().setItem(0, new ItemStack(Items.WHEAT, 2));
         body.getInventory().selected = 0;
         String companionId = body.getUUID().toString();

@@ -11,7 +11,13 @@ import net.minecraft.world.inventory.AbstractContainerMenu;
  * Handles are process-local capabilities: reconnect/restart, expiry, close, or menu replacement invalidates them.
  */
 public final class MenuSessionTracker {
-    private static final int SESSION_TTL_TICKS = 20 * 10;
+    /*
+     * Leave enough time for an external Brain to inspect the menu, persist the
+     * Observation, and dispatch the next graph node. The token remains bound to
+     * the exact process-local menu instance and is invalidated on replacement or
+     * close, so extending this bounded window does not widen its authority.
+     */
+    private static final int SESSION_TTL_TICKS = 20 * 60;
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final ConcurrentHashMap<UUID, State> SESSIONS = new ConcurrentHashMap<>();
 

@@ -158,7 +158,8 @@ function Invoke-McpTool(
     [string]$brainSessionId,
     [string]$name,
     [hashtable]$arguments,
-    [string]$requestId
+    [string]$requestId,
+    [bool]$allowToolError = $false
 ) {
     $body = @{
         jsonrpc = '2.0'
@@ -177,7 +178,7 @@ function Invoke-McpTool(
         throw "MCP $name failed: $($reply.error | ConvertTo-Json -Compress -Depth 10)"
     }
     $result = $reply.result.structuredContent
-    if (-not $result -or $result.isError) {
+    if (-not $result -or ($result.isError -and -not $allowToolError)) {
         throw "MCP $name returned an error: $($result | ConvertTo-Json -Compress -Depth 20)"
     }
     return $result
@@ -493,12 +494,116 @@ try {
         started = $effectStarted
         terminal = $effectTerminal
     }
+    Write-Output '[runtime-e2e] exercising external graph correction and deterministic fallback'
+    $editedBrainSession = "representative-edit-$([Guid]::NewGuid())"
+    $invalidEditedGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'externally-edited-fallback'
+        permissions = @('READ_WORLD')
+        root = @{
+            id = 'root'
+            type = 'fallback'
+            nodes = @(
+                @{
+                    id = 'declined-primary'
+                    type = 'fail'
+                    code = 'PRIMARY_DECLINED'
+                    message = 'external graph selected its declared fallback'
+                },
+                @{
+                    id = 'describe'
+                    type = 'call_tool'
+                    tool = 'registry.describe'
+                    arguments = @{ kind = 'ITEM' }
+                }
+            )
+        }
+    }
+    $invalidRevision = Invoke-McpTool $pairingToken $companionId $editedBrainSession 'task_graph.execute' @{
+        graph = $invalidEditedGraph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+            revision = 1
+        }
+    } "invalid-edit-$([Guid]::NewGuid())" $true
+    if ($invalidRevision.code -ne 'TASK_GRAPH_INVALID' -or
+        $invalidRevision.observation.valid -ne $false -or
+        $invalidRevision.observation.issues.code -notcontains 'TOOL_INPUT_SCHEMA_INVALID') {
+        throw "Invalid external graph did not expose its Tool schema error: $($invalidRevision | ConvertTo-Json -Compress -Depth 30)"
+    }
+
+    $correctedGraph = $invalidEditedGraph.Clone()
+    $correctedGraph.root = @{
+        id = 'root'
+        type = 'sequence'
+        nodes = @(
+            @{
+                id = 'choose'
+                type = 'fallback'
+                nodes = @(
+                    @{
+                        id = 'declined-primary'
+                        type = 'fail'
+                        code = 'PRIMARY_DECLINED'
+                        message = 'external graph selected its declared fallback'
+                    },
+                    @{
+                        id = 'describe'
+                        type = 'call_tool'
+                        tool = 'registry.describe'
+                        arguments = @{
+                            kind = 'ITEM'
+                            id = 'mcac_registry_fixture:blue_block'
+                        }
+                    }
+                )
+            },
+            @{
+                id = 'done'
+                type = 'return'
+                value = @{
+                    source = '${outputs.describe.source}'
+                    entry = '${outputs.describe.entry}'
+                }
+            }
+        )
+    }
+    $correctedStarted = Invoke-McpTool $pairingToken $companionId $editedBrainSession 'task_graph.execute' @{
+        graph = $correctedGraph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+            revision = 2
+            correctedAfter = 'TOOL_INPUT_SCHEMA_INVALID'
+        }
+    } "corrected-edit-$([Guid]::NewGuid())"
+    $correctedExecutionId = $correctedStarted.observation.executionId
+    if (-not $correctedExecutionId) { throw 'Corrected fallback graph did not return an execution id.' }
+    $correctedTerminal = if ($correctedStarted.observation.state -eq 'SUCCEEDED') {
+        $correctedStarted
+    } else {
+        Wait-TaskGraphExecution $pairingToken $companionId $editedBrainSession $correctedExecutionId
+    }
+    if ($correctedTerminal.observation.state -ne 'SUCCEEDED' -or
+        $correctedTerminal.observation.value.source -ne 'LIVE_SERVER_REGISTRY' -or
+        $correctedTerminal.observation.value.entry.id -ne 'mcac_registry_fixture:blue_block') {
+        throw "Corrected fallback graph did not complete from live Registry state: $($correctedTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $correctedGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        rejectedRevision = $invalidRevision
+        started = $correctedStarted
+        terminal = $correctedTerminal
+    }
     $representativeTaskGraphEvidence = [pscustomobject]@{
         classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
         liveModel = $false
-        graphs = @($registryGraphEvidence, $effectGraphEvidence)
+        graphs = @($registryGraphEvidence, $effectGraphEvidence, $correctedGraphEvidence)
     }
     Write-Output '[runtime-e2e] Task Graph inspected a live block and aimed the body at its observed position'
+    Write-Output '[runtime-e2e] External client corrected a rejected graph and executed its declared fallback'
 
     $follow = Invoke-RuntimeCommand $pairingToken $companionId 'FOLLOW' @{} 'follow'
     if (-not $follow.accepted -or -not $follow.taskId) { throw "FOLLOW was rejected: $($follow.code)" }
@@ -664,10 +769,11 @@ try {
         throw 'External Brain evidence did not retain the four terminal tool observations.'
     }
     if (-not $representativeTaskGraphEvidence -or
-        $representativeTaskGraphEvidence.graphs.Count -ne 2 -or
+        $representativeTaskGraphEvidence.graphs.Count -ne 3 -or
         ($representativeTaskGraphEvidence.graphs | Where-Object {
             $_.terminal.observation.state -ne 'SUCCEEDED' -or $_.liveModel
         }).Count -ne 0 -or
+        $representativeTaskGraphEvidence.graphs[2].rejectedRevision.code -ne 'TASK_GRAPH_INVALID' -or
         $representativeTaskGraphEvidence.liveModel) {
         throw 'Representative Task Graph evidence is missing or has an invalid verification classification.'
     }

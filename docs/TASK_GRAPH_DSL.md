@@ -244,5 +244,12 @@ A second graph exercises a different boundary: a typed `position` graph input is
 `block.inspect`, then the exact live `${outputs.inspect.position.*}` Observation fields become the
 arguments of the generic `movement.look` primitive. Acceptance requires the Fabric terminal evidence
 to identify `VANILLA_ENTITY_LOOK`, so a graph that merely validates or returns a mocked body effect
-does not pass. Three additional structurally different representative graphs and the
+does not pass.
+
+A third external-client session first submits a graph whose `registry.describe` call omits a required
+Tool argument. Runtime rejects it with the real `TOOL_INPUT_SCHEMA_INVALID` issue and does not repair
+or plan around it. The external client supplies a corrected second revision under a new execution ID;
+its declared `fallback` bypasses an explicit failed primary and returns the live Registry entry. This
+tests graph correction ownership and deterministic fallback without turning Runtime into a Planner.
+Two additional structurally different representative graphs and the
 external verification gates remain open in `RC_COMPLETION_MATRIX.md`.

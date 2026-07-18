@@ -89,7 +89,7 @@ class TaskGraphRuntimeTest {
 
                 ToolResult resumed = runtime.resume(context,
                         new ToolCall("resume-1", "task_graph.resume", Json.object()), "execution-2");
-                assertTrue(resumed.success());
+                assertTrue(resumed.success(), resumed.code() + ": " + resumed.observation());
                 ToolResult completed = runtime.await(context, execute, Duration.ofSeconds(4), ignored -> { });
                 assertTrue(completed.success(), completed.observation().toString());
                 assertEquals(1, gateway.arguments.size(), "completed Tool effect repeated after resume");

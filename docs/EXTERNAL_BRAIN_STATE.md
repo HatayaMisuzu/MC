@@ -257,15 +257,20 @@ release/install verification remain incomplete.
   companion headers in addition to the Runtime pairing token.
 - MCP request IDs map deterministically to bounded internal call IDs. This lets a concurrent
   `notifications/cancelled` request reach the same durable task/tool execution, while completed
-  calls return both MCP text content and structured terminal observations. When the client accepts
+  calls return both MCP text content and structured terminal observations. A migration-18 durable
+  replay ledger binds the scoped call ID to the exact Tool and canonical arguments before dispatch,
+  returns persisted terminal results for exact retries, rejects changed or concurrent reuse, and
+  quarantines startup-interrupted calls for reconciliation rather than redispatch. When the client accepts
   SSE, Tool Gateway state changes stream as standard token-bound `notifications/progress` messages
   before the final JSON-RPC result; a disconnected stream cancels the same bound internal call.
   Runtime integration verifies authentication, protocol negotiation and subsequent version-header
   enforcement, binding rejection, filtered discovery, JSON/SSE failure evidence, progress
   envelopes, and cancellation acceptance. Terminal Doctor now performs a live authenticated MCP
   negotiation plus bounded schema/permission discovery without exposing the token, and
-  `docs/MCP_PROTOCOL.md` documents the lifecycle and Hermes connection contract. SSE event
-  resumption, live concurrent cancellation E2E, and verified Hermes-native configuration remain,
+  `docs/MCP_PROTOCOL.md` documents the lifecycle and Hermes connection contract. Repository and
+  authenticated HTTP tests cover restart retention, terminal replay and changed-input rejection.
+  SSE event resumption, cryptographic caller identity/nonces, live concurrent cancellation E2E,
+  and verified Hermes-native configuration remain,
   so the protocol is intentionally `PARTIAL`.
 
 ## Search configuration and privacy UI slice

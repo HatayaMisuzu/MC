@@ -262,6 +262,22 @@ class RuntimeApplicationTest {
                     callResult.path("structuredContent").path("code").asText());
             assertTrue(callResult.path("structuredContent").path("callId").asText().startsWith("mcp-"));
 
+            HttpResponse<String> replayed = http.send(bound.copy()
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"observe-1","method":"tools/call","params":{
+                              "name":"world.observe","arguments":{}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(callResult, Json.parse(replayed.body()).path("result"), replayed.body());
+
+            HttpResponse<String> conflictingReplay = http.send(bound.copy()
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"observe-1","method":"tools/call","params":{
+                              "name":"world.observe","arguments":{"radius":1}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals("MCP_REQUEST_REPLAY_CONFLICT", Json.parse(conflictingReplay.body())
+                    .path("result").path("structuredContent").path("code").asText(),
+                    conflictingReplay.body());
+
             HttpResponse<String> streamed = http.send(bound.copy().header("Accept", "text/event-stream")
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":"observe-sse","method":"tools/call","params":{
@@ -767,12 +783,13 @@ class RuntimeApplicationTest {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         JsonNode latest = Json.object();
         String latestBody = "";
+        int poll = 0;
         while (System.nanoTime() < deadline) {
             HttpResponse<String> inspected = http.send(mcpRequest.apply("inspect").POST(
                     HttpRequest.BodyPublishers.ofString("""
-                            {"jsonrpc":"2.0","id":"inspect-%s","method":"tools/call","params":{
+                            {"jsonrpc":"2.0","id":"inspect-%s-%d","method":"tools/call","params":{
                               "name":"task_graph.inspect","arguments":{"executionId":"%s"}}}
-                            """.formatted(executionId, executionId))).build(),
+                            """.formatted(executionId, poll++, executionId))).build(),
                     HttpResponse.BodyHandlers.ofString());
             latestBody = inspected.body();
             latest = Json.parse(latestBody).path("result").path("structuredContent").path("observation");

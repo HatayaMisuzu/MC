@@ -98,6 +98,15 @@ the notification cannot cancel another Brain session's call. A disconnected SSE 
 the same cancellation path. Runtime waits at most 30 seconds for a call and then dispatches task
 cancellation; its terminal Observation states whether cancellation was confirmed.
 
+Before dispatch, Runtime durably binds that internal call ID to the exact Tool name and canonical
+argument hash. An identical retry after completion returns the persisted terminal result without
+dispatching the Tool again. Reusing the request ID with different Tool input is rejected as
+`MCP_REQUEST_REPLAY_CONFLICT`; a concurrent duplicate is rejected as
+`MCP_REQUEST_IN_PROGRESS`. If Runtime stops while a request is in flight, startup changes the
+ledger entry to `MCP_REQUEST_RECONCILIATION_REQUIRED` rather than guessing whether an external
+effect occurred. A replay-ledger database failure is fail-closed before dispatch, or quarantines a
+result-persistence failure for reconciliation.
+
 Tool calls, progress, terminal results, task/behavior revisions, and delivery state use the
 existing durable MCAC audit path. The authenticated `/brain/audit` endpoint is the current audit
 inspection surface.
@@ -133,9 +142,10 @@ MCAC Terminal Doctor performs a live local negotiation and bounded-tool check be
 
 ## Current protocol limits
 
-- Full lease expiry, request nonce, progress-resume token, cross-companion authorization, and
-  replay-resistant identity hardening remain tracked as `PARTIAL`; this document does not claim
-  they are complete.
+- Full lease expiry, a cryptographic per-client identity/nonce protocol, progress-resume token,
+  and cross-companion authorization remain tracked as `PARTIAL`; this document does not claim
+  they are complete. The durable request ledger prevents exact Tool-call redispatch but does not
+  turn caller-supplied identity headers into cryptographic identity proof.
 - SSE event replay/resumption is not implemented; reconnect and reconcile through durable task
   and audit state.
 - HTTP transport sessions are stateless; MCAC identity and task state remain durable.

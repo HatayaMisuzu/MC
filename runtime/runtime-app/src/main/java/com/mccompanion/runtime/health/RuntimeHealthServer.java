@@ -43,6 +43,7 @@ import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.Duration;
@@ -68,6 +69,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final ToolGateway toolGateway;
     private final TaskGraphRuntime taskGraphRuntime;
     private final SkillRepository skills;
+    private final McpReplayRepository mcpReplay;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -93,7 +95,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             RuntimeLog log) throws IOException {
         this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
-                null, null, log);
+                null, null, null, log);
     }
 
     public RuntimeHealthServer(
@@ -113,6 +115,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             ToolGateway toolGateway,
             TaskGraphRuntime taskGraphRuntime,
             SkillRepository skills,
+            McpReplayRepository mcpReplay,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -130,6 +133,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.toolGateway = toolGateway;
         this.taskGraphRuntime = taskGraphRuntime;
         this.skills = skills;
+        this.mcpReplay = mcpReplay;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -222,6 +226,9 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 sendJson(exchange, 200, mcpResult(id, result));
             } catch (IllegalArgumentException invalid) {
                 sendJson(exchange, 200, mcpError(id, -32602, invalid.getMessage()));
+            } catch (SQLException persistenceFailure) {
+                log.error("MCP replay persistence failed closed", persistenceFailure);
+                sendJson(exchange, 500, mcpError(id, -32603, "MCP replay persistence unavailable"));
             }
         }
     }
@@ -251,44 +258,96 @@ public final class RuntimeHealthServer implements AutoCloseable {
         return Json.object().set("tools", tools);
     }
 
-    private ObjectNode mcpToolCall(HttpExchange exchange, JsonNode params, JsonNode requestId) {
+    private ObjectNode mcpToolCall(HttpExchange exchange, JsonNode params, JsonNode requestId) throws SQLException {
         ToolContext context = mcpContext(exchange);
         String name = requiredText(params, "name", 64);
         JsonNode arguments = params.path("arguments");
         if (arguments.isMissingNode()) arguments = Json.object();
         String callId = mcpCallId(context, requestId);
         ToolCall call = new ToolCall(callId, name, arguments);
+        ToolResult replayed = acquireMcpCall(call);
+        if (replayed != null) return mcpToolResult(replayed);
         ToolResult accepted = toolGateway.execute(context, call);
         ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
                 context, call, accepted, Duration.ofSeconds(30), ignored -> { });
+        completeMcpCall(call, terminal);
         return mcpToolResult(terminal);
     }
 
-    private void mcpToolCallSse(HttpExchange exchange, JsonNode params, JsonNode requestId) throws IOException {
+    private void mcpToolCallSse(HttpExchange exchange, JsonNode params, JsonNode requestId)
+            throws IOException, SQLException {
         ToolContext context = mcpContext(exchange);
         String name = requiredText(params, "name", 64);
         JsonNode arguments = params.path("arguments");
         if (arguments.isMissingNode()) arguments = Json.object();
         ToolCall call = new ToolCall(mcpCallId(context, requestId), name, arguments);
         JsonNode progressToken = params.path("_meta").get("progressToken");
-        ToolResult accepted = toolGateway.execute(context, call);
+        ToolResult replayed = acquireMcpCall(call);
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-cache");
         exchange.sendResponseHeaders(200, 0);
         try (var output = exchange.getResponseBody()) {
-            ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
-                    context, call, accepted, Duration.ofSeconds(30), progress -> {
-                        if (progressToken == null || progressToken.isNull()) return;
-                        try {
-                            writeSse(output, mcpProgress(progressToken, progress));
-                        } catch (IOException disconnected) {
-                            throw new java.io.UncheckedIOException(disconnected);
-                        }
-                    });
-            writeSse(output, mcpResult(requestId, mcpToolResult(terminal)));
+            if (replayed != null) {
+                writeSse(output, mcpResult(requestId, mcpToolResult(replayed)));
+                return;
+            }
+            try {
+                ToolResult accepted = toolGateway.execute(context, call);
+                ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
+                        context, call, accepted, Duration.ofSeconds(30), progress -> {
+                            if (progressToken == null || progressToken.isNull()) return;
+                            try {
+                                writeSse(output, mcpProgress(progressToken, progress));
+                            } catch (IOException disconnected) {
+                                throw new java.io.UncheckedIOException(disconnected);
+                            }
+                        });
+                completeMcpCall(call, terminal);
+                writeSse(output, mcpResult(requestId, mcpToolResult(terminal)));
+            } catch (SQLException persistenceFailure) {
+                log.error("MCP SSE replay completion failed closed", persistenceFailure);
+                writeSse(output, mcpResult(requestId, mcpToolResult(ToolResult.rejected(call,
+                        "MCP_REPLAY_PERSISTENCE_FAILED",
+                        "The terminal result could not be persisted; reconciliation is required"))));
+            }
         } catch (java.io.UncheckedIOException disconnected) {
             toolGateway.cancel(context, call.callId(), "MCP_STREAM_DISCONNECTED");
+            quarantineMcpCall(call);
             throw disconnected.getCause();
+        }
+    }
+
+    private ToolResult acquireMcpCall(ToolCall call) throws SQLException {
+        if (mcpReplay == null) return null;
+        McpReplayRepository.Acquisition acquisition = mcpReplay.acquire(call);
+        return switch (acquisition.status()) {
+            case NEW -> null;
+            case TERMINAL -> acquisition.result();
+            case IN_FLIGHT -> ToolResult.rejected(call, "MCP_REQUEST_IN_PROGRESS",
+                    "An identical MCP request is already in progress");
+            case RECONCILIATION_REQUIRED -> ToolResult.rejected(call, "MCP_REQUEST_RECONCILIATION_REQUIRED",
+                    "The interrupted MCP request requires explicit reconciliation");
+            case CONFLICT -> ToolResult.rejected(call, "MCP_REQUEST_REPLAY_CONFLICT",
+                    "The MCP request id is already bound to different tool arguments");
+        };
+    }
+
+    private void completeMcpCall(ToolCall call, ToolResult result) throws SQLException {
+        if (mcpReplay == null) return;
+        try {
+            mcpReplay.complete(call, result);
+        } catch (SQLException failure) {
+            quarantineMcpCall(call);
+            throw failure;
+        }
+    }
+
+    private void quarantineMcpCall(ToolCall call) {
+        if (mcpReplay == null) return;
+        try {
+            mcpReplay.quarantine(call);
+        } catch (SQLException failure) {
+            log.error("MCP request quarantine failed", failure);
         }
     }
 

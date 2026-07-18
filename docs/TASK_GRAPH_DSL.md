@@ -238,5 +238,11 @@ The resulting `evidence/representative-task-graph.json` is classified
 `LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E` and records `liveModel=false`. It proves the external-client,
 MCP, Task Graph, expression, Tool Gateway, authenticated Mod session, and live Registry path. It does
 not prove a real Hermes/DeepSeek model selected the graph, a human played the scenario, or a formal
-online Provider passed. Four additional structurally different representative graphs and those
+online Provider passed.
+
+A second graph exercises a different boundary: a typed `position` graph input is passed to
+`block.inspect`, then the exact live `${outputs.inspect.position.*}` Observation fields become the
+arguments of the generic `movement.look` primitive. Acceptance requires the Fabric terminal evidence
+to identify `VANILLA_ENTITY_LOOK`, so a graph that merely validates or returns a mocked body effect
+does not pass. Three additional structurally different representative graphs and the
 external verification gates remain open in `RC_COMPLETION_MATRIX.md`.

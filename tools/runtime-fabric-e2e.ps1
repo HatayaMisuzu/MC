@@ -407,13 +407,98 @@ try {
         $graphValue.entry.id -notmatch '^mcac_registry_fixture:') {
         throw "Unknown-namespace Task Graph did not return verified live Registry evidence: $($graphTerminal | ConvertTo-Json -Compress -Depth 30)"
     }
-    $representativeTaskGraphEvidence = [pscustomobject]@{
+    $registryGraphEvidence = [pscustomobject]@{
         classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
         liveModel = $false
         started = $graphStarted
         terminal = $graphTerminal
     }
     Write-Output '[runtime-e2e] Task Graph composed live Registry search output into Registry describe'
+
+    Write-Output '[runtime-e2e] executing Observation-to-body-effect Task Graph'
+    $effectBrainSession = "representative-effect-$([Guid]::NewGuid())"
+    $effectGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'observed-block-look'
+        inputs = @{
+            target = @{ type = 'position'; required = $true }
+        }
+        permissions = @('READ_WORLD', 'MOVE')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'inspect'
+                    type = 'call_tool'
+                    tool = 'block.inspect'
+                    arguments = @{ position = '${inputs.target}' }
+                },
+                @{
+                    id = 'look'
+                    type = 'call_tool'
+                    tool = 'movement.look'
+                    arguments = @{
+                        dimension = '${outputs.inspect.position.dimension}'
+                        x = '${outputs.inspect.position.x}'
+                        y = '${outputs.inspect.position.y}'
+                        z = '${outputs.inspect.position.z}'
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        block = '${outputs.inspect.block}'
+                        position = '${outputs.inspect.position}'
+                        effectState = '${outputs.look.state}'
+                        effectEvidence = '${outputs.look.fabricObservation.snapshot.evidence}'
+                    }
+                }
+            )
+        }
+    }
+    $effectStarted = Invoke-McpTool $pairingToken $companionId $effectBrainSession 'task_graph.execute' @{
+        graph = $effectGraph
+        inputs = @{
+            target = @{
+                dimension = 'minecraft:overworld'
+                x = $chestX
+                y = $chestY
+                z = $chestZ
+            }
+        }
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+        }
+    } "effect-$([Guid]::NewGuid())"
+    $effectExecutionId = $effectStarted.observation.executionId
+    if (-not $effectExecutionId) { throw 'Observation-to-body-effect graph did not return an execution id.' }
+    $effectTerminal = if ($effectStarted.observation.state -eq 'SUCCEEDED') {
+        $effectStarted
+    } else {
+        Wait-TaskGraphExecution $pairingToken $companionId $effectBrainSession $effectExecutionId
+    }
+    $effectValue = $effectTerminal.observation.value
+    if ($effectTerminal.observation.state -ne 'SUCCEEDED' -or
+        $effectValue.block -ne 'minecraft:chest' -or
+        $effectValue.effectState -ne 'SUCCEEDED' -or
+        $effectValue.effectEvidence -notmatch 'VANILLA_ENTITY_LOOK') {
+        throw "Observation-to-body-effect graph did not produce a verified primitive effect: $($effectTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $effectGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        started = $effectStarted
+        terminal = $effectTerminal
+    }
+    $representativeTaskGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        graphs = @($registryGraphEvidence, $effectGraphEvidence)
+    }
+    Write-Output '[runtime-e2e] Task Graph inspected a live block and aimed the body at its observed position'
 
     $follow = Invoke-RuntimeCommand $pairingToken $companionId 'FOLLOW' @{} 'follow'
     if (-not $follow.accepted -or -not $follow.taskId) { throw "FOLLOW was rejected: $($follow.code)" }
@@ -579,7 +664,10 @@ try {
         throw 'External Brain evidence did not retain the four terminal tool observations.'
     }
     if (-not $representativeTaskGraphEvidence -or
-        $representativeTaskGraphEvidence.terminal.observation.state -ne 'SUCCEEDED' -or
+        $representativeTaskGraphEvidence.graphs.Count -ne 2 -or
+        ($representativeTaskGraphEvidence.graphs | Where-Object {
+            $_.terminal.observation.state -ne 'SUCCEEDED' -or $_.liveModel
+        }).Count -ne 0 -or
         $representativeTaskGraphEvidence.liveModel) {
         throw 'Representative Task Graph evidence is missing or has an invalid verification classification.'
     }

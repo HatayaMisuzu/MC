@@ -152,6 +152,57 @@ function Invoke-ExternalBrainRequest([string]$pairingToken, [string]$companionId
     } -ContentType 'application/json' -Body $body -TimeoutSec 60
 }
 
+function Invoke-McpTool(
+    [string]$pairingToken,
+    [string]$companionId,
+    [string]$brainSessionId,
+    [string]$name,
+    [hashtable]$arguments,
+    [string]$requestId
+) {
+    $body = @{
+        jsonrpc = '2.0'
+        id = $requestId
+        method = 'tools/call'
+        params = @{ name = $name; arguments = $arguments }
+    } | ConvertTo-Json -Compress -Depth 40
+    $reply = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18766/mcp' -Headers @{
+        Authorization = "Bearer $pairingToken"
+        'MCP-Protocol-Version' = '2025-06-18'
+        'X-MCAC-Controller-Id' = 'representative-e2e'
+        'X-MCAC-Brain-Session-Id' = $brainSessionId
+        'X-MCAC-Companion-Id' = $companionId
+    } -ContentType 'application/json' -Body $body -TimeoutSec 20
+    if ($reply.error) {
+        throw "MCP $name failed: $($reply.error | ConvertTo-Json -Compress -Depth 10)"
+    }
+    $result = $reply.result.structuredContent
+    if (-not $result -or $result.isError) {
+        throw "MCP $name returned an error: $($result | ConvertTo-Json -Compress -Depth 20)"
+    }
+    return $result
+}
+
+function Wait-TaskGraphExecution(
+    [string]$pairingToken,
+    [string]$companionId,
+    [string]$brainSessionId,
+    [string]$executionId
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    do {
+        $inspected = Invoke-McpTool $pairingToken $companionId $brainSessionId 'task_graph.inspect' @{
+            executionId = $executionId
+        } "inspect-$([Guid]::NewGuid())"
+        $state = $inspected.observation.state
+        if ($state -in @('SUCCEEDED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) {
+            return $inspected
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Task Graph $executionId did not reach a terminal state."
+}
+
 function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
     $lastInspectionError = $null
@@ -218,6 +269,7 @@ $commandEvidence = @()
 $conversationEvidence = $null
 $goalModificationEvidence = $null
 $externalBrainEvidence = $null
+$representativeTaskGraphEvidence = $null
 try {
     Write-Output '[runtime-e2e] starting Runtime'
     $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
@@ -279,6 +331,89 @@ try {
     $chestX = [int]$readyMatch.Groups[2].Value
     $chestY = [int]$readyMatch.Groups[3].Value
     $chestZ = [int]$readyMatch.Groups[4].Value
+
+    Write-Output '[runtime-e2e] executing external-client Task Graph over live unknown Registry content'
+    $graphBrainSession = "representative-graph-$([Guid]::NewGuid())"
+    $graph = @{
+        version = 'mcac-task-graph/1'
+        id = 'unknown-registry-observation-chain'
+        permissions = @('READ_WORLD')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'search'
+                    type = 'call_tool'
+                    tool = 'registry.search'
+                    arguments = @{
+                        kind = 'ITEM'
+                        namespace = 'mcac_registry_fixture'
+                        query = 'blue'
+                        limit = 8
+                    }
+                },
+                @{
+                    id = 'has-result'
+                    type = 'if'
+                    condition = '${outputs.search.entries.length > 0}'
+                    then = @{
+                        id = 'describe'
+                        type = 'call_tool'
+                        tool = 'registry.describe'
+                        arguments = @{
+                            kind = '${outputs.search.entries[0].kind}'
+                            id = '${outputs.search.entries[0].id}'
+                        }
+                    }
+                    else = @{
+                        id = 'missing'
+                        type = 'fail'
+                        code = 'UNKNOWN_NAMESPACE_ITEM_MISSING'
+                        message = 'live Registry returned no fixture item'
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        searchSource = '${outputs.search.source}'
+                        descriptionSource = '${outputs.describe.source}'
+                        entry = '${outputs.describe.entry}'
+                    }
+                }
+            )
+        }
+    }
+    $graphStarted = Invoke-McpTool $pairingToken $companionId $graphBrainSession 'task_graph.execute' @{
+        graph = $graph
+        provenance = @{
+            source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+            liveModel = $false
+        }
+    } "graph-$([Guid]::NewGuid())"
+    $graphExecutionId = $graphStarted.observation.executionId
+    if (-not $graphExecutionId) { throw 'Task Graph did not return an execution id.' }
+    $graphTerminal = if ($graphStarted.observation.state -eq 'SUCCEEDED') {
+        $graphStarted
+    } else {
+        Wait-TaskGraphExecution $pairingToken $companionId $graphBrainSession $graphExecutionId
+    }
+    $graphValue = $graphTerminal.observation.value
+    if ($graphTerminal.observation.state -ne 'SUCCEEDED' -or
+        $graphValue.searchSource -ne 'LIVE_SERVER_REGISTRY' -or
+        $graphValue.descriptionSource -ne 'LIVE_SERVER_REGISTRY' -or
+        $graphValue.entry.namespace -ne 'mcac_registry_fixture' -or
+        $graphValue.entry.id -notmatch '^mcac_registry_fixture:') {
+        throw "Unknown-namespace Task Graph did not return verified live Registry evidence: $($graphTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    $representativeTaskGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        started = $graphStarted
+        terminal = $graphTerminal
+    }
+    Write-Output '[runtime-e2e] Task Graph composed live Registry search output into Registry describe'
 
     $follow = Invoke-RuntimeCommand $pairingToken $companionId 'FOLLOW' @{} 'follow'
     if (-not $follow.accepted -or -not $follow.taskId) { throw "FOLLOW was rejected: $($follow.code)" }
@@ -407,6 +542,8 @@ try {
         ($externalBrainEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\goal-modification.json'),
         ($goalModificationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
+    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\representative-task-graph.json'),
+        ($representativeTaskGraphEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
     if ($provider) {
         if (-not $provider.HasExited) {
             $provider.Kill()
@@ -440,6 +577,11 @@ try {
     }
     if (-not $externalBrainEvidence -or $externalBrainEvidence.reply.result.toolResults.Count -ne 4) {
         throw 'External Brain evidence did not retain the four terminal tool observations.'
+    }
+    if (-not $representativeTaskGraphEvidence -or
+        $representativeTaskGraphEvidence.terminal.observation.state -ne 'SUCCEEDED' -or
+        $representativeTaskGraphEvidence.liveModel) {
+        throw 'Representative Task Graph evidence is missing or has an invalid verification classification.'
     }
     if (-not $goalModificationEvidence -or
         $goalModificationEvidence.modification.planId -ne $goalModificationEvidence.initial.planId -or

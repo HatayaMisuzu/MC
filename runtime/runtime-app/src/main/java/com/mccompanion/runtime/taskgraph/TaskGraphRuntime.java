@@ -473,7 +473,10 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                 waiting.variables(), waiting.outputs(), waiting.checkpoints(), waiting.evidence(),
                                 waiting.waitingQuestion(), waiting.result(),
                                 control.cancelRequested() ? "TASK_GRAPH_CANCELLED" : "TASK_GRAPH_PAUSED");
-                    } else if (isTimedWait(waiting)) {
+                    } else if (result.code().equals("TASK_GRAPH_WAITING_TIME") || isTimedWait(waiting)) {
+                        // The executor outcome is authoritative for this just-persisted boundary. During
+                        // pause/resume, control can race the follow-up repository read; never reinterpret
+                        // a TIME wait as ASK_USER merely because that read observed an adjacent revision.
                         scheduleTimedWait(record.executionId());
                     } else {
                         materializeWaitingQuestion(record.executionId());

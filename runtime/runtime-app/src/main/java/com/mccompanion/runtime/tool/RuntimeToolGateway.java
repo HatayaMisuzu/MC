@@ -75,12 +75,25 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Accepted Minecraft tool did not return a durable task binding");
         long deadline = System.nanoTime() + Math.max(1L, timeout.toNanos());
         TaskState previous = null;
+        TaskRecord terminalPendingLeaseRelease = null;
         try {
             while (System.nanoTime() < deadline) {
                 TaskRecord task = tasks.get(taskId).orElse(null);
                 if (task == null) return ToolResult.rejected(call, "TASK_NOT_FOUND", "Bound task disappeared");
-                if (task.state().terminal() || task.state() == TaskState.BLOCKED
-                        || task.state() == TaskState.PAUSED
+                if (task.state().terminal()) {
+                    if (commands.leaseFor(task.companionId())
+                            .filter(lease -> lease.epoch() == task.controlEpoch()).isPresent()) {
+                        // CommandService persists the terminal observation before releasing the control lease.
+                        // Do not let a sequential external Brain call reuse that epoch in the small interval
+                        // between those operations; the Mod may already have processed RELEASE_LEASE.
+                        terminalPendingLeaseRelease = task;
+                        Thread.sleep(25);
+                        continue;
+                    }
+                    activeTasks.remove(key(context, call.callId()));
+                    return terminalResult(call, task);
+                }
+                if (task.state() == TaskState.BLOCKED || task.state() == TaskState.PAUSED
                         || task.state() == TaskState.RECONCILIATION_REQUIRED) {
                     activeTasks.remove(key(context, call.callId()));
                     return terminalResult(call, task);
@@ -90,6 +103,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                     previous = task.state();
                 }
                 Thread.sleep(25);
+            }
+            if (terminalPendingLeaseRelease != null) {
+                activeTasks.remove(key(context, call.callId()));
+                return controlReleaseUnconfirmed(call, terminalPendingLeaseRelease);
             }
             CommandReply cancellation = commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
                     context.companionId(), stop("cancel"));
@@ -123,6 +140,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         } catch (java.sql.SQLException failure) {
             return ToolResult.rejected(call, "PERSISTENCE_ERROR", "Bound task state is unavailable");
         }
+    }
+
+    private static ToolResult controlReleaseUnconfirmed(ToolCall call, TaskRecord task) {
+        return new ToolResult(call.callId(), call.name(), false, "TOOL_CONTROL_RELEASE_UNCONFIRMED",
+                Json.object().put("state", "CONTROL_RELEASE_UNCONFIRMED")
+                        .put("effectState", task.state().name())
+                        .put("taskId", task.taskId())
+                        .put("taskRevision", task.revision())
+                        .put("controlEpoch", task.controlEpoch())
+                        .put("message", "Tool effect reached a durable terminal state, but its control lease "
+                                + "was not released before the execution deadline"), true);
     }
 
     private TaskRecord markCancellationUnconfirmed(String taskId, CommandReply cancellation)

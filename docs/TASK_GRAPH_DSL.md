@@ -225,3 +225,18 @@ provenance and verification metadata in its observation. `suggest_memory` is a p
 convenience node over `memory.suggest`. It accepts only `EPISODIC`, `WORLD`, or `PREFERENCE`, creates
 a stable Task Graph-derived suggestion key, and writes only a `QUARANTINED` expiring candidate in
 the separate suggestion store. It never writes a `MemoryFact` or verified World Memory.
+
+## Representative E2E evidence
+
+`runtimeFabricE2E` includes the first production-path representative graph. An authenticated
+external MCP client submits a graph that searches the live Fabric Registry for an otherwise unknown
+`mcac_registry_fixture` namespace, checks the length of the prior Tool output, selects its first
+entry, and passes that Observation into `registry.describe`. The graph contains no namespace-specific
+Java Handler and the Runtime does not decide what to search for or how to branch.
+
+The resulting `evidence/representative-task-graph.json` is classified
+`LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E` and records `liveModel=false`. It proves the external-client,
+MCP, Task Graph, expression, Tool Gateway, authenticated Mod session, and live Registry path. It does
+not prove a real Hermes/DeepSeek model selected the graph, a human played the scenario, or a formal
+online Provider passed. Four additional structurally different representative graphs and those
+external verification gates remain open in `RC_COMPLETION_MATRIX.md`.

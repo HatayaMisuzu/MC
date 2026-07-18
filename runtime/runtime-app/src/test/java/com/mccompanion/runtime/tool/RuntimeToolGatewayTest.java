@@ -9,6 +9,7 @@ import com.mccompanion.runtime.command.IdempotencyStore;
 import com.mccompanion.runtime.command.ProtocolCommandSender;
 import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.lease.ControlLease;
 import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
@@ -700,6 +701,97 @@ class RuntimeToolGatewayTest {
                         assertEquals("TOOL_RECONCILIATION_REQUIRED", immediateResult.code());
                     }
                 }
+            }
+        }
+    }
+
+    @Test
+    void terminalToolWaitsForItsControlLeaseReleaseBoundary() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("terminal-lease-release.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("terminal-lease-release.log"),
+                     false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            LeaseService leases = new LeaseService(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions, tasks, leases,
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateTo"));
+                ControlLease lease = leases.acquire("c-lease-release", "runtime-primary",
+                        Duration.ofMinutes(1), ControlLease.ControlMode.EXTERNAL_RUNTIME);
+                var task = tasks.create("c-lease-release", TaskType.TRAVEL, "go", Json.object(),
+                        "command-lease-release", "START_BEHAVIOR", lease.epoch());
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.COMPLETED,
+                        "BehaviorCompleted", Json.object().put("arrived", true));
+                CompletableFuture<Void> release = CompletableFuture.runAsync(() -> {
+                    try {
+                        Thread.sleep(150);
+                        leases.release(lease);
+                    } catch (Exception failure) {
+                        throw new RuntimeException(failure);
+                    }
+                });
+                ToolCall call = new ToolCall("navigate-lease-release", "movement.navigate", Json.object());
+                ToolResult accepted = new ToolResult(call.callId(), call.name(), true, "COMMAND_DISPATCHED",
+                        Json.object().put("taskId", task.taskId()), false);
+
+                long started = System.nanoTime();
+                ToolResult result = gateway.awaitTerminal(
+                        new ToolContext("hermes", "session-lease-release", "c-lease-release"),
+                        call, accepted, Duration.ofSeconds(2), ignored -> { });
+                Duration elapsed = Duration.ofNanos(System.nanoTime() - started);
+                release.get(2, TimeUnit.SECONDS);
+
+                assertTrue(result.success());
+                assertEquals("SUCCEEDED", result.observation().path("state").asText());
+                assertTrue(elapsed.compareTo(Duration.ofMillis(100)) >= 0,
+                        "terminal result crossed the control lease boundary too early");
+                assertTrue(commands.leaseFor("c-lease-release").isEmpty());
+            }
+        }
+    }
+
+    @Test
+    void terminalToolFailsSafeWhenControlLeaseReleaseIsUnconfirmed() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("terminal-lease-stuck.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("terminal-lease-stuck.log"),
+                     false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            LeaseService leases = new LeaseService(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions, tasks, leases,
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateTo"));
+                ControlLease lease = leases.acquire("c-lease-stuck", "runtime-primary",
+                        Duration.ofMinutes(1), ControlLease.ControlMode.EXTERNAL_RUNTIME);
+                var task = tasks.create("c-lease-stuck", TaskType.TRAVEL, "go", Json.object(),
+                        "command-lease-stuck", "START_BEHAVIOR", lease.epoch());
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                task = tasks.transition(task.taskId(), task.revision(), TaskState.COMPLETED,
+                        "BehaviorCompleted", Json.object().put("arrived", true));
+                ToolCall call = new ToolCall("navigate-lease-stuck", "movement.navigate", Json.object());
+                ToolResult accepted = new ToolResult(call.callId(), call.name(), true, "COMMAND_DISPATCHED",
+                        Json.object().put("taskId", task.taskId()), false);
+
+                ToolResult result = gateway.awaitTerminal(
+                        new ToolContext("hermes", "session-lease-stuck", "c-lease-stuck"),
+                        call, accepted, Duration.ofMillis(75), ignored -> { });
+
+                assertFalse(result.success());
+                assertEquals("TOOL_CONTROL_RELEASE_UNCONFIRMED", result.code());
+                assertEquals("CONTROL_RELEASE_UNCONFIRMED", result.observation().path("state").asText());
+                assertEquals("COMPLETED", result.observation().path("effectState").asText());
+                assertEquals(lease.epoch(), result.observation().path("controlEpoch").asLong());
+                assertEquals(TaskState.COMPLETED, tasks.get(task.taskId()).orElseThrow().state(),
+                        "lease cleanup uncertainty must not rewrite the verified effect state");
             }
         }
     }

@@ -176,6 +176,12 @@ conservative recovery assessment succeeds. The deterministic core executes `sequ
 `emit_progress`, `ask_user`, `read_memory`, `return`, and `fail`. Safe expressions can read graph
 inputs, persisted state, and prior Tool observations. Loop iterations receive stable scoped node and
 Tool call IDs; the current scoped node key and loop cursors are persisted at execution boundaries.
+The loopback Terminal also exposes an authenticated, CSRF-protected local-user control surface.
+It lists at most 100 same-companion summaries containing execution/graph identity, state, current
+node, completed-node count, result code and timestamps; graph inputs, variables and Tool results are
+not returned. Pause/resume/cancel ownership is reconstructed from the durable execution and is
+rejected across companion scope. These are execution controls only: neither endpoint can create,
+edit, repair or choose a graph, goal or strategy.
 Parallel branches use real bounded concurrency; state
 snapshots are serialized, pause/cancel reaches every active Tool call, and all active graphs share
 the Runtime's four-worker parallel budget.

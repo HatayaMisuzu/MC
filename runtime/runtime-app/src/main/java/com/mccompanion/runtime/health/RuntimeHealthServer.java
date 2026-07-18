@@ -156,6 +156,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/plans", this::plans);
         server.createContext("/conversations", this::conversations);
         server.createContext("/memories", this::memoryManagement);
+        server.createContext("/task-graphs", this::taskGraphManagement);
         server.createContext("/skills", this::skillManagement);
         server.createContext("/mcp", this::mcp);
         server.createContext("/search/sessions", this::searchSessions);
@@ -718,6 +719,44 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         .put("message", failure.getMessage()));
             } catch (java.sql.SQLException failure) {
                 log.error("Memory management failed", failure);
+                sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+            }
+        }
+    }
+
+    private void taskGraphManagement(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (taskGraphRuntime == null) {
+                sendJson(exchange, 503, Json.object().put("code", "TASK_GRAPH_RUNTIME_UNAVAILABLE"));
+                return;
+            }
+            try {
+                String companionId = queryParameter(exchange, "companionId");
+                if (companionId == null || companionId.isBlank()) {
+                    sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED")); return;
+                }
+                if ("GET".equals(exchange.getRequestMethod())) {
+                    sendJson(exchange, 200, Json.object().put("companionId", companionId)
+                            .set("executions", Json.MAPPER.valueToTree(
+                                    taskGraphRuntime.listForManagement(companionId, 100))));
+                    return;
+                }
+                if ("POST".equals(exchange.getRequestMethod())) {
+                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    ToolResult result = taskGraphRuntime.controlForManagement(companionId,
+                            requiredText(request, "executionId", 256),
+                            requiredText(request, "action", 32));
+                    sendJson(exchange, result.success() ? 200 : 409, Json.MAPPER.valueToTree(result));
+                    return;
+                }
+                exchange.getResponseHeaders().set("Allow", "GET, POST");
+                sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
+            } catch (IllegalArgumentException failure) {
+                sendJson(exchange, 400, Json.object().put("code", "INVALID_TASK_GRAPH_REQUEST")
+                        .put("message", failure.getMessage()));
+            } catch (SQLException failure) {
+                log.error("Task Graph management failed", failure);
                 sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
             }
         }

@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CompanionsPage } from './CompanionsPage'
 
 const requestPlan = vi.fn()
+const { post } = vi.hoisted(() => ({ post: vi.fn(() => Promise.resolve({})) }))
 afterEach(() => cleanup())
+
+vi.mock('../api/client', () => ({ api: vi.fn(), post }))
 
 vi.mock('../context/TerminalContext', () => ({
   useTerminal: () => ({
@@ -15,7 +18,14 @@ vi.mock('../context/TerminalContext', () => ({
 }))
 
 vi.mock('../hooks/useResource', () => ({
-  useResource: () => ({
+  useResource: (_loader: unknown, dependencies: unknown[]) => dependencies.length === 2 ? ({
+    data: { companionId: 'companion-1', executions: [{
+      executionId: 'graph-execution-1', companionId: 'companion-1', graphId: 'external-graph',
+      graphVersion: '1', state: 'PAUSED', currentNodeId: 'inspect', completedNodeCount: 2,
+      resultCode: 'TASK_GRAPH_PAUSED', revision: 4, createdAt: '', updatedAt: '',
+    }] },
+    refresh: vi.fn(() => Promise.resolve()),
+  }) : ({
     data: {
       instanceId: 'instance-1',
       mode: 'SAFE_IDLE',
@@ -74,6 +84,18 @@ describe('CompanionsPage text companion input', () => {
       instanceId: 'instance-1',
       companionId: 'companion-1',
       text: '不要铁锭了，改为跟随我',
+    })
+  })
+
+  it('shows durable Task Graph progress and sends local Runtime controls', () => {
+    post.mockClear()
+    render(<CompanionsPage />)
+    expect(screen.getByText(/外部 Brain 生成/)).toBeVisible()
+    expect(screen.getByText('external-graph · graph-exec')).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    expect(post).toHaveBeenCalledWith('/api/task-graphs/control', {
+      instanceId: 'instance-1', companionId: 'companion-1',
+      executionId: 'graph-execution-1', action: 'resume',
     })
   })
 })

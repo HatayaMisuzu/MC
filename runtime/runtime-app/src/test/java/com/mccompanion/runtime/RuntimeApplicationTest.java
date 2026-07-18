@@ -853,6 +853,24 @@ class RuntimeApplicationTest {
             JsonNode inspectedGraph = awaitTaskGraphState(http, mcpRequest, executionId, "SUCCEEDED");
             assertEquals("SUCCEEDED", inspectedGraph.path("state").asText(), inspectedGraph.toString());
             assertEquals("Yes", inspectedGraph.path("value").asText());
+            URI graphManagement = new URI("http://127.0.0.1:" + config.server.managementPort
+                    + "/task-graphs?companionId=graph-companion");
+            HttpResponse<String> graphList = http.send(HttpRequest.newBuilder(graphManagement)
+                    .header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            JsonNode listedExecution = Json.parse(graphList.body()).path("executions").path(0);
+            assertEquals(executionId, listedExecution.path("executionId").asText());
+            assertEquals("SUCCEEDED", listedExecution.path("state").asText());
+            assertFalse(listedExecution.has("inputs"));
+            assertFalse(listedExecution.has("toolResults"));
+            HttpResponse<String> terminalControl = http.send(HttpRequest.newBuilder(graphManagement)
+                    .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"action":"pause","executionId":"%s"}
+                            """.formatted(executionId))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, terminalControl.statusCode(), terminalControl.body());
+            assertEquals("SUCCEEDED",
+                    Json.parse(terminalControl.body()).path("observation").path("state").asText());
 
             HttpResponse<String> httpStarted = http.send(mcpRequest.apply("start-http").POST(
                     HttpRequest.BodyPublishers.ofString("""

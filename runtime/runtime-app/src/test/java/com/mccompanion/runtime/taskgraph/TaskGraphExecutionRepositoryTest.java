@@ -43,6 +43,12 @@ class TaskGraphExecutionRepositoryTest {
             assertTrue(recovered.result().path("partial").asBoolean());
             assertEquals("value", recovered.outputs().path("observe").asText());
             assertEquals(2, recovered.revision());
+            var summaries = repository.listByCompanion("companion-1", 10);
+            assertEquals(1, summaries.size());
+            assertEquals("durable", summaries.getFirst().graphId());
+            assertEquals("observe", summaries.getFirst().currentNodeId());
+            assertEquals(1, summaries.getFirst().completedNodeCount());
+            assertTrue(repository.listByCompanion("other-companion", 10).isEmpty());
             assertThrows(IllegalStateException.class, () -> repository.save("execution-1", 0, "RUNNING",
                     "other", Json.parse("[]"), Json.object(), Json.object(), Json.object(), Json.parse("[]"),
                     Json.parse("[]"), null, Json.MAPPER.nullNode(), "RUNNING"));

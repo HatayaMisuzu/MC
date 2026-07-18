@@ -177,6 +177,36 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
+    public java.util.List<TaskGraphExecutionRepository.ExecutionSummary> listForManagement(
+            String companionId, int limit) throws SQLException {
+        return repository.listByCompanion(companionId, limit);
+    }
+
+    /** Local authenticated user control; ownership is derived from the durable execution. */
+    public ToolResult controlForManagement(String companionId, String executionId, String action) {
+        try {
+            TaskGraphExecutionRecord record = repository.get(executionId)
+                    .orElseThrow(() -> new IllegalArgumentException("task graph execution was not found"));
+            if (!record.companionId().equals(companionId)) {
+                throw new IllegalArgumentException("task graph execution is outside companion scope");
+            }
+            ToolContext owner = new ToolContext(
+                    record.controllerId(), record.brainSessionId(), record.companionId());
+            ToolCall call = new ToolCall("local-management-" + java.util.UUID.randomUUID(),
+                    "task_graph." + action, Json.object().put("executionId", executionId));
+            return switch (action) {
+                case "pause" -> pause(owner, call, executionId);
+                case "resume" -> resume(owner, call, executionId);
+                case "cancel" -> cancel(owner, call, executionId, "LOCAL_MANAGEMENT_USER");
+                default -> throw new IllegalArgumentException("task graph management action is invalid");
+            };
+        } catch (SQLException | IllegalArgumentException failure) {
+            ToolCall call = new ToolCall("local-management-rejected", "task_graph." + action,
+                    Json.object().put("executionId", executionId));
+            return ToolResult.rejected(call, "TASK_GRAPH_MANAGEMENT_REJECTED", failure.getMessage());
+        }
+    }
+
     public ToolResult checkpoint(ToolContext context, ToolCall call, String executionId, String label) {
         try {
             if (label == null || label.isBlank() || label.length() > 512) {

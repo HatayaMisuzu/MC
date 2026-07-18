@@ -129,6 +129,39 @@ public final class TaskGraphExecutionRepository {
         return List.copyOf(values);
     }
 
+    public List<ExecutionSummary> listByCompanion(String companionId, int limit) throws SQLException {
+        int bounded = Math.max(1, Math.min(limit, 100));
+        ArrayList<ExecutionSummary> values = new ArrayList<>();
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT execution_id,companion_id,graph_id,graph_version,state,current_node_id,
+                completed_nodes_json,result_code,revision,created_at,updated_at
+                FROM task_graph_execution WHERE companion_id=?
+                ORDER BY updated_at DESC,execution_id DESC LIMIT ?
+                """)) {
+            statement.setString(1, required(companionId));
+            statement.setInt(2, bounded);
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    values.add(new ExecutionSummary(rows.getString("execution_id"),
+                            rows.getString("companion_id"), rows.getString("graph_id"),
+                            rows.getString("graph_version"), rows.getString("state"),
+                            rows.getString("current_node_id"),
+                            Json.parse(rows.getString("completed_nodes_json")).size(),
+                            rows.getString("result_code"), rows.getLong("revision"),
+                            Instant.ofEpochMilli(rows.getLong("created_at")),
+                            Instant.ofEpochMilli(rows.getLong("updated_at"))));
+                }
+            }
+        }
+        return List.copyOf(values);
+    }
+
+    public record ExecutionSummary(String executionId, String companionId, String graphId,
+                                   String graphVersion, String state, String currentNodeId,
+                                   int completedNodeCount, String resultCode, long revision,
+                                   Instant createdAt, Instant updatedAt) {
+    }
+
     /** Aggregate-only durable telemetry; execution, session and companion identities are never exposed. */
     public ObjectNode telemetry() throws SQLException {
         ObjectNode states = Json.object();

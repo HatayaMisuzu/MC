@@ -80,15 +80,15 @@ class TaskGraphRuntimeTest {
                         """);
                 ToolResult accepted = runtime.start(context, execute, graph, Json.object(), Json.object());
                 waitForState(runtime, context, "execution-2", "WAITING");
-                ToolResult pause = runtime.pause(context,
-                        new ToolCall("pause-1", "task_graph.pause", Json.object()), "execution-2");
+                assertEquals(1, runtime.listForManagement("companion-1", 10).size());
+                assertFalse(runtime.controlForManagement("other-companion", "execution-2", "pause").success());
+                ToolResult pause = runtime.controlForManagement("companion-1", "execution-2", "pause");
                 assertTrue(pause.success());
                 ToolResult paused = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
                 assertEquals("PAUSED", paused.observation().path("state").asText());
                 assertEquals(1, gateway.arguments.size());
 
-                ToolResult resumed = runtime.resume(context,
-                        new ToolCall("resume-1", "task_graph.resume", Json.object()), "execution-2");
+                ToolResult resumed = runtime.controlForManagement("companion-1", "execution-2", "resume");
                 assertTrue(resumed.success(), resumed.code() + ": " + resumed.observation());
                 ToolResult completed = runtime.await(context, execute, Duration.ofSeconds(4), ignored -> { });
                 assertTrue(completed.success(), completed.observation().toString());

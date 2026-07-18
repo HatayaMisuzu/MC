@@ -162,6 +162,12 @@ export interface MemorySuggestion {
 export interface MemorySnapshot {
   companionId: string; byKind: Record<string, MemoryFact[]>; suggestions?: MemorySuggestion[]
 }
+export interface TaskGraphExecution {
+  executionId: string; companionId: string; graphId: string; graphVersion: string
+  state: string; currentNodeId?: string; completedNodeCount: number
+  resultCode: string; revision: number; createdAt: string; updatedAt: string
+}
+export interface TaskGraphSnapshot { companionId: string; executions: TaskGraphExecution[] }
 
 export interface OperationPlan {
   planId: string

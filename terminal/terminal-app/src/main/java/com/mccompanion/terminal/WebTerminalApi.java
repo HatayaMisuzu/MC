@@ -78,6 +78,10 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/memories", "companionId", "kind", "query"));
       else if ("POST".equals(method) && "/api/memories/review".equals(path))
         send(exchange, 200, reviewMemorySuggestion(body(exchange)));
+      else if ("GET".equals(method) && "/api/task-graphs".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/task-graphs", "companionId"));
+      else if ("POST".equals(method) && "/api/task-graphs/control".equals(path))
+        send(exchange, 200, controlTaskGraph(body(exchange)));
       else if ("GET".equals(method) && "/api/logs/tail".equals(path))
         send(exchange, 200, logSnapshot(exchange));
       else if ("POST".equals(method) && path.endsWith("/plan"))
@@ -347,6 +351,18 @@ final class WebTerminalApi {
         .put("action", required(request, "action"))
         .put("suggestionId", required(request, "suggestionId"));
     if (request.hasNonNull("reason")) bounded.put("reason", required(request, "reason"));
+    return new RuntimeControlClient().manage(
+        root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
+  }
+
+  private JsonNode controlTaskGraph(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String companionId = required(request, "companionId");
+    String path = "/task-graphs?companionId=" + java.net.URLEncoder.encode(
+        companionId, StandardCharsets.UTF_8);
+    ObjectNode bounded = JSON.createObjectNode()
+        .put("action", required(request, "action"))
+        .put("executionId", required(request, "executionId"));
     return new RuntimeControlClient().manage(
         root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
   }

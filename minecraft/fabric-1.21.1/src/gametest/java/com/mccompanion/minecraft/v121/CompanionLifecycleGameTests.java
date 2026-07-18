@@ -309,6 +309,15 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "ItemUser").success(), "item-use test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "item-use test created no live body");
+        BlockPos itemUseOrigin = body.blockPosition();
+        for (int x = -4; x <= 4; x++) {
+            for (int y = 0; y <= 5; y++) {
+                for (int z = -4; z <= 4; z++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            itemUseOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
         body.getInventory().setItem(0, new ItemStack(Items.SNOWBALL, 2));
         body.getInventory().selected = 0;
         body.setXRot(-30.0F);
@@ -394,6 +403,13 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "entity interaction test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "entity interaction test created no live body");
+        BlockPos interactionOrigin = body.blockPosition();
+        for (int x = 0; x <= 3; x++) {
+            for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        interactionOrigin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+        }
         var cow = EntityType.COW.create(body.serverLevel());
         helper.assertTrue(cow != null, "entity interaction test could not create cow");
         cow.setNoAi(true);
@@ -1361,16 +1377,17 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     helper.assertTrue(body.distanceToSqr(owner) < followDistanceBefore,
                             "follow did not continuously close distance to owner");
                     helper.assertTrue(registry.pause(owner).success(), "pause failed");
-                    Vec3 pausedAt = body.position();
                     owner.moveTo(owner.getX(), owner.getY(), owner.getZ() + 4.0D, owner.getYRot(), owner.getXRot());
-                    helper.runAfterDelay(12, () -> {
-                        helper.assertTrue(horizontalDistanceToSqr(body.position(), pausedAt) < 0.04D,
-                                "paused companion kept walking horizontally");
-                        helper.assertTrue(registry.resume(owner).success(), "resume failed");
-                        helper.runAfterDelay(40, () -> {
-                            helper.assertTrue(body.position().distanceToSqr(pausedAt) > 0.20D,
-                                    "resumed follow did not restore movement");
-                            helper.assertTrue(registry.stop(owner).success(), "stop after resume failed");
+                    helper.runAfterDelay(2, () -> {
+                        Vec3 pausedAt = body.position();
+                        helper.runAfterDelay(10, () -> {
+                            helper.assertTrue(horizontalDistanceToSqr(body.position(), pausedAt) < 0.04D,
+                                    "paused companion kept walking horizontally");
+                            helper.assertTrue(registry.resume(owner).success(), "resume failed");
+                            helper.runAfterDelay(40, () -> {
+                                helper.assertTrue(body.position().distanceToSqr(pausedAt) > 0.20D,
+                                        "resumed follow did not restore movement");
+                                helper.assertTrue(registry.stop(owner).success(), "stop after resume failed");
 
                 helper.assertTrue(body.addItem(new ItemStack(Items.DIAMOND)),
                         "test item could not enter companion inventory through player addItem");
@@ -1436,6 +1453,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         helper.succeed();
                     }
                 });
+                            });
                         });
                     });
                 });

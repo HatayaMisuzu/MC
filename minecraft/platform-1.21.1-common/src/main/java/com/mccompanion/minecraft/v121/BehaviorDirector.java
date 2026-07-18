@@ -1019,7 +1019,7 @@ final class BehaviorDirector {
             }
         }
         if (targets.isEmpty()) return MineProgress.failed(parameters, "RESOURCE_NOT_FOUND");
-        return new MineProgress(parameters, block, targets, server.getTickCount(), inventoryItemCount(body), null);
+        return new MineProgress(parameters, block, targets, server.getTickCount(), inventoryCounts(body), null);
     }
 
     private void tickMine(CompanionEntry entry, CompanionPlayer body, MineProgress mine) {
@@ -1053,6 +1053,10 @@ final class BehaviorDirector {
             body.swing(InteractionHand.MAIN_HAND);
             mine.destroyProgress += increment;
             if (mine.destroyProgress < 1.0F) return;
+            var dropArea = new net.minecraft.world.phys.AABB(target).inflate(2.0D);
+            java.util.Set<UUID> preExistingDrops = body.serverLevel()
+                    .getEntitiesOfClass(ItemEntity.class, dropArea, Entity::isAlive).stream()
+                    .map(Entity::getUUID).collect(java.util.stream.Collectors.toSet());
             actionGateway.markVanillaGameModeAction(body);
             if (!body.gameMode.destroyBlock(target) || body.serverLevel().getBlockState(target).is(mine.block)) {
                 pauseSafely(entry, body, "BLOCK_BREAK_REJECTED"); return;
@@ -1060,13 +1064,14 @@ final class BehaviorDirector {
             mine.destroyed.add(new CompanionRegistry.ScanCandidate(
                     BuiltInRegistries.BLOCK.getKey(mine.block).toString(), mine.parameters.dimension(),
                     target.getX(), target.getY(), target.getZ(), mine.targets.getFirst().distSqr(target)));
-            body.serverLevel().getEntitiesOfClass(ItemEntity.class,
-                            new net.minecraft.world.phys.AABB(target).inflate(2.0D),
-                            entity -> entity.isAlive() && entity.getAge() <= 2
+            body.serverLevel().getEntitiesOfClass(ItemEntity.class, dropArea,
+                            entity -> entity.isAlive() && !preExistingDrops.contains(entity.getUUID())
                                     && !mine.dropEntities.contains(entity.getUUID()))
                     .forEach(entity -> {
                         mine.dropEntities.add(entity.getUUID());
                         mine.expectedDropCount += entity.getItem().getCount();
+                        mine.expectedDrops.merge(entity.getItem().getItem(),
+                                entity.getItem().getCount(), Integer::sum);
                     });
             mine.targetIndex++;
             mine.destroyProgress = 0.0F;
@@ -1075,8 +1080,10 @@ final class BehaviorDirector {
         java.util.List<ItemEntity> drops = mine.dropEntities.stream()
                 .map(body.serverLevel()::getEntity).filter(ItemEntity.class::isInstance)
                 .map(ItemEntity.class::cast).filter(ItemEntity::isAlive).toList();
-        int inventoryDelta = inventoryItemCount(body) - mine.inventoryBaseline;
-        if (mine.expectedDropCount > 0 && drops.isEmpty() && inventoryDelta >= mine.expectedDropCount) {
+        boolean inventoryVerified = mine.expectedDrops.entrySet().stream().allMatch(expected ->
+                count(body, expected.getKey()) - mine.inventoryBaseline.getOrDefault(expected.getKey(), 0)
+                        >= expected.getValue());
+        if (mine.expectedDropCount > 0 && drops.isEmpty() && inventoryVerified) {
             mine.destroyed.sort(java.util.Comparator.comparingDouble(CompanionRegistry.ScanCandidate::distanceSquared));
             observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
                     "MINE_COMPLETE", mine.parameters.itemId(), mine.parameters.quantity(),
@@ -1543,6 +1550,15 @@ final class BehaviorDirector {
         return count;
     }
 
+    private static java.util.Map<Item, Integer> inventoryCounts(CompanionPlayer body) {
+        java.util.Map<Item, Integer> counts = new java.util.HashMap<>();
+        for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = body.getInventory().getItem(slot);
+            if (!stack.isEmpty()) counts.merge(stack.getItem(), stack.getCount(), Integer::sum);
+        }
+        return counts;
+    }
+
     private static int findSlot(ServerPlayer player, Item item) {
         for (int slot = 0; slot < 9; slot++) if (player.getInventory().getItem(slot).is(item)) return slot;
         return -1;
@@ -1975,22 +1991,24 @@ final class BehaviorDirector {
         private final Block block;
         private final java.util.List<BlockPos> targets;
         private final int startedTick;
-        private final int inventoryBaseline;
+        private final java.util.Map<Item, Integer> inventoryBaseline;
         private final String failureCode;
         private final java.util.Set<UUID> dropEntities = new java.util.HashSet<>();
+        private final java.util.Map<Item, Integer> expectedDrops = new java.util.HashMap<>();
         private final java.util.List<CompanionRegistry.ScanCandidate> destroyed = new java.util.ArrayList<>();
         private int targetIndex;
         private float destroyProgress;
         private int expectedDropCount;
 
         private MineProgress(SkillParameters parameters, Block block, java.util.List<BlockPos> targets,
-                             int startedTick, int inventoryBaseline, String failureCode) {
+                             int startedTick, java.util.Map<Item, Integer> inventoryBaseline, String failureCode) {
             this.parameters = parameters; this.block = block; this.targets = java.util.List.copyOf(targets);
-            this.startedTick = startedTick; this.inventoryBaseline = inventoryBaseline; this.failureCode = failureCode;
+            this.startedTick = startedTick; this.inventoryBaseline = java.util.Map.copyOf(inventoryBaseline);
+            this.failureCode = failureCode;
         }
 
         private static MineProgress failed(SkillParameters parameters, String code) {
-            return new MineProgress(parameters, Blocks.AIR, java.util.List.of(), 0, 0, code);
+            return new MineProgress(parameters, Blocks.AIR, java.util.List.of(), 0, java.util.Map.of(), code);
         }
     }
 

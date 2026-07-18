@@ -25,7 +25,7 @@ public final class RuntimeDatabase implements AutoCloseable {
             "memory_fact", "memory_suggestion", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call",
             "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
-            "schema_migration");
+            "search_session", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -699,6 +699,24 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX mcp_event_session_idx ON mcp_event(session_hash,sequence)");
+        List<String> searchSessionLifecycle = List.of(
+                """
+                CREATE TABLE search_session (
+                  search_id TEXT PRIMARY KEY,
+                  controller_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  policy_json TEXT NOT NULL,
+                  sources_json TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX search_session_scope_idx ON search_session(" +
+                        "controller_id,brain_session_id,companion_id,state,updated_at)",
+                "CREATE INDEX search_session_expiry_idx ON search_session(state,expires_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -719,6 +737,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(17, "persist generated skill promotion and rollback lifecycle", skillLifecycle),
                 new Migration(18, "bind MCP request replay identity and terminal results", mcpReplayProtection),
                 new Migration(19, "bind expiring MCP transport sessions", mcpSessionLifecycle),
-                new Migration(20, "persist bounded MCP SSE replay events", mcpEventReplay));
+                new Migration(20, "persist bounded MCP SSE replay events", mcpEventReplay),
+                new Migration(21, "persist isolated search source sessions", searchSessionLifecycle));
     }
 }

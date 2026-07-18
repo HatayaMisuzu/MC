@@ -35,7 +35,8 @@ release/install verification remain incomplete.
   HTTP provider implementation with environment-only credentials.
 - Added `search.query`, `search.open`, `search.citations`, and `search.cancel` tools.
 - A Brain can open only a source ID returned by the current Brain search session; the
-  tool protocol accepts no arbitrary URL.
+  tool protocol accepts no arbitrary URL. Migration 21 persists that source set for five minutes
+  across Runtime restart under the exact controller + Brain-session + companion scope.
 - Enforced public HTTPS source URLs, no redirects, text-only content types, response
   size and timeout limits, global allow/deny domains, and safe-search request fields.
 - Queries containing credential-shaped values, player UUIDs, server addresses,
@@ -299,10 +300,14 @@ release/install verification remain incomplete.
   offers an explicit live provider probe. The probe uses a fixed non-private query, requests at most
   one result, rejects redirects and responses over 1 MiB, validates the result envelope, and never
   returns a credential or provider body to the UI.
-- Successful queries now use a five-minute, 128-entry in-memory cache keyed by companion and complete
-  privacy policy. Cache hits still receive independent session/source IDs, never cross companions,
-  and `search.cancel` removes both the active session and its cached result. Source-click UI and the
-  full persisted search-session lifecycle remain `PARTIAL`.
+- Successful queries use a five-minute, 128-entry in-memory provider cache keyed by companion and
+  complete privacy policy. Cache hits still receive independent durable search IDs, and returned
+  source IDs remain usable only through the exact scoped session. Migration 21 persists only the
+  bounded query policy and untrusted source metadata (at most 256 KiB) for restart recovery; it
+  never persists opened page content as Memory. A new same-scope query replaces the prior row,
+  `search.cancel` physically deletes it and its cache entry, expiry is physically deleted, and each
+  companion retains at most 128 live/recent rows. Repository/Gateway restart tests prove source
+  recovery plus controller/Brain/companion isolation. Source-click UI remains `PARTIAL`.
 
 ## Craft item slice
 

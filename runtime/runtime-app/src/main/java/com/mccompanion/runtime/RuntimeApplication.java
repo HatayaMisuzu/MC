@@ -35,6 +35,7 @@ import com.mccompanion.runtime.search.DisabledSearchProvider;
 import com.mccompanion.runtime.search.HttpSearchProvider;
 import com.mccompanion.runtime.search.SearchProvider;
 import com.mccompanion.runtime.search.SearchToolGateway;
+import com.mccompanion.runtime.search.SearchSessionRepository;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.task.TaskEventStore;
@@ -195,6 +196,8 @@ public final class RuntimeApplication implements AutoCloseable {
                 }
             });
             SearchProvider searchProvider = searchOverride == null ? createSearchProvider(config, redactor, log) : searchOverride;
+            SearchSessionRepository searchSessions = new SearchSessionRepository(database);
+            int expiredSearchSessions = searchSessions.expire();
             RegistryToolGateway registryTools = new RegistryToolGateway(sessions, commandSender);
             java.util.concurrent.atomic.AtomicReference<CompositeToolGateway> toolGatewayReference =
                     new java.util.concurrent.atomic.AtomicReference<>();
@@ -214,7 +217,7 @@ public final class RuntimeApplication implements AutoCloseable {
                                     .map(value -> value.handshake()).orElse(null)),
                     registryTools,
                     new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
-                    config.search.allowedDomains, config.search.deniedDomains), skillTools));
+                    config.search.allowedDomains, config.search.deniedDomains, searchSessions), skillTools));
             toolGatewayReference.set(toolGateway);
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
                     conversationRepository);
@@ -235,7 +238,8 @@ public final class RuntimeApplication implements AutoCloseable {
             int reconciliationGraphs = taskGraphs.markUnfinishedForReconciliation();
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
                     || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0
-                    || interruptedMcpRequests > 0 || expiredMcpSessions > 0 || prunedMcpEvents > 0) {
+                    || interruptedMcpRequests > 0 || expiredMcpSessions > 0 || prunedMcpEvents > 0
+                    || expiredSearchSessions > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
@@ -243,7 +247,8 @@ public final class RuntimeApplication implements AutoCloseable {
                         + ", reconciliationGraphs=" + reconciliationGraphs
                         + ", interruptedMcpRequests=" + interruptedMcpRequests
                         + ", expiredMcpSessions=" + expiredMcpSessions
-                        + ", prunedMcpEvents=" + prunedMcpEvents);
+                        + ", prunedMcpEvents=" + prunedMcpEvents
+                        + ", expiredSearchSessions=" + expiredSearchSessions);
             }
 
             webSocket = new RuntimeWebSocketServer(

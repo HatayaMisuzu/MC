@@ -1,11 +1,15 @@
 package com.mccompanion.runtime.search;
 
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
+import com.mccompanion.runtime.tool.ToolResult;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.time.Instant;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -14,6 +18,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SearchToolGatewayTest {
     private static final ToolContext CONTEXT = new ToolContext("controller", "brain-session", "companion");
+    @TempDir Path temporary;
 
     @Test
     void replayQueryOpenCitationsAndCancelStayBoundToReturnedSourceIds() {
@@ -73,6 +78,40 @@ class SearchToolGatewayTest {
                     new ToolCall("q4", "search.query", Json.object().put("query", "Fabric docs")));
             assertFalse(afterCancel.observation().path("cacheHit").asBoolean());
             assertEquals(3, calls.get());
+        }
+    }
+
+    @Test
+    void durableSessionRestoresSourcesButRejectsSameBrainIdFromAnotherScope() throws Exception {
+        SearchSource source = new SearchSource("docs-1", "Fabric docs", "https://docs.fabricmc.net/",
+                "docs.fabricmc.net", "Fabric", null, Instant.now(), "Documentation", "OFFICIAL", "text/html");
+        SearchPage page = new SearchPage("docs-1", "Fabric docs", source.url(), source.domain(),
+                "UNTRUSTED_EXTERNAL_CONTENT\nDocumentation", "text/html", false, Instant.now());
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("search.db"))) {
+            database.initialize();
+            SearchSessionRepository sessions = new SearchSessionRepository(database);
+            try (SearchToolGateway first = new SearchToolGateway(
+                    new ReplaySearchProvider(List.of(source), Map.of(source.sourceId(), page)),
+                    List.of(), List.of(), sessions)) {
+                assertTrue(first.execute(CONTEXT, new ToolCall("query", "search.query",
+                        Json.object().put("query", "Fabric documentation"))).success());
+            }
+
+            try (SearchToolGateway restarted = new SearchToolGateway(
+                    new ReplaySearchProvider(List.of(source), Map.of(source.sourceId(), page)),
+                    List.of(), List.of(), new SearchSessionRepository(database))) {
+                assertTrue(restarted.execute(CONTEXT, new ToolCall("open", "search.open",
+                        Json.object().put("sourceId", source.sourceId()))).success());
+                ToolResult crossCompanion = restarted.execute(
+                        new ToolContext("controller", "brain-session", "other-companion"),
+                        new ToolCall("cross", "search.citations", Json.object()));
+                assertFalse(crossCompanion.success());
+                assertEquals("SEARCH_SESSION_NOT_FOUND", crossCompanion.code());
+                assertEquals("SEARCH_CANCELLED", restarted.execute(CONTEXT,
+                        new ToolCall("cancel", "search.cancel", Json.object())).code());
+                assertEquals("SEARCH_SESSION_NOT_FOUND", restarted.execute(CONTEXT,
+                        new ToolCall("after", "search.citations", Json.object())).code());
+            }
         }
     }
 

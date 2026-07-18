@@ -10,6 +10,7 @@ import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
 
 import java.time.Duration;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -22,17 +23,24 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
     private final SearchProvider provider;
     private final List<String> globallyAllowedDomains;
     private final List<String> deniedDomains;
-    private final Map<String, SearchState> states = new ConcurrentHashMap<>();
+    private final SearchSessionRepository sessions;
+    private final Map<Scope, SearchState> states = new ConcurrentHashMap<>();
     private final Map<CacheKey, CacheEntry> cache = new ConcurrentHashMap<>();
 
-    public SearchToolGateway(SearchProvider provider) { this(provider, List.of(), List.of()); }
+    public SearchToolGateway(SearchProvider provider) { this(provider, List.of(), List.of(), null); }
 
     public SearchToolGateway(SearchProvider provider, List<String> globallyAllowedDomains, List<String> deniedDomains) {
+        this(provider, globallyAllowedDomains, deniedDomains, null);
+    }
+
+    public SearchToolGateway(SearchProvider provider, List<String> globallyAllowedDomains,
+                             List<String> deniedDomains, SearchSessionRepository sessions) {
         this.provider = java.util.Objects.requireNonNull(provider);
         this.globallyAllowedDomains = globallyAllowedDomains == null ? List.of()
                 : globallyAllowedDomains.stream().map(SearchSecurity::normalizedDomain).distinct().toList();
         this.deniedDomains = deniedDomains == null ? List.of()
                 : deniedDomains.stream().map(SearchSecurity::normalizedDomain).distinct().toList();
+        this.sessions = sessions;
     }
 
     @Override public List<ToolDefinition> definitions(ToolContext context) {
@@ -59,10 +67,13 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
         } catch (IllegalStateException failure) {
             return ToolResult.rejected(call, failure.getMessage() == null ? "SEARCH_FAILED" : failure.getMessage(),
                     "Search provider did not complete safely");
+        } catch (SQLException failure) {
+            return ToolResult.rejected(call, "SEARCH_PERSISTENCE_ERROR",
+                    "Search session state is unavailable");
         }
     }
 
-    private ToolResult query(ToolContext context, ToolCall call) {
+    private ToolResult query(ToolContext context, ToolCall call) throws SQLException {
         JsonNode a = call.arguments();
         rejectUnexpected(a, List.of("query", "allowedDomains", "maxResults", "recencyDays", "locale", "safeSearch", "timeoutSeconds"));
         List<String> domains = effectiveDomains(strings(a.path("allowedDomains")));
@@ -86,7 +97,9 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
             cache.put(cacheKey, new CacheEntry(now, sources));
         }
         String searchId = UUID.randomUUID().toString();
-        states.put(context.brainSessionId(), new SearchState(searchId, request, sources, cacheKey));
+        SearchState state = new SearchState(searchId, request, sources, cacheKey);
+        if (sessions != null) sessions.activate(searchId, context, request, sources);
+        states.put(Scope.of(context), state);
         ObjectNode observation = Json.object().put("searchId", searchId)
                 .put("trustBoundary", "UNTRUSTED_EXTERNAL_CONTENT").put("cacheHit", cacheHit);
         observation.set("sources", Json.MAPPER.valueToTree(sources));
@@ -109,7 +122,7 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
         return selected;
     }
 
-    private ToolResult open(ToolContext context, ToolCall call) {
+    private ToolResult open(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), List.of("sourceId"));
         SearchState state = requiredState(context);
         String sourceId = call.arguments().path("sourceId").asText("");
@@ -121,7 +134,7 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
                 Json.MAPPER.valueToTree(page), true);
     }
 
-    private ToolResult citations(ToolContext context, ToolCall call) {
+    private ToolResult citations(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), List.of());
         SearchState state = requiredState(context);
         ObjectNode result = Json.object().put("searchId", state.searchId());
@@ -129,18 +142,31 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
         return new ToolResult(call.callId(), call.name(), true, "OK", result, true);
     }
 
-    private ToolResult cancel(ToolContext context, ToolCall call) {
+    private ToolResult cancel(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), List.of());
-        SearchState state = states.remove(context.brainSessionId());
+        SearchState state = states.remove(Scope.of(context));
+        if (sessions != null) {
+            var cancelled = sessions.cancel(context);
+            if (state == null && cancelled.isPresent()) {
+                state = new SearchState(cancelled.get(), null, List.of(), null);
+            }
+        }
         if (state != null) {
-            cache.remove(state.cacheKey());
+            if (state.cacheKey() != null) cache.remove(state.cacheKey());
             provider.cancel(state.searchId());
         }
         return new ToolResult(call.callId(), call.name(), true, "SEARCH_CANCELLED", Json.object(), true);
     }
 
-    private SearchState requiredState(ToolContext context) {
-        SearchState state = states.get(context.brainSessionId());
+    private SearchState requiredState(ToolContext context) throws SQLException {
+        SearchState state;
+        if (sessions != null) {
+            var stored = sessions.active(context).orElse(null);
+            state = stored == null ? null : new SearchState(stored.searchId(), stored.policy(),
+                    stored.sources(), new CacheKey(context.companionId(), stored.policy()));
+        } else {
+            state = states.get(Scope.of(context));
+        }
         if (state == null) throw new IllegalStateException("SEARCH_SESSION_NOT_FOUND");
         return state;
     }
@@ -191,5 +217,10 @@ public final class SearchToolGateway implements ToolGateway, AutoCloseable {
     private record CacheKey(String companionId, SearchQuery policy) { }
     private record CacheEntry(long storedAtNanos, List<SearchSource> sources) {
         private CacheEntry { sources = List.copyOf(sources); }
+    }
+    private record Scope(String controllerId, String brainSessionId, String companionId) {
+        private static Scope of(ToolContext context) {
+            return new Scope(context.controllerId(), context.brainSessionId(), context.companionId());
+        }
     }
 }

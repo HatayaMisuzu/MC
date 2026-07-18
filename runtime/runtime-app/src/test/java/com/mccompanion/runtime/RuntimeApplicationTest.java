@@ -204,6 +204,9 @@ class RuntimeApplicationTest {
             HttpResponse<String> initialized = http.send(HttpRequest.newBuilder(endpoint)
                     .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
                     .header("Accept", "application/json, text/event-stream")
+                    .header("X-MCAC-Controller-Id", "hermes-test")
+                    .header("X-MCAC-Brain-Session-Id", "brain-session-1")
+                    .header("X-MCAC-Companion-Id", "missing-companion")
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{
                               "protocolVersion":"2025-06-18","capabilities":{},
@@ -214,6 +217,8 @@ class RuntimeApplicationTest {
             assertEquals("init-1", initializeBody.path("id").asText());
             assertEquals("2025-06-18", initializeBody.path("result").path("protocolVersion").asText());
             assertTrue(initializeBody.path("result").path("capabilities").has("tools"));
+            String mcpSession = initialized.headers().firstValue("Mcp-Session-Id").orElseThrow();
+            assertEquals(43, mcpSession.length());
 
             HttpResponse<String> unbound = http.send(HttpRequest.newBuilder(endpoint)
                     .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
@@ -237,7 +242,8 @@ class RuntimeApplicationTest {
                     .header("MCP-Protocol-Version", "2025-06-18")
                     .header("X-MCAC-Controller-Id", "hermes-test")
                     .header("X-MCAC-Brain-Session-Id", "brain-session-1")
-                    .header("X-MCAC-Companion-Id", "missing-companion");
+                    .header("X-MCAC-Companion-Id", "missing-companion")
+                    .header("Mcp-Session-Id", mcpSession);
             HttpResponse<String> listed = http.send(bound.copy()
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}
@@ -278,6 +284,19 @@ class RuntimeApplicationTest {
                     .path("result").path("structuredContent").path("code").asText(),
                     conflictingReplay.body());
 
+            String secondSession = initializeMcpSession(http, endpoint, token,
+                    "hermes-test", "brain-session-1", "missing-companion");
+            HttpResponse<String> newSessionCall = http.send(bound.copy()
+                    .setHeader("Mcp-Session-Id", secondSession)
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"observe-1","method":"tools/call","params":{
+                              "name":"world.observe","arguments":{}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertNotEquals(callResult.path("structuredContent").path("callId").asText(),
+                    Json.parse(newSessionCall.body()).path("result").path("structuredContent")
+                            .path("callId").asText(),
+                    "JSON-RPC ids are unique only within their MCP transport session");
+
             HttpResponse<String> streamed = http.send(bound.copy().header("Accept", "text/event-stream")
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":"observe-sse","method":"tools/call","params":{
@@ -300,6 +319,23 @@ class RuntimeApplicationTest {
                             """)).build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(202, cancelled.statusCode(), cancelled.body());
             assertTrue(cancelled.body().isEmpty());
+
+            HttpResponse<String> wrongScope = http.send(bound.copy()
+                    .setHeader("X-MCAC-Companion-Id", "other-companion")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"wrong-scope","method":"ping","params":{}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, wrongScope.statusCode(), wrongScope.body());
+            assertEquals("MCP_SESSION_NOT_FOUND", Json.parse(wrongScope.body()).path("code").asText());
+
+            HttpResponse<String> deleted = http.send(bound.copy().DELETE().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(204, deleted.statusCode(), deleted.body());
+            HttpResponse<String> afterDelete = http.send(bound.copy()
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"after-delete","method":"ping","params":{}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(404, afterDelete.statusCode(), afterDelete.body());
         }
     }
 
@@ -339,6 +375,8 @@ class RuntimeApplicationTest {
 
             URI endpoint = new URI("http://127.0.0.1:" + config.server.managementPort + "/mcp");
             HttpClient http = HttpClient.newHttpClient();
+            String mcpSession = initializeMcpSession(http, endpoint, token,
+                    "hermes-test", "registry-brain-session", "registry-companion");
             HttpRequest request = HttpRequest.newBuilder(endpoint)
                     .header("Authorization", "Bearer " + token)
                     .header("Content-Type", "application/json")
@@ -346,6 +384,7 @@ class RuntimeApplicationTest {
                     .header("X-MCAC-Controller-Id", "hermes-test")
                     .header("X-MCAC-Brain-Session-Id", "registry-brain-session")
                     .header("X-MCAC-Companion-Id", "registry-companion")
+                    .header("Mcp-Session-Id", mcpSession)
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":"registry-search","method":"tools/call","params":{
                               "name":"registry.search","arguments":{
@@ -386,6 +425,7 @@ class RuntimeApplicationTest {
                     .header("X-MCAC-Controller-Id", "hermes-test")
                     .header("X-MCAC-Brain-Session-Id", "registry-brain-session")
                     .header("X-MCAC-Companion-Id", "registry-companion")
+                    .header("Mcp-Session-Id", mcpSession)
                     .POST(HttpRequest.BodyPublishers.ofString("""
                             {"jsonrpc":"2.0","id":"block-inspect","method":"tools/call","params":{
                               "name":"block.inspect","arguments":{
@@ -695,13 +735,16 @@ class RuntimeApplicationTest {
             }
             HttpClient http = HttpClient.newHttpClient();
             URI mcp = new URI("http://127.0.0.1:" + config.server.managementPort + "/mcp");
+            String mcpSession = initializeMcpSession(http, mcp, token,
+                    "hermes-test", "brain-graph", "graph-companion");
             java.util.function.Function<String, HttpRequest.Builder> mcpRequest = ignored ->
                     HttpRequest.newBuilder(mcp).header("Authorization", "Bearer " + token)
                             .header("Content-Type", "application/json")
                             .header("MCP-Protocol-Version", "2025-06-18")
                             .header("X-MCAC-Controller-Id", "hermes-test")
                             .header("X-MCAC-Brain-Session-Id", "brain-graph")
-                            .header("X-MCAC-Companion-Id", "graph-companion");
+                            .header("X-MCAC-Companion-Id", "graph-companion")
+                            .header("Mcp-Session-Id", mcpSession);
 
             HttpResponse<String> started = http.send(mcpRequest.apply("start").POST(
                     HttpRequest.BodyPublishers.ofString("""
@@ -798,6 +841,32 @@ class RuntimeApplicationTest {
         }
         fail("Task Graph did not reach " + expectedState + "; latest=" + latestBody);
         return latest;
+    }
+
+    private static String initializeMcpSession(
+            HttpClient http,
+            URI endpoint,
+            String token,
+            String controllerId,
+            String brainSessionId,
+            String companionId) throws Exception {
+        HttpResponse<String> response = http.send(HttpRequest.newBuilder(endpoint)
+                        .header("Authorization", "Bearer " + token)
+                        .header("Content-Type", "application/json")
+                        .header("Accept", "application/json")
+                        .header("X-MCAC-Controller-Id", controllerId)
+                        .header("X-MCAC-Brain-Session-Id", brainSessionId)
+                        .header("X-MCAC-Companion-Id", companionId)
+                        .POST(HttpRequest.BodyPublishers.ofString("""
+                                {"jsonrpc":"2.0","id":"session-init","method":"initialize","params":{
+                                  "protocolVersion":"2025-06-18","capabilities":{},
+                                  "clientInfo":{"name":"mcac-test","version":"test"}}}
+                                """)).build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, response.statusCode(), response.body());
+        assertEquals("2025-06-18",
+                Json.parse(response.body()).path("result").path("protocolVersion").asText());
+        return response.headers().firstValue("Mcp-Session-Id").orElseThrow();
     }
 
     private static int freePort() throws Exception {

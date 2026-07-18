@@ -38,6 +38,31 @@ function Health($profile){
             $result.taskGraph.status -eq 'READY'
     } catch { return $false }
 }
+function New-McpSession($profile){
+    $client=[Net.Http.HttpClient]::new()
+    try {
+        $request=[Net.Http.HttpRequestMessage]::new(
+            [Net.Http.HttpMethod]::Post,
+            "http://127.0.0.1:$($profile.Port + 10000)/mcp")
+        $request.Headers.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$profile.Token)
+        $request.Headers.Add('X-MCAC-Companion-Id',"telemetry-$($profile.Id)")
+        $request.Headers.Add('X-MCAC-Brain-Session-Id',"telemetry-$($profile.Id)")
+        $body=@{
+            jsonrpc='2.0';id="init-$($profile.Id)";method='initialize'
+            params=@{
+                protocolVersion='2025-06-18';capabilities=@{}
+                clientInfo=@{name='mcac-multi-profile-test';version='test'}
+            }
+        }|ConvertTo-Json -Depth 8 -Compress
+        $request.Content=[Net.Http.StringContent]::new($body,[Text.Encoding]::UTF8,'application/json')
+        $response=$client.SendAsync($request).GetAwaiter().GetResult()
+        try {
+            $content=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            if(-not $response.IsSuccessStatusCode){throw "MCP initialize failed: $content"}
+            return [string]($response.Headers.GetValues('Mcp-Session-Id')|Select-Object -First 1)
+        } finally {$response.Dispose()}
+    } finally {$client.Dispose()}
+}
 function Start-Graph-Wait($profile){
     $client=[Net.Http.HttpClient]::new()
     $request=[Net.Http.HttpRequestMessage]::new(
@@ -45,6 +70,7 @@ function Start-Graph-Wait($profile){
         "http://127.0.0.1:$($profile.Port + 10000)/mcp")
     $request.Headers.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$profile.Token)
     $request.Headers.Add('MCP-Protocol-Version','2025-06-18')
+    $request.Headers.Add('Mcp-Session-Id',(New-McpSession $profile))
     $request.Headers.Add('X-MCAC-Companion-Id',"telemetry-$($profile.Id)")
     $request.Headers.Add('X-MCAC-Brain-Session-Id',"telemetry-$($profile.Id)")
     $body=@{

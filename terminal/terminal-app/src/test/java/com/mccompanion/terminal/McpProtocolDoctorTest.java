@@ -46,6 +46,9 @@ class McpProtocolDoctorTest {
             String request = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             String response;
             if (request.contains("\"initialize\"")) {
+                assertEquals("mcac-doctor", exchange.getRequestHeaders().getFirst("X-MCAC-Controller-Id"));
+                assertEquals("doctor-session", exchange.getRequestHeaders().getFirst("X-MCAC-Brain-Session-Id"));
+                exchange.getResponseHeaders().set("Mcp-Session-Id", "doctor-opaque-session");
                 response = """
                         {"jsonrpc":"2.0","id":"doctor-init","result":{"protocolVersion":"2025-06-18",
                          "capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}}
@@ -53,6 +56,7 @@ class McpProtocolDoctorTest {
             } else {
                 assertEquals("2025-06-18", exchange.getRequestHeaders().getFirst("MCP-Protocol-Version"));
                 assertEquals("doctor-session", exchange.getRequestHeaders().getFirst("X-MCAC-Brain-Session-Id"));
+                assertEquals("doctor-opaque-session", exchange.getRequestHeaders().getFirst("Mcp-Session-Id"));
                 response = """
                         {"jsonrpc":"2.0","id":"doctor-list","result":{"tools":[
                          {"name":"world.observe","description":"Observe","inputSchema":{"type":"object"}}]}}

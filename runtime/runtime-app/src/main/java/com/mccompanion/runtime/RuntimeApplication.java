@@ -17,6 +17,7 @@ import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.intent.RuleIntentParser;
 import com.mccompanion.runtime.health.RuntimeHealthServer;
 import com.mccompanion.runtime.health.McpReplayRepository;
+import com.mccompanion.runtime.health.McpSessionRepository;
 import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
@@ -150,6 +151,8 @@ public final class RuntimeApplication implements AutoCloseable {
             database.initialize();
             McpReplayRepository mcpReplay = new McpReplayRepository(database);
             int interruptedMcpRequests = mcpReplay.quarantineInterrupted();
+            McpSessionRepository mcpSessions = new McpSessionRepository(database);
+            int expiredMcpSessions = mcpSessions.expire();
             BrainAuditRepository brainAudit = new BrainAuditRepository(database);
             int interruptedBrainSessions = brainAudit.interruptActiveSessions();
             CompanionRepository companions = new CompanionRepository(database);
@@ -229,13 +232,14 @@ public final class RuntimeApplication implements AutoCloseable {
             int reconciliationGraphs = taskGraphs.markUnfinishedForReconciliation();
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
                     || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0
-                    || interruptedMcpRequests > 0) {
+                    || interruptedMcpRequests > 0 || expiredMcpSessions > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
                         + ", interruptedBrainSessions=" + interruptedBrainSessions
                         + ", reconciliationGraphs=" + reconciliationGraphs
-                        + ", interruptedMcpRequests=" + interruptedMcpRequests);
+                        + ", interruptedMcpRequests=" + interruptedMcpRequests
+                        + ", expiredMcpSessions=" + expiredMcpSessions);
             }
 
             webSocket = new RuntimeWebSocketServer(
@@ -257,7 +261,7 @@ public final class RuntimeApplication implements AutoCloseable {
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
                     kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,
-                    toolGateway, taskGraphRuntime, skillRepository, mcpReplay, log);
+                    toolGateway, taskGraphRuntime, skillRepository, mcpReplay, mcpSessions, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;

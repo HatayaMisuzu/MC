@@ -24,7 +24,7 @@ public final class RuntimeDatabase implements AutoCloseable {
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
             "memory_fact", "memory_suggestion", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call",
-            "task_graph_execution", "skill_version", "mcp_request", "schema_migration");
+            "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "schema_migration");
 
     private final Path path;
     private final String jdbcUrl;
@@ -670,6 +670,21 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX mcp_request_state_idx ON mcp_request(state,updated_at)");
+        List<String> mcpSessionLifecycle = List.of(
+                """
+                CREATE TABLE mcp_session (
+                  session_hash TEXT PRIMARY KEY,
+                  controller_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  protocol_version TEXT NOT NULL,
+                  state TEXT NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX mcp_session_expiry_idx ON mcp_session(state,expires_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -688,6 +703,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(15, "bind waiting questions to task graph executions", taskGraphQuestions),
                 new Migration(16, "quarantine external memory suggestions", memorySuggestionQuarantine),
                 new Migration(17, "persist generated skill promotion and rollback lifecycle", skillLifecycle),
-                new Migration(18, "bind MCP request replay identity and terminal results", mcpReplayProtection));
+                new Migration(18, "bind MCP request replay identity and terminal results", mcpReplayProtection),
+                new Migration(19, "bind expiring MCP transport sessions", mcpSessionLifecycle));
     }
 }

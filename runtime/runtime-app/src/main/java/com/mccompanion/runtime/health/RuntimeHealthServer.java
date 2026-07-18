@@ -22,6 +22,7 @@ import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.memory.MemoryRepository;
 import com.mccompanion.runtime.memory.MemoryKind;
 import com.mccompanion.runtime.security.PairingTokenStore;
+import com.mccompanion.runtime.security.Digests;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.provider.ProviderRouter;
@@ -70,6 +71,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final TaskGraphRuntime taskGraphRuntime;
     private final SkillRepository skills;
     private final McpReplayRepository mcpReplay;
+    private final McpSessionRepository mcpSessions;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -95,7 +97,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             RuntimeLog log) throws IOException {
         this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
-                null, null, null, log);
+                null, null, null, null, log);
     }
 
     public RuntimeHealthServer(
@@ -116,6 +118,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             TaskGraphRuntime taskGraphRuntime,
             SkillRepository skills,
             McpReplayRepository mcpReplay,
+            McpSessionRepository mcpSessions,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -134,6 +137,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.taskGraphRuntime = taskGraphRuntime;
         this.skills = skills;
         this.mcpReplay = mcpReplay;
+        this.mcpSessions = mcpSessions;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -163,8 +167,12 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private void mcp(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;
+            if ("DELETE".equals(exchange.getRequestMethod())) {
+                mcpDelete(exchange);
+                return;
+            }
             if (!"POST".equals(exchange.getRequestMethod())) {
-                exchange.getResponseHeaders().set("Allow", "POST");
+                exchange.getResponseHeaders().set("Allow", "POST, DELETE");
                 sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
                 return;
             }
@@ -189,6 +197,16 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         "MCP-Protocol-Version must match a supported negotiated version"));
                 return;
             }
+            try {
+                if (!method.equals("initialize") && !validateMcpSession(exchange)) return;
+            } catch (IllegalArgumentException invalid) {
+                sendJson(exchange, 200, mcpError(id, -32602, invalid.getMessage()));
+                return;
+            } catch (SQLException persistenceFailure) {
+                log.error("MCP session validation failed closed", persistenceFailure);
+                sendJson(exchange, 500, mcpError(id, -32603, "MCP session persistence unavailable"));
+                return;
+            }
             if (method.equals("notifications/initialized")) {
                 exchange.sendResponseHeaders(202, -1);
                 return;
@@ -198,7 +216,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 if (cancelledId != null && !cancelledId.isNull()) {
                     ToolContext context = mcpContext(exchange);
                     String reason = request.path("params").path("reason").asText("MCP_REQUEST_CANCELLED");
-                    toolGateway.cancel(context, mcpCallId(context, cancelledId), reason);
+                    toolGateway.cancel(context, mcpCallId(exchange, context, cancelledId), reason);
                 }
                 exchange.sendResponseHeaders(202, -1);
                 return;
@@ -213,7 +231,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     return;
                 }
                 ObjectNode result = switch (method) {
-                    case "initialize" -> mcpInitialize(request.path("params"));
+                    case "initialize" -> mcpInitialize(exchange, request.path("params"));
                     case "ping" -> Json.object();
                     case "tools/list" -> mcpTools(exchange);
                     case "tools/call" -> mcpToolCall(exchange, request.path("params"), id);
@@ -233,15 +251,62 @@ public final class RuntimeHealthServer implements AutoCloseable {
         }
     }
 
-    private static ObjectNode mcpInitialize(JsonNode params) {
+    private ObjectNode mcpInitialize(HttpExchange exchange, JsonNode params) throws SQLException {
         String requested = params.path("protocolVersion").asText("");
         String negotiated = supportedMcpVersion(requested) ? requested : "2025-06-18";
+        if (mcpSessions != null) {
+            String session = mcpSessions.create(mcpContext(exchange), negotiated);
+            exchange.getResponseHeaders().set("Mcp-Session-Id", session);
+        }
         ObjectNode result = Json.object().put("protocolVersion", negotiated);
         ObjectNode capabilities = Json.object();
         capabilities.set("tools", Json.object().put("listChanged", false));
         result.set("capabilities", capabilities);
         result.set("serverInfo", Json.object().put("name", "mcac-runtime").put("version", "0.3.0"));
         return result;
+    }
+
+    private boolean validateMcpSession(HttpExchange exchange) throws IOException, SQLException {
+        if (mcpSessions == null) return true;
+        String version = exchange.getRequestHeaders().getFirst("MCP-Protocol-Version");
+        McpSessionRepository.Status status = mcpSessions.validate(
+                exchange.getRequestHeaders().getFirst("Mcp-Session-Id"), mcpContext(exchange), version);
+        if (status == McpSessionRepository.Status.ACTIVE) return true;
+        if (status == McpSessionRepository.Status.MISSING) {
+            sendJson(exchange, 400, Json.object().put("code", "MCP_SESSION_REQUIRED"));
+        } else {
+            sendJson(exchange, 404, Json.object().put("code", "MCP_SESSION_NOT_FOUND"));
+        }
+        return false;
+    }
+
+    private void mcpDelete(HttpExchange exchange) throws IOException {
+        try {
+            String version = exchange.getRequestHeaders().getFirst("MCP-Protocol-Version");
+            if (!supportedMcpVersion(version)) {
+                sendJson(exchange, 400, Json.object().put("code", "MCP_PROTOCOL_VERSION_REQUIRED"));
+                return;
+            }
+            if (mcpSessions == null) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+            String session = exchange.getRequestHeaders().getFirst("Mcp-Session-Id");
+            if (session == null || session.isBlank()) {
+                sendJson(exchange, 400, Json.object().put("code", "MCP_SESSION_REQUIRED"));
+                return;
+            }
+            if (!mcpSessions.terminate(session, mcpContext(exchange), version)) {
+                sendJson(exchange, 404, Json.object().put("code", "MCP_SESSION_NOT_FOUND"));
+                return;
+            }
+            exchange.sendResponseHeaders(204, -1);
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 400, Json.object().put("code", "INVALID_MCP_IDENTITY"));
+        } catch (SQLException persistenceFailure) {
+            log.error("MCP session termination failed closed", persistenceFailure);
+            sendJson(exchange, 500, Json.object().put("code", "MCP_SESSION_PERSISTENCE_UNAVAILABLE"));
+        }
     }
 
     private static boolean supportedMcpVersion(String version) {
@@ -263,7 +328,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         String name = requiredText(params, "name", 64);
         JsonNode arguments = params.path("arguments");
         if (arguments.isMissingNode()) arguments = Json.object();
-        String callId = mcpCallId(context, requestId);
+        String callId = mcpCallId(exchange, context, requestId);
         ToolCall call = new ToolCall(callId, name, arguments);
         ToolResult replayed = acquireMcpCall(call);
         if (replayed != null) return mcpToolResult(replayed);
@@ -280,7 +345,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         String name = requiredText(params, "name", 64);
         JsonNode arguments = params.path("arguments");
         if (arguments.isMissingNode()) arguments = Json.object();
-        ToolCall call = new ToolCall(mcpCallId(context, requestId), name, arguments);
+        ToolCall call = new ToolCall(mcpCallId(exchange, context, requestId), name, arguments);
         JsonNode progressToken = params.path("_meta").get("progressToken");
         ToolResult replayed = acquireMcpCall(call);
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
@@ -389,20 +454,36 @@ public final class RuntimeHealthServer implements AutoCloseable {
         output.flush();
     }
 
-    private static String mcpCallId(ToolContext context, JsonNode requestId) {
+    private static String mcpCallId(HttpExchange exchange, ToolContext context, JsonNode requestId) {
+        String session = exchange.getRequestHeaders().getFirst("Mcp-Session-Id");
+        String sessionHash = session == null ? "legacy" : Digests.sha256(session);
         String identity = context.controllerId() + '\n' + context.brainSessionId() + '\n'
-                + context.companionId() + '\n' + Json.write(requestId);
+                + context.companionId() + '\n' + sessionHash + '\n' + Json.write(requestId);
         return "mcp-" + java.util.UUID.nameUUIDFromBytes(identity.getBytes(StandardCharsets.UTF_8));
     }
 
     private static ToolContext mcpContext(HttpExchange exchange) {
-        String companionId = exchange.getRequestHeaders().getFirst("X-MCAC-Companion-Id");
-        String brainSessionId = exchange.getRequestHeaders().getFirst("X-MCAC-Brain-Session-Id");
+        String companionId = requiredIdentityHeader(exchange, "X-MCAC-Companion-Id");
+        String brainSessionId = requiredIdentityHeader(exchange, "X-MCAC-Brain-Session-Id");
         String controllerId = exchange.getRequestHeaders().getFirst("X-MCAC-Controller-Id");
-        if (companionId == null || brainSessionId == null) {
-            throw new IllegalArgumentException("X-MCAC-Companion-Id and X-MCAC-Brain-Session-Id are required");
+        if (controllerId == null) controllerId = "mcp";
+        else validateIdentityHeader("X-MCAC-Controller-Id", controllerId);
+        return new ToolContext(controllerId, brainSessionId, companionId);
+    }
+
+    private static String requiredIdentityHeader(HttpExchange exchange, String name) {
+        String value = exchange.getRequestHeaders().getFirst(name);
+        if (value == null) throw new IllegalArgumentException(
+                "X-MCAC-Companion-Id and X-MCAC-Brain-Session-Id are required");
+        validateIdentityHeader(name, value);
+        return value;
+    }
+
+    private static void validateIdentityHeader(String name, String value) {
+        if (value.isBlank() || value.length() > 128 || value.chars().anyMatch(character ->
+                character < 0x21 || character > 0x7e)) {
+            throw new IllegalArgumentException(name + " must contain 1..128 visible ASCII characters");
         }
-        return new ToolContext(controllerId == null ? "mcp" : controllerId, brainSessionId, companionId);
     }
 
     private static ObjectNode mcpResult(JsonNode id, JsonNode result) {

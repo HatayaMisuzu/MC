@@ -16,6 +16,7 @@ $gameErrFile = Join-Path $runtimeHome 'fabric-gametest.err.log'
 $runtimeDatabase = Join-Path $runtimeHome 'data\companion.db'
 $crashWindowSource = Join-Path $root 'tools\fault-injection\SqliteTaskGraphCrashWindow.java'
 $crashWindowClasses = Join-Path $runtimeHome 'fault-injection-classes'
+$script:mcpSessions = @{}
 
 if (-not (Test-Path -LiteralPath $runtimeBat)) {
     throw 'Runtime distribution is missing; run :runtime:runtime-app:installDist first.'
@@ -169,6 +170,46 @@ function Invoke-ExternalBrainRequest([string]$pairingToken, [string]$companionId
     } -ContentType 'application/json' -Body $body -TimeoutSec 60
 }
 
+function Get-McpSession(
+    [string]$pairingToken,
+    [string]$companionId,
+    [string]$brainSessionId
+) {
+    $key = "$brainSessionId`n$companionId"
+    if ($script:mcpSessions.ContainsKey($key)) { return $script:mcpSessions[$key] }
+    $client = [Net.Http.HttpClient]::new()
+    try {
+        $request = [Net.Http.HttpRequestMessage]::new(
+            [Net.Http.HttpMethod]::Post, 'http://127.0.0.1:18766/mcp')
+        $null = $request.Headers.TryAddWithoutValidation('Authorization', "Bearer $pairingToken")
+        $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Controller-Id', 'representative-e2e')
+        $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Brain-Session-Id', $brainSessionId)
+        $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Companion-Id', $companionId)
+        $body = @{
+            jsonrpc = '2.0'; id = "init-$([Guid]::NewGuid())"; method = 'initialize'
+            params = @{
+                protocolVersion = '2025-06-18'; capabilities = @{}
+                clientInfo = @{ name = 'mcac-representative-e2e'; version = 'test' }
+            }
+        } | ConvertTo-Json -Compress -Depth 10
+        $request.Content = [Net.Http.StringContent]::new(
+            $body, [Text.Encoding]::UTF8, 'application/json')
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        try {
+            $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            if (-not $response.IsSuccessStatusCode) { throw "MCP initialize failed: $content" }
+            $session = [string]($response.Headers.GetValues('Mcp-Session-Id') | Select-Object -First 1)
+            if ([string]::IsNullOrWhiteSpace($session)) { throw 'MCP initialize returned no session id.' }
+            $script:mcpSessions[$key] = $session
+            return $session
+        } finally {
+            $response.Dispose()
+        }
+    } finally {
+        $client.Dispose()
+    }
+}
+
 function Invoke-McpTool(
     [string]$pairingToken,
     [string]$companionId,
@@ -187,6 +228,7 @@ function Invoke-McpTool(
     $reply = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18766/mcp' -Headers @{
         Authorization = "Bearer $pairingToken"
         'MCP-Protocol-Version' = '2025-06-18'
+        'Mcp-Session-Id' = (Get-McpSession $pairingToken $companionId $brainSessionId)
         'X-MCAC-Controller-Id' = 'representative-e2e'
         'X-MCAC-Brain-Session-Id' = $brainSessionId
         'X-MCAC-Companion-Id' = $companionId
@@ -205,9 +247,17 @@ function Get-McpCallId(
     [string]$controllerId,
     [string]$brainSessionId,
     [string]$companionId,
+    [string]$mcpSessionId,
     [string]$requestId
 ) {
-    $identity = "$controllerId`n$brainSessionId`n$companionId`n$($requestId | ConvertTo-Json -Compress)"
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $sessionHash = -join ($sha256.ComputeHash(
+            [Text.Encoding]::UTF8.GetBytes($mcpSessionId)) | ForEach-Object { $_.ToString('x2') })
+    } finally {
+        $sha256.Dispose()
+    }
+    $identity = "$controllerId`n$brainSessionId`n$companionId`n$sessionHash`n$($requestId | ConvertTo-Json -Compress)"
     $md5 = [Security.Cryptography.MD5]::Create()
     try {
         $hash = $md5.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity))
@@ -240,6 +290,8 @@ function Start-McpToolRequest(
         [Net.Http.HttpMethod]::Post, 'http://127.0.0.1:18766/mcp')
     $null = $request.Headers.TryAddWithoutValidation('Authorization', "Bearer $pairingToken")
     $null = $request.Headers.TryAddWithoutValidation('MCP-Protocol-Version', '2025-06-18')
+    $mcpSessionId = Get-McpSession $pairingToken $companionId $brainSessionId
+    $null = $request.Headers.TryAddWithoutValidation('Mcp-Session-Id', $mcpSessionId)
     $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Controller-Id', 'representative-e2e')
     $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Brain-Session-Id', $brainSessionId)
     $null = $request.Headers.TryAddWithoutValidation('X-MCAC-Companion-Id', $companionId)
@@ -248,7 +300,7 @@ function Start-McpToolRequest(
         client = $client
         request = $request
         task = $client.SendAsync($request)
-        callId = Get-McpCallId 'representative-e2e' $brainSessionId $companionId $requestId
+        callId = Get-McpCallId 'representative-e2e' $brainSessionId $companionId $mcpSessionId $requestId
     }
 }
 

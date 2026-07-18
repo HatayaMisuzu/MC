@@ -6,9 +6,9 @@ MCAC Runtime exposes a local, authenticated MCP Streamable HTTP endpoint at:
 http://127.0.0.1:<management_port>/mcp
 ```
 
-It supports MCP `2025-03-26` and `2025-06-18`. The endpoint is stateless at the HTTP
-transport layer; MCAC binds every tool operation to explicit controller, Brain-session, and
-companion identities. It exposes only bounded MCAC tools and never exposes a shell, arbitrary
+It supports MCP `2025-03-26` and `2025-06-18`. Runtime uses the standard stateful Streamable
+HTTP lifecycle and binds every session and tool operation to explicit controller, Brain-session,
+and companion identities. It exposes only bounded MCAC tools and never exposes a shell, arbitrary
 files, arbitrary URLs, credentials, cookies, direct world editing, or direct inventory editing.
 
 ## Authentication and identity
@@ -19,13 +19,16 @@ Every HTTP request requires the Runtime pairing token:
 Authorization: Bearer <pairing token>
 ```
 
-After `initialize`, every request also requires the negotiated version:
+`initialize` requires the three identity headers below. Its successful HTTP response contains a
+cryptographically random opaque `Mcp-Session-Id`; only its SHA-256 hash is persisted. Every later
+request requires both that session bearer and the negotiated version:
 
 ```text
+Mcp-Session-Id: <initialize response header>
 MCP-Protocol-Version: 2025-06-18
 ```
 
-`tools/list`, `tools/call`, and `notifications/cancelled` require:
+`initialize`, `tools/list`, `tools/call`, and `notifications/cancelled` require:
 
 ```text
 X-MCAC-Controller-Id: hermes
@@ -35,12 +38,14 @@ X-MCAC-Companion-Id: <connected companion UUID>
 
 The controller header is optional and defaults to `mcp`; Brain-session and companion headers
 are mandatory. These headers are routing claims, not sufficient proof of identity by themselves.
-Runtime also binds calls to the authenticated pairing context and durable session/task state.
+Runtime binds the opaque session to their exact values, the negotiated version, the authenticated
+pairing context, an eight-hour absolute expiry, and durable session/task state. Cross-scope,
+expired, terminated, and unknown bearers return HTTP 404 without revealing which field differed.
 A client must not reuse one Brain-session ID across independent users or tasks.
 
 ## Lifecycle
 
-Initialize without `MCP-Protocol-Version`:
+Initialize without `MCP-Protocol-Version` or `Mcp-Session-Id`, but with the identity headers:
 
 ```json
 {"jsonrpc":"2.0","id":"init-1","method":"initialize","params":{
@@ -49,9 +54,10 @@ Initialize without `MCP-Protocol-Version`:
 }}
 ```
 
-Then send `notifications/initialized` with the negotiated protocol header. Tool discovery uses
-the identity headers and returns only tools currently allowed by Runtime configuration and the
-connected Fabric body's capability report:
+Retain the `Mcp-Session-Id` response header. Then send `notifications/initialized` with that
+session and the negotiated protocol header. Tool discovery uses the bound identity and returns
+only tools currently allowed by Runtime configuration and the connected Fabric body's capability
+report:
 
 ```json
 {"jsonrpc":"2.0","id":"list-1","method":"tools/list","params":{}}
@@ -107,6 +113,10 @@ ledger entry to `MCP_REQUEST_RECONCILIATION_REQUIRED` rather than guessing wheth
 effect occurred. A replay-ledger database failure is fail-closed before dispatch, or quarantines a
 result-persistence failure for reconciliation.
 
+Clients can explicitly end the scoped session with HTTP `DELETE /mcp`, carrying the same
+authorization, identity, version, and session headers. Runtime returns 204 and rejects later use
+of that bearer. Session rows survive Runtime restart until termination or absolute expiry.
+
 Tool calls, progress, terminal results, task/behavior revisions, and delivery state use the
 existing durable MCAC audit path. The authenticated `/brain/audit` endpoint is the current audit
 inspection surface.
@@ -126,7 +136,6 @@ the common server-map shape, the equivalent connection is:
       "url": "http://127.0.0.1:18766/mcp",
       "headers": {
         "Authorization": "Bearer ${MCAC_PAIRING_TOKEN}",
-        "MCP-Protocol-Version": "2025-06-18",
         "X-MCAC-Controller-Id": "hermes",
         "X-MCAC-Brain-Session-Id": "${MCAC_BRAIN_SESSION_ID}",
         "X-MCAC-Companion-Id": "${MCAC_COMPANION_ID}"
@@ -136,19 +145,24 @@ the common server-map shape, the equivalent connection is:
 }
 ```
 
+The MCP client must retain the server-provided session header and add it, together with
+`MCP-Protocol-Version`, to later requests. A conforming `2025-06-18` Streamable HTTP client does
+this automatically; `Mcp-Session-Id` must not be hard-coded in configuration.
+
 The exact configuration keys depend on the Hermes release. Treat this as the connection contract,
 not as proof that an unverified Hermes build accepts a particular configuration-file shape. The
 MCAC Terminal Doctor performs a live local negotiation and bounded-tool check before use.
 
 ## Current protocol limits
 
-- Full lease expiry, a cryptographic per-client identity/nonce protocol, progress-resume token,
-  and cross-companion authorization remain tracked as `PARTIAL`; this document does not claim
-  they are complete. The durable request ledger prevents exact Tool-call redispatch but does not
-  turn caller-supplied identity headers into cryptographic identity proof.
+- A separately provisioned long-term client identity, explicit request nonce beyond the
+  session-scoped JSON-RPC ID, progress-resume token, and user-to-companion authorization policy
+  remain tracked as `PARTIAL`. The random bearer and durable request ledger prevent cross-scope
+  session use and exact Tool-call redispatch, but the identity labels are not a separate user
+  identity system.
 - SSE event replay/resumption is not implemented; reconnect and reconcile through durable task
   and audit state.
-- HTTP transport sessions are stateless; MCAC identity and task state remain durable.
+- Session lifetime and retention policy are fixed rather than user-configurable.
 - Live concurrent cancellation with a real Hermes process remains external verification.
 - Search tools appear only when Search is configured and authorized; they accept bounded queries
   and source IDs, never arbitrary URL fetches.

@@ -17,6 +17,9 @@ import java.util.UUID;
 
 /** Typed memory store. Inferences cannot overwrite verified facts. */
 public final class MemoryRepository {
+    private static final int MAX_VALUE_CHARS = 16_384;
+    private static final int MAX_QUARANTINED_SUGGESTIONS = 128;
+    private static final Duration MAX_WORKING_TTL = Duration.ofHours(24);
     private final RuntimeDatabase database;
     private final Clock clock;
 
@@ -32,28 +35,51 @@ public final class MemoryRepository {
     public MemoryFact remember(String companionId, MemoryKind kind, String key, JsonNode value,
                                boolean verified, double confidence, Duration ttl, String source) throws SQLException {
         if (confidence < 0 || confidence > 1 || Double.isNaN(confidence)) throw new IllegalArgumentException("confidence must be 0..1");
+        java.util.Objects.requireNonNull(kind, "kind");
+        JsonNode boundedValue = value == null ? Json.object() : value;
+        if (Json.write(boundedValue).length() > MAX_VALUE_CHARS) {
+            throw new IllegalArgumentException("memory value exceeds 16384 characters");
+        }
+        if (kind == MemoryKind.WORKING && (ttl == null || ttl.isZero() || ttl.isNegative()
+                || ttl.compareTo(MAX_WORKING_TTL) > 0)) {
+            throw new IllegalArgumentException("working memory ttl must be 1 second..24 hours");
+        }
         long now = clock.millis();
         Long expires = ttl == null ? null : Math.addExact(now, ttl.toMillis());
         try (var connection = database.open()) {
-            MemoryFact existing = find(connection, companionId, kind, key, now);
-            if (existing != null && existing.verified() && !verified) return existing;
-            String id = existing == null ? UUID.randomUUID().toString() : existing.memoryId();
-            try (PreparedStatement statement = connection.prepareStatement("""
-                    INSERT INTO memory_fact(memory_id,companion_id,kind,fact_key,value_json,verified,confidence,source,expires_at,created_at,updated_at)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(companion_id,kind,fact_key) DO UPDATE SET value_json=excluded.value_json,
-                    verified=excluded.verified,confidence=excluded.confidence,source=excluded.source,
-                    expires_at=excluded.expires_at,updated_at=excluded.updated_at
-                    """)) {
-                statement.setString(1, id); statement.setString(2, required(companionId)); statement.setString(3, kind.name());
-                statement.setString(4, required(key)); statement.setString(5, Json.write(value == null ? Json.object() : value));
-                statement.setInt(6, verified ? 1 : 0); statement.setDouble(7, confidence);
-                statement.setString(8, required(source));
-                if (expires == null) statement.setNull(9, java.sql.Types.BIGINT); else statement.setLong(9, expires);
-                statement.setLong(10, existing == null ? now : existing.createdAt().toEpochMilli()); statement.setLong(11, now);
-                statement.executeUpdate();
+            connection.setAutoCommit(false);
+            try {
+                MemoryFact existing = find(connection, companionId, kind, key, now);
+                if (existing == null) ensureCapacity(connection, companionId, kind, now);
+                if (existing != null && existing.verified() && !verified) {
+                    connection.commit();
+                    return existing;
+                }
+                String id = existing == null ? UUID.randomUUID().toString() : existing.memoryId();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO memory_fact(memory_id,companion_id,kind,fact_key,value_json,verified,confidence,source,expires_at,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                        ON CONFLICT(companion_id,kind,fact_key) DO UPDATE SET value_json=excluded.value_json,
+                        verified=excluded.verified,confidence=excluded.confidence,source=excluded.source,
+                        expires_at=excluded.expires_at,updated_at=excluded.updated_at
+                        """)) {
+                    statement.setString(1, id); statement.setString(2, required(companionId)); statement.setString(3, kind.name());
+                    statement.setString(4, required(key)); statement.setString(5, Json.write(boundedValue));
+                    statement.setInt(6, verified ? 1 : 0); statement.setDouble(7, confidence);
+                    statement.setString(8, required(source));
+                    if (expires == null) statement.setNull(9, java.sql.Types.BIGINT); else statement.setLong(9, expires);
+                    statement.setLong(10, existing == null ? now : existing.createdAt().toEpochMilli()); statement.setLong(11, now);
+                    statement.executeUpdate();
+                }
+                MemoryFact remembered = find(connection, companionId, kind, key, now);
+                connection.commit();
+                return remembered;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
             }
-            return find(connection, companionId, kind, key, now);
         }
     }
 
@@ -79,23 +105,47 @@ public final class MemoryRepository {
         long now = clock.millis();
         long expires = Math.addExact(now, ttl.toMillis());
         String id = UUID.randomUUID().toString();
-        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
-                INSERT INTO memory_suggestion(suggestion_id,companion_id,kind,suggestion_key,value_json,
-                confidence,status,source,brain_session_id,expires_at,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,'QUARANTINED',?,?,?,?,?)
-                """)) {
-            statement.setString(1, id);
-            statement.setString(2, required(companionId));
-            statement.setString(3, java.util.Objects.requireNonNull(kind, "kind").name());
-            statement.setString(4, required(key));
-            statement.setString(5, Json.write(boundedValue));
-            statement.setDouble(6, confidence);
-            statement.setString(7, required(source));
-            statement.setString(8, required(brainSessionId));
-            statement.setLong(9, expires);
-            statement.setLong(10, now);
-            statement.setLong(11, now);
-            statement.executeUpdate();
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                deleteExpiredSuggestions(connection, now);
+                try (PreparedStatement count = connection.prepareStatement("""
+                        SELECT COUNT(*) FROM memory_suggestion
+                        WHERE companion_id=? AND status='QUARANTINED' AND expires_at>?
+                        """)) {
+                    count.setString(1, required(companionId));
+                    count.setLong(2, now);
+                    try (ResultSet result = count.executeQuery()) {
+                        if (result.next() && result.getInt(1) >= MAX_QUARANTINED_SUGGESTIONS) {
+                            throw new IllegalStateException("memory suggestion quarantine capacity reached");
+                        }
+                    }
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO memory_suggestion(suggestion_id,companion_id,kind,suggestion_key,value_json,
+                        confidence,status,source,brain_session_id,expires_at,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,'QUARANTINED',?,?,?,?,?)
+                        """)) {
+                    statement.setString(1, id);
+                    statement.setString(2, required(companionId));
+                    statement.setString(3, java.util.Objects.requireNonNull(kind, "kind").name());
+                    statement.setString(4, required(key));
+                    statement.setString(5, Json.write(boundedValue));
+                    statement.setDouble(6, confidence);
+                    statement.setString(7, required(source));
+                    statement.setString(8, required(brainSessionId));
+                    statement.setLong(9, expires);
+                    statement.setLong(10, now);
+                    statement.setLong(11, now);
+                    statement.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
         }
         return suggestion(id).orElseThrow();
     }
@@ -299,6 +349,49 @@ public final class MemoryRepository {
                 suggestions.setLong(1, now);
                 return expired + suggestions.executeUpdate();
             }
+        }
+    }
+
+    private static void ensureCapacity(java.sql.Connection connection, String companionId,
+                                       MemoryKind kind, long now) throws SQLException {
+        int maximum = switch (kind) {
+            case WORKING, PREFERENCE -> 128;
+            case EPISODIC -> 512;
+            case WORLD -> 1_024;
+        };
+        try (PreparedStatement count = connection.prepareStatement("""
+                SELECT COUNT(*) FROM memory_fact
+                WHERE companion_id=? AND kind=? AND (expires_at IS NULL OR expires_at>?)
+                """)) {
+            count.setString(1, required(companionId));
+            count.setString(2, kind.name());
+            count.setLong(3, now);
+            try (ResultSet result = count.executeQuery()) {
+                if (!result.next() || result.getInt(1) < maximum) return;
+            }
+        }
+        if (kind != MemoryKind.WORKING) {
+            throw new IllegalStateException("memory capacity reached for " + kind.name());
+        }
+        try (PreparedStatement evict = connection.prepareStatement("""
+                DELETE FROM memory_fact WHERE memory_id=(
+                  SELECT memory_id FROM memory_fact
+                  WHERE companion_id=? AND kind='WORKING'
+                    AND (expires_at IS NULL OR expires_at>?)
+                  ORDER BY updated_at ASC,memory_id ASC LIMIT 1
+                )
+                """)) {
+            evict.setString(1, companionId);
+            evict.setLong(2, now);
+            if (evict.executeUpdate() != 1) throw new IllegalStateException("working memory capacity reconciliation failed");
+        }
+    }
+
+    private static int deleteExpiredSuggestions(java.sql.Connection connection, long now) throws SQLException {
+        try (PreparedStatement suggestions = connection.prepareStatement(
+                "DELETE FROM memory_suggestion WHERE expires_at<=?")) {
+            suggestions.setLong(1, now);
+            return suggestions.executeUpdate();
         }
     }
 

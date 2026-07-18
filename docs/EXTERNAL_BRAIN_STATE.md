@@ -65,6 +65,11 @@ release/install verification remain incomplete.
   `USER_APPROVED_SUGGESTION` provenance and closes the candidate, while reject closes it without
   writing Memory. Both actions require the loopback Terminal's authenticated, CSRF-protected
   management path and exact companion scope; the external Brain has no review Tool.
+- Repository policy requires every `WORKING` fact to expire within 24 hours and keeps at most
+  128 per companion by evicting the oldest active entry. Durable categories fail closed at
+  explicit per-companion limits (`PREFERENCE` 128, `EPISODIC` 512, `WORLD` 1024) instead of
+  silently deleting verified facts; values are capped at 16 KiB and live quarantined suggestions
+  at 128. Runtime removes expired facts and suggestions at startup and every 60 seconds.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,
   exposes verification provenance/time, marks same- versus cross-dimension candidates, and
   filters unverified inferences instead of presenting them as world facts.

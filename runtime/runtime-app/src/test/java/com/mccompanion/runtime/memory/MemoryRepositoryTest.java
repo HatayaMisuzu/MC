@@ -149,4 +149,48 @@ class MemoryRepositoryTest {
             assertTrue(repository.relevant("c1", MemoryKind.PREFERENCE, 10).isEmpty());
         }
     }
+
+    @Test
+    void workingMemoryRequiresBoundedTtlAndEvictsOldestAtCapacity() throws Exception {
+        Instant now = Instant.parse("2026-07-15T00:00:00Z");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("working-capacity.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database, Clock.fixed(now, ZoneOffset.UTC));
+            assertThrows(IllegalArgumentException.class, () -> repository.remember(
+                    "c1", MemoryKind.WORKING, "permanent", Json.object(), false, 0.5, null));
+            assertThrows(IllegalArgumentException.class, () -> repository.remember(
+                    "c1", MemoryKind.WORKING, "too-long", Json.object(), false, 0.5,
+                    Duration.ofHours(25)));
+            for (int index = 0; index < 129; index++) {
+                MemoryRepository writer = new MemoryRepository(database,
+                        Clock.fixed(now.plusSeconds(index), ZoneOffset.UTC));
+                writer.remember("c1", MemoryKind.WORKING, "working:" + index,
+                        Json.object().put("index", index), false, 0.5, Duration.ofHours(1));
+            }
+            MemoryRepository reader = new MemoryRepository(database,
+                    Clock.fixed(now.plusSeconds(129), ZoneOffset.UTC));
+            var retained = reader.relevant("c1", MemoryKind.WORKING, 200);
+            assertEquals(100, retained.size(), "read APIs retain their independent 100 row bound");
+            assertTrue(reader.search("c1", MemoryKind.WORKING, "working:0", 10).isEmpty());
+            assertEquals(1, reader.search("c1", MemoryKind.WORKING, "working:128", 10).size());
+        }
+    }
+
+    @Test
+    void durableMemoryCapacityFailsClosedInsteadOfDeletingVerifiedFacts() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("durable-capacity.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            for (int index = 0; index < 128; index++) {
+                repository.remember("c1", MemoryKind.PREFERENCE, "preference:" + index,
+                        Json.object().put("index", index), true, 1.0, null, "USER");
+            }
+            assertThrows(IllegalStateException.class, () -> repository.remember(
+                    "c1", MemoryKind.PREFERENCE, "overflow", Json.object(), true, 1.0, null, "USER"));
+            MemoryFact retained = repository.remember("c1", MemoryKind.PREFERENCE, "preference:0",
+                    Json.object().put("index", -1), false, 0.1, null, "INFERENCE");
+            assertTrue(retained.verified());
+            assertEquals(0, retained.value().path("index").asInt());
+        }
+    }
 }

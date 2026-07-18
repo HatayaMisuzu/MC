@@ -165,6 +165,7 @@ public final class RuntimeApplication implements AutoCloseable {
             TaskGraphExecutionRepository taskGraphs = new TaskGraphExecutionRepository(database);
             AgentPlanRepository plans = new AgentPlanRepository(database);
             MemoryRepository memories = new MemoryRepository(database);
+            int expiredMemories = memories.expire();
             LeaseService leases = new LeaseService(database);
             int invalidatedLeases = leases.invalidateRecoveredLeases();
             sessions = new SessionRegistry(database, companions, log);
@@ -239,7 +240,7 @@ public final class RuntimeApplication implements AutoCloseable {
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
                     || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0
                     || interruptedMcpRequests > 0 || expiredMcpSessions > 0 || prunedMcpEvents > 0
-                    || expiredSearchSessions > 0) {
+                    || expiredSearchSessions > 0 || expiredMemories > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
@@ -248,7 +249,8 @@ public final class RuntimeApplication implements AutoCloseable {
                         + ", interruptedMcpRequests=" + interruptedMcpRequests
                         + ", expiredMcpSessions=" + expiredMcpSessions
                         + ", prunedMcpEvents=" + prunedMcpEvents
-                        + ", expiredSearchSessions=" + expiredSearchSessions);
+                        + ", expiredSearchSessions=" + expiredSearchSessions
+                        + ", expiredMemories=" + expiredMemories);
             }
 
             webSocket = new RuntimeWebSocketServer(
@@ -291,6 +293,14 @@ public final class RuntimeApplication implements AutoCloseable {
                     log.error("Runtime maintenance iteration failed", failure);
                 }
             }, 5, 5, TimeUnit.SECONDS);
+            maintenance.scheduleWithFixedDelay(() -> {
+                try {
+                    int expired = memories.expire();
+                    if (expired > 0) log.info("Expired Memory records: " + expired);
+                } catch (java.sql.SQLException failure) {
+                    log.error("Memory expiry maintenance failed", failure);
+                }
+            }, 60, 60, TimeUnit.SECONDS);
 
             final RuntimeApplication[] holder = new RuntimeApplication[1];
             if (enableCli) {

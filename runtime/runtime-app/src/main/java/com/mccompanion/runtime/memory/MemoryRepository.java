@@ -120,6 +120,76 @@ public final class MemoryRepository {
         }
     }
 
+    /**
+     * Promotes one still-live quarantined candidate through a local-user-only management path.
+     * The fact write and review transition share one transaction, so a crash cannot expose a
+     * verified fact while leaving the candidate actionable.
+     */
+    public MemoryFact approveSuggestion(String companionId, String suggestionId, String reviewedBy)
+            throws SQLException {
+        long now = clock.millis();
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                MemorySuggestion candidate = suggestion(connection, companionId, suggestionId);
+                requireReviewable(candidate, now);
+                MemoryFact existing = find(connection, companionId, candidate.kind(), candidate.key(), now);
+                String memoryId = existing == null ? UUID.randomUUID().toString() : existing.memoryId();
+                long createdAt = existing == null ? now : existing.createdAt().toEpochMilli();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO memory_fact(memory_id,companion_id,kind,fact_key,value_json,verified,
+                        confidence,source,expires_at,created_at,updated_at)
+                        VALUES(?,?,?,?,?,1,1.0,?,?,?,?)
+                        ON CONFLICT(companion_id,kind,fact_key) DO UPDATE SET value_json=excluded.value_json,
+                        verified=1,confidence=1.0,source=excluded.source,expires_at=excluded.expires_at,
+                        updated_at=excluded.updated_at
+                        """)) {
+                    statement.setString(1, memoryId);
+                    statement.setString(2, candidate.companionId());
+                    statement.setString(3, candidate.kind().name());
+                    statement.setString(4, candidate.key());
+                    statement.setString(5, Json.write(candidate.value()));
+                    statement.setString(6, "USER_APPROVED_SUGGESTION");
+                    statement.setLong(7, candidate.expiresAt().toEpochMilli());
+                    statement.setLong(8, createdAt);
+                    statement.setLong(9, now);
+                    statement.executeUpdate();
+                }
+                transitionSuggestion(connection, candidate.suggestionId(), "APPROVED",
+                        required(reviewedBy), null, now);
+                MemoryFact promoted = find(connection, companionId, candidate.kind(), candidate.key(), now);
+                connection.commit();
+                return promoted;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    public MemorySuggestion rejectSuggestion(String companionId, String suggestionId,
+                                             String reviewedBy, String reason) throws SQLException {
+        long now = clock.millis();
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                MemorySuggestion candidate = suggestion(connection, companionId, suggestionId);
+                requireReviewable(candidate, now);
+                transitionSuggestion(connection, candidate.suggestionId(), "REJECTED",
+                        required(reviewedBy), required(reason), now);
+                connection.commit();
+                return suggestion(connection, companionId, suggestionId);
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
     private java.util.Optional<MemorySuggestion> suggestion(String suggestionId) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
                 "SELECT * FROM memory_suggestion WHERE suggestion_id=?")) {
@@ -127,6 +197,46 @@ public final class MemoryRepository {
             try (ResultSet result = statement.executeQuery()) {
                 return result.next() ? java.util.Optional.of(readSuggestion(result)) : java.util.Optional.empty();
             }
+        }
+    }
+
+    private static MemorySuggestion suggestion(java.sql.Connection connection, String companionId,
+                                               String suggestionId) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM memory_suggestion WHERE companion_id=? AND suggestion_id=?
+                """)) {
+            statement.setString(1, required(companionId));
+            statement.setString(2, required(suggestionId));
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) throw new IllegalArgumentException("memory suggestion was not found in companion scope");
+                return readSuggestion(result);
+            }
+        }
+    }
+
+    private static void requireReviewable(MemorySuggestion candidate, long now) {
+        if (!"QUARANTINED".equals(candidate.status())) {
+            throw new IllegalStateException("memory suggestion is already reviewed");
+        }
+        if (candidate.expiresAt().toEpochMilli() <= now) {
+            throw new IllegalStateException("memory suggestion has expired");
+        }
+    }
+
+    private static void transitionSuggestion(java.sql.Connection connection, String suggestionId,
+                                             String status, String reviewedBy, String reason, long now)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE memory_suggestion SET status=?,reviewed_by=?,review_reason=?,reviewed_at=?,updated_at=?
+                WHERE suggestion_id=? AND status='QUARANTINED'
+                """)) {
+            statement.setString(1, status);
+            statement.setString(2, reviewedBy);
+            if (reason == null) statement.setNull(3, java.sql.Types.VARCHAR); else statement.setString(3, reason);
+            statement.setLong(4, now);
+            statement.setLong(5, now);
+            statement.setString(6, suggestionId);
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("memory suggestion review raced");
         }
     }
 
@@ -264,7 +374,14 @@ public final class MemoryRepository {
                 result.getString("status"), result.getString("source"),
                 result.getString("brain_session_id"), Instant.ofEpochMilli(result.getLong("expires_at")),
                 Instant.ofEpochMilli(result.getLong("created_at")),
-                Instant.ofEpochMilli(result.getLong("updated_at")));
+                Instant.ofEpochMilli(result.getLong("updated_at")),
+                result.getString("reviewed_by"), result.getString("review_reason"),
+                nullableInstant(result, "reviewed_at"));
+    }
+
+    private static Instant nullableInstant(ResultSet result, String column) throws SQLException {
+        long value = result.getLong(column);
+        return result.wasNull() ? null : Instant.ofEpochMilli(value);
     }
 
     private static String required(String value) {

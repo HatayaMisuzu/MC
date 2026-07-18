@@ -58,6 +58,13 @@ final class RuntimeControlClient {
         return request(profile, "GET", path, null, timeout);
     }
 
+    JsonNode manage(RuntimeProfile profile, String path, JsonNode body, Duration timeout) throws IOException {
+        if (path == null || !path.startsWith("/") || path.contains("..") || path.contains("#")) {
+            throw new IllegalArgumentException("Runtime management path is invalid");
+        }
+        return request(profile, "POST", path, body == null ? "{}" : body.toString(), timeout);
+    }
+
     private JsonNode request(RuntimeProfile profile, String method, String path, String body, Duration timeout)
             throws IOException {
         String token = Files.readString(profile.profileDirectory().resolve("pairing.token"),

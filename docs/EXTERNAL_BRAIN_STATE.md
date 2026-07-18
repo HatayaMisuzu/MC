@@ -60,6 +60,11 @@ release/install verification remain incomplete.
   and `safety.inspect` explicitly excludes hostile threat scanning from its current result.
 - Added authenticated loopback memory list/search/export, user correction, delete, and
   per-category clear operations. Secret-shaped keys/values are rejected from Brain suggestions.
+- Schema migration 22 records local review identity, reason and time. The existing Brain page
+  lists only live quarantined candidates; approve atomically writes a verified fact with
+  `USER_APPROVED_SUGGESTION` provenance and closes the candidate, while reject closes it without
+  writing Memory. Both actions require the loopback Terminal's authenticated, CSRF-protected
+  management path and exact companion scope; the external Brain has no review Tool.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,
   exposes verification provenance/time, marks same- versus cross-dimension candidates, and
   filters unverified inferences instead of presenting them as world facts.

@@ -1,6 +1,6 @@
 import { RefreshCw, Send } from 'lucide-react'
 import { useState } from 'react'
-import { api } from '../api/client'
+import { api, post } from '../api/client'
 import { ActionButton } from '../components/ActionButton'
 import { EmptyState } from '../components/EmptyState'
 import { PageHeader } from '../components/PageHeader'
@@ -16,6 +16,8 @@ export function BrainPage() {
     : Promise.resolve({ instanceId: '', mode: 'SAFE_IDLE', companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [] }), [selectedId])
   const [selectedCompanion, setSelectedCompanion] = useState('')
   const [message, setMessage] = useState('')
+  const [reviewing, setReviewing] = useState('')
+  const [reviewError, setReviewError] = useState('')
   const companionId = companions.data?.companions.some((value) => value.id === selectedCompanion)
     ? selectedCompanion : companions.data?.companions[0]?.id ?? ''
   const status = useResource<BrainStatus>(() => selectedId
@@ -28,6 +30,24 @@ export function BrainPage() {
     ? api<MemorySnapshot>(`/api/memories?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
     : Promise.resolve({ companionId: '', byKind: {} }), [selectedId, companionId])
   const refresh = () => { void status.refresh(); void audit.refresh(); void memories.refresh(); void companions.refresh() }
+  const reviewSuggestion = async (suggestionId: string, action: 'approve_suggestion' | 'reject_suggestion') => {
+    setReviewing(suggestionId)
+    setReviewError('')
+    try {
+      await post('/api/memories/review', {
+        instanceId: selectedId,
+        companionId,
+        suggestionId,
+        action,
+        ...(action === 'reject_suggestion' ? { reason: 'Rejected by local user' } : {}),
+      })
+      await memories.refresh()
+    } catch (failure) {
+      setReviewError(failure instanceof Error ? failure.message : 'Memory review failed')
+    } finally {
+      setReviewing('')
+    }
+  }
   if (!selected) return <EmptyState title="Select an instance">External Brain status belongs to a Runtime profile.</EmptyState>
   const send = () => {
     const text = message.trim()
@@ -62,6 +82,20 @@ export function BrainPage() {
         <div className="event-rows">{Object.entries(memories.data?.byKind ?? {}).flatMap(([kind, facts]) => facts.map((fact) =>
           <div className="event-row" key={fact.memoryId}><time>{kind}</time><strong>{fact.key}</strong><StatusBadge value={fact.verified ? 'VERIFIED' : 'UNVERIFIED'} />
             <span>{fact.source} · {fact.confidence.toFixed(2)}</span><p>{JSON.stringify(fact.value)}</p></div>))}</div>
+      </section>
+      <section className="main-panel"><header className="panel-header"><h2>Quarantined memory suggestions</h2>
+        <span>local user review required</span></header>
+        <p>External Brain suggestions are untrusted and never enter verified Memory automatically.</p>
+        {reviewError && <p role="alert">{reviewError}</p>}
+        <div className="event-rows">{(memories.data?.suggestions ?? []).map((suggestion) =>
+          <div className="event-row" key={suggestion.suggestionId}><time>{suggestion.kind}</time><strong>{suggestion.key}</strong>
+            <StatusBadge value="QUARANTINED" /><span>{suggestion.source} · {suggestion.confidence.toFixed(2)}</span>
+            <p>{JSON.stringify(suggestion.value)}</p><div className="inline-actions">
+              <ActionButton tone="primary" disabled={reviewing === suggestion.suggestionId}
+                onClick={() => void reviewSuggestion(suggestion.suggestionId, 'approve_suggestion')}>Approve</ActionButton>
+              <ActionButton disabled={reviewing === suggestion.suggestionId}
+                onClick={() => void reviewSuggestion(suggestion.suggestionId, 'reject_suggestion')}>Reject</ActionButton>
+            </div></div>)}</div>
       </section>
     </>}
   </div>

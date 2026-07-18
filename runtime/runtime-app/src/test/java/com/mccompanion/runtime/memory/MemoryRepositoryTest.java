@@ -116,4 +116,37 @@ class MemoryRepositoryTest {
                     repository.suggestions("c1", "QUARANTINED", 10).getFirst().suggestionId());
         }
     }
+
+    @Test
+    void localReviewAtomicallyPromotesOrRejectsWithinCompanionScope() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("review.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            MemorySuggestion approved = repository.suggest("c1", MemoryKind.WORLD, "landmark:moon",
+                    Json.object().put("dimension", "examplemod:moon"), 0.5,
+                    Duration.ofDays(30), "EXTERNAL_BRAIN_SUGGESTION", "brain-1");
+            MemorySuggestion rejected = repository.suggest("c1", MemoryKind.PREFERENCE, "style",
+                    Json.object().put("value", "quiet"), 0.4,
+                    Duration.ofDays(30), "EXTERNAL_BRAIN_SUGGESTION", "brain-1");
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> repository.approveSuggestion("c2", approved.suggestionId(), "LOCAL_MANAGEMENT_USER"));
+            MemoryFact fact = repository.approveSuggestion(
+                    "c1", approved.suggestionId(), "LOCAL_MANAGEMENT_USER");
+            MemorySuggestion rejection = repository.rejectSuggestion(
+                    "c1", rejected.suggestionId(), "LOCAL_MANAGEMENT_USER", "not observed");
+
+            assertTrue(fact.verified());
+            assertEquals("USER_APPROVED_SUGGESTION", fact.source());
+            assertEquals("APPROVED", repository.suggestions("c1", "APPROVED", 10).getFirst().status());
+            assertEquals("LOCAL_MANAGEMENT_USER",
+                    repository.suggestions("c1", "APPROVED", 10).getFirst().reviewedBy());
+            assertEquals("REJECTED", rejection.status());
+            assertEquals("not observed", rejection.reviewReason());
+            assertThrows(IllegalStateException.class,
+                    () -> repository.approveSuggestion("c1", approved.suggestionId(), "LOCAL_MANAGEMENT_USER"));
+            assertEquals(1, repository.relevant("c1", MemoryKind.WORLD, 10).size());
+            assertTrue(repository.relevant("c1", MemoryKind.PREFERENCE, 10).isEmpty());
+        }
+    }
 }

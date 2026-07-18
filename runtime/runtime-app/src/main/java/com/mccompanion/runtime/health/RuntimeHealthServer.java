@@ -663,12 +663,27 @@ public final class RuntimeHealthServer implements AutoCloseable {
                             ObjectNode byKind = body.putObject("byKind");
                             for (MemoryKind kind : MemoryKind.values()) byKind.set(kind.name(),
                                     Json.MAPPER.valueToTree(memories.list(companionId, kind, 100)));
+                            body.set("suggestions", Json.MAPPER.valueToTree(
+                                    memories.suggestions(companionId, "QUARANTINED", 100)));
                         }
                     }
                     sendJson(exchange, 200, body); return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
                     JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    String action = request.path("action").asText("");
+                    if (!action.isBlank()) {
+                        String suggestionId = requiredText(request, "suggestionId", 256);
+                        Object result = switch (action) {
+                            case "approve_suggestion" -> memories.approveSuggestion(
+                                    companionId, suggestionId, "LOCAL_MANAGEMENT_USER");
+                            case "reject_suggestion" -> memories.rejectSuggestion(
+                                    companionId, suggestionId, "LOCAL_MANAGEMENT_USER",
+                                    requiredText(request, "reason", 256));
+                            default -> throw new IllegalArgumentException("memory review action is invalid");
+                        };
+                        sendJson(exchange, 200, Json.MAPPER.valueToTree(result)); return;
+                    }
                     MemoryKind kind = MemoryKind.valueOf(required(request, "kind").toUpperCase(java.util.Locale.ROOT));
                     String key = requiredText(request, "key", 256);
                     JsonNode value = request.path("value");
@@ -697,6 +712,9 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 exchange.sendResponseHeaders(405, -1);
             } catch (IllegalArgumentException failure) {
                 sendJson(exchange, 400, Json.object().put("code", "INVALID_MEMORY_REQUEST")
+                        .put("message", failure.getMessage()));
+            } catch (IllegalStateException failure) {
+                sendJson(exchange, 409, Json.object().put("code", "MEMORY_REVIEW_CONFLICT")
                         .put("message", failure.getMessage()));
             } catch (java.sql.SQLException failure) {
                 log.error("Memory management failed", failure);

@@ -717,6 +717,10 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "CREATE INDEX search_session_scope_idx ON search_session(" +
                         "controller_id,brain_session_id,companion_id,state,updated_at)",
                 "CREATE INDEX search_session_expiry_idx ON search_session(state,expires_at)");
+        List<String> memorySuggestionReview = List.of(
+                "ALTER TABLE memory_suggestion ADD COLUMN reviewed_by TEXT",
+                "ALTER TABLE memory_suggestion ADD COLUMN review_reason TEXT",
+                "ALTER TABLE memory_suggestion ADD COLUMN reviewed_at INTEGER");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -738,6 +742,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(18, "bind MCP request replay identity and terminal results", mcpReplayProtection),
                 new Migration(19, "bind expiring MCP transport sessions", mcpSessionLifecycle),
                 new Migration(20, "persist bounded MCP SSE replay events", mcpEventReplay),
-                new Migration(21, "persist isolated search source sessions", searchSessionLifecycle));
+                new Migration(21, "persist isolated search source sessions", searchSessionLifecycle),
+                new Migration(22, "audit local review of memory suggestions", memorySuggestionReview));
     }
 }

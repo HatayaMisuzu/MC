@@ -708,6 +708,38 @@ class RuntimeApplicationTest {
 
             URI memoryUri = new URI("http://127.0.0.1:" + config.server.managementPort
                     + "/memories?companionId=brain-companion");
+            var memoryRepository = new com.mccompanion.runtime.memory.MemoryRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()));
+            var approveCandidate = memoryRepository.suggest("brain-companion",
+                    com.mccompanion.runtime.memory.MemoryKind.WORLD, "landmark:reviewed",
+                    Json.object().put("dimension", "examplemod:moon"), 0.5, Duration.ofDays(30),
+                    "EXTERNAL_BRAIN_SUGGESTION", "brain-session-review");
+            var rejectCandidate = memoryRepository.suggest("brain-companion",
+                    com.mccompanion.runtime.memory.MemoryKind.PREFERENCE, "unsafe_claim",
+                    Json.object().put("value", "untrusted"), 0.4, Duration.ofDays(30),
+                    "EXTERNAL_BRAIN_SUGGESTION", "brain-session-review");
+            HttpResponse<String> pendingMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(2, Json.parse(pendingMemory.body()).path("suggestions").size());
+            HttpResponse<String> approvedMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"action":"approve_suggestion","suggestionId":"%s"}
+                                    """.formatted(approveCandidate.suggestionId()))).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, approvedMemory.statusCode(), approvedMemory.body());
+            assertEquals("USER_APPROVED_SUGGESTION",
+                    Json.parse(approvedMemory.body()).path("source").asText());
+            HttpResponse<String> rejectedMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"action":"reject_suggestion","suggestionId":"%s","reason":"not observed"}
+                                    """.formatted(rejectCandidate.suggestionId()))).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals("REJECTED", Json.parse(rejectedMemory.body()).path("status").asText());
             HttpResponse<String> savedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(memoryUri)
                     .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString("""

@@ -154,7 +154,14 @@ export interface MemoryFact {
   memoryId: string; kind: string; key: string; value: unknown; verified: boolean
   confidence: number; source: string; expiresAt?: string; createdAt: string; updatedAt: string
 }
-export interface MemorySnapshot { companionId: string; byKind: Record<string, MemoryFact[]> }
+export interface MemorySuggestion {
+  suggestionId: string; companionId: string; kind: string; key: string; value: unknown
+  confidence: number; status: string; source: string; brainSessionId: string
+  expiresAt: string; createdAt: string; updatedAt: string
+}
+export interface MemorySnapshot {
+  companionId: string; byKind: Record<string, MemoryFact[]>; suggestions?: MemorySuggestion[]
+}
 
 export interface OperationPlan {
   planId: string

@@ -8,5 +8,6 @@ import java.time.Instant;
 public record MemorySuggestion(String suggestionId, String companionId, MemoryKind kind, String key,
                                JsonNode value, double confidence, String status, String source,
                                String brainSessionId, Instant expiresAt,
-                               Instant createdAt, Instant updatedAt) {
+                               Instant createdAt, Instant updatedAt,
+                               String reviewedBy, String reviewReason, Instant reviewedAt) {
 }

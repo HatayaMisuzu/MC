@@ -13,6 +13,9 @@ $gameToken = Join-Path $fabric 'build\gametest\config\minecraft-ai-companion\run
 $gameRun = Join-Path $fabric 'build\gametest'
 $gameOutFile = Join-Path $runtimeHome 'fabric-gametest.out.log'
 $gameErrFile = Join-Path $runtimeHome 'fabric-gametest.err.log'
+$runtimeDatabase = Join-Path $runtimeHome 'data\companion.db'
+$crashWindowSource = Join-Path $root 'tools\fault-injection\SqliteTaskGraphCrashWindow.java'
+$crashWindowClasses = Join-Path $runtimeHome 'fault-injection-classes'
 
 if (-not (Test-Path -LiteralPath $runtimeBat)) {
     throw 'Runtime distribution is missing; run :runtime:runtime-app:installDist first.'
@@ -72,6 +75,19 @@ function Start-TestProcess([string]$file, [string]$arguments, [string]$workingDi
     $process.StartInfo = $start
     if (-not $process.Start()) { throw "Unable to start $file" }
     return $process
+}
+
+function Invoke-CrashWindowHelper(
+    [string]$java,
+    [string]$runtimeClasspath,
+    [string]$classes,
+    [string[]]$helperArguments
+) {
+    $classpath = "$classes;$runtimeClasspath"
+    & $java '-classpath' $classpath 'SqliteTaskGraphCrashWindow' @helperArguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Task Graph crash-window helper failed with exit code $LASTEXITCODE."
+    }
 }
 
 function Read-ProcessLog([string]$path) {
@@ -339,6 +355,7 @@ $runtimeOut = $null
 $runtimeErr = $null
 $priorRuntimeStdout = ''
 $priorRuntimeStderr = ''
+$expectedCrashWindowSevereObserved = $false
 $providerOut = $null
 $providerErr = $null
 $brainProviderOut = $null
@@ -349,6 +366,7 @@ $goalModificationEvidence = $null
 $externalBrainEvidence = $null
 $representativeTaskGraphEvidence = $null
 $primitiveEquivalenceEvidence = $null
+$crashWindowArmed = $false
 try {
     Write-Output '[runtime-e2e] starting Runtime'
     $runtimeLib = Join-Path (Split-Path -Parent (Split-Path -Parent $runtimeBat)) 'lib'
@@ -358,6 +376,11 @@ try {
     if (-not $javaHome) { throw 'A real Java home was not provided by Gradle.' }
     $java = Join-Path $javaHome 'bin\java.exe'
     if (-not (Test-Path -LiteralPath $java -PathType Leaf)) { throw 'The Gradle Java executable is missing.' }
+    $javac = Join-Path $javaHome 'bin\javac.exe'
+    if (-not (Test-Path -LiteralPath $javac -PathType Leaf)) { throw 'The Gradle Java compiler is missing.' }
+    New-Item -ItemType Directory -Force -Path $crashWindowClasses | Out-Null
+    & $javac '-encoding' 'UTF-8' '-d' $crashWindowClasses $crashWindowSource
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to compile the Task Graph crash-window helper.' }
     $runtimeArgs = "-classpath `"$runtimeClasspath`" com.mccompanion.runtime.RuntimeMain --config `"$config`""
     $runtime = Start-TestProcess $java $runtimeArgs $root $true
     $runtimeOut = $runtime.StandardOutput.ReadToEndAsync()
@@ -900,6 +923,130 @@ try {
         resumed = $restartResumed
         terminal = $restartTerminal
     }
+
+    Write-Output '[runtime-e2e] exercising live Tool-result crash window across an abrupt Runtime kill'
+    $crashBrainSession = "representative-crash-window-$([Guid]::NewGuid())"
+    $crashRequestId = "crash-window-$([Guid]::NewGuid())"
+    $crashGraph = @{
+        version = 'mcac-task-graph/1'
+        id = 'live-tool-result-crash-window'
+        permissions = @('MOVE')
+        root = @{
+            id = 'root'
+            type = 'sequence'
+            nodes = @(
+                @{
+                    id = 'crashEffect'
+                    type = 'call_tool'
+                    tool = 'movement.look'
+                    arguments = @{
+                        dimension = 'minecraft:overworld'
+                        x = $chestX
+                        y = $chestY
+                        z = $chestZ
+                    }
+                },
+                @{
+                    id = 'done'
+                    type = 'return'
+                    value = @{
+                        effectState = '${outputs.crashEffect.state}'
+                        effectEvidence = '${outputs.crashEffect.fabricObservation.snapshot.evidence}'
+                        taskId = '${outputs.crashEffect.taskId}'
+                    }
+                }
+            )
+        }
+    }
+    Invoke-CrashWindowHelper $java $runtimeClasspath $crashWindowClasses @(
+        'arm', $runtimeDatabase, $companionId
+    )
+    $crashWindowArmed = $true
+    $crashRequest = Start-McpToolRequest $pairingToken $companionId $crashBrainSession `
+        'task_graph.execute' @{
+            graph = $crashGraph
+            provenance = @{
+                source = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+                liveModel = $false
+                abruptRuntimeCrash = $true
+            }
+        } $crashRequestId
+    $crashExecutionId = $crashRequest.callId
+    $crashCommandId = "brain-$crashBrainSession-$crashExecutionId`:crashEffect`:1"
+    Invoke-CrashWindowHelper $java $runtimeClasspath $crashWindowClasses @(
+        'await', $runtimeDatabase, $crashCommandId, $crashExecutionId, '30'
+    )
+
+    $runtime.Kill()
+    if (-not $runtime.WaitForExit(5000)) {
+        throw 'Runtime process did not terminate at the injected live Tool-result crash boundary.'
+    }
+    $crashExitCode = $runtime.ExitCode
+    $priorRuntimeStdout += $runtimeOut.GetAwaiter().GetResult()
+    $crashRuntimeStderr = $runtimeErr.GetAwaiter().GetResult()
+    $expectedCrashWindowSevereObserved =
+        $crashRuntimeStderr -match 'SEVERE Unable to release control lease' -and
+        $crashRuntimeStderr -match 'injected terminal lease hold'
+    if (-not $expectedCrashWindowSevereObserved) {
+        throw 'Crash-window Runtime did not record the expected injected lease-release failure.'
+    }
+    $priorRuntimeStderr += $crashRuntimeStderr
+    $crashRequest.request.Dispose()
+    $crashRequest.client.Dispose()
+    Invoke-CrashWindowHelper $java $runtimeClasspath $crashWindowClasses @(
+        'disarm', $runtimeDatabase
+    )
+    $crashWindowArmed = $false
+
+    $runtime = Start-TestProcess $java $runtimeArgs $root $true
+    $runtimeOut = $runtime.StandardOutput.ReadToEndAsync()
+    $runtimeErr = $runtime.StandardError.ReadToEndAsync()
+    $reconnectDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    $reconnected = $false
+    do {
+        if ($runtime.HasExited) {
+            throw "Crash-window replacement Runtime exited before Fabric reconnected ($($runtime.ExitCode))."
+        }
+        try {
+            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:18766/health' -Headers @{
+                Authorization = "Bearer $pairingToken"
+            } -TimeoutSec 2
+            $reconnected = $health.onlineCompanionCount -ge 1
+        } catch {
+            $reconnected = $false
+        }
+        if (-not $reconnected) { Start-Sleep -Milliseconds 200 }
+    } while (-not $reconnected -and [DateTime]::UtcNow -lt $reconnectDeadline)
+    if (-not $reconnected) { throw 'Fabric body did not reconnect after the abrupt Runtime crash.' }
+
+    $crashQuarantined = Wait-TaskGraphState $pairingToken $companionId $crashBrainSession `
+        $crashExecutionId 'RECONCILIATION_REQUIRED'
+    $crashResumed = Invoke-McpTool $pairingToken $companionId $crashBrainSession 'task_graph.resume' @{
+        executionId = $crashExecutionId
+    } "resume-crash-window-$([Guid]::NewGuid())"
+    if ($crashResumed.code -ne 'RECOVERY_RESUME_ACCEPTED') {
+        throw "Crash-window graph recovery was rejected: $($crashResumed | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $crashTerminal = Wait-TaskGraphExecution $pairingToken $companionId $crashBrainSession $crashExecutionId
+    if ($crashTerminal.observation.state -ne 'SUCCEEDED' -or
+        $crashTerminal.observation.value.effectState -ne 'SUCCEEDED' -or
+        $crashTerminal.observation.value.effectEvidence -notmatch 'VANILLA_ENTITY_LOOK') {
+        throw "Crash-window graph did not import its durable live Tool result: $($crashTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    Invoke-CrashWindowHelper $java $runtimeClasspath $crashWindowClasses @(
+        'verify', $runtimeDatabase, $crashCommandId, $crashExecutionId
+    )
+    $crashWindowGraphEvidence = [pscustomobject]@{
+        classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
+        liveModel = $false
+        abruptRuntimeCrash = $true
+        crashExitCode = $crashExitCode
+        durableCommandId = $crashCommandId
+        quarantinedAfterRestart = $crashQuarantined
+        resumed = $crashResumed
+        terminal = $crashTerminal
+    }
+
     Write-Output '[runtime-e2e] exercising generic inventory.transfer round trip'
     $transferBrainSession = "primitive-transfer-$([Guid]::NewGuid())"
     $container = @{
@@ -1072,12 +1219,13 @@ try {
         classification = 'LOCAL_DETERMINISTIC_EXTERNAL_CLIENT_E2E'
         liveModel = $false
         graphs = @($registryGraphEvidence, $effectGraphEvidence, $correctedGraphEvidence, $askGraphEvidence,
-            $restartGraphEvidence)
+            $restartGraphEvidence, $crashWindowGraphEvidence)
     }
     Write-Output '[runtime-e2e] Task Graph inspected a live block and aimed the body at its observed position'
     Write-Output '[runtime-e2e] External client corrected a rejected graph and executed its declared fallback'
     Write-Output '[runtime-e2e] Task Graph resumed its exact ASK_USER execution and ran the selected live Tool'
     Write-Output '[runtime-e2e] Paused Task Graph survived Runtime restart and completed its primitive effect'
+    Write-Output '[runtime-e2e] Abrupt Runtime crash imported a durable live Tool result without replay'
     Write-Output '[runtime-e2e] Generic inventory.transfer withdrew and restored one verified live item'
     Write-Output '[runtime-e2e] Generic block interaction issued and consumed one scoped live menu capability'
 
@@ -1247,13 +1395,14 @@ try {
         throw 'External Brain evidence did not retain the four terminal tool observations.'
     }
     if (-not $representativeTaskGraphEvidence -or
-        $representativeTaskGraphEvidence.graphs.Count -ne 5 -or
+        $representativeTaskGraphEvidence.graphs.Count -ne 6 -or
         ($representativeTaskGraphEvidence.graphs | Where-Object {
             $_.terminal.observation.state -ne 'SUCCEEDED' -or $_.liveModel
         }).Count -ne 0 -or
         $representativeTaskGraphEvidence.graphs[2].rejectedRevision.code -ne 'TASK_GRAPH_INVALID' -or
         -not $representativeTaskGraphEvidence.graphs[3].deterministicTestAnswer -or
         -not $representativeTaskGraphEvidence.graphs[4].runtimeRestarted -or
+        -not $representativeTaskGraphEvidence.graphs[5].abruptRuntimeCrash -or
         $representativeTaskGraphEvidence.liveModel) {
         throw 'Representative Task Graph evidence is missing or has an invalid verification classification.'
     }
@@ -1276,7 +1425,10 @@ try {
     if ($runtimeStdout -match '(?m)^CLI_ERROR:') {
         throw 'Runtime CLI emitted a command error after companion registration.'
     }
-    if ($runtimeStderr -match '(?m)^.*SEVERE.*$') {
+    $unexpectedSevere = @($runtimeStderr -split "`r?`n" | Where-Object {
+        $_ -match 'SEVERE' -and $_ -notmatch 'SEVERE Unable to release control lease'
+    })
+    if (-not $expectedCrashWindowSevereObserved -or $unexpectedSevere.Count -gt 0) {
         throw 'Runtime emitted a SEVERE error during E2E.'
     }
     Write-Output 'Runtime/Fabric E2E passed: External Brain 6/16 ASK_USER, same-session answer, navigate, withdraw, return, deliver, and final reply from verified observations.'
@@ -1322,6 +1474,16 @@ try {
     [IO.File]::WriteAllText($failurePath, $failureText, [Text.UTF8Encoding]::new($false))
     throw
 } finally {
+    if ($crashWindowArmed -and $java -and $runtimeClasspath -and
+        (Test-Path -LiteralPath $runtimeDatabase -PathType Leaf)) {
+        try {
+            Invoke-CrashWindowHelper $java $runtimeClasspath $crashWindowClasses @(
+                'disarm', $runtimeDatabase
+            )
+        } catch {
+            Write-Warning "Unable to disarm Task Graph crash-window fixture during cleanup: $_"
+        }
+    }
     if ($game -and -not $game.HasExited) { $game.Kill() }
     if ($provider -and -not $provider.HasExited) { $provider.Kill() }
     if ($brainProvider -and -not $brainProvider.HasExited) { $brainProvider.Kill() }

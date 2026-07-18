@@ -226,8 +226,13 @@ effects is rejected rather than treated as reconciliation. The durable Minecraft
 path is locally verified. An injected repository failure at the exact
 `TOOL_RESULT_RECORDED` boundary proves that a completed non-idempotent effect is quarantined,
 survives Runtime replacement, is imported from the Gateway's durable terminal result, and is not
-dispatched a second time. A real OS-level Runtime-process crash between live Mod completion and
-Graph result persistence remains pending end-to-end verification. A Tool transport or worker failure with
+dispatched a second time. The Runtime/Fabric E2E also arms a test-side SQLite trigger that holds the
+exact terminal control-lease deletion, waits until the live Minecraft Task is `COMPLETED` while the
+Graph is still `RUNNING` with no Tool result, and abruptly kills the Runtime process. Startup
+invalidates the lost process lease, marks the Graph for reconciliation, reconnects Fabric, imports
+the exact durable result, and reaches `SUCCEEDED`; independent database assertions retain exactly
+one command binding and one behavior run. This is local deterministic external-client evidence, not
+a Live Brain or human-play claim. A Tool transport or worker failure with
 unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
 reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic

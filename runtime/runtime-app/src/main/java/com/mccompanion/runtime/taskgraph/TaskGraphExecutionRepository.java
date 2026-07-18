@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 /** Durable execution state. Hidden reasoning is never stored. */
 public final class TaskGraphExecutionRepository {
@@ -126,6 +127,24 @@ public final class TaskGraphExecutionRepository {
             while (rows.next()) values.add(rows.getString(1));
         }
         return List.copyOf(values);
+    }
+
+    /** Aggregate-only durable telemetry; execution, session and companion identities are never exposed. */
+    public ObjectNode telemetry() throws SQLException {
+        ObjectNode states = Json.object();
+        int total = 0;
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT state,COUNT(*) AS executions
+                FROM task_graph_execution GROUP BY state ORDER BY state
+                """);
+             var rows = statement.executeQuery()) {
+            while (rows.next()) {
+                int count = rows.getInt("executions");
+                states.put(rows.getString("state"), count);
+                total += count;
+            }
+        }
+        return Json.object().put("totalExecutions", total).set("states", states);
     }
 
     private static String required(String value) {

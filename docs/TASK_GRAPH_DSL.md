@@ -202,6 +202,11 @@ resolved Tool contract.
 Tool/wall-time/loop/concurrency budgets, bounded backoff/wait, uniformly rotated evidence, inputs,
 variables, durable node outputs, and exact `${inputs.*}`, `${state.*}`, and
 `${outputs.<node>.*}` references are enforced, including bounded literal array selection and length.
+The authenticated local `/health` response includes aggregate-only Task Graph telemetry: active
+executions and Tool calls, timed waits, fixed worker/parallel-pool activity and queue depth, plus
+durable execution totals grouped by state. It never exposes execution IDs, Brain-session IDs,
+companion IDs, graph documents, arguments, observations, or Evidence. Durable telemetry failure is
+reported as `DEGRADED` instead of being silently treated as zero activity.
 
 Migrations 11–15 persist every supported node, Tool, checkpoint, loop and parallel boundary, terminal
 `return` values, all node outputs, and Task Graph-owned waiting questions. A safe pause resumes using

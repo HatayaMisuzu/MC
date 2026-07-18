@@ -991,6 +991,16 @@ class TaskGraphRuntimeTest {
                             new ToolCall("fair-" + index, "task_graph.execute", Json.object()),
                             graph, Json.object().put("index", index), Json.object());
                 }
+                var saturated = runtime.telemetry();
+                assertEquals("READY", saturated.path("status").asText());
+                assertEquals(executions, saturated.path("activeExecutions").asInt());
+                assertEquals(2, saturated.path("activeToolCalls").asInt());
+                assertEquals(2, saturated.path("workerActive").asInt());
+                assertEquals(executions - 2, saturated.path("workerQueueDepth").asInt());
+                assertEquals(executions, saturated.path("durable").path("totalExecutions").asInt());
+                assertEquals(2, saturated.path("durable").path("states").path("RUNNING").asInt());
+                assertEquals(executions - 2,
+                        saturated.path("durable").path("states").path("READY").asInt());
                 gateway.release.countDown();
                 for (int index = executions - 1; index >= 0; index--) {
                     ToolCall call = new ToolCall("fair-" + index, "task_graph.execute", Json.object());
@@ -1011,6 +1021,13 @@ class TaskGraphRuntimeTest {
                         "FIFO scheduler admitted the tail before the early queued cohort: " + gateway.started);
                 assertTrue(elapsedMillis < 10_000,
                         "64 durable executions exceeded the bounded local scheduler budget: " + elapsedMillis + "ms");
+                var drained = runtime.telemetry();
+                assertEquals(0, drained.path("activeExecutions").asInt());
+                assertEquals(0, drained.path("activeToolCalls").asInt());
+                assertEquals(0, drained.path("workerActive").asInt());
+                assertEquals(0, drained.path("workerQueueDepth").asInt());
+                assertEquals(executions,
+                        drained.path("durable").path("states").path("SUCCEEDED").asInt());
             } finally {
                 gateway.release.countDown();
             }

@@ -25,6 +25,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -45,8 +47,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
     private final Set<String> executableNodeTypes;
     private final Duration cancellationConfirmationTimeout;
     private final TaskGraphValidator validator = new TaskGraphValidator();
-    private final ExecutorService workers;
-    private final ExecutorService parallelWorkers;
+    private final ThreadPoolExecutor workers;
+    private final ThreadPoolExecutor parallelWorkers;
     private final ScheduledExecutorService timers;
     private final Map<String, Running> active = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> timedWaits = new ConcurrentHashMap<>();
@@ -74,17 +76,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
         HashSet<String> executable = new HashSet<>(TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
         if (conversations == null) executable.remove("ask_user");
         this.executableNodeTypes = Set.copyOf(executable);
-        this.workers = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mcac-task-graph");
-            thread.setDaemon(false);
-            return thread;
-        });
-        this.parallelWorkers = Executors.newFixedThreadPool(
-                TaskGraphLimits.HARD_LIMITS.maxParallelNodes(), runnable -> {
-                    Thread thread = new Thread(runnable, "mcac-task-graph-parallel");
-                    thread.setDaemon(false);
-                    return thread;
-                });
+        this.workers = fixedPool(2, "mcac-task-graph");
+        this.parallelWorkers = fixedPool(
+                TaskGraphLimits.HARD_LIMITS.maxParallelNodes(), "mcac-task-graph-parallel");
         this.timers = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mcac-task-graph-timer");
             thread.setDaemon(false);
@@ -96,6 +90,15 @@ public final class TaskGraphRuntime implements AutoCloseable {
             close();
             throw new IllegalStateException("TASK_GRAPH_WAIT_RECOVERY_FAILED", failure);
         }
+    }
+
+    private static ThreadPoolExecutor fixedPool(int size, String threadName) {
+        return new ThreadPoolExecutor(size, size, 0L, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(), runnable -> {
+            Thread thread = new Thread(runnable, threadName);
+            thread.setDaemon(false);
+            return thread;
+        });
     }
 
     public ToolResult start(ToolContext context, ToolCall call, JsonNode graph, JsonNode inputs,
@@ -590,6 +593,30 @@ public final class TaskGraphRuntime implements AutoCloseable {
 
     public Set<String> executableNodeTypes() {
         return executableNodeTypes;
+    }
+
+    /** Aggregate-only operational telemetry for the authenticated local health endpoint. */
+    public ObjectNode telemetry() {
+        int activeToolCalls = active.values().stream()
+                .mapToInt(value -> value.control.activeCallIds().size()).sum();
+        ObjectNode telemetry = Json.object()
+                .put("status", "READY")
+                .put("activeExecutions", active.size())
+                .put("activeToolCalls", activeToolCalls)
+                .put("timedWaits", timedWaits.size())
+                .put("workerActive", workers.getActiveCount())
+                .put("workerPoolSize", workers.getPoolSize())
+                .put("workerQueueDepth", workers.getQueue().size())
+                .put("parallelActive", parallelWorkers.getActiveCount())
+                .put("parallelPoolSize", parallelWorkers.getPoolSize())
+                .put("parallelQueueDepth", parallelWorkers.getQueue().size());
+        try {
+            telemetry.set("durable", repository.telemetry());
+        } catch (SQLException failure) {
+            telemetry.put("status", "DEGRADED")
+                    .set("durable", Json.object().put("available", false));
+        }
+        return telemetry;
     }
 
     private void materializeWaitingQuestion(String executionId) {

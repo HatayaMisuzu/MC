@@ -873,6 +873,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     .put("onlineCompanionCount", sessions.sessions().stream()
                             .mapToInt(session -> session.companionIds().size())
                             .sum());
+            if (taskGraphRuntime != null) body.set("taskGraph", taskGraphRuntime.telemetry());
             sendJson(exchange, 200, body);
         }
     }

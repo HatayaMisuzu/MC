@@ -269,8 +269,8 @@ release/install verification remain incomplete.
   negotiation plus bounded schema/permission discovery without exposing the token, and
   `docs/MCP_PROTOCOL.md` documents the lifecycle and Hermes connection contract. Repository and
   authenticated HTTP tests cover restart retention, terminal replay and changed-input rejection.
-  SSE event resumption, separately provisioned long-term caller identity/explicit nonces,
-  live concurrent cancellation E2E,
+  long-lived future-event GET attachment, separately provisioned long-term caller
+  identity/explicit nonces, live concurrent cancellation E2E,
   and verified Hermes-native configuration remain,
   so the protocol is intentionally `PARTIAL`.
 - Migration 19 implements the standard stateful Streamable HTTP lifecycle: initialization returns
@@ -278,6 +278,10 @@ release/install verification remain incomplete.
   exact controller, Brain session, companion and negotiated version for an eight-hour absolute
   lifetime. Missing, cross-scope, expired and explicitly deleted sessions fail before Tool
   dispatch. Runtime HTTP, repository-restart and Terminal Doctor tests cover the lifecycle.
+- Migration 20 persists each SSE progress/terminal envelope before transmission with an opaque
+  event ID. Authenticated `GET /mcp` plus `Last-Event-ID` replays only later events in the same
+  session; retention is capped at 256 events and 64 KiB per event, unknown/cross-session/pruned
+  cursors fail closed, and session deletion/expiry removes its event history.
 
 ## Search configuration and privacy UI slice
 

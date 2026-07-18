@@ -74,14 +74,13 @@ Each tool definition contains its bounded JSON `inputSchema`. A typical call is:
 
 With `Accept: application/json`, Runtime returns one terminal JSON-RPC response. With
 `Accept: text/event-stream`, Runtime sends SSE `message` events. Task state changes use the
-client's progress token:
+client's progress token. Every event is persisted before transmission and includes an opaque
+standard SSE `id`:
 
-```json
-{"jsonrpc":"2.0","method":"notifications/progress","params":{
-  "progressToken":"progress-call-1","progress":4,"message":"RUNNING",
-  "structuredContent":{"callId":"mcp-...","code":"TOOL_PROGRESS","terminal":false,
-    "observation":{"state":"RUNNING","taskId":"...","taskRevision":4}}
-}}
+```text
+id: 6884bdb4-c814-4d04-b530-c643b85d6453
+event: message
+data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"progress-call-1","progress":4,"message":"RUNNING","structuredContent":{"callId":"mcp-...","code":"TOOL_PROGRESS","terminal":false,"observation":{"state":"RUNNING","taskId":"...","taskRevision":4}}}}
 ```
 
 The final SSE message is the ordinary JSON-RPC response. Its MCP content includes a readable
@@ -120,6 +119,22 @@ of that bearer. Session rows survive Runtime restart until termination or absolu
 Tool calls, progress, terminal results, task/behavior revisions, and delivery state use the
 existing durable MCAC audit path. The authenticated `/brain/audit` endpoint is the current audit
 inspection surface.
+
+## SSE reconnect and replay
+
+After losing an SSE response, reconnect with `GET /mcp`, the same authorization, identity,
+protocol and session headers, and the last fully processed cursor:
+
+```text
+Accept: text/event-stream
+Last-Event-ID: 6884bdb4-c814-4d04-b530-c643b85d6453
+```
+
+Runtime returns only later persisted events in database order and then closes the catch-up
+response. A cursor is valid only in its exact MCP session; an unknown, cross-session, or
+retention-pruned cursor returns HTTP 404 and the client must reconcile through durable Tool,
+Task Graph and audit inspection. Each session retains at most 256 events, each at most 64 KiB.
+Explicit session deletion removes its events, and startup prunes events for inactive sessions.
 
 ## Hermes connection example
 
@@ -160,8 +175,8 @@ MCAC Terminal Doctor performs a live local negotiation and bounded-tool check be
   remain tracked as `PARTIAL`. The random bearer and durable request ledger prevent cross-scope
   session use and exact Tool-call redispatch, but the identity labels are not a separate user
   identity system.
-- SSE event replay/resumption is not implemented; reconnect and reconcile through durable task
-  and audit state.
+- Catch-up GET replays persisted events after a cursor but does not remain attached as a
+  long-lived subscription for future server events.
 - Session lifetime and retention policy are fixed rather than user-configurable.
 - Live concurrent cancellation with a real Hermes process remains external verification.
 - Search tools appear only when Search is configured and authorized; they accept bounded queries

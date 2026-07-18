@@ -25,7 +25,7 @@ class RuntimeDatabaseTest {
         try (RuntimeDatabase database = new RuntimeDatabase(path)) {
             database.initialize();
             database.initialize();
-            assertEquals(19, database.currentVersion());
+            assertEquals(20, database.currentVersion());
             assertEquals("wal", database.journalMode().toLowerCase());
             Set<String> tables = new HashSet<>();
             try (var connection = database.open(); Statement statement = connection.createStatement();
@@ -36,7 +36,7 @@ class RuntimeDatabaseTest {
                     "task_event", "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
                     "conversation_event", "waiting_question",
                     "memory_fact", "memory_suggestion", "brain_session", "brain_tool_call",
-                    "task_graph_execution", "skill_version", "mcp_request", "mcp_session",
+                    "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
                     "schema_migration")));
         }
     }

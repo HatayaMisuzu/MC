@@ -306,11 +306,28 @@ class RuntimeApplicationTest {
             assertEquals(200, streamed.statusCode(), streamed.body());
             assertTrue(streamed.headers().firstValue("Content-Type").orElse("")
                     .startsWith("text/event-stream"));
-            assertTrue(streamed.body().startsWith("event: message\ndata: "), streamed.body());
+            assertTrue(streamed.body().startsWith("id: "), streamed.body());
+            String firstEventId = streamed.body().lines()
+                    .filter(line -> line.startsWith("id: ")).findFirst().orElseThrow().substring(4);
             JsonNode streamedResult = Json.parse(streamed.body().lines()
                     .filter(line -> line.startsWith("data: ")).findFirst().orElseThrow().substring(6));
             assertEquals("observe-sse", streamedResult.path("id").asText());
             assertTrue(streamedResult.path("result").path("isError").asBoolean());
+
+            HttpResponse<String> secondStreamed = http.send(bound.copy().header("Accept", "text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"observe-sse-2","method":"tools/call","params":{
+                              "name":"world.observe","arguments":{}}}
+                            """)).build(), HttpResponse.BodyHandlers.ofString());
+            String secondEventId = secondStreamed.body().lines()
+                    .filter(line -> line.startsWith("id: ")).findFirst().orElseThrow().substring(4);
+            HttpResponse<String> resumedEvents = http.send(bound.copy()
+                    .header("Accept", "text/event-stream")
+                    .header("Last-Event-ID", firstEventId).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, resumedEvents.statusCode(), resumedEvents.body());
+            assertTrue(resumedEvents.body().contains("id: " + secondEventId), resumedEvents.body());
+            assertTrue(resumedEvents.body().contains("\"id\":\"observe-sse-2\""), resumedEvents.body());
 
             HttpResponse<String> cancelled = http.send(bound.copy()
                     .POST(HttpRequest.BodyPublishers.ofString("""

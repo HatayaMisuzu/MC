@@ -72,6 +72,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final SkillRepository skills;
     private final McpReplayRepository mcpReplay;
     private final McpSessionRepository mcpSessions;
+    private final McpEventRepository mcpEvents;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -97,7 +98,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             RuntimeLog log) throws IOException {
         this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
-                null, null, null, null, log);
+                null, null, null, null, null, log);
     }
 
     public RuntimeHealthServer(
@@ -119,6 +120,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             SkillRepository skills,
             McpReplayRepository mcpReplay,
             McpSessionRepository mcpSessions,
+            McpEventRepository mcpEvents,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -138,6 +140,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.skills = skills;
         this.mcpReplay = mcpReplay;
         this.mcpSessions = mcpSessions;
+        this.mcpEvents = mcpEvents;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -167,12 +170,16 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private void mcp(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;
+            if ("GET".equals(exchange.getRequestMethod())) {
+                mcpReplayEvents(exchange);
+                return;
+            }
             if ("DELETE".equals(exchange.getRequestMethod())) {
                 mcpDelete(exchange);
                 return;
             }
             if (!"POST".equals(exchange.getRequestMethod())) {
-                exchange.getResponseHeaders().set("Allow", "POST, DELETE");
+                exchange.getResponseHeaders().set("Allow", "GET, POST, DELETE");
                 sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
                 return;
             }
@@ -300,6 +307,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 sendJson(exchange, 404, Json.object().put("code", "MCP_SESSION_NOT_FOUND"));
                 return;
             }
+            if (mcpEvents != null) mcpEvents.deleteSession(session);
             exchange.sendResponseHeaders(204, -1);
         } catch (IllegalArgumentException invalid) {
             sendJson(exchange, 400, Json.object().put("code", "INVALID_MCP_IDENTITY"));
@@ -353,7 +361,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
         exchange.sendResponseHeaders(200, 0);
         try (var output = exchange.getResponseBody()) {
             if (replayed != null) {
-                writeSse(output, mcpResult(requestId, mcpToolResult(replayed)));
+                writeDurableSse(exchange, output, call,
+                        mcpResult(requestId, mcpToolResult(replayed)), true);
                 return;
             }
             try {
@@ -362,13 +371,17 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         context, call, accepted, Duration.ofSeconds(30), progress -> {
                             if (progressToken == null || progressToken.isNull()) return;
                             try {
-                                writeSse(output, mcpProgress(progressToken, progress));
+                                writeDurableSse(exchange, output, call,
+                                        mcpProgress(progressToken, progress), false);
                             } catch (IOException disconnected) {
                                 throw new java.io.UncheckedIOException(disconnected);
+                            } catch (SQLException persistenceFailure) {
+                                throw new McpEventPersistenceFailure(persistenceFailure);
                             }
                         });
                 completeMcpCall(call, terminal);
-                writeSse(output, mcpResult(requestId, mcpToolResult(terminal)));
+                writeDurableSse(exchange, output, call,
+                        mcpResult(requestId, mcpToolResult(terminal)), true);
             } catch (SQLException persistenceFailure) {
                 log.error("MCP SSE replay completion failed closed", persistenceFailure);
                 writeSse(output, mcpResult(requestId, mcpToolResult(ToolResult.rejected(call,
@@ -379,6 +392,45 @@ public final class RuntimeHealthServer implements AutoCloseable {
             toolGateway.cancel(context, call.callId(), "MCP_STREAM_DISCONNECTED");
             quarantineMcpCall(call);
             throw disconnected.getCause();
+        } catch (McpEventPersistenceFailure persistenceFailure) {
+            toolGateway.cancel(context, call.callId(), "MCP_EVENT_PERSISTENCE_FAILED");
+            quarantineMcpCall(call);
+            log.error("MCP SSE event persistence failed closed", persistenceFailure.getCause());
+        }
+    }
+
+    private void mcpReplayEvents(HttpExchange exchange) throws IOException {
+        try {
+            String version = exchange.getRequestHeaders().getFirst("MCP-Protocol-Version");
+            if (!supportedMcpVersion(version)) {
+                sendJson(exchange, 400, Json.object().put("code", "MCP_PROTOCOL_VERSION_REQUIRED"));
+                return;
+            }
+            if (!validateMcpSession(exchange)) return;
+            if (mcpEvents == null) {
+                sendJson(exchange, 405, Json.object().put("code", "MCP_EVENT_REPLAY_UNAVAILABLE"));
+                return;
+            }
+            String lastEventId = exchange.getRequestHeaders().getFirst("Last-Event-ID");
+            if (lastEventId == null || lastEventId.isBlank()) {
+                sendJson(exchange, 400, Json.object().put("code", "MCP_REPLAY_CURSOR_REQUIRED"));
+                return;
+            }
+            var events = mcpEvents.after(
+                    exchange.getRequestHeaders().getFirst("Mcp-Session-Id"), lastEventId);
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+            exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+            exchange.sendResponseHeaders(200, 0);
+            try (var output = exchange.getResponseBody()) {
+                for (McpEventRepository.Event event : events) {
+                    writeSse(output, event.eventId(), event.payload());
+                }
+            }
+        } catch (IllegalArgumentException invalid) {
+            sendJson(exchange, 404, Json.object().put("code", "MCP_REPLAY_CURSOR_NOT_FOUND"));
+        } catch (SQLException persistenceFailure) {
+            log.error("MCP SSE replay failed closed", persistenceFailure);
+            sendJson(exchange, 500, Json.object().put("code", "MCP_EVENT_PERSISTENCE_UNAVAILABLE"));
         }
     }
 
@@ -449,9 +501,37 @@ public final class RuntimeHealthServer implements AutoCloseable {
     }
 
     private static void writeSse(java.io.OutputStream output, JsonNode message) throws IOException {
-        output.write(("event: message\ndata: " + Json.write(message) + "\n\n")
+        writeSse(output, null, message);
+    }
+
+    private static void writeSse(java.io.OutputStream output, String eventId, JsonNode message)
+            throws IOException {
+        String id = eventId == null ? "" : "id: " + eventId + "\n";
+        output.write((id + "event: message\ndata: " + Json.write(message) + "\n\n")
                 .getBytes(StandardCharsets.UTF_8));
         output.flush();
+    }
+
+    private void writeDurableSse(
+            HttpExchange exchange,
+            java.io.OutputStream output,
+            ToolCall call,
+            JsonNode message,
+            boolean terminal) throws IOException, SQLException {
+        if (mcpEvents == null) {
+            writeSse(output, message);
+            return;
+        }
+        McpEventRepository.Event event = mcpEvents.append(
+                exchange.getRequestHeaders().getFirst("Mcp-Session-Id"),
+                call.callId(), message, terminal);
+        writeSse(output, event.eventId(), message);
+    }
+
+    private static final class McpEventPersistenceFailure extends RuntimeException {
+        private McpEventPersistenceFailure(SQLException cause) {
+            super(cause);
+        }
     }
 
     private static String mcpCallId(HttpExchange exchange, ToolContext context, JsonNode requestId) {

@@ -775,6 +775,61 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void queuedExecutionsRemainFairAndCompleteUnderSustainedAdmission() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("scheduler-soak.db"))) {
+            database.initialize();
+            FairnessGateway gateway = new FairnessGateway();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, repository)) {
+                ToolContext context = new ToolContext("hermes", "brain-fairness", "companion-1");
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"scheduler-fairness",
+                         "inputs":{"index":{"type":"integer","required":true}},
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"observe","type":"call_tool","tool":"test.observe",
+                          "arguments":{"index":"${inputs.index}"}}}
+                        """);
+                int executions = 64;
+                for (int index = 0; index < 2; index++) {
+                    runtime.start(context,
+                            new ToolCall("fair-" + index, "task_graph.execute", Json.object()),
+                            graph, Json.object().put("index", index), Json.object());
+                }
+                assertTrue(gateway.firstWorkersEntered.await(2, TimeUnit.SECONDS),
+                        "the two graph workers did not enter the controlled saturation boundary");
+                long saturatedAt = System.nanoTime();
+                for (int index = 2; index < executions; index++) {
+                    runtime.start(context,
+                            new ToolCall("fair-" + index, "task_graph.execute", Json.object()),
+                            graph, Json.object().put("index", index), Json.object());
+                }
+                gateway.release.countDown();
+                for (int index = executions - 1; index >= 0; index--) {
+                    ToolCall call = new ToolCall("fair-" + index, "task_graph.execute", Json.object());
+                    ToolResult terminal = runtime.await(context, call, Duration.ofSeconds(10), ignored -> { });
+                    assertTrue(terminal.success(), "execution " + index + " starved: " + terminal.observation());
+                    assertEquals("SUCCEEDED", repository.get(call.callId()).orElseThrow().state());
+                }
+                long elapsedMillis = Duration.ofNanos(System.nanoTime() - saturatedAt).toMillis();
+                assertEquals(executions, gateway.started.size());
+                assertEquals(executions, Set.copyOf(gateway.started).size());
+                int lastEarly = gateway.started.stream()
+                        .filter(index -> index >= 2 && index < 12)
+                        .mapToInt(gateway.started::indexOf).max().orElseThrow();
+                int firstLate = gateway.started.stream()
+                        .filter(index -> index >= executions - 10)
+                        .mapToInt(gateway.started::indexOf).min().orElseThrow();
+                assertTrue(lastEarly < firstLate,
+                        "FIFO scheduler admitted the tail before the early queued cohort: " + gateway.started);
+                assertTrue(elapsedMillis < 10_000,
+                        "64 durable executions exceeded the bounded local scheduler budget: " + elapsedMillis + "ms");
+            } finally {
+                gateway.release.countDown();
+            }
+        }
+    }
+
+    @Test
     void timedWaitCanBeCancelledWhileNoGraphWorkerIsActive() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("cancel-wait.db"))) {
             database.initialize();
@@ -948,6 +1003,40 @@ class TaskGraphRuntimeTest {
             calls++;
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("moved", true), true);
+        }
+    }
+
+    private static final class FairnessGateway implements ToolGateway {
+        private final CountDownLatch firstWorkersEntered = new CountDownLatch(2);
+        private final CountDownLatch release = new CountDownLatch(1);
+        private final List<Integer> started = new CopyOnWriteArrayList<>();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.observe", "1.0", "observe",
+                    Json.object().put("type", "object")
+                            .set("properties", Json.object().set("index",
+                                    Json.object().put("type", "integer"))),
+                    "LOW", "READ_WORLD", Duration.ofSeconds(2), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            int index = call.arguments().path("index").asInt();
+            started.add(index);
+            if (index < 2) {
+                firstWorkersEntered.countDown();
+                try {
+                    if (!release.await(5, TimeUnit.SECONDS)) {
+                        return new ToolResult(call.callId(), call.name(), false,
+                                "TEST_SATURATION_TIMEOUT", Json.object(), true);
+                    }
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    return new ToolResult(call.callId(), call.name(), false,
+                            "INTERRUPTED", Json.object(), true);
+                }
+            }
+            return new ToolResult(call.callId(), call.name(), true, "OK",
+                    Json.object().put("index", index), true);
         }
     }
 

@@ -210,6 +210,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.step",
                 "Move a bounded relative step through normal navigation", stepSchema(), "LOW", "MOVE", false));
+        if (available.contains("LookAt")) values.add(definition("movement.look",
+                "Turn the connected body toward one bounded world position", lookSchema(), "LOW", "MOVE", true));
         if (available.contains("NavigateTo") && tasks != null) values.add(definition("movement.stop",
                 "Cancel only an active movement task", Json.object(), "LOW", "MOVE", false));
         if (available.contains("ExploreArea")) values.add(definition("world.scan",
@@ -334,6 +336,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "movement.follow" -> noArguments(call, TaskType.FOLLOW);
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
+            case "movement.look" -> skill("LookAt", validatedLook(call.arguments()));
             case "block.break" -> breakBlock(call.arguments());
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
@@ -381,6 +384,11 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode target = Json.object().put("dimension", arguments.path("dimension").asText("minecraft:overworld"))
                 .put("x", x).put("y", y).put("z", z);
         return new Intent(TaskType.TRAVEL, Json.object().set("target", target), "movement.navigate");
+    }
+
+    private static JsonNode validatedLook(JsonNode arguments) {
+        Intent target = navigate(arguments);
+        return Json.object().set("target", target.arguments().path("target"));
     }
 
     private Intent step(ToolContext context, JsonNode arguments) throws java.sql.SQLException {
@@ -541,6 +549,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         root.set("properties", schema);
         if (name.equals("movement.navigate")) {
             root.putArray("required").add("x").add("y").add("z");
+        } else if (name.equals("movement.look")) {
+            root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("movement.step")) {
             root.putArray("required").add("dx").add("dy").add("dz");
         } else if (name.equals("block.break")) {
@@ -583,6 +593,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             properties.putObject(field).put("type", "integer").put("minimum", -8).put("maximum", 8);
         }
         return properties;
+    }
+
+    private static ObjectNode lookSchema() {
+        return coordinateSchema();
     }
 
     private static ObjectNode blockBreakSchema() {

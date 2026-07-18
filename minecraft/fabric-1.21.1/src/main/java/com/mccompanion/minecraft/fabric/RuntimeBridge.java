@@ -151,6 +151,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("recipe_query", true)
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
+                .put("LookAt", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)

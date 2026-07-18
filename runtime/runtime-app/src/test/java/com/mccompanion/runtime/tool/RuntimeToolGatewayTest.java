@@ -253,7 +253,7 @@ class RuntimeToolGatewayTest {
                 var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of(
-                        "c-step", "c-stop", "c-idle", "c-break", "c-collect", "c-from", "c-to")) {
+                        "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-collect", "c-from", "c-to")) {
                     CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
                             "minecraft:overworld", new PositionDto(10, 64, -5), CompanionBodyState.SPAWNED,
                             null, null, 0, 0, true, CapabilitySet.empty(), Instant.now());
@@ -265,12 +265,14 @@ class RuntimeToolGatewayTest {
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
                         ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
-                                "WithdrawFromStorage", "DepositToStorage"));
+                                "WithdrawFromStorage", "DepositToStorage", "LookAt"));
 
                 var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().containsAll(List.of(
                         "movement.step", "movement.stop", "block.break", "entity.collect", "inventory.transfer")));
+                assertTrue(definitions.stream().map(ToolDefinition::name).toList().contains("movement.look"));
                 assertEquals("MOVE", definition(definitions, "movement.step").permission());
+                assertEquals("MOVE", definition(definitions, "movement.look").permission());
                 assertEquals("MINE", definition(definitions, "block.break").permission());
                 assertEquals("COLLECT", definition(definitions, "entity.collect").permission());
                 assertEquals("INVENTORY", definition(definitions, "inventory.transfer").permission());
@@ -284,6 +286,17 @@ class RuntimeToolGatewayTest {
                 assertEquals(12, stepCommand.path("arguments").path("parameters").path("target").path("x").asInt());
                 assertEquals(63, stepCommand.path("arguments").path("parameters").path("target").path("y").asInt());
                 assertEquals(-2, stepCommand.path("arguments").path("parameters").path("target").path("z").asInt());
+
+                ToolResult looked = gateway.execute(new ToolContext("hermes", "session", "c-look"),
+                        new ToolCall("look", "movement.look",
+                                Json.object().put("dimension", "minecraft:overworld")
+                                        .put("x", 14).put("y", 66).put("z", -1)));
+                assertTrue(looked.success(), looked.observation().toString());
+                var lookParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("LookAt", lookParameters.path("capability").asText());
+                assertEquals(14, lookParameters.path("parameters").path("target").path("x").asInt());
+                assertEquals(66, lookParameters.path("parameters").path("target").path("y").asInt());
+                assertEquals(-1, lookParameters.path("parameters").path("target").path("z").asInt());
 
                 ToolResult moving = gateway.execute(new ToolContext("hermes", "session", "c-stop"),
                         new ToolCall("move-before-stop", "movement.navigate",

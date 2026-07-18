@@ -17,6 +17,7 @@ final class PlayerActionGateway {
     private final Map<UUID, InFlight> inFlight = new HashMap<>();
     private final Deque<ActionEvidence> completed = new ArrayDeque<>();
     private final java.util.Set<UUID> gameModeActions = new java.util.HashSet<>();
+    private final java.util.Set<UUID> lookActions = new java.util.HashSet<>();
 
     void startBehavior(CompanionPlayer body, CompanionEntry.Mode mode, long tick) {
         completeBehavior(body, false, "SUPERSEDED", tick);
@@ -34,6 +35,11 @@ final class PlayerActionGateway {
 
     void stopInput(CompanionPlayer body) {
         body.stopWalking();
+    }
+
+    void lookAt(CompanionPlayer body, net.minecraft.world.phys.Vec3 target) {
+        body.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES, target);
+        lookActions.add(body.getUUID());
     }
 
     void markVanillaGameModeAction(CompanionPlayer body) { gameModeActions.add(body.getUUID()); }
@@ -55,7 +61,9 @@ final class PlayerActionGateway {
                 inventoryDigest(body),
                 success,
                 success ? "NONE" : failureCode,
-                gameModeActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_GAME_MODE" : "VANILLA_PLAYER_INPUT",
+                gameModeActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_GAME_MODE"
+                        : lookActions.remove(body.getUUID()) ? "VANILLA_ENTITY_LOOK"
+                        : "VANILLA_PLAYER_INPUT",
                 false));
         while (completed.size() > MAX_COMPLETED_EVIDENCE) {
             completed.removeFirst();
@@ -65,6 +73,7 @@ final class PlayerActionGateway {
     void discard(UUID companionId) {
         inFlight.remove(companionId);
         gameModeActions.remove(companionId);
+        lookActions.remove(companionId);
     }
 
     String evidenceSummary(UUID companionId) {

@@ -111,6 +111,44 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.succeed();
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "look")
+    public void movementLookUsesBoundedVanillaBodyRotationAndVerifiesDirection(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Looker").success(), "look test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "look test created no live body");
+        BlockPos target = body.blockPosition().offset(5, 2, -4);
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-look";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "look lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "look-position", "skill",
+                null, null, null, new SkillParameters("LookAt", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        target.getX(), target.getY(), target.getZ())).success(), "look skill failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            Vec3 expected = Vec3.atCenterOf(target).subtract(body.getEyePosition()).normalize();
+            helper.assertTrue(expected.dot(body.getViewVector(1.0F)) >= 0.999D,
+                    "body view direction did not match the bounded target");
+            helper.assertTrue(snapshot.behaviorObservation() != null,
+                    "look action produced no verified observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "LOOK_COMPLETE",
+                    "look observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_ENTITY_LOOK"),
+                    "look evidence did not identify the vanilla body-rotation path");
+            helper.assertTrue(registry.remove(owner).success(), "look test cleanup failed");
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
     public void exploreAreaScansIncrementallyAndReturnsRankedVerifiedCandidates(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")

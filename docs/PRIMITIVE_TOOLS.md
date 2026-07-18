@@ -46,6 +46,7 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | Tool | Shared executor and boundary |
 |---|---|
 | `movement.step` | Resolves a relative `dx/dy/dz` in `-8..8` from the latest connected-body position, then dispatches an ordinary survival `TRAVEL`; it never teleports |
+| `movement.look` | Runs through the durable lease/task path, turns the body toward a bounded same-dimension position with vanilla entity rotation, and verifies the resulting view vector |
 | `movement.stop` | Is exposed only when durable task state is attached and cancels only an active `TRAVEL`, `FOLLOW`, or `RETURN` task |
 | `block.break` | Converts one observed namespaced block position into `MineResourceVein` with `quantity=1`, preserving vanilla hardness, tool, drop, pickup, and evidence behavior |
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
@@ -58,7 +59,6 @@ Runtime/Fabric E2E remains part of the RC gap.
 
 Still required for RC:
 
-- movement look;
 - block interact/place;
 - inventory drop;
 - item use;

@@ -133,6 +133,8 @@ features extend these surfaces rather than creating parallel products.
 - `pure-core` does not reference Minecraft or Loader APIs.
 - Runtime does not reference Minecraft classes.
 - Normal world-changing actions pass through `PlayerActionGateway` and real player interaction.
+- Body-control primitives such as `movement.look` also use the durable lease/task path and
+  `PlayerActionGateway`; a returned success includes a verified post-action body observation.
 - Asynchronous results are revalidated against world, dimension, lease, behavior revision,
   companion, and owner.
 - Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.

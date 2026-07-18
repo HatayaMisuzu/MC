@@ -312,6 +312,18 @@ final class BehaviorDirector {
 
     private SkillProgress createSkill(CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
         ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (parameters.capability().equals("LookAt")) {
+            if (!parameters.hasBlockTarget()) return SkillProgress.failed(parameters, "LOOK_TARGET_MISSING");
+            if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+                return SkillProgress.failed(parameters, "WORLD_CHANGED");
+            }
+            BlockPos target = new BlockPos(parameters.x(), parameters.y(), parameters.z());
+            if (body.distanceToSqr(Vec3.atCenterOf(target)) > 64.0D * 64.0D) {
+                return SkillProgress.failed(parameters, "LOOK_TARGET_OUT_OF_RANGE");
+            }
+            return new SkillProgress(parameters, null, 1, 0, 0, 0, server.getTickCount(),
+                    null, target, 0);
+        }
         if (parameters.capability().equals("DeliverItem")) {
             Item item = resolveItem(parameters.itemId());
             if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
@@ -484,11 +496,29 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "SKILL_TIMEOUT"); return;
         }
         if (progress.parameters.capability().equals("DeliverItem")) tickDelivery(entry, body, progress);
+        else if (progress.parameters.capability().equals("LookAt")) tickLook(entry, body, progress);
         else if (progress.parameters.capability().equals("WithdrawFromStorage")) tickWithdrawal(entry, body, progress);
         else if (progress.parameters.capability().equals("DepositToStorage")) tickDeposit(entry, body, progress);
         else if (progress.parameters.capability().equals("CraftItem")) tickCraft(entry, body, progress);
         else if (progress.parameters.capability().equals("CollectResource")) tickCollection(entry, body, progress);
         else tickEating(entry, body, progress);
+    }
+
+    private void tickLook(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        Vec3 target = Vec3.atCenterOf(progress.containerPosition);
+        actionGateway.stopInput(body);
+        actionGateway.lookAt(body, target);
+        Vec3 expected = target.subtract(body.getEyePosition()).normalize();
+        if (expected.dot(body.getViewVector(1.0F)) < 0.999D) {
+            pauseSafely(entry, body, "LOOK_VERIFICATION_FAILED");
+            return;
+        }
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                "LOOK_COMPLETE", "", 1, 1));
+        stop(entry, body, true, "NONE");
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        savedData.changed();
     }
 
     private void tickCollection(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {

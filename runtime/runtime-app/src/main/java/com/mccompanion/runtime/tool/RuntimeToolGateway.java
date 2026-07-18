@@ -260,6 +260,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("DefendOwner")) values.add(definition("combat.defend_owner",
                 "Defend the owner from one nearby hostile using vanilla movement and attacks",
                 Json.object(), "MEDIUM", "COMBAT", false));
+        if (available.contains("RetreatFromDanger")) values.add(definition("safety.retreat",
+                "Retreat from one externally selected live threat using vanilla player movement",
+                entityAttackSchema(), "LOW", "SURVIVAL", false));
         if (available.contains("WithdrawFromStorage")) values.add(definition("inventory.withdraw", "Withdraw from a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("DepositToStorage")) values.add(definition("inventory.deposit", "Deposit held items into a verified container", withdrawSchema(), "LOW", "INVENTORY", false));
         if (available.contains("WithdrawFromStorage") && available.contains("DepositToStorage")) {
@@ -381,6 +384,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "item.smelt" -> skill("SmeltItem", validatedSmelt(call.arguments()));
             case "item.use" -> skill("UseItem", validatedItemUse(call.arguments()));
             case "combat.defend_owner" -> skill("DefendOwner", noArgumentsNode(call.arguments()));
+            case "safety.retreat" -> skill("RetreatFromDanger", validatedEntityAttack(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "inventory.transfer" -> transfer(call.arguments());
@@ -733,7 +737,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("position");
         } else if (name.equals("block.place")) {
             root.putArray("required").add("block").add("position");
-        } else if (name.equals("entity.interact") || name.equals("entity.attack")) {
+        } else if (name.equals("entity.interact") || name.equals("entity.attack")
+                || name.equals("safety.retreat")) {
             root.putArray("required").add("entityId");
         } else if (name.equals("menu.click")) {
             root.putArray("required").add("sessionToken").add("slot").add("button");

@@ -61,6 +61,7 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `menu.close` | Closes only the menu bound to the exact unexpired capability and invalidates that capability immediately |
 | `item.use` | Selects a declared namespaced item into the requested hand through vanilla inventory-menu rules, invokes `ServerPlayerGameMode.useItem`, and bounds any hold duration |
 | `inventory.drop` | Drops 1..64 declared items through `ServerPlayer.drop`, verifies both the inventory delta and newly spawned vanilla `ItemEntity` |
+| `safety.retreat` | Retreats from one externally selected visible live entity through the existing vanilla player-input safety executor; completion requires three-block displacement and six-block threat clearance |
 
 These aliases are convenience primitive entry points, not new scenario Handlers. Runtime tests
 capture their actual Mod protocol payloads, including unknown namespaced IDs. Existing real Fabric
@@ -69,7 +70,7 @@ Runtime/Fabric E2E remains part of the RC gap.
 
 Still required for RC:
 
-- explicit safety retreat Tool and remaining task wait/checkpoint controls;
+- remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and
   composite-to-primitive equivalence.

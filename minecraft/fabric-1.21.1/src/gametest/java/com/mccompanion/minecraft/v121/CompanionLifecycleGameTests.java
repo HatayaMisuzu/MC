@@ -165,7 +165,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "block interaction test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "block interaction test created no live body");
-        BlockPos target = body.blockPosition().offset(2, 0, 0);
+        BlockPos target = body.blockPosition().offset(1, 0, 0);
         body.serverLevel().setBlockAndUpdate(target, Blocks.CHEST.defaultBlockState());
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-block-interact";
@@ -668,6 +668,60 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     "retreat did not produce successful movement evidence");
             zombie.discard();
             helper.assertTrue(registry.remove(owner).success(), "retreat test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400, batch = "explicit_retreat")
+    public void explicitRetreatUsesExternallySelectedThreatAndVanillaMovement(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "ExplicitRetreater").success(),
+                "explicit retreat test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "explicit retreat test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -10; x <= 6; x++) {
+            for (int z = -3; z <= 3; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+            }
+        }
+        var zombie = EntityType.ZOMBIE.create(body.serverLevel());
+        helper.assertTrue(zombie != null, "explicit retreat test could not create threat");
+        zombie.setNoAi(true);
+        zombie.moveTo(body.getX() + 4.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(zombie),
+                "explicit retreat test could not spawn threat");
+        Vec3 start = body.position();
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-explicit-retreat";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "explicit retreat lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "retreat-selected-threat", "skill",
+                null, null, null, new SkillParameters("RetreatFromDanger", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        null, null, null, zombie.getUUID().toString(), "UP", "MAIN_HAND")).success(),
+                "explicit retreat failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 300, snapshot -> {
+            helper.assertTrue(body.position().distanceToSqr(start) >= 9.0D,
+                    "explicit retreat did not move at least three blocks");
+            helper.assertTrue(zombie.distanceToSqr(body) >= 36.0D,
+                    "explicit retreat did not reach six-block threat clearance");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
+                    "explicit retreat observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().itemId(), zombie.getUUID().toString(),
+                    "explicit retreat observation lost the external threat identity");
+            helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
+                    "explicit retreat did not produce successful player-input evidence");
+            zombie.discard();
+            helper.assertTrue(registry.remove(owner).success(), "explicit retreat cleanup failed");
         });
     }
 

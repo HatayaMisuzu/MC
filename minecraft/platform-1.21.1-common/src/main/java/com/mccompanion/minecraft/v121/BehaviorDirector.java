@@ -82,7 +82,14 @@ final class BehaviorDirector {
         observations.remove(entry.companionId);
         interactions.remove(entry.companionId);
         menuActions.remove(entry.companionId);
-        if (parameters.capability().equals("ExploreArea")) {
+        if (parameters.capability().equals("RetreatFromDanger")) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
+            retreats.put(entry.companionId, createExplicitRetreat(body, parameters));
+        } else if (parameters.capability().equals("ExploreArea")) {
             skills.remove(entry.companionId);
             mines.remove(entry.companionId);
             smelts.remove(entry.companionId);
@@ -137,7 +144,7 @@ final class BehaviorDirector {
         if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)
                 && !mines.containsKey(entry.companionId) && !smelts.containsKey(entry.companionId)
                 && !defends.containsKey(entry.companionId) && !interactions.containsKey(entry.companionId)
-                && !menuActions.containsKey(entry.companionId)) {
+                && !menuActions.containsKey(entry.companionId) && !retreats.containsKey(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -171,6 +178,7 @@ final class BehaviorDirector {
             defends.remove(entry.companionId);
             interactions.remove(entry.companionId);
             menuActions.remove(entry.companionId);
+            retreats.remove(entry.companionId);
         }
     }
 
@@ -302,7 +310,7 @@ final class BehaviorDirector {
             stop(entry, body, false, "SAFETY_RETREAT_TRIGGERED");
         }
         retreats.put(entry.companionId, new RetreatProgress(
-                threat.getUUID(), interruptedMode, body.position(), server.getTickCount()));
+                threat.getUUID(), interruptedMode, body.position(), server.getTickCount(), false, null));
         actionGateway.startBehavior(body, CompanionEntry.Mode.GOTO, server.getTickCount());
         savedData.changed();
         logger.warn("companion_safety_retreat owner={} companion={} threat={}",
@@ -310,17 +318,21 @@ final class BehaviorDirector {
     }
 
     private void tickRetreat(CompanionEntry entry, CompanionPlayer body, RetreatProgress retreat) {
+        if (retreat.failureCode != null) {
+            pauseSafely(entry, body, retreat.failureCode);
+            return;
+        }
         Entity threat = body.serverLevel().getEntity(retreat.threatId);
         double displacement = body.position().distanceToSqr(retreat.startPosition);
         boolean clear = threat == null || !threat.isAlive() || threat.distanceToSqr(body) >= 36.0D;
         if (clear && displacement >= 9.0D) {
             if (++retreat.clearTicks < 5) { actionGateway.stopInput(body); return; }
             observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
-                    "SAFETY_RETREAT_COMPLETE", "", 1, 1));
+                    "SAFETY_RETREAT_COMPLETE", retreat.threatId.toString(), 1, 1));
             actionGateway.stopInput(body);
             actionGateway.completeBehavior(body, true, "NONE", server.getTickCount());
             retreats.remove(entry.companionId);
-            entry.mode = retreat.interruptedMode == CompanionEntry.Mode.IDLE
+            entry.mode = retreat.explicit || retreat.interruptedMode == CompanionEntry.Mode.IDLE
                     ? CompanionEntry.Mode.IDLE : CompanionEntry.Mode.PAUSED;
             entry.resumeMode = CompanionEntry.Mode.IDLE;
             savedData.changed();
@@ -342,6 +354,27 @@ final class BehaviorDirector {
         Vec3 away = body.position().subtract(threat.position());
         float yaw = (float) Math.toDegrees(Math.atan2(-away.x, away.z));
         actionGateway.applyMoveInput(body, yaw, body.horizontalCollision);
+    }
+
+    private RetreatProgress createExplicitRetreat(CompanionPlayer body, SkillParameters parameters) {
+        final UUID threatId;
+        try {
+            threatId = UUID.fromString(parameters.targetId());
+        } catch (IllegalArgumentException invalid) {
+            return RetreatProgress.failed(parameters, "ENTITY_ID_INVALID");
+        }
+        Entity threat = body.serverLevel().getEntity(threatId);
+        if (threat == null || !threat.isAlive() || threat == body) {
+            return RetreatProgress.failed(parameters, "ENTITY_NOT_FOUND");
+        }
+        if (body.distanceToSqr(threat) > 16.0D * 16.0D) {
+            return RetreatProgress.failed(parameters, "ENTITY_OUT_OF_RANGE");
+        }
+        if (!body.hasLineOfSight(threat)) {
+            return RetreatProgress.failed(parameters, "ENTITY_NOT_VISIBLE");
+        }
+        return new RetreatProgress(threatId, CompanionEntry.Mode.IDLE, body.position(),
+                server.getTickCount(), true, null);
     }
 
     private SkillProgress createSkill(CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
@@ -1802,12 +1835,22 @@ final class BehaviorDirector {
         private final CompanionEntry.Mode interruptedMode;
         private final Vec3 startPosition;
         private final int startedTick;
+        private final boolean explicit;
+        private final String failureCode;
         private int clearTicks;
 
         private RetreatProgress(UUID threatId, CompanionEntry.Mode interruptedMode,
-                                Vec3 startPosition, int startedTick) {
+                                Vec3 startPosition, int startedTick, boolean explicit, String failureCode) {
             this.threatId = threatId; this.interruptedMode = interruptedMode;
             this.startPosition = startPosition; this.startedTick = startedTick;
+            this.explicit = explicit; this.failureCode = failureCode;
+        }
+
+        private static RetreatProgress failed(SkillParameters parameters, String code) {
+            UUID target = null;
+            try { target = UUID.fromString(parameters.targetId()); }
+            catch (IllegalArgumentException ignored) { }
+            return new RetreatProgress(target, CompanionEntry.Mode.IDLE, Vec3.ZERO, 0, true, code);
         }
     }
 

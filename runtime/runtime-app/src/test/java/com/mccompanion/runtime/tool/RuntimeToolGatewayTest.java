@@ -271,7 +271,7 @@ class RuntimeToolGatewayTest {
                 for (String companionId : List.of(
                         "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-block-interact",
                         "c-block-place", "c-entity-interact", "c-entity-attack",
-                        "c-menu-click", "c-menu-quick", "c-menu-close",
+                        "c-retreat", "c-menu-click", "c-menu-quick", "c-menu-close",
                         "c-use", "c-drop", "c-collect", "c-from", "c-to")) {
                     CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
                             "minecraft:overworld", new PositionDto(10, 64, -5), CompanionBodyState.SPAWNED,
@@ -286,7 +286,7 @@ class RuntimeToolGatewayTest {
                         ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
                                 "WithdrawFromStorage", "DepositToStorage", "LookAt",
                                 "InteractBlock", "PlaceBlock", "InteractEntity", "AttackEntity",
-                                "MenuAction", "UseItem", "DropItem"));
+                                "RetreatFromDanger", "MenuAction", "UseItem", "DropItem"));
 
                 var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().containsAll(List.of(
@@ -299,6 +299,8 @@ class RuntimeToolGatewayTest {
                         .containsAll(List.of("menu.click", "menu.quick_move", "menu.close")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
                         .containsAll(List.of("item.use", "inventory.drop")));
+                assertTrue(definitions.stream().map(ToolDefinition::name).toList()
+                        .contains("safety.retreat"));
                 assertEquals("MOVE", definition(definitions, "movement.step").permission());
                 assertEquals("MOVE", definition(definitions, "movement.look").permission());
                 assertEquals("INTERACT", definition(definitions, "block.interact").permission());
@@ -309,6 +311,8 @@ class RuntimeToolGatewayTest {
                 assertEquals("COMBAT", definition(definitions, "entity.attack").permission());
                 assertEquals("MEDIUM", definition(definitions, "entity.attack").risk());
                 assertEquals(List.of("entityId"), required(definition(definitions, "entity.attack")));
+                assertEquals("SURVIVAL", definition(definitions, "safety.retreat").permission());
+                assertEquals(List.of("entityId"), required(definition(definitions, "safety.retreat")));
                 assertEquals("INVENTORY", definition(definitions, "menu.click").permission());
                 assertEquals(List.of("sessionToken", "slot", "button"),
                         required(definition(definitions, "menu.click")));
@@ -393,6 +397,15 @@ class RuntimeToolGatewayTest {
                 assertEquals("AttackEntity", entityAttackParameters.path("capability").asText());
                 assertEquals(entityId, entityAttackParameters.path("parameters").path("entityId").asText());
                 assertFalse(entityAttackParameters.path("parameters").has("hand"));
+
+                ToolResult retreated = gateway.execute(
+                        new ToolContext("hermes", "session", "c-retreat"),
+                        new ToolCall("retreat", "safety.retreat",
+                                Json.object().put("entityId", entityId)));
+                assertTrue(retreated.success(), retreated.observation().toString());
+                var retreatParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("RetreatFromDanger", retreatParameters.path("capability").asText());
+                assertEquals(entityId, retreatParameters.path("parameters").path("entityId").asText());
 
                 String menuToken = "0123456789abcdef0123456789abcdef";
                 ToolResult menuClick = gateway.execute(new ToolContext("hermes", "session", "c-menu-click"),

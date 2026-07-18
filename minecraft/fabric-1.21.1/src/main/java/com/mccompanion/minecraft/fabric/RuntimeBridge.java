@@ -159,6 +159,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("DropItem", true)
                 .put("AttackEntity", true)
                 .put("PlaceBlock", true)
+                .put("RetreatFromDanger", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)

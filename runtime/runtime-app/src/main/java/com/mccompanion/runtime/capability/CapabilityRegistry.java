@@ -31,7 +31,7 @@ public final class CapabilityRegistry {
                 implemented("CollectResource", RiskLevel.MEDIUM), implemented("MineResourceVein", RiskLevel.MEDIUM),
                 implemented("CraftItem", RiskLevel.LOW), implemented("SmeltItem", RiskLevel.LOW),
                 implemented("DeliverItem", RiskLevel.LOW), implemented("EatAndRecover", RiskLevel.LOW),
-                implemented("DefendOwner", RiskLevel.MEDIUM), capability("RetreatFromDanger", RiskLevel.LOW),
+                implemented("DefendOwner", RiskLevel.MEDIUM), implemented("RetreatFromDanger", RiskLevel.LOW),
                 capability("BuildSmallBlueprint", RiskLevel.HIGH)));
     }
 

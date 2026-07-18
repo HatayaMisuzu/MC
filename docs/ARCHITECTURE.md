@@ -153,6 +153,10 @@ features extend these surfaces rather than creating parallel products.
 - Generic item use and drop select declared Registry items through vanilla inventory-menu state,
   invoke `ServerPlayerGameMode.useItem` or `ServerPlayer.drop`, and require observed consumption,
   projectile/world-entity, inventory-delta, and action-path evidence rather than editing stacks.
+- Automatic safety reflexes and external safety Tools coexist: `safety.retreat` accepts an exact
+  externally selected live entity UUID and reuses the bounded player-input retreat executor, while
+  the reflex may independently preempt an immediate nearby-hostile hazard. Neither path adds an
+  internal high-level Agent or selects the external Brain's strategic objective.
 - Asynchronous results are revalidated against world, dimension, lease, behavior revision,
   companion, and owner.
 - Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.

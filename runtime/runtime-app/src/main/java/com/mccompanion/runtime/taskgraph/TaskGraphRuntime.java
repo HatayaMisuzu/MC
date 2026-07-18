@@ -708,7 +708,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     ? current.path("tool").asText() : null;
             if (tool != null) {
                 ToolDefinition definition = definitions.get(tool);
-                if (!hasConfirmedCompletedToolResult(record, current.path("id").asText(), tool)
+                if (!hasConfirmedCurrentToolResult(record, current.path("id").asText(), tool)
                         && (definition == null || !definition.idempotent())) {
                     return RecoveryAssessment.rejected("TASK_GRAPH_RECOVERY_UNCONFIRMED_EFFECT",
                             "interrupted Tool is not currently available as idempotent");
@@ -737,20 +737,19 @@ public final class TaskGraphRuntime implements AutoCloseable {
         return RecoveryAssessment.recoverable();
     }
 
-    private static boolean hasConfirmedCompletedToolResult(
+    private static boolean hasConfirmedCurrentToolResult(
             TaskGraphExecutionRecord record, String nodeId, String toolName) {
-        boolean completed = false;
-        for (JsonNode value : record.completedNodes()) {
-            if (nodeId.equals(value.asText())) {
-                completed = true;
-                break;
-            }
-        }
-        if (!completed) return false;
+        String nodeKey = record.variables().path("_mcac").path("currentNodeKey").asText();
+        if (nodeKey.isBlank()) nodeKey = nodeId;
+        // Non-idempotent Tools cannot be wrapped in automatic retry, so their only valid
+        // persisted attempt at this recovery boundary is attempt one.
+        String exactCallId = record.executionId() + ':' + nodeKey + ":1";
         var results = record.toolResults().fields();
         while (results.hasNext()) {
-            JsonNode value = results.next().getValue();
-            if (nodeId.equals(value.path("nodeId").asText())
+            var entry = results.next();
+            JsonNode value = entry.getValue();
+            if (entry.getKey().equals(exactCallId)
+                    && nodeId.equals(value.path("nodeId").asText())
                     && toolName.equals(value.path("toolName").asText())
                     && value.path("success").isBoolean() && value.path("code").isTextual()
                     && value.has("observation")) {

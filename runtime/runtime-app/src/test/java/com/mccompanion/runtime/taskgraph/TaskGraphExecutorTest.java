@@ -70,6 +70,33 @@ class TaskGraphExecutorTest {
     }
 
     @Test
+    void nestedLoopsPersistExactScopedNodeKeysAndCallIds() {
+        FakeGateway tools = new FakeGateway(false);
+        TaskGraphExecutor executor = new TaskGraphExecutor(tools);
+        List<TaskGraphExecutionSnapshot> snapshots = new ArrayList<>();
+        var graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"nested-loop-scope","permissions":["READ_WORLD"],
+                 "root":{"id":"outer","type":"repeat","maxIterations":2,
+                  "body":{"id":"inner","type":"repeat","maxIterations":2,
+                   "body":{"id":"observe","type":"call_tool","tool":"world.observe"}}}}
+                """);
+
+        TaskGraphExecutionResult result = executor.execute("exec-loop-scope",
+                new ToolContext("hermes", "brain-1", "companion-1"), graph,
+                Json.object(), null, new TaskGraphExecutionControl(), snapshots::add);
+
+        assertTrue(result.success(), result.toJson().toString());
+        assertEquals(List.of(
+                "exec-loop-scope:observe@outer#0/inner#0:1",
+                "exec-loop-scope:observe@outer#0/inner#1:1",
+                "exec-loop-scope:observe@outer#1/inner#0:1",
+                "exec-loop-scope:observe@outer#1/inner#1:1"), tools.callIds);
+        assertTrue(snapshots.stream().anyMatch(snapshot ->
+                snapshot.variables().path("_mcac").path("currentNodeKey").asText()
+                        .equals("observe@outer#1/inner#1")));
+    }
+
+    @Test
     void retryRechecksLiveIdempotencyBeforeDispatch() {
         AtomicInteger definitionReads = new AtomicInteger();
         AtomicInteger dispatches = new AtomicInteger();

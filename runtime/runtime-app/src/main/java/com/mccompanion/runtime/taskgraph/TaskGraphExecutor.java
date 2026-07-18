@@ -117,7 +117,7 @@ public final class TaskGraphExecutor {
         String nodeId = node.path("id").asText();
         String nodeKey = scoped(nodeId, scope);
         if (state.isCompleted(nodeKey)) return Outcome.success();
-        state.enter(nodeId);
+        state.enter(nodeId, nodeKey);
         if (!executableNodeTypes.contains(type)) {
             return Outcome.failure("NODE_TYPE_NOT_EXECUTABLE",
                     Json.object().put("nodeId", nodeId).put("nodeType", type));
@@ -670,13 +670,7 @@ public final class TaskGraphExecutor {
         }
 
         private ObjectNode runtimeLoops() {
-            JsonNode runtime = variables.path("_mcac");
-            ObjectNode runtimeObject;
-            if (runtime.isObject()) runtimeObject = (ObjectNode) runtime;
-            else {
-                runtimeObject = Json.object();
-                variables.set("_mcac", runtimeObject);
-            }
+            ObjectNode runtimeObject = runtimeState();
             JsonNode loops = runtimeObject.path("loops");
             if (loops.isObject()) return (ObjectNode) loops;
             ObjectNode loopObject = Json.object();
@@ -688,8 +682,9 @@ public final class TaskGraphExecutor {
             return completedNodes.contains(nodeKey);
         }
 
-        private synchronized void enter(String nodeId) {
+        private synchronized void enter(String nodeId, String nodeKey) {
             currentNodeId = nodeId;
+            runtimeState().put("currentNodeKey", nodeKey);
             publish("RUNNING", nodeId, "RUNNING");
         }
 
@@ -781,18 +776,20 @@ public final class TaskGraphExecutor {
         }
 
         private ObjectNode runtimeRetries() {
-            JsonNode runtime = variables.path("_mcac");
-            ObjectNode runtimeObject;
-            if (runtime.isObject()) runtimeObject = (ObjectNode) runtime;
-            else {
-                runtimeObject = Json.object();
-                variables.set("_mcac", runtimeObject);
-            }
+            ObjectNode runtimeObject = runtimeState();
             JsonNode retries = runtimeObject.path("retries");
             if (retries.isObject()) return (ObjectNode) retries;
             ObjectNode retryObject = Json.object();
             runtimeObject.set("retries", retryObject);
             return retryObject;
+        }
+
+        private ObjectNode runtimeState() {
+            JsonNode runtime = variables.path("_mcac");
+            if (runtime.isObject()) return (ObjectNode) runtime;
+            ObjectNode runtimeObject = Json.object();
+            variables.set("_mcac", runtimeObject);
+            return runtimeObject;
         }
 
         private synchronized void recordNodeOutput(String nodeId, JsonNode value) {

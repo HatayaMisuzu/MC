@@ -499,6 +499,84 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
+    void recoveryMatchesConfirmedNonIdempotentResultToExactLoopScope() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("loop-scope-recovery.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+            var graph = Json.parse("""
+                    {"version":"mcac-task-graph/1","id":"loop-scope-recovery",
+                     "permissions":["MOVE"],
+                     "root":{"id":"loop","type":"repeat","maxIterations":2,
+                      "body":{"id":"move","type":"call_tool","tool":"test.move"}}}
+                    """);
+            var completedFirstIteration = Json.MAPPER.createArrayNode().add("move@loop#0");
+            var variables = Json.object();
+            variables.set("_mcac", Json.object()
+                    .put("currentNodeKey", "move@loop#1")
+                    .set("loops", Json.object().put("loop", 1)));
+            var firstObservation = Json.object().put("iteration", 0);
+            var priorOnlyResults = Json.object();
+            priorOnlyResults.set("loop-prior-only:move@loop#0:1", Json.object()
+                    .put("nodeId", "move").put("toolName", "test.move")
+                    .put("success", true).put("code", "OK").set("observation", firstObservation));
+            priorOnlyResults.set("loop-prior-only:move@loop#1:2", Json.object()
+                    .put("nodeId", "move").put("toolName", "test.move")
+                    .put("success", true).put("code", "OK")
+                    .set("observation", Json.object().put("iteration", 1)));
+
+            TaskGraphExecutionRecord priorOnly = repository.create(
+                    "loop-prior-only", context, graph, TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(priorOnly.executionId(), priorOnly.revision(), "RUNNING", "move",
+                    completedFirstIteration, priorOnlyResults, variables,
+                    Json.object().set("move", firstObservation),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            AtomicGateway rejectedGateway = new AtomicGateway(false);
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(rejectedGateway, repository)) {
+                ToolResult rejected = restarted.resume(context,
+                        new ToolCall("resume-loop-prior", "task_graph.resume", Json.object()),
+                        "loop-prior-only");
+                assertFalse(rejected.success());
+                assertEquals("TASK_GRAPH_RECOVERY_UNCONFIRMED_EFFECT", rejected.code());
+                assertEquals(0, rejectedGateway.calls,
+                        "another loop iteration or attempt must not confirm the current non-idempotent effect");
+            }
+
+            var exactObservation = Json.object().put("iteration", 1);
+            var exactResults = Json.object();
+            exactResults.set("loop-exact:move@loop#0:1", Json.object()
+                    .put("nodeId", "move").put("toolName", "test.move")
+                    .put("success", true).put("code", "OK").set("observation", firstObservation));
+            exactResults.set("loop-exact:move@loop#1:1", Json.object()
+                    .put("nodeId", "move").put("toolName", "test.move")
+                    .put("success", true).put("code", "OK").set("observation", exactObservation));
+            TaskGraphExecutionRecord exact = repository.create(
+                    "loop-exact", context, graph, TaskGraphLimits.DEFAULTS, Json.object(), Json.object());
+            repository.save(exact.executionId(), exact.revision(), "RUNNING", "move",
+                    completedFirstIteration, exactResults, variables,
+                    Json.object().set("move", exactObservation),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.nullNode(), Json.MAPPER.nullNode(), "RUNNING");
+            repository.markUnfinishedForReconciliation();
+            AtomicGateway exactGateway = new AtomicGateway(false);
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(exactGateway, repository)) {
+                ToolResult accepted = restarted.resume(context,
+                        new ToolCall("resume-loop-exact", "task_graph.resume", Json.object()), "loop-exact");
+                assertTrue(accepted.success(), accepted.observation().toString());
+                ToolResult terminal = restarted.await(context,
+                        new ToolCall("loop-exact", "task_graph.execute", Json.object()),
+                        Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("SUCCEEDED", terminal.observation().path("state").asText());
+                assertEquals(0, exactGateway.calls,
+                        "the exact persisted loop-iteration result must be reused without repeating its effect");
+            }
+        }
+    }
+
+    @Test
     void timeoutConfirmsWaitCancellationAndQuarantinesUnconfirmedToolCancellation() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("timeout-confirmation.db"))) {
             database.initialize();

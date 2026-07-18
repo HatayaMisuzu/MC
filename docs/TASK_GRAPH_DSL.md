@@ -175,7 +175,8 @@ conservative recovery assessment succeeds. The deterministic core executes `sequ
 `switch`, `repeat`, `while`, `retry`, `fallback`, `parallel`, `wait`, `checkpoint`,
 `emit_progress`, `ask_user`, `read_memory`, `return`, and `fail`. Safe expressions can read graph
 inputs, persisted state, and prior Tool observations. Loop iterations receive stable scoped node and
-Tool call IDs, and loop cursors are persisted. Parallel branches use real bounded concurrency; state
+Tool call IDs; the current scoped node key and loop cursors are persisted at execution boundaries.
+Parallel branches use real bounded concurrency; state
 snapshots are serialized, pause/cancel reaches every active Tool call, and all active graphs share
 the Runtime's four-worker parallel budget.
 Timed `wait` nodes and retry backoff persist an absolute deadline, release the fixed Graph execution
@@ -210,13 +211,15 @@ and paused executions; an answered `ask_user` question resumes the original exec
 after restart. Startup still moves crash-left `READY` or `RUNNING` work to
 `RECONCILIATION_REQUIRED`. A same-owner recovery resume rechecks the graph hash, persisted state
 shape, current graph validity, Tool availability, permission and idempotency before continuing from
-the durable boundary. An unconfirmed idempotent Tool may be reissued with its stable call ID; a
-confirmed completed Tool result is reused without repeating the effect. Unknown non-idempotent
+the durable boundary. An unconfirmed idempotent Tool may be reissued with its stable call ID. A
+persisted terminal Tool result is reused only when its execution ID, exact scoped node key (including
+every loop iteration), attempt and Tool name match the interrupted boundary; a result from another
+iteration cannot confirm a non-idempotent effect. Unknown non-idempotent
 effects, changed Tool availability, malformed Evidence and graph-hash mismatch remain in
 `RECONCILIATION_REQUIRED`. Persisted retry attempt cursors and backoff deadlines resume at the next
 stable scoped call ID rather than replaying a prior attempt. Automatic retry of non-idempotent
-effects is rejected rather than treated as reconciliation. Exact reconciliation of non-idempotent
-effects inside loop scopes and live Mod status reconciliation are not yet claimed. A Tool transport or worker failure with
+effects is rejected rather than treated as reconciliation. Live Mod status reconciliation is not
+yet claimed. A Tool transport or worker failure with
 unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
 reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic

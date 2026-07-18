@@ -64,6 +64,8 @@ final class WebTerminalApi {
         send(exchange, 200, searchStatus(requiredQuery(exchange, "instanceId")));
       else if ("POST".equals(method) && "/api/search/test".equals(path))
         send(exchange, 200, searchTest(body(exchange)));
+      else if ("GET".equals(method) && "/api/search/sessions".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/search/sessions"));
       else if ("GET".equals(method) && "/api/session/status".equals(path))
         send(exchange, 200, sessionStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/companions".equals(path))

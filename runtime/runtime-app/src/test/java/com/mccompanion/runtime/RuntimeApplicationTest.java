@@ -585,6 +585,21 @@ class RuntimeApplicationTest {
                     .header("Authorization", "Bearer " + token).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, audit.statusCode(), audit.body());
             assertEquals(3, Json.parse(audit.body()).path(0).path("toolCalls").size());
+            HttpResponse<String> searchSessions = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(new URI("http://127.0.0.1:"
+                                    + config.server.managementPort + "/search/sessions"))
+                            .header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, searchSessions.statusCode(), searchSessions.body());
+            JsonNode visibleSearch = Json.parse(searchSessions.body());
+            assertEquals("UNTRUSTED_EXTERNAL_CONTENT",
+                    visibleSearch.path("trustBoundary").asText());
+            assertEquals("brain-companion",
+                    visibleSearch.path("sessions").path(0).path("companionId").asText());
+            assertEquals("fabric-docs", visibleSearch.path("sessions").path(0)
+                    .path("sources").path(0).path("sourceId").asText());
+            assertFalse(visibleSearch.toString().contains("Version documentation"),
+                    "opened page content must not enter Search session inspection");
             assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 

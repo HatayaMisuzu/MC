@@ -307,7 +307,10 @@ release/install verification remain incomplete.
   never persists opened page content as Memory. A new same-scope query replaces the prior row,
   `search.cancel` physically deletes it and its cache entry, expiry is physically deleted, and each
   companion retains at most 128 live/recent rows. Repository/Gateway restart tests prove source
-  recovery plus controller/Brain/companion isolation. Source-click UI remains `PARTIAL`.
+  recovery plus controller/Brain/companion isolation. The existing Search & Privacy page now reads
+  a pairing-authenticated Runtime summary, labels it `UNTRUSTED_EXTERNAL_CONTENT`, lists only
+  source metadata, and opens public source URLs solely after an explicit user click with
+  `noopener noreferrer`; opened page content is neither stored nor returned by this UI endpoint.
 
 ## Craft item slice
 

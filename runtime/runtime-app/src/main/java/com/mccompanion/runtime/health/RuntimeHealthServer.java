@@ -38,6 +38,7 @@ import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.mccompanion.runtime.workspace.SkillRepository;
+import com.mccompanion.runtime.search.SearchSessionRepository;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -73,6 +74,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final McpReplayRepository mcpReplay;
     private final McpSessionRepository mcpSessions;
     private final McpEventRepository mcpEvents;
+    private final SearchSessionRepository searchSessions;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final RuntimeLog log;
     private final Instant startedAt;
@@ -98,7 +100,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             RuntimeLog log) throws IOException {
         this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
-                null, null, null, null, null, log);
+                null, null, null, null, null, null, log);
     }
 
     public RuntimeHealthServer(
@@ -121,6 +123,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             McpReplayRepository mcpReplay,
             McpSessionRepository mcpSessions,
             McpEventRepository mcpEvents,
+            SearchSessionRepository searchSessions,
             RuntimeLog log) throws IOException {
         this.config = config;
         this.pairingToken = pairingToken;
@@ -141,6 +144,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.mcpReplay = mcpReplay;
         this.mcpSessions = mcpSessions;
         this.mcpEvents = mcpEvents;
+        this.searchSessions = searchSessions;
         this.log = log;
         this.startedAt = Clock.systemUTC().instant();
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
@@ -154,6 +158,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/memories", this::memoryManagement);
         server.createContext("/skills", this::skillManagement);
         server.createContext("/mcp", this::mcp);
+        server.createContext("/search/sessions", this::searchSessions);
         executor = Executors.newFixedThreadPool(2, runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-runtime-management");
             thread.setDaemon(true);
@@ -165,6 +170,32 @@ public final class RuntimeHealthServer implements AutoCloseable {
             return thread;
         });
         server.setExecutor(executor);
+    }
+
+    private void searchSessions(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            if (!"GET".equals(exchange.getRequestMethod())) {
+                exchange.getResponseHeaders().set("Allow", "GET");
+                sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
+                return;
+            }
+            if (searchSessions == null) {
+                sendJson(exchange, 503, Json.object().put("code", "SEARCH_SESSION_STORE_UNAVAILABLE"));
+                return;
+            }
+            try {
+                var values = Json.MAPPER.createArrayNode();
+                searchSessions.listActive(128).forEach(session -> values.add(
+                        Json.MAPPER.valueToTree(session)));
+                sendJson(exchange, 200, Json.object()
+                        .put("trustBoundary", "UNTRUSTED_EXTERNAL_CONTENT")
+                        .set("sessions", values));
+            } catch (SQLException failure) {
+                log.error("Search session inspection failed", failure);
+                sendJson(exchange, 500, Json.object().put("code", "SEARCH_PERSISTENCE_ERROR"));
+            }
+        }
     }
 
     private void mcp(HttpExchange exchange) throws IOException {

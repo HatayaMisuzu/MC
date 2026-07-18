@@ -17,6 +17,14 @@ interface SearchState {
   deniedDomains?: string[]
 }
 interface SearchTest { success: boolean; networkAttempted: boolean; latencyMillis: number; code: string; message: string }
+interface SearchSourceView {
+  sourceId: string; title: string; url: string; domain: string; publisher?: string; snippet?: string
+  trustLevel: string; contentType: string
+}
+interface SearchSessionView {
+  searchId: string; companionId: string; query: string; expiresAt: number; sources: SearchSourceView[]
+}
+interface SearchSessions { trustBoundary: string; sessions: SearchSessionView[] }
 
 const domains = (value: string) => value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
 
@@ -25,6 +33,9 @@ export function SearchPage() {
   const status = useResource(() => selectedId
     ? api<SearchState>(`/api/search/status?instanceId=${encodeURIComponent(selectedId)}`)
     : Promise.resolve<SearchState>({ mode: 'disabled' }), [selectedId])
+  const sessions = useResource(() => selectedId
+    ? api<SearchSessions>(`/api/search/sessions?instanceId=${encodeURIComponent(selectedId)}`)
+    : Promise.resolve<SearchSessions>({ trustBoundary: 'UNTRUSTED_EXTERNAL_CONTENT', sessions: [] }), [selectedId])
   const [form, setForm] = useState({ endpoint: 'https://search-provider.invalid/v1/search', tokenEnv: 'MC_COMPANION_SEARCH_TOKEN', timeoutSeconds: 15, allowed: '', denied: '' })
   const [test, setTest] = useState<SearchTest | null>(null)
   const [testing, setTesting] = useState(false)
@@ -56,5 +67,16 @@ export function SearchPage() {
       <label className="field"><span>拒绝域名</span><textarea value={form.denied} onChange={(event) => setForm((value) => ({ ...value, denied: event.target.value }))} /></label>
       <div className="form-actions"><ActionButton tone="primary" icon={<Save size={16} />} type="submit">审阅 Search 配置计划</ActionButton><ActionButton icon={<Search size={16} />} type="button" loading={testing} onClick={() => void testProvider()}>测试连接</ActionButton></div>
     </form><section className="provider-test"><h2>Search Doctor</h2>{test ? <dl className="detail-list"><div><dt>结果</dt><dd><StatusBadge value={test.success ? 'PASS' : 'FAILED'} /></dd></div><div><dt>代码</dt><dd>{test.code}</dd></div><div><dt>网络请求</dt><dd>{test.networkAttempted ? '已发送有界探针' : '未发送'}</dd></div><div><dt>延迟</dt><dd>{test.latencyMillis} ms</dd></div><div><dt>说明</dt><dd>{test.message}</dd></div></dl> : <p>连接测试使用固定、无私人内容的查询，最多请求一个结果；不返回响应正文或凭据。</p>}<p>Provider 只能接收经过隐私过滤的有界查询。打开来源时仅允许本次会话返回的 sourceId，并拒绝重定向、脚本、表单和非公开 HTTPS 来源。</p><ActionButton tone="danger" icon={<Power size={16} />} onClick={() => void requestPlan('search', { instanceId: selectedId, action: 'disable' })}>关闭 Search</ActionButton><div className="privacy-note"><Search size={16} /> 搜索内容不会写入 verified World Memory。</div></section></div>
+    <section className="search-sources">
+      <header className="panel-header"><h2>最近的受限来源</h2><span>{sessions.data?.sessions?.length ?? 0} 个会话</span></header>
+      <p>以下链接来自外部 Search Provider，始终是不可信内容。只有点击链接时才会由浏览器打开；页面正文不会写入 verified World Memory。</p>
+      <div className="search-source-list">{(sessions.data?.sessions ?? []).flatMap((session) =>
+        session.sources.map((source) => <article className="search-source" key={`${session.searchId}-${source.sourceId}`}>
+          <div><strong>{source.title}</strong><span>{source.domain} · {session.companionId}</span></div>
+          <p>{source.snippet || '无摘要'}</p>
+          <a href={source.url} target="_blank" rel="noopener noreferrer">打开外部来源</a>
+        </article>))}</div>
+      {!sessions.loading && !(sessions.data?.sessions?.length) ? <p>当前没有未过期的 Search 会话。</p> : null}
+    </section>
   </div>
 }

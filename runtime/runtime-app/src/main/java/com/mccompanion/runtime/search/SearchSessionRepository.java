@@ -14,6 +14,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.ArrayList;
 
 /** Durable, expiring Search source sessions scoped to one controller/Brain/companion tuple. */
 public final class SearchSessionRepository {
@@ -140,6 +141,31 @@ public final class SearchSessionRepository {
         }
     }
 
+    public List<SessionView> listActive(int limit) throws SQLException {
+        if (limit < 1 || limit > 128) throw new IllegalArgumentException("limit must be 1..128");
+        expire();
+        List<SessionView> sessions = new ArrayList<>();
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT search_id,companion_id,policy_json,sources_json,expires_at
+                FROM search_session WHERE state='ACTIVE' AND expires_at>?
+                ORDER BY updated_at DESC LIMIT ?
+                """)) {
+            statement.setLong(1, clock.millis());
+            statement.setInt(2, limit);
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    SearchQuery policy = parsePolicy(rows.getString("policy_json"));
+                    sessions.add(new SessionView(rows.getString("search_id"),
+                            rows.getString("companion_id"), policy.query(),
+                            rows.getLong("expires_at"),
+                            Json.MAPPER.convertValue(Json.parse(rows.getString("sources_json")),
+                                    new TypeReference<List<SearchSource>>() { })));
+                }
+            }
+        }
+        return List.copyOf(sessions);
+    }
+
     private static void bindScope(PreparedStatement statement, int start, ToolContext context)
             throws SQLException {
         statement.setString(start, context.controllerId());
@@ -169,6 +195,14 @@ public final class SearchSessionRepository {
     public record StoredSession(
             String searchId, SearchQuery policy, List<SearchSource> sources, long expiresAt) {
         public StoredSession {
+            sources = List.copyOf(sources);
+        }
+    }
+
+    public record SessionView(
+            String searchId, String companionId, String query, long expiresAt,
+            List<SearchSource> sources) {
+        public SessionView {
             sources = List.copyOf(sources);
         }
     }

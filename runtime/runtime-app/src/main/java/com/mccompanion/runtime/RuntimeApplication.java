@@ -270,7 +270,8 @@ public final class RuntimeApplication implements AutoCloseable {
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
                     kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,
-                    toolGateway, taskGraphRuntime, skillRepository, mcpReplay, mcpSessions, mcpEvents, log);
+                    toolGateway, taskGraphRuntime, skillRepository, mcpReplay, mcpSessions, mcpEvents,
+                    searchSessions, log);
             healthServer.start();
 
             RuntimeWebSocketServer activeWebSocket = webSocket;

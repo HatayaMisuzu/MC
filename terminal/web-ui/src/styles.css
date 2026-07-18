@@ -106,7 +106,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .command-row { margin-bottom: 14px; }
 
 .overview-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 12px; margin-bottom: 12px; }
-.main-panel, .detail-panel, .evidence-panel, .session-state, .flow-explanation, .control-panel, .companion-detail, .companion-chat, .runtime-details, .form-panel, .provider-test, .doctor-summary, .support-panel, .shutdown-panel, .settings-grid > section, .smoke-grid > section { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.main-panel, .detail-panel, .evidence-panel, .session-state, .flow-explanation, .control-panel, .companion-detail, .companion-chat, .runtime-details, .form-panel, .provider-test, .search-sources, .doctor-summary, .support-panel, .shutdown-panel, .settings-grid > section, .smoke-grid > section { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
 .panel-header { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 13px; border-bottom: 1px solid var(--border); }
 .panel-header h2, .event-stream h2 { margin: 0; font-size: 13.5px; }
 .panel-header span, .event-stream header > span { color: var(--muted); font-size: 11px; }
@@ -173,6 +173,14 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 
 .session-layout, .companion-grid, .provider-layout, .smoke-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, .8fr); gap: 12px; }
 .session-state, .flow-explanation, .control-panel, .companion-detail, .form-panel, .provider-test, .smoke-grid > section { padding: 16px; }
+.search-sources { margin-top: 12px; padding: 16px; }
+.search-sources > p { color: var(--muted); }
+.search-source-list { display: grid; gap: 8px; }
+.search-source { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.search-source div { display: grid; gap: 2px; }
+.search-source span, .search-source p { color: var(--muted); font-size: 12px; }
+.search-source p { grid-column: 1 / -1; margin: 0; }
+.search-source a { grid-column: 2; grid-row: 1; align-self: center; }
 .session-state > header { display: flex; align-items: center; justify-content: space-between; }
 .flow-explanation ol { margin: 12px 0; padding-left: 22px; color: var(--muted); font-size: 12px; line-height: 2; }
 

@@ -49,7 +49,9 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `movement.look` | Runs through the durable lease/task path, turns the body toward a bounded same-dimension position with vanilla entity rotation, and verifies the resulting view vector |
 | `movement.stop` | Is exposed only when durable task state is attached and cancels only an active `TRAVEL`, `FOLLOW`, or `RETURN` task |
 | `block.break` | Converts one observed namespaced block position into `MineResourceVein` with `quantity=1`, preserving vanilla hardness, tool, drop, pickup, and evidence behavior |
+| `block.interact` | Performs one same-dimension, loaded, visible interaction within five blocks through `ServerPlayerGameMode.useItemOn`; face and hand are explicit and bounded |
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
+| `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `inventory.transfer` | Selects the existing verified-container withdraw or deposit executor from the declared direction; arbitrary container or filesystem access is impossible |
 
 These aliases are convenience primitive entry points, not new scenario Handlers. Runtime tests
@@ -59,10 +61,10 @@ Runtime/Fabric E2E remains part of the RC gap.
 
 Still required for RC:
 
-- block interact/place;
+- block place;
 - inventory drop;
 - item use;
-- entity interact/attack;
+- entity attack;
 - menu session inspect/click/quick-move/close;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;

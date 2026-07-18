@@ -253,7 +253,8 @@ class RuntimeToolGatewayTest {
                 var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of(
-                        "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-collect", "c-from", "c-to")) {
+                        "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-block-interact",
+                        "c-entity-interact", "c-collect", "c-from", "c-to")) {
                     CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
                             "minecraft:overworld", new PositionDto(10, 64, -5), CompanionBodyState.SPAWNED,
                             null, null, 0, 0, true, CapabilitySet.empty(), Instant.now());
@@ -265,14 +266,19 @@ class RuntimeToolGatewayTest {
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
                         ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
-                                "WithdrawFromStorage", "DepositToStorage", "LookAt"));
+                                "WithdrawFromStorage", "DepositToStorage", "LookAt",
+                                "InteractBlock", "InteractEntity"));
 
                 var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().containsAll(List.of(
                         "movement.step", "movement.stop", "block.break", "entity.collect", "inventory.transfer")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().contains("movement.look"));
+                assertTrue(definitions.stream().map(ToolDefinition::name).toList()
+                        .containsAll(List.of("block.interact", "entity.interact")));
                 assertEquals("MOVE", definition(definitions, "movement.step").permission());
                 assertEquals("MOVE", definition(definitions, "movement.look").permission());
+                assertEquals("INTERACT", definition(definitions, "block.interact").permission());
+                assertEquals("INTERACT", definition(definitions, "entity.interact").permission());
                 assertEquals("MINE", definition(definitions, "block.break").permission());
                 assertEquals("COLLECT", definition(definitions, "entity.collect").permission());
                 assertEquals("INVENTORY", definition(definitions, "inventory.transfer").permission());
@@ -297,6 +303,30 @@ class RuntimeToolGatewayTest {
                 assertEquals(14, lookParameters.path("parameters").path("target").path("x").asInt());
                 assertEquals(66, lookParameters.path("parameters").path("target").path("y").asInt());
                 assertEquals(-1, lookParameters.path("parameters").path("target").path("z").asInt());
+
+                ToolResult blockInteraction = gateway.execute(
+                        new ToolContext("hermes", "session", "c-block-interact"),
+                        new ToolCall("interact-block", "block.interact", Json.object()
+                                .put("face", "NORTH").put("hand", "OFF_HAND")
+                                .set("position", Json.object().put("dimension", "examplemod:moon")
+                                        .put("x", 3).put("y", 70).put("z", 4))));
+                assertTrue(blockInteraction.success(), blockInteraction.observation().toString());
+                var blockInteractionParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("InteractBlock", blockInteractionParameters.path("capability").asText());
+                assertEquals("NORTH", blockInteractionParameters.path("parameters").path("face").asText());
+                assertEquals("OFF_HAND", blockInteractionParameters.path("parameters").path("hand").asText());
+                assertEquals("examplemod:moon", blockInteractionParameters.path("parameters")
+                        .path("target").path("dimension").asText());
+
+                String entityId = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
+                ToolResult entityInteraction = gateway.execute(
+                        new ToolContext("hermes", "session", "c-entity-interact"),
+                        new ToolCall("interact-entity", "entity.interact",
+                                Json.object().put("entityId", entityId).put("hand", "MAIN_HAND")));
+                assertTrue(entityInteraction.success(), entityInteraction.observation().toString());
+                var entityInteractionParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("InteractEntity", entityInteractionParameters.path("capability").asText());
+                assertEquals(entityId, entityInteractionParameters.path("parameters").path("entityId").asText());
 
                 ToolResult moving = gateway.execute(new ToolContext("hermes", "session", "c-stop"),
                         new ToolCall("move-before-stop", "movement.navigate",

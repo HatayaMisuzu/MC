@@ -135,6 +135,9 @@ features extend these surfaces rather than creating parallel products.
 - Normal world-changing actions pass through `PlayerActionGateway` and real player interaction.
 - Body-control primitives such as `movement.look` also use the durable lease/task path and
   `PlayerActionGateway`; a returned success includes a verified post-action body observation.
+- Generic block/entity interaction is capability-gated per loader, bound to the durable lease/task,
+  and rechecks dimension, loaded state, range, visibility, UUID, hand, and face immediately before
+  invoking vanilla `ServerPlayer` interaction. It does not contain block- or Mod-specific handlers.
 - Asynchronous results are revalidated against world, dimension, lease, behavior revision,
   companion, and owner.
 - Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.

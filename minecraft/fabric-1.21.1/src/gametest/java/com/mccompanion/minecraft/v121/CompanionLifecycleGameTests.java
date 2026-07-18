@@ -149,6 +149,91 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "block_interaction")
+    public void blockInteractUsesVisibleReachableVanillaPlayerAction(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "BlockInteractor").success(),
+                "block interaction test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "block interaction test created no live body");
+        BlockPos target = body.blockPosition().offset(2, 0, 0);
+        body.serverLevel().setBlockAndUpdate(target, Blocks.CHEST.defaultBlockState());
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-block-interact";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "block interaction lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "open-visible-chest", "skill",
+                null, null, null, new SkillParameters("InteractBlock", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND")).success(),
+                "block interaction failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertTrue(body.containerMenu != body.inventoryMenu,
+                    "vanilla block interaction did not open the chest menu");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "INTERACTION_COMPLETE",
+                    "block interaction observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
+                    "block interaction evidence did not identify ServerPlayerGameMode");
+            body.closeContainer();
+            helper.assertTrue(registry.remove(owner).success(), "block interaction cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "entity_interaction")
+    public void entityInteractUsesVisibleReachableVanillaPlayerAction(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "EntityInteractor").success(),
+                "entity interaction test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "entity interaction test created no live body");
+        var cow = EntityType.COW.create(body.serverLevel());
+        helper.assertTrue(cow != null, "entity interaction test could not create cow");
+        cow.setNoAi(true);
+        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(cow),
+                "entity interaction test could not add cow");
+        body.getInventory().setItem(0, new ItemStack(Items.WHEAT, 2));
+        body.getInventory().selected = 0;
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-entity-interact";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "entity interaction lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "feed-visible-cow", "skill",
+                null, null, null, new SkillParameters("InteractEntity", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        null, null, null, cow.getUUID().toString(), "UP", "MAIN_HAND")).success(),
+                "entity interaction failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertTrue(cow.isInLove(), "vanilla entity interaction did not feed the cow");
+            helper.assertValueEqual(body.getMainHandItem().getCount(), 1,
+                    "vanilla entity interaction did not consume one wheat");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "INTERACTION_COMPLETE",
+                    "entity interaction observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_INTERACTION"),
+                    "entity interaction evidence did not identify the vanilla player action");
+            cow.discard();
+            helper.assertTrue(registry.remove(owner).success(), "entity interaction cleanup failed");
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
     public void exploreAreaScansIncrementallyAndReturnsRankedVerifiedCandidates(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
@@ -287,10 +372,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
             helper.assertValueEqual(snapshot.behaviorState(), "PAUSED",
                     "active task was not interrupted after safety retreat");
-            helper.assertTrue(body.position().distanceToSqr(start) >= 9.0D,
+            // The reflex measures its three-block displacement from the exact tick on which it
+            // preempts travel. Depending on server scheduling, travel may first move toward the
+            // threat, so the net delta from this earlier setup position can be smaller.
+            helper.assertTrue(body.position().distanceToSqr(start) >= 0.25D,
                     "retreat did not create a verified movement delta");
-            helper.assertTrue(zombie.distanceToSqr(body) > initialThreatDistance,
-                    "retreat did not increase distance from the hostile");
+            helper.assertTrue(zombie.distanceToSqr(body) >= 36.0D
+                            && zombie.distanceToSqr(body) > initialThreatDistance,
+                    "retreat did not reach the verified six-block hostile clearance");
             helper.assertTrue(snapshot.behaviorObservation() != null, "retreat produced no observation");
             helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
                     "retreat observation code mismatch");
@@ -532,7 +621,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400, batch = "crafting")
     public void storageSkillsUseVanillaContainerMenuAndPreserveItemCounts(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")

@@ -228,6 +228,12 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("MineResourceVein")) values.add(definition("block.break",
                 "Break one observed block through vanilla block-breaking rules", blockBreakSchema(),
                 "MEDIUM", "MINE", false));
+        if (available.contains("InteractBlock")) values.add(definition("block.interact",
+                "Interact once with a visible reachable block through vanilla player rules",
+                blockInteractionSchema(), "LOW", "INTERACT", false));
+        if (available.contains("InteractEntity")) values.add(definition("entity.interact",
+                "Interact once with a visible reachable entity through vanilla player rules",
+                entityInteractionSchema(), "LOW", "INTERACT", false));
         if (available.contains("SmeltItem")) values.add(definition("item.smelt",
                 "Smelt a bounded quantity in a verified nearby furnace using held input and fuel",
                 smeltSchema(), "LOW", "CRAFT", false));
@@ -338,6 +344,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "movement.navigate" -> navigate(call.arguments());
             case "movement.look" -> skill("LookAt", validatedLook(call.arguments()));
             case "block.break" -> breakBlock(call.arguments());
+            case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
+            case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "entity.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
@@ -389,6 +397,53 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private static JsonNode validatedLook(JsonNode arguments) {
         Intent target = navigate(arguments);
         return Json.object().set("target", target.arguments().path("target"));
+    }
+
+    private static JsonNode validatedBlockInteraction(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("position", "face", "hand"));
+        JsonNode position = arguments.path("position");
+        if (!position.isObject()) throw new IllegalArgumentException("position must be an object");
+        rejectUnexpected(position, Set.of("dimension", "x", "y", "z"));
+        ObjectNode target = validatedBoundedPosition(position);
+        String face = enumValue(arguments.path("face").asText("UP"), "face",
+                Set.of("DOWN", "UP", "NORTH", "SOUTH", "WEST", "EAST"));
+        String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
+                Set.of("MAIN_HAND", "OFF_HAND"));
+        return Json.object().put("face", face).put("hand", hand).set("target", target);
+    }
+
+    private static JsonNode validatedEntityInteraction(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("entityId", "hand"));
+        String entityId = arguments.path("entityId").asText("");
+        try {
+            entityId = java.util.UUID.fromString(entityId).toString();
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("entityId must be a UUID");
+        }
+        String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
+                Set.of("MAIN_HAND", "OFF_HAND"));
+        return Json.object().put("entityId", entityId).put("hand", hand);
+    }
+
+    private static ObjectNode validatedBoundedPosition(JsonNode position) {
+        ObjectNode target = Json.object();
+        for (String field : List.of("x", "y", "z")) {
+            if (!position.path(field).isIntegralNumber() || !position.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException("position." + field + " must be an integer");
+            }
+            target.put(field, position.path(field).asInt());
+        }
+        int x = target.path("x").asInt(), y = target.path("y").asInt(), z = target.path("z").asInt();
+        if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000 || y < -2048 || y > 2048) {
+            throw new IllegalArgumentException("position is outside safe world bounds");
+        }
+        target.put("dimension", position.path("dimension").asText("minecraft:overworld"));
+        return target;
+    }
+
+    private static String enumValue(String value, String label, Set<String> allowed) {
+        if (!allowed.contains(value)) throw new IllegalArgumentException(label + " is invalid");
+        return value;
     }
 
     private Intent step(ToolContext context, JsonNode arguments) throws java.sql.SQLException {
@@ -555,6 +610,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("dx").add("dy").add("dz");
         } else if (name.equals("block.break")) {
             root.putArray("required").add("block").add("position");
+        } else if (name.equals("block.interact")) {
+            root.putArray("required").add("position");
+        } else if (name.equals("entity.interact")) {
+            root.putArray("required").add("entityId");
         } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
         } else if (name.equals("inventory.transfer")) {
@@ -609,6 +668,30 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         fields.putObject("dimension").put("type", "string");
         for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
         position.putArray("required").add("x").add("y").add("z");
+        return properties;
+    }
+
+    private static ObjectNode blockInteractionSchema() {
+        ObjectNode properties = Json.object();
+        ObjectNode position = properties.putObject("position");
+        position.put("type", "object").put("additionalProperties", false);
+        ObjectNode fields = position.putObject("properties");
+        fields.putObject("dimension").put("type", "string");
+        for (String field : List.of("x", "y", "z")) fields.putObject(field).put("type", "integer");
+        position.putArray("required").add("x").add("y").add("z");
+        properties.putObject("face").put("type", "string").putArray("enum")
+                .add("DOWN").add("UP").add("NORTH").add("SOUTH").add("WEST").add("EAST");
+        properties.putObject("hand").put("type", "string").putArray("enum")
+                .add("MAIN_HAND").add("OFF_HAND");
+        return properties;
+    }
+
+    private static ObjectNode entityInteractionSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        properties.putObject("hand").put("type", "string").putArray("enum")
+                .add("MAIN_HAND").add("OFF_HAND");
         return properties;
     }
 

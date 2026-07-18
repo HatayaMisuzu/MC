@@ -152,6 +152,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
                 .put("LookAt", true)
+                .put("InteractBlock", true)
+                .put("InteractEntity", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)
@@ -368,7 +370,9 @@ final class RuntimeBridge implements AutoCloseable {
         Integer z = target.path("z").canConvertToInt() ? target.path("z").asInt() : null;
         try { return new SkillParameters(parameters.path("capability").asText(), item, quantity,
                 values.path("allowPartial").asBoolean(false),
-                target.path("dimension").asText("minecraft:overworld"), x, y, z); }
+                target.path("dimension").asText("minecraft:overworld"), x, y, z,
+                values.path("entityId").asText(""), values.path("face").asText("UP"),
+                values.path("hand").asText("MAIN_HAND")); }
         catch (IllegalArgumentException invalid) { return null; }
     }
 

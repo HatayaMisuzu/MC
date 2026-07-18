@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -33,7 +34,7 @@ public final class SkillToolGateway implements ToolGateway {
     private final String profileId;
     private final Function<ToolContext, List<ToolDefinition>> availableTools;
     private final TaskGraphValidator validator = new TaskGraphValidator();
-    private final Set<String> activeExecutions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Map<String, ActiveSkillExecution> activeExecutions = new ConcurrentHashMap<>();
     private volatile TaskGraphRuntime taskGraphRuntime;
 
     public SkillToolGateway(AgentWorkspace workspace, SkillRepository skills, String profileId,
@@ -112,7 +113,7 @@ public final class SkillToolGateway implements ToolGateway {
 
     @Override
     public void cancel(ToolContext context, String callId, String reason) {
-        if (taskGraphRuntime != null && activeExecutions.remove(executionKey(context, callId))) {
+        if (taskGraphRuntime != null && activeExecutions.remove(executionKey(context, callId)) != null) {
             taskGraphRuntime.cancel(context, callId, reason);
         }
     }
@@ -221,6 +222,7 @@ public final class SkillToolGateway implements ToolGateway {
         rejectBuiltinId(skillId);
         SkillVersion disabled = skills.disable(profileId, context.companionId(), skillId,
                 context.controllerId(), text(call.arguments(), "reason", 1, 256));
+        cancelRevoked(context.companionId(), skillId, null, "SKILL_DISABLED");
         return new ToolResult(call.callId(), call.name(), true, "SKILL_DISABLED",
                 withoutDocument(disabled), true);
     }
@@ -232,6 +234,7 @@ public final class SkillToolGateway implements ToolGateway {
         SkillVersion active = skills.rollback(profileId, context.companionId(), skillId,
                 integer(call.arguments(), "version", 1, Integer.MAX_VALUE), context.controllerId(),
                 text(call.arguments(), "reason", 1, 256));
+        cancelRevoked(context.companionId(), skillId, active.requestId(), "SKILL_VERSION_REVOKED");
         return new ToolResult(call.callId(), call.name(), true, "SKILL_ROLLED_BACK",
                 withoutDocument(active), true);
     }
@@ -271,9 +274,34 @@ public final class SkillToolGateway implements ToolGateway {
         }
         ToolResult started = taskGraphRuntime.start(context, call, graph, inputs, provenance);
         if (started.success() && !started.terminal()) {
-            activeExecutions.add(executionKey(context, call.callId()));
+            String key = executionKey(context, call.callId());
+            ActiveSkillExecution execution = new ActiveSkillExecution(
+                    context, call.callId(), skillId, active == null ? null : active.requestId());
+            activeExecutions.put(key, execution);
+            if (active != null) {
+                SkillVersion current = skills.active(profileId, context.companionId(), skillId).orElse(null);
+                if (current == null || !current.requestId().equals(active.requestId())) {
+                    if (activeExecutions.remove(key, execution)) {
+                        taskGraphRuntime.cancel(context, call.callId(), "SKILL_VERSION_REVOKED");
+                    }
+                }
+            }
         }
         return started;
+    }
+
+    private void cancelRevoked(String companionId, String skillId, String retainedRequestId, String reason) {
+        if (taskGraphRuntime == null) return;
+        activeExecutions.forEach((key, execution) -> {
+            if (!execution.context().companionId().equals(companionId)
+                    || !execution.skillId().equals(skillId)
+                    || java.util.Objects.equals(execution.requestId(), retainedRequestId)) {
+                return;
+            }
+            if (activeExecutions.remove(key, execution)) {
+                taskGraphRuntime.cancel(execution.context(), execution.callId(), reason);
+            }
+        });
     }
 
     private ValidatedDraft validatedDraft(ToolContext context, JsonNode arguments) throws IOException {
@@ -451,5 +479,8 @@ public final class SkillToolGateway implements ToolGateway {
 
     private record ValidatedDraft(String skillId, String format, WorkspaceDocument document, JsonNode graph,
                                   com.mccompanion.runtime.taskgraph.TaskGraphValidationResult validation) {
+    }
+
+    private record ActiveSkillExecution(ToolContext context, String callId, String skillId, String requestId) {
     }
 }

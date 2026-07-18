@@ -4,6 +4,7 @@ import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
+import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRepository;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import org.junit.jupiter.api.Test;
@@ -171,6 +172,95 @@ class SkillToolGatewayTest {
     }
 
     @Test
+    void disableAndRollbackCancelOnlyExecutionsOfTheRevokedApprovedVersion() throws Exception {
+        AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("revocation-workspace"), "profile");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("revocation.db"))) {
+            database.initialize();
+            SkillRepository repository = new SkillRepository(database);
+            SkillToolGateway[] holder = new SkillToolGateway[1];
+            holder[0] = new SkillToolGateway(workspace, repository, "profile",
+                    context -> holder[0].definitions(context));
+            SkillToolGateway gateway = holder[0];
+            TaskGraphExecutionRepository executions = new TaskGraphExecutionRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, executions)) {
+                gateway.attachTaskGraphRuntime(runtime);
+                ToolContext context = new ToolContext("controller", "brain-session", "c1");
+                String firstGraph = """
+                        version: mcac-task-graph/1
+                        id: revocable_wait_v1
+                        permissions: []
+                        root:
+                          id: wait
+                          type: wait
+                          durationMillis: 3000
+                        """;
+                gateway.execute(context, new ToolCall("save-v1", "skill.save_draft", Json.object()
+                        .put("skillId", "revocable_wait").put("format", "yaml")
+                        .put("document", firstGraph)));
+                var firstRequest = gateway.execute(context,
+                        new ToolCall("promote-v1", "skill.request_promotion", Json.object()
+                                .put("skillId", "revocable_wait").put("format", "yaml")));
+                repository.approve(firstRequest.observation().path("requestId").asText(), "user:owner");
+
+                ToolCall firstExecution = new ToolCall(
+                        "execute-revocable-v1", "skill.execute",
+                        Json.object().put("skillId", "revocable_wait"));
+                ToolResult firstAccepted = gateway.execute(context, firstExecution);
+                assertFalse(firstAccepted.terminal());
+                waitForGraphState(executions, firstExecution.callId(), "WAITING");
+
+                ToolContext otherContext = new ToolContext("controller", "other-session", "c2");
+                gateway.execute(otherContext, new ToolCall("save-other", "skill.save_draft", Json.object()
+                        .put("skillId", "revocable_wait").put("format", "yaml")
+                        .put("document", firstGraph)));
+                var otherRequest = gateway.execute(otherContext,
+                        new ToolCall("promote-other", "skill.request_promotion", Json.object()
+                                .put("skillId", "revocable_wait").put("format", "yaml")));
+                repository.approve(otherRequest.observation().path("requestId").asText(), "user:owner");
+                ToolCall otherExecution = new ToolCall(
+                        "execute-other-companion", "skill.execute",
+                        Json.object().put("skillId", "revocable_wait"));
+                ToolResult otherAccepted = gateway.execute(otherContext, otherExecution);
+                waitForGraphState(executions, otherExecution.callId(), "WAITING");
+
+                var disabled = gateway.execute(context, new ToolCall("disable-running", "skill.disable",
+                        Json.object().put("skillId", "revocable_wait").put("reason", "revoke running version")));
+                assertEquals("SKILL_DISABLED", disabled.code());
+                assertEquals("CANCELLED", gateway.awaitTerminal(
+                        context, firstExecution, firstAccepted,
+                        Duration.ofSeconds(2), ignored -> { }).observation().path("state").asText());
+                assertEquals("WAITING", executions.get(otherExecution.callId()).orElseThrow().state(),
+                        "revocation crossed the companion workspace boundary");
+                assertTrue(gateway.awaitTerminal(otherContext, otherExecution, otherAccepted,
+                        Duration.ofSeconds(4), ignored -> { }).success());
+
+                String secondGraph = firstGraph.replace("revocable_wait_v1", "revocable_wait_v2");
+                gateway.execute(context, new ToolCall("save-v2", "skill.save_draft", Json.object()
+                        .put("skillId", "revocable_wait").put("format", "yaml")
+                        .put("document", secondGraph)));
+                var secondRequest = gateway.execute(context,
+                        new ToolCall("promote-v2", "skill.request_promotion", Json.object()
+                                .put("skillId", "revocable_wait").put("format", "yaml")));
+                repository.approve(secondRequest.observation().path("requestId").asText(), "user:owner");
+                ToolCall secondExecution = new ToolCall(
+                        "execute-revocable-v2", "skill.execute",
+                        Json.object().put("skillId", "revocable_wait"));
+                ToolResult secondAccepted = gateway.execute(context, secondExecution);
+                assertFalse(secondAccepted.terminal());
+                waitForGraphState(executions, secondExecution.callId(), "WAITING");
+                var rolledBack = gateway.execute(context, new ToolCall("rollback-running", "skill.rollback",
+                        Json.object().put("skillId", "revocable_wait").put("version", 1)
+                                .put("reason", "revoke v2")));
+                assertEquals("SKILL_ROLLED_BACK", rolledBack.code());
+                ToolResult cancelled = gateway.awaitTerminal(
+                        context, secondExecution, secondAccepted, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("CANCELLED", cancelled.observation().path("state").asText());
+                assertEquals(1, rolledBack.observation().path("version").asInt());
+            }
+        }
+    }
+
+    @Test
     void invalidGraphRemainsQuarantinedAndUnknownFieldsAreRejected() throws Exception {
         AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("invalid"), "profile");
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("invalid.db"))) {
@@ -195,5 +285,16 @@ class SkillToolGatewayTest {
             assertFalse(unexpected.success());
             assertEquals("INVALID_TOOL_ARGUMENTS", unexpected.code());
         }
+    }
+
+    private static void waitForGraphState(TaskGraphExecutionRepository repository,
+                                          String executionId, String expected) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            var record = repository.get(executionId);
+            if (record.isPresent() && record.get().state().equals(expected)) return;
+            Thread.sleep(10);
+        }
+        fail("Skill execution did not reach Task Graph state " + expected);
     }
 }

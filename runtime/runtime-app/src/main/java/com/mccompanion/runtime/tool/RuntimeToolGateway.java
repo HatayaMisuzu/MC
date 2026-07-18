@@ -234,6 +234,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
                 "Interact once with a visible reachable entity through vanilla player rules",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
+        if (available.contains("AttackEntity")) values.add(definition("entity.attack",
+                "Attack one externally selected visible reachable living entity through vanilla player rules",
+                entityAttackSchema(), "MEDIUM", "COMBAT", false));
         if (available.contains("MenuAction")) {
             values.add(definition("menu.click",
                     "Perform one bounded pickup click in the exact short-lived open menu session",
@@ -363,6 +366,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "block.break" -> breakBlock(call.arguments());
             case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
             case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
+            case "entity.attack" -> skill("AttackEntity", validatedEntityAttack(call.arguments()));
             case "menu.click" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLICK"));
             case "menu.quick_move" -> skill("MenuAction", validatedMenuAction(call.arguments(), "QUICK_MOVE"));
             case "menu.close" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLOSE"));
@@ -445,6 +449,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
                 Set.of("MAIN_HAND", "OFF_HAND"));
         return Json.object().put("entityId", entityId).put("hand", hand);
+    }
+
+    private static JsonNode validatedEntityAttack(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("entityId"));
+        String entityId = arguments.path("entityId").asText("");
+        try {
+            entityId = java.util.UUID.fromString(entityId).toString();
+        } catch (IllegalArgumentException invalid) {
+            throw new IllegalArgumentException("entityId must be a UUID");
+        }
+        return Json.object().put("entityId", entityId);
     }
 
     private static JsonNode validatedMenuAction(JsonNode arguments, String action) {
@@ -695,7 +710,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("block").add("position");
         } else if (name.equals("block.interact")) {
             root.putArray("required").add("position");
-        } else if (name.equals("entity.interact")) {
+        } else if (name.equals("entity.interact") || name.equals("entity.attack")) {
             root.putArray("required").add("entityId");
         } else if (name.equals("menu.click")) {
             root.putArray("required").add("sessionToken").add("slot").add("button");
@@ -784,6 +799,13 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 .put("pattern", "^[0-9a-fA-F-]{36}$");
         properties.putObject("hand").put("type", "string").putArray("enum")
                 .add("MAIN_HAND").add("OFF_HAND");
+        return properties;
+    }
+
+    private static ObjectNode entityAttackSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
         return properties;
     }
 

@@ -18,6 +18,7 @@ final class PlayerActionGateway {
     private final Deque<ActionEvidence> completed = new ArrayDeque<>();
     private final java.util.Set<UUID> gameModeActions = new java.util.HashSet<>();
     private final java.util.Set<UUID> entityInteractionActions = new java.util.HashSet<>();
+    private final java.util.Set<UUID> attackActions = new java.util.HashSet<>();
     private final java.util.Set<UUID> menuActions = new java.util.HashSet<>();
     private final java.util.Set<UUID> dropActions = new java.util.HashSet<>();
     private final java.util.Set<UUID> lookActions = new java.util.HashSet<>();
@@ -49,6 +50,7 @@ final class PlayerActionGateway {
     void markVanillaEntityInteraction(CompanionPlayer body) {
         entityInteractionActions.add(body.getUUID());
     }
+    void markVanillaAttack(CompanionPlayer body) { attackActions.add(body.getUUID()); }
     void markVanillaMenuAction(CompanionPlayer body) { menuActions.add(body.getUUID()); }
     void markVanillaDrop(CompanionPlayer body) { dropActions.add(body.getUUID()); }
 
@@ -70,6 +72,7 @@ final class PlayerActionGateway {
                 success,
                 success ? "NONE" : failureCode,
                 gameModeActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_GAME_MODE"
+                        : attackActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_ATTACK"
                         : entityInteractionActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_INTERACTION"
                         : menuActions.remove(body.getUUID()) ? "VANILLA_CONTAINER_MENU"
                         : dropActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_DROP"
@@ -85,6 +88,7 @@ final class PlayerActionGateway {
         inFlight.remove(companionId);
         gameModeActions.remove(companionId);
         entityInteractionActions.remove(companionId);
+        attackActions.remove(companionId);
         menuActions.remove(companionId);
         dropActions.remove(companionId);
         lookActions.remove(companionId);

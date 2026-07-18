@@ -52,6 +52,7 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `block.interact` | Performs one same-dimension, loaded, visible interaction within five blocks through `ServerPlayerGameMode.useItemOn`; face and hand are explicit and bounded |
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
+| `entity.attack` | Attacks one externally selected UUID-bound living entity within five blocks through `ServerPlayer.attack`; alive/range/visibility are revalidated and success requires an observed health decrease or death |
 | `inventory.transfer` | Selects the existing verified-container withdraw or deposit executor from the declared direction; arbitrary container or filesystem access is impossible |
 | `menu.inspect` | Reads the exact live open menu and issues a process-local 192-bit opaque capability bound to that menu instance for ten seconds |
 | `menu.click` | Performs one bounded left/right vanilla pickup click using the exact unexpired menu capability and rejects no-effect actions |
@@ -68,7 +69,6 @@ Runtime/Fabric E2E remains part of the RC gap.
 Still required for RC:
 
 - block place;
-- entity attack;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and

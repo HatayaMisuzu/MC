@@ -403,7 +403,8 @@ public final class CompanionRegistry {
                     && !skill.capability().equals("InteractEntity")
                     && !skill.capability().equals("MenuAction")
                     && !skill.capability().equals("UseItem")
-                    && !skill.capability().equals("DropItem")) {
+                    && !skill.capability().equals("DropItem")
+                    && !skill.capability().equals("AttackEntity")) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }
             entry.mode = CompanionEntry.Mode.SKILL;

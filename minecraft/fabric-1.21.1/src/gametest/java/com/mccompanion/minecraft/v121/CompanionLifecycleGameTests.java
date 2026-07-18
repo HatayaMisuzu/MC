@@ -422,6 +422,50 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "entity_attack")
+    public void entityAttackUsesExternallySelectedVanillaLivingEntityAction(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "EntityAttacker").success(),
+                "entity attack test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "entity attack test created no live body");
+        var cow = EntityType.COW.create(body.serverLevel());
+        helper.assertTrue(cow != null, "entity attack test could not create cow");
+        cow.setNoAi(true);
+        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(cow),
+                "entity attack test could not add cow");
+        float healthBefore = cow.getHealth();
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-entity-attack";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "entity attack lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "attack-selected-cow", "skill",
+                null, null, null, new SkillParameters("AttackEntity", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        null, null, null, cow.getUUID().toString(), "UP", "MAIN_HAND")).success(),
+                "entity attack failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertTrue(!cow.isAlive() || cow.getHealth() < healthBefore,
+                    "vanilla entity attack did not damage the selected living entity");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "ENTITY_ATTACK_COMPLETE",
+                    "entity attack observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_ATTACK"),
+                    "entity attack evidence did not identify ServerPlayer.attack");
+            cow.discard();
+            helper.assertTrue(registry.remove(owner).success(), "entity attack cleanup failed");
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
     public void exploreAreaScansIncrementallyAndReturnsRankedVerifiedCandidates(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")

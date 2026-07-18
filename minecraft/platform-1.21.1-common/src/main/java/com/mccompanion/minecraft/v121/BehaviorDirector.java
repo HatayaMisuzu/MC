@@ -22,6 +22,7 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.entity.player.StackedContents;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.CraftingRecipe;
@@ -105,7 +106,8 @@ final class BehaviorDirector {
             smelts.remove(entry.companionId);
             defends.put(entry.companionId, createDefend(body, entry, parameters));
         } else if (parameters.capability().equals("InteractBlock")
-                || parameters.capability().equals("InteractEntity")) {
+                || parameters.capability().equals("InteractEntity")
+                || parameters.capability().equals("AttackEntity")) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
@@ -563,7 +565,8 @@ final class BehaviorDirector {
             } catch (IllegalArgumentException invalid) {
                 return InteractionProgress.failed(parameters, "INTERACTION_FACE_INVALID");
             }
-            return new InteractionProgress(parameters, target, null, hand, face, server.getTickCount(), null);
+            return new InteractionProgress(parameters, target, null, hand, face,
+                    server.getTickCount(), null, null);
         }
         final UUID entityId;
         try {
@@ -575,14 +578,18 @@ final class BehaviorDirector {
         if (target == null || !target.isAlive() || target == body) {
             return InteractionProgress.failed(parameters, "ENTITY_NOT_FOUND");
         }
+        if (parameters.capability().equals("AttackEntity") && !(target instanceof LivingEntity)) {
+            return InteractionProgress.failed(parameters, "ENTITY_NOT_LIVING");
+        }
         if (body.distanceToSqr(target) > 25.0D) {
             return InteractionProgress.failed(parameters, "ENTITY_OUT_OF_REACH");
         }
         if (!body.hasLineOfSight(target)) {
             return InteractionProgress.failed(parameters, "ENTITY_NOT_VISIBLE");
         }
+        Float healthBaseline = target instanceof LivingEntity living ? living.getHealth() : null;
         return new InteractionProgress(parameters, null, entityId, hand, Direction.UP,
-                server.getTickCount(), null);
+                server.getTickCount(), null, healthBaseline);
     }
 
     private MenuProgress createMenuAction(CompanionPlayer body, SkillParameters parameters) {
@@ -668,13 +675,16 @@ final class BehaviorDirector {
             return;
         }
         actionGateway.stopInput(body);
-        final net.minecraft.world.InteractionResult result;
         if (progress.blockPosition != null) {
             BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(progress.blockPosition),
                     progress.face, progress.blockPosition, false);
-            result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
+            var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
                     progress.hand, hit);
             actionGateway.markVanillaGameModeAction(body);
+            if (!result.consumesAction()) {
+                pauseSafely(entry, body, "INTERACTION_REJECTED");
+                return;
+            }
         } else {
             Entity target = body.serverLevel().getEntity(progress.entityId);
             if (target == null || !target.isAlive() || body.distanceToSqr(target) > 25.0D
@@ -682,15 +692,30 @@ final class BehaviorDirector {
                 pauseSafely(entry, body, "ENTITY_CHANGED");
                 return;
             }
-            result = body.interactOn(target, progress.hand);
-            actionGateway.markVanillaEntityInteraction(body);
-        }
-        if (!result.consumesAction()) {
-            pauseSafely(entry, body, "INTERACTION_REJECTED");
-            return;
+            if (progress.parameters.capability().equals("AttackEntity")) {
+                if (!(target instanceof LivingEntity living) || progress.healthBaseline == null) {
+                    pauseSafely(entry, body, "ENTITY_CHANGED");
+                    return;
+                }
+                body.attack(living);
+                actionGateway.markVanillaAttack(body);
+                if (living.isAlive() && living.getHealth() >= progress.healthBaseline) {
+                    pauseSafely(entry, body, "ENTITY_ATTACK_NO_EFFECT");
+                    return;
+                }
+            } else {
+                var result = body.interactOn(target, progress.hand);
+                actionGateway.markVanillaEntityInteraction(body);
+                if (!result.consumesAction()) {
+                    pauseSafely(entry, body, "INTERACTION_REJECTED");
+                    return;
+                }
+            }
         }
         observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
-                "INTERACTION_COMPLETE", progress.parameters.targetId(), 1, 1));
+                progress.parameters.capability().equals("AttackEntity")
+                        ? "ENTITY_ATTACK_COMPLETE" : "INTERACTION_COMPLETE",
+                progress.parameters.targetId(), 1, 1));
         stop(entry, body, true, "NONE");
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
@@ -1764,9 +1789,11 @@ final class BehaviorDirector {
         private final Direction face;
         private final int startedTick;
         private final String failureCode;
+        private final Float healthBaseline;
 
         private InteractionProgress(SkillParameters parameters, BlockPos blockPosition, UUID entityId,
-                                    InteractionHand hand, Direction face, int startedTick, String failureCode) {
+                                    InteractionHand hand, Direction face, int startedTick, String failureCode,
+                                    Float healthBaseline) {
             this.parameters = parameters;
             this.blockPosition = blockPosition;
             this.entityId = entityId;
@@ -1774,11 +1801,12 @@ final class BehaviorDirector {
             this.face = face;
             this.startedTick = startedTick;
             this.failureCode = failureCode;
+            this.healthBaseline = healthBaseline;
         }
 
         private static InteractionProgress failed(SkillParameters parameters, String code) {
             return new InteractionProgress(parameters, null, null, InteractionHand.MAIN_HAND,
-                    Direction.UP, 0, code);
+                    Direction.UP, 0, code, null);
         }
     }
 

@@ -2,7 +2,8 @@ package com.mccompanion.minecraft.v121;
 
 public record SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
                               String dimension, Integer x, Integer y, Integer z,
-                              String targetId, String face, String hand) {
+                              String targetId, String face, String hand,
+                              String sessionToken, Integer slot, Integer button, String menuAction) {
     public SkillParameters {
         capability = capability == null ? "" : capability;
         itemId = itemId == null ? "" : itemId;
@@ -10,18 +11,27 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
         targetId = targetId == null ? "" : targetId;
         face = face == null || face.isBlank() ? "UP" : face;
         hand = hand == null || hand.isBlank() ? "MAIN_HAND" : hand;
+        sessionToken = sessionToken == null ? "" : sessionToken;
+        menuAction = menuAction == null ? "" : menuAction;
         if (quantity < 1 || quantity > 2304) throw new IllegalArgumentException("quantity must be 1..2304");
     }
 
     public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial) {
         this(capability, itemId, quantity, allowPartial, "minecraft:overworld",
-                null, null, null, "", "UP", "MAIN_HAND");
+                null, null, null, "", "UP", "MAIN_HAND", "", null, null, "");
     }
 
     public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
                            String dimension, Integer x, Integer y, Integer z) {
         this(capability, itemId, quantity, allowPartial, dimension, x, y, z,
-                "", "UP", "MAIN_HAND");
+                "", "UP", "MAIN_HAND", "", null, null, "");
+    }
+
+    public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
+                           String dimension, Integer x, Integer y, Integer z,
+                           String targetId, String face, String hand) {
+        this(capability, itemId, quantity, allowPartial, dimension, x, y, z,
+                targetId, face, hand, "", null, null, "");
     }
 
     public boolean hasBlockTarget() { return x != null && y != null && z != null; }

@@ -254,7 +254,8 @@ class RuntimeToolGatewayTest {
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of(
                         "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-block-interact",
-                        "c-entity-interact", "c-collect", "c-from", "c-to")) {
+                        "c-entity-interact", "c-menu-click", "c-menu-quick", "c-menu-close",
+                        "c-collect", "c-from", "c-to")) {
                     CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
                             "minecraft:overworld", new PositionDto(10, 64, -5), CompanionBodyState.SPAWNED,
                             null, null, 0, 0, true, CapabilitySet.empty(), Instant.now());
@@ -267,7 +268,7 @@ class RuntimeToolGatewayTest {
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
                         ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
                                 "WithdrawFromStorage", "DepositToStorage", "LookAt",
-                                "InteractBlock", "InteractEntity"));
+                                "InteractBlock", "InteractEntity", "MenuAction"));
 
                 var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().containsAll(List.of(
@@ -275,10 +276,18 @@ class RuntimeToolGatewayTest {
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().contains("movement.look"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
                         .containsAll(List.of("block.interact", "entity.interact")));
+                assertTrue(definitions.stream().map(ToolDefinition::name).toList()
+                        .containsAll(List.of("menu.click", "menu.quick_move", "menu.close")));
                 assertEquals("MOVE", definition(definitions, "movement.step").permission());
                 assertEquals("MOVE", definition(definitions, "movement.look").permission());
                 assertEquals("INTERACT", definition(definitions, "block.interact").permission());
                 assertEquals("INTERACT", definition(definitions, "entity.interact").permission());
+                assertEquals("INVENTORY", definition(definitions, "menu.click").permission());
+                assertEquals(List.of("sessionToken", "slot", "button"),
+                        required(definition(definitions, "menu.click")));
+                assertEquals(List.of("sessionToken", "slot"),
+                        required(definition(definitions, "menu.quick_move")));
+                assertEquals(List.of("sessionToken"), required(definition(definitions, "menu.close")));
                 assertEquals("MINE", definition(definitions, "block.break").permission());
                 assertEquals("COLLECT", definition(definitions, "entity.collect").permission());
                 assertEquals("INVENTORY", definition(definitions, "inventory.transfer").permission());
@@ -327,6 +336,37 @@ class RuntimeToolGatewayTest {
                 var entityInteractionParameters = peer.lastCommand().path("arguments").path("parameters");
                 assertEquals("InteractEntity", entityInteractionParameters.path("capability").asText());
                 assertEquals(entityId, entityInteractionParameters.path("parameters").path("entityId").asText());
+
+                String menuToken = "0123456789abcdef0123456789abcdef";
+                ToolResult menuClick = gateway.execute(new ToolContext("hermes", "session", "c-menu-click"),
+                        new ToolCall("menu-click", "menu.click", Json.object()
+                                .put("sessionToken", menuToken).put("slot", 3).put("button", 1)));
+                assertTrue(menuClick.success(), menuClick.observation().toString());
+                var menuClickParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("MenuAction", menuClickParameters.path("capability").asText());
+                assertEquals("CLICK", menuClickParameters.path("parameters").path("action").asText());
+                assertEquals(menuToken, menuClickParameters.path("parameters").path("sessionToken").asText());
+                assertEquals(3, menuClickParameters.path("parameters").path("slot").asInt());
+                assertEquals(1, menuClickParameters.path("parameters").path("button").asInt());
+
+                ToolResult menuQuick = gateway.execute(new ToolContext("hermes", "session", "c-menu-quick"),
+                        new ToolCall("menu-quick", "menu.quick_move", Json.object()
+                                .put("sessionToken", menuToken).put("slot", 7)));
+                assertTrue(menuQuick.success(), menuQuick.observation().toString());
+                assertEquals("QUICK_MOVE", peer.lastCommand().path("arguments").path("parameters")
+                        .path("parameters").path("action").asText());
+
+                ToolResult menuClose = gateway.execute(new ToolContext("hermes", "session", "c-menu-close"),
+                        new ToolCall("menu-close", "menu.close", Json.object().put("sessionToken", menuToken)));
+                assertTrue(menuClose.success(), menuClose.observation().toString());
+                assertEquals("CLOSE", peer.lastCommand().path("arguments").path("parameters")
+                        .path("parameters").path("action").asText());
+
+                ToolResult forgedMenu = gateway.execute(new ToolContext("hermes", "session", "c-menu-close"),
+                        new ToolCall("menu-forged", "menu.close",
+                                Json.object().put("sessionToken", "../server.properties")));
+                assertFalse(forgedMenu.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", forgedMenu.code());
 
                 ToolResult moving = gateway.execute(new ToolContext("hermes", "session", "c-stop"),
                         new ToolCall("move-before-stop", "movement.navigate",

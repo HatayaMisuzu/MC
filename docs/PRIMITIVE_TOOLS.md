@@ -53,6 +53,10 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `inventory.transfer` | Selects the existing verified-container withdraw or deposit executor from the declared direction; arbitrary container or filesystem access is impossible |
+| `menu.inspect` | Reads the exact live open menu and issues a process-local 192-bit opaque capability bound to that menu instance for ten seconds |
+| `menu.click` | Performs one bounded left/right vanilla pickup click using the exact unexpired menu capability and rejects no-effect actions |
+| `menu.quick_move` | Performs one bounded vanilla quick-move using the exact unexpired menu capability and verifies a menu/inventory delta |
+| `menu.close` | Closes only the menu bound to the exact unexpired capability and invalidates that capability immediately |
 
 These aliases are convenience primitive entry points, not new scenario Handlers. Runtime tests
 capture their actual Mod protocol payloads, including unknown namespaced IDs. Existing real Fabric
@@ -65,7 +69,6 @@ Still required for RC:
 - inventory drop;
 - item use;
 - entity attack;
-- menu session inspect/click/quick-move/close;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and

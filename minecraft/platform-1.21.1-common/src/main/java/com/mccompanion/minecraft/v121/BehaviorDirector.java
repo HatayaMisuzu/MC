@@ -62,6 +62,7 @@ final class BehaviorDirector {
     private final Map<UUID, RetreatProgress> retreats = new HashMap<>();
     private final Map<UUID, DefendProgress> defends = new HashMap<>();
     private final Map<UUID, InteractionProgress> interactions = new HashMap<>();
+    private final Map<UUID, MenuProgress> menuActions = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
@@ -78,6 +79,7 @@ final class BehaviorDirector {
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
         observations.remove(entry.companionId);
         interactions.remove(entry.companionId);
+        menuActions.remove(entry.companionId);
         if (parameters.capability().equals("ExploreArea")) {
             skills.remove(entry.companionId);
             mines.remove(entry.companionId);
@@ -110,6 +112,13 @@ final class BehaviorDirector {
             smelts.remove(entry.companionId);
             defends.remove(entry.companionId);
             interactions.put(entry.companionId, createInteraction(body, parameters));
+        } else if (parameters.capability().equals("MenuAction")) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
+            menuActions.put(entry.companionId, createMenuAction(body, parameters));
         } else {
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
@@ -123,7 +132,8 @@ final class BehaviorDirector {
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
         if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)
                 && !mines.containsKey(entry.companionId) && !smelts.containsKey(entry.companionId)
-                && !defends.containsKey(entry.companionId) && !interactions.containsKey(entry.companionId)) {
+                && !defends.containsKey(entry.companionId) && !interactions.containsKey(entry.companionId)
+                && !menuActions.containsKey(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -153,6 +163,7 @@ final class BehaviorDirector {
             smelts.remove(entry.companionId);
             defends.remove(entry.companionId);
             interactions.remove(entry.companionId);
+            menuActions.remove(entry.companionId);
         }
     }
 
@@ -166,6 +177,8 @@ final class BehaviorDirector {
         retreats.remove(companionId);
         defends.remove(companionId);
         interactions.remove(companionId);
+        menuActions.remove(companionId);
+        MenuSessionTracker.invalidate(companionId);
         observations.remove(companionId);
     }
 
@@ -541,6 +554,27 @@ final class BehaviorDirector {
                 server.getTickCount(), null);
     }
 
+    private MenuProgress createMenuAction(CompanionPlayer body, SkillParameters parameters) {
+        String action = parameters.menuAction();
+        if (!Set.of("CLICK", "QUICK_MOVE", "CLOSE").contains(action)) {
+            return MenuProgress.failed(parameters, "MENU_ACTION_INVALID");
+        }
+        MenuSessionTracker.Validation session = MenuSessionTracker.validate(
+                body, parameters.sessionToken(), server.getTickCount());
+        if (!session.valid()) return MenuProgress.failed(parameters, session.code());
+        if (!action.equals("CLOSE")) {
+            if (parameters.slot() == null || parameters.slot() < 0
+                    || parameters.slot() >= session.menu().slots.size() || parameters.slot() > 127) {
+                return MenuProgress.failed(parameters, "MENU_SLOT_INVALID");
+            }
+        }
+        if (action.equals("CLICK") && (parameters.button() == null
+                || parameters.button() < 0 || parameters.button() > 1)) {
+            return MenuProgress.failed(parameters, "MENU_BUTTON_INVALID");
+        }
+        return new MenuProgress(parameters, server.getTickCount(), null);
+    }
+
     private void recordShortage(CompanionEntry entry, SkillParameters parameters, int available) {
         observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
                 "ITEM_INSUFFICIENT", parameters.itemId(), parameters.quantity(), Math.max(0, available)));
@@ -557,6 +591,8 @@ final class BehaviorDirector {
         if (defend != null) { tickDefend(entry, body, defend); return; }
         InteractionProgress interaction = interactions.get(entry.companionId);
         if (interaction != null) { tickInteraction(entry, body, interaction); return; }
+        MenuProgress menu = menuActions.get(entry.companionId);
+        if (menu != null) { tickMenuAction(entry, body, menu); return; }
         SkillProgress progress = skills.get(entry.companionId);
         if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
         if (progress.failureCode != null) { pauseSafely(entry, body, progress.failureCode); return; }
@@ -626,6 +662,65 @@ final class BehaviorDirector {
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
         savedData.changed();
+    }
+
+    private void tickMenuAction(CompanionEntry entry, CompanionPlayer body, MenuProgress progress) {
+        if (progress.failureCode != null) {
+            pauseSafely(entry, body, progress.failureCode);
+            return;
+        }
+        if (server.getTickCount() - progress.startedTick > 20) {
+            pauseSafely(entry, body, "MENU_ACTION_TIMEOUT");
+            return;
+        }
+        MenuSessionTracker.Validation session = MenuSessionTracker.validate(
+                body, progress.parameters.sessionToken(), server.getTickCount());
+        if (!session.valid()) {
+            pauseSafely(entry, body, session.code());
+            return;
+        }
+        actionGateway.stopInput(body);
+        String action = progress.parameters.menuAction();
+        if (action.equals("CLOSE")) {
+            body.closeContainer();
+            MenuSessionTracker.invalidate(body.getUUID());
+            actionGateway.markVanillaMenuAction(body);
+            if (body.containerMenu != body.inventoryMenu) {
+                pauseSafely(entry, body, "MENU_CLOSE_FAILED");
+                return;
+            }
+        } else {
+            int before = menuDigest(session.menu());
+            ClickType clickType = action.equals("QUICK_MOVE") ? ClickType.QUICK_MOVE : ClickType.PICKUP;
+            int button = action.equals("CLICK") ? progress.parameters.button() : 0;
+            session.menu().clicked(progress.parameters.slot(), button, clickType, body);
+            actionGateway.markVanillaMenuAction(body);
+            if (menuDigest(session.menu()) == before) {
+                pauseSafely(entry, body, "MENU_ACTION_NO_EFFECT");
+                return;
+            }
+        }
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                "MENU_ACTION_COMPLETE", action, 1, 1));
+        stop(entry, body, true, "NONE");
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        savedData.changed();
+    }
+
+    private static int menuDigest(net.minecraft.world.inventory.AbstractContainerMenu menu) {
+        int hash = 1;
+        for (Slot slot : menu.slots) {
+            ItemStack stack = slot.getItem();
+            hash = 31 * hash + stack.getItem().hashCode();
+            hash = 31 * hash + stack.getCount();
+            hash = 31 * hash + stack.getComponents().hashCode();
+        }
+        ItemStack carried = menu.getCarried();
+        hash = 31 * hash + carried.getItem().hashCode();
+        hash = 31 * hash + carried.getCount();
+        hash = 31 * hash + carried.getComponents().hashCode();
+        return hash;
     }
 
     private void tickCollection(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -1562,6 +1657,22 @@ final class BehaviorDirector {
         private static InteractionProgress failed(SkillParameters parameters, String code) {
             return new InteractionProgress(parameters, null, null, InteractionHand.MAIN_HAND,
                     Direction.UP, 0, code);
+        }
+    }
+
+    private static final class MenuProgress {
+        private final SkillParameters parameters;
+        private final int startedTick;
+        private final String failureCode;
+
+        private MenuProgress(SkillParameters parameters, int startedTick, String failureCode) {
+            this.parameters = parameters;
+            this.startedTick = startedTick;
+            this.failureCode = failureCode;
+        }
+
+        private static MenuProgress failed(SkillParameters parameters, String code) {
+            return new MenuProgress(parameters, 0, code);
         }
     }
 

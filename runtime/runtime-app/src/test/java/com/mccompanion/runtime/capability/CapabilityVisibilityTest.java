@@ -15,12 +15,14 @@ class CapabilityVisibilityTest {
     void exposesOnlyFormallyImplementedConnectedFabricCapabilities() {
         var capabilities = Json.object().put("NavigateTo", true).put("FollowOwner", true)
                 .put("DeliverItem", true).put("EatAndRecover", true)
-                .put("CraftItem", true);
+                .put("CraftItem", true).put("LookAt", true)
+                .put("InteractBlock", true).put("InteractEntity", true).put("MenuAction", true);
         var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
 
         var snapshot = visibility.resolve(handshake("fabric", "1.21.1", capabilities), status);
 
-        assertEquals(List.of("CraftItem", "DeliverItem", "EatAndRecover", "FollowOwner", "NavigateTo"),
+        assertEquals(List.of("CraftItem", "DeliverItem", "EatAndRecover", "InteractBlock",
+                        "InteractEntity", "LookAt", "MenuAction", "FollowOwner", "NavigateTo").stream().sorted().toList(),
                 snapshot.availableNames());
         assertEquals("AVAILABLE_NOW", snapshot.toJson().path("CraftItem").path("state").asText());
     }

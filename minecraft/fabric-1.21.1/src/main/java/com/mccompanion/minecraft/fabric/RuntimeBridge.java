@@ -154,6 +154,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("LookAt", true)
                 .put("InteractBlock", true)
                 .put("InteractEntity", true)
+                .put("MenuAction", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)
@@ -372,7 +373,11 @@ final class RuntimeBridge implements AutoCloseable {
                 values.path("allowPartial").asBoolean(false),
                 target.path("dimension").asText("minecraft:overworld"), x, y, z,
                 values.path("entityId").asText(""), values.path("face").asText("UP"),
-                values.path("hand").asText("MAIN_HAND")); }
+                values.path("hand").asText("MAIN_HAND"),
+                values.path("sessionToken").asText(""),
+                values.path("slot").canConvertToInt() ? values.path("slot").asInt() : null,
+                values.path("button").canConvertToInt() ? values.path("button").asInt() : null,
+                values.path("action").asText("")); }
         catch (IllegalArgumentException invalid) { return null; }
     }
 

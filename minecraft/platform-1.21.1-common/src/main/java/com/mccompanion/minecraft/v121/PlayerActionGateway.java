@@ -18,6 +18,7 @@ final class PlayerActionGateway {
     private final Deque<ActionEvidence> completed = new ArrayDeque<>();
     private final java.util.Set<UUID> gameModeActions = new java.util.HashSet<>();
     private final java.util.Set<UUID> entityInteractionActions = new java.util.HashSet<>();
+    private final java.util.Set<UUID> menuActions = new java.util.HashSet<>();
     private final java.util.Set<UUID> lookActions = new java.util.HashSet<>();
 
     void startBehavior(CompanionPlayer body, CompanionEntry.Mode mode, long tick) {
@@ -47,6 +48,7 @@ final class PlayerActionGateway {
     void markVanillaEntityInteraction(CompanionPlayer body) {
         entityInteractionActions.add(body.getUUID());
     }
+    void markVanillaMenuAction(CompanionPlayer body) { menuActions.add(body.getUUID()); }
 
     void completeBehavior(CompanionPlayer body, boolean success, String failureCode, long tick) {
         InFlight started = inFlight.remove(body.getUUID());
@@ -67,6 +69,7 @@ final class PlayerActionGateway {
                 success ? "NONE" : failureCode,
                 gameModeActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_GAME_MODE"
                         : entityInteractionActions.remove(body.getUUID()) ? "VANILLA_SERVER_PLAYER_INTERACTION"
+                        : menuActions.remove(body.getUUID()) ? "VANILLA_CONTAINER_MENU"
                         : lookActions.remove(body.getUUID()) ? "VANILLA_ENTITY_LOOK"
                         : "VANILLA_PLAYER_INPUT",
                 false));
@@ -79,6 +82,7 @@ final class PlayerActionGateway {
         inFlight.remove(companionId);
         gameModeActions.remove(companionId);
         entityInteractionActions.remove(companionId);
+        menuActions.remove(companionId);
         lookActions.remove(companionId);
     }
 

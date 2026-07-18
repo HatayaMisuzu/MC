@@ -42,7 +42,7 @@ class RegistryToolGatewayTest {
 
                 List<ToolDefinition> definitions = gateway.definitions(context);
                 assertEquals(List.of("registry.search", "registry.describe", "recipe.query",
-                                "block.inspect", "item.inspect", "entity.inspect"),
+                                "block.inspect", "item.inspect", "entity.inspect", "menu.inspect"),
                         definitions.stream().map(ToolDefinition::name).toList());
                 assertEquals("INVENTORY", definitions.stream()
                         .filter(value -> value.name().equals("item.inspect")).findFirst().orElseThrow().permission());
@@ -108,6 +108,22 @@ class RegistryToolGatewayTest {
                 ToolResult inspected = gateway.awaitTerminal(context, block, blockAccepted,
                         Duration.ofSeconds(1), ignored -> { });
                 assertEquals("examplemod:moon_ore", inspected.observation().path("block").asText());
+
+                ToolCall menu = new ToolCall("menu-1", "menu.inspect", Json.object());
+                ToolResult menuAccepted = gateway.execute(context, menu);
+                assertFalse(menuAccepted.terminal());
+                assertEquals("query_observation", peer.lastPayload().path("command").asText());
+                assertEquals("menu.inspect", peer.lastPayload().path("arguments").path("tool").asText());
+                String menuQueryId = peer.lastPayload().path("arguments").path("queryId").asText();
+                assertTrue(gateway.complete(session, Json.object().put("queryId", menuQueryId)
+                        .put("companionId", "c1").put("success", true).put("code", "OK")
+                        .set("observation", Json.object().put("source", "LIVE_SERVER_OBSERVATION")
+                                .put("kind", "MENU")
+                                .put("sessionToken", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                                .put("containerId", 7))));
+                ToolResult menuInspected = gateway.awaitTerminal(context, menu, menuAccepted,
+                        Duration.ofSeconds(1), ignored -> { });
+                assertEquals(7, menuInspected.observation().path("containerId").asInt());
 
                 ToolResult invalid = gateway.execute(context, new ToolCall("bad", "registry.describe",
                         Json.object().put("kind", "ITEM").put("id", "../server.properties")));

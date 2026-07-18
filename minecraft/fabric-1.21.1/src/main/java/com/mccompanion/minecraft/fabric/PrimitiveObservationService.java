@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v121.CompanionPlayer;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
+import com.mccompanion.minecraft.v121.MenuSessionTracker;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -36,6 +37,7 @@ public final class PrimitiveObservationService {
                 case "block.inspect" -> block(body, arguments.path("position"));
                 case "item.inspect" -> item(body, arguments.path("item").asText(""));
                 case "entity.inspect" -> entities(body, arguments);
+                case "menu.inspect" -> menu(body);
                 default -> failure("OBSERVATION_TOOL_UNKNOWN", "Observation tool is unsupported");
             };
         } catch (RuntimeException invalid) {
@@ -153,6 +155,43 @@ public final class PrimitiveObservationService {
                     .put("count", stack.getCount());
         }
         return value;
+    }
+
+    private static Result menu(CompanionPlayer body) {
+        MenuSessionTracker.Snapshot session = MenuSessionTracker.inspect(
+                body, body.getServer().getTickCount());
+        if (session == null) {
+            return failure("MENU_NOT_OPEN", "The connected body has no open container menu");
+        }
+        var menu = session.menu();
+        ResourceLocation menuType = BuiltInRegistries.MENU.getKey(menu.getType());
+        ObjectNode observation = envelope(body, "MENU")
+                .put("sessionToken", session.token())
+                .put("containerId", session.containerId())
+                .put("expiresAtTick", session.expiresAtTick())
+                .put("menuType", menuType == null ? "minecraft:unknown" : menuType.toString())
+                .put("slotCount", menu.slots.size())
+                .put("slotsTruncated", menu.slots.size() > 128);
+        ArrayNode slots = observation.putArray("slots");
+        for (int index = 0; index < Math.min(128, menu.slots.size()); index++) {
+            var slot = menu.getSlot(index);
+            ItemStack stack = slot.getItem();
+            ObjectNode value = slots.addObject().put("slot", index)
+                    .put("mayPickup", slot.mayPickup(body))
+                    .put("empty", stack.isEmpty());
+            if (!stack.isEmpty()) {
+                value.put("item", BuiltInRegistries.ITEM.getKey(stack.getItem()).toString())
+                        .put("count", stack.getCount()).put("maxStackSize", stack.getMaxStackSize())
+                        .put("damage", stack.getDamageValue()).put("maxDamage", stack.getMaxDamage());
+            }
+        }
+        ItemStack carried = menu.getCarried();
+        ObjectNode carriedValue = observation.putObject("carried").put("empty", carried.isEmpty());
+        if (!carried.isEmpty()) {
+            carriedValue.put("item", BuiltInRegistries.ITEM.getKey(carried.getItem()).toString())
+                    .put("count", carried.getCount());
+        }
+        return new Result(true, "OK", observation);
     }
 
     private static BlockPos position(JsonNode value) {

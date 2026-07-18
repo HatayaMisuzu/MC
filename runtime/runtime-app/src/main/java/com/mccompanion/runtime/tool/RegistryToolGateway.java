@@ -65,6 +65,9 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
             values.add(new ToolDefinition("entity.inspect", "1.0",
                     "Inspect bounded visible entities near the connected body",
                     entityInspectSchema(), "LOW", "READ_WORLD", QUERY_TIMEOUT, true));
+            values.add(new ToolDefinition("menu.inspect", "1.0",
+                    "Inspect the exact open menu and issue a short-lived session capability",
+                    objectSchema(), "LOW", "INVENTORY", QUERY_TIMEOUT, true));
         }
         return List.copyOf(values);
     }
@@ -85,6 +88,7 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
                 case "block.inspect" -> validatedBlockInspect(call.arguments());
                 case "item.inspect" -> validatedItemInspect(call.arguments());
                 case "entity.inspect" -> validatedEntityInspect(call.arguments());
+                case "menu.inspect" -> validatedEmpty(call.arguments());
                 default -> throw new IllegalArgumentException("Unsupported Registry tool");
             };
             command = call.name().startsWith("registry.") ? CommandType.QUERY_REGISTRY
@@ -262,6 +266,11 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
             }
         }
         return values;
+    }
+
+    private static ObjectNode validatedEmpty(JsonNode input) {
+        rejectUnexpected(input, Set.of());
+        return Json.object();
     }
 
     private static ObjectNode validatedPosition(JsonNode input, String label) {

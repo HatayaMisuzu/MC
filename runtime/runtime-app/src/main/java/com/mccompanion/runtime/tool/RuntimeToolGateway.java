@@ -234,6 +234,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
                 "Interact once with a visible reachable entity through vanilla player rules",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
+        if (available.contains("MenuAction")) {
+            values.add(definition("menu.click",
+                    "Perform one bounded pickup click in the exact short-lived open menu session",
+                    menuClickSchema(), "LOW", "INVENTORY", false));
+            values.add(definition("menu.quick_move",
+                    "Quick-move one slot in the exact short-lived open menu session",
+                    menuSlotSchema(), "LOW", "INVENTORY", false));
+            values.add(definition("menu.close",
+                    "Close the exact short-lived open menu session",
+                    menuCloseSchema(), "LOW", "INVENTORY", false));
+        }
         if (available.contains("SmeltItem")) values.add(definition("item.smelt",
                 "Smelt a bounded quantity in a verified nearby furnace using held input and fuel",
                 smeltSchema(), "LOW", "CRAFT", false));
@@ -346,6 +357,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "block.break" -> breakBlock(call.arguments());
             case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
             case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
+            case "menu.click" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLICK"));
+            case "menu.quick_move" -> skill("MenuAction", validatedMenuAction(call.arguments(), "QUICK_MOVE"));
+            case "menu.close" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLOSE"));
             case "world.scan" -> skill("ExploreArea", validatedScan(call.arguments()));
             case "resource.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "entity.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
@@ -423,6 +437,36 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
                 Set.of("MAIN_HAND", "OFF_HAND"));
         return Json.object().put("entityId", entityId).put("hand", hand);
+    }
+
+    private static JsonNode validatedMenuAction(JsonNode arguments, String action) {
+        Set<String> allowed = action.equals("CLICK")
+                ? Set.of("sessionToken", "slot", "button")
+                : action.equals("QUICK_MOVE") ? Set.of("sessionToken", "slot")
+                : Set.of("sessionToken");
+        rejectUnexpected(arguments, allowed);
+        String token = arguments.path("sessionToken").asText("");
+        if (!token.matches("[A-Za-z0-9_-]{32}")) {
+            throw new IllegalArgumentException("sessionToken must be a 32-character opaque menu capability");
+        }
+        ObjectNode values = Json.object().put("sessionToken", token).put("action", action);
+        if (!action.equals("CLOSE")) {
+            if (!arguments.path("slot").canConvertToInt()) {
+                throw new IllegalArgumentException("slot must be an integer");
+            }
+            int slot = arguments.path("slot").asInt();
+            if (slot < 0 || slot > 127) throw new IllegalArgumentException("slot must be between 0 and 127");
+            values.put("slot", slot);
+        }
+        if (action.equals("CLICK")) {
+            if (!arguments.path("button").canConvertToInt()) {
+                throw new IllegalArgumentException("button must be an integer");
+            }
+            int button = arguments.path("button").asInt();
+            if (button < 0 || button > 1) throw new IllegalArgumentException("button must be 0 or 1");
+            values.put("button", button);
+        }
+        return values;
     }
 
     private static ObjectNode validatedBoundedPosition(JsonNode position) {
@@ -614,6 +658,12 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("position");
         } else if (name.equals("entity.interact")) {
             root.putArray("required").add("entityId");
+        } else if (name.equals("menu.click")) {
+            root.putArray("required").add("sessionToken").add("slot").add("button");
+        } else if (name.equals("menu.quick_move")) {
+            root.putArray("required").add("sessionToken").add("slot");
+        } else if (name.equals("menu.close")) {
+            root.putArray("required").add("sessionToken");
         } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
         } else if (name.equals("inventory.transfer")) {
@@ -692,6 +742,25 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 .put("pattern", "^[0-9a-fA-F-]{36}$");
         properties.putObject("hand").put("type", "string").putArray("enum")
                 .add("MAIN_HAND").add("OFF_HAND");
+        return properties;
+    }
+
+    private static ObjectNode menuClickSchema() {
+        ObjectNode properties = menuSlotSchema();
+        properties.putObject("button").put("type", "integer").put("minimum", 0).put("maximum", 1);
+        return properties;
+    }
+
+    private static ObjectNode menuSlotSchema() {
+        ObjectNode properties = menuCloseSchema();
+        properties.putObject("slot").put("type", "integer").put("minimum", 0).put("maximum", 127);
+        return properties;
+    }
+
+    private static ObjectNode menuCloseSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("sessionToken").put("type", "string")
+                .put("pattern", "^[A-Za-z0-9_-]{32}$");
         return properties;
     }
 

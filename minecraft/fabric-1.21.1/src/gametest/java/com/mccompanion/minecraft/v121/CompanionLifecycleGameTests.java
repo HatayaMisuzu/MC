@@ -188,6 +188,112 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 240, batch = "menu_session")
+    public void menuSessionInspectsQuickMovesAndClosesExactOpenMenu(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "MenuOperator").success(), "menu test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "menu test created no live body");
+        BlockPos target = body.blockPosition().offset(2, 0, 0);
+        body.serverLevel().setBlockAndUpdate(target, Blocks.CHEST.defaultBlockState());
+        helper.assertTrue(body.serverLevel().getBlockEntity(target) instanceof Container,
+                "menu test chest has no container");
+        Container chest = (Container) body.serverLevel().getBlockEntity(target);
+        chest.setItem(0, new ItemStack(Items.STONE, 5));
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-menu";
+        long epoch = 1L;
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, epoch, System.currentTimeMillis() + 30_000L).success(),
+                "menu lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "menu-open", "skill",
+                null, null, null, new SkillParameters("InteractBlock", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND")).success(),
+                "menu block interaction failed to start");
+        awaitBehaviorIdleForChain(helper, registry, companionId, 20, opened -> {
+            var inspected = PrimitiveObservationService.inspect(registry, companionId,
+                    com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                            .put("tool", "menu.inspect"));
+            helper.assertTrue(inspected.success(), "menu inspection failed: " + inspected.code());
+            String token = inspected.observation().path("sessionToken").asText();
+            helper.assertTrue(token.matches("[A-Za-z0-9_-]{32}"),
+                    "menu inspection did not issue an opaque capability");
+            helper.assertValueEqual(inspected.observation().path("slots").path(0).path("item").asText(),
+                    "minecraft:stone", "menu inspection did not read the live chest slot");
+            helper.assertTrue(!MenuSessionTracker.validate(body,
+                            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                            body.serverLevel().getServer().getTickCount()).valid(),
+                    "forged menu session capability was accepted");
+
+            helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "menu-click-pickup", "skill",
+                    null, null, null, new SkillParameters("MenuAction", "", 1, false,
+                            body.serverLevel().dimension().location().toString(),
+                            null, null, null, "", "UP", "MAIN_HAND",
+                            token, 0, 0, "CLICK")).success(),
+                    "menu pickup click failed to start");
+            awaitBehaviorIdleForChain(helper, registry, companionId, 20, picked -> {
+                helper.assertValueEqual(body.containerMenu.getCarried().getCount(), 5,
+                        "menu pickup click did not move the stack to the carried cursor");
+                helper.assertTrue(picked.evidenceSummary().contains("VANILLA_CONTAINER_MENU"),
+                        "menu click evidence did not identify the vanilla menu path");
+                helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "menu-click-return", "skill",
+                        null, null, null, new SkillParameters("MenuAction", "", 1, false,
+                                body.serverLevel().dimension().location().toString(),
+                                null, null, null, "", "UP", "MAIN_HAND",
+                                token, 0, 0, "CLICK")).success(),
+                        "menu return click failed to start");
+                awaitBehaviorIdleForChain(helper, registry, companionId, 20, returned -> {
+                    helper.assertTrue(body.containerMenu.getCarried().isEmpty(),
+                            "menu return click left a carried stack");
+                    helper.assertValueEqual(chest.getItem(0).getCount(), 5,
+                            "menu return click did not restore the chest stack");
+                    helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch,
+                            "menu-quick-move", "skill",
+                            null, null, null, new SkillParameters("MenuAction", "", 1, false,
+                                    body.serverLevel().dimension().location().toString(),
+                                    null, null, null, "", "UP", "MAIN_HAND",
+                                    token, 0, null, "QUICK_MOVE")).success(),
+                            "menu quick-move failed to start");
+                    awaitBehaviorIdleForChain(helper, registry, companionId, 20, moved -> {
+                        helper.assertValueEqual(chest.getItem(0).getCount(), 0,
+                                "quick-move did not remove the chest stack");
+                        helper.assertValueEqual(body.getInventory().countItem(Items.STONE), 5,
+                                "quick-move did not reach the connected body inventory");
+                        helper.assertTrue(moved.evidenceSummary().contains("VANILLA_CONTAINER_MENU"),
+                                "menu quick-move evidence did not identify the vanilla menu path");
+
+                        helper.assertTrue(registry.runtimeStart(
+                                companionId, leaseId, epoch, "menu-close", "skill",
+                                null, null, null, new SkillParameters("MenuAction", "", 1, false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null, null, null, "", "UP", "MAIN_HAND",
+                                        token, null, null, "CLOSE")).success(),
+                                "menu close failed to start");
+                        awaitBehaviorIdle(helper, registry, companionId, 20, closed -> {
+                            helper.assertTrue(body.containerMenu == body.inventoryMenu,
+                                    "menu close did not restore the inventory menu");
+                            helper.assertTrue(!MenuSessionTracker.validate(body, token,
+                                            body.serverLevel().getServer().getTickCount()).valid(),
+                                    "closed menu session capability remained usable");
+                            helper.assertValueEqual(closed.behaviorObservation().failureCode(),
+                                    "MENU_ACTION_COMPLETE", "menu close observation code mismatch");
+                            helper.assertTrue(registry.remove(owner).success(), "menu test cleanup failed");
+                        });
+                    });
+                });
+            });
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "entity_interaction")
     public void entityInteractUsesVisibleReachableVanillaPlayerAction(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
@@ -852,18 +958,37 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             String companionId,
             int ticksRemaining,
             java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+        awaitBehaviorIdle(helper, registry, companionId, ticksRemaining, terminalAssertions, true);
+    }
+
+    private static void awaitBehaviorIdleForChain(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            String companionId,
+            int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+        awaitBehaviorIdle(helper, registry, companionId, ticksRemaining, terminalAssertions, false);
+    }
+
+    private static void awaitBehaviorIdle(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            String companionId,
+            int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions,
+            boolean completeTest) {
         var snapshot = registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
         if (snapshot.behaviorState().equals("RUNNING")) {
             helper.assertTrue(ticksRemaining > 0, "timed out waiting for behavior completion");
             helper.runAfterDelay(1, () -> awaitBehaviorIdle(
-                    helper, registry, companionId, ticksRemaining - 1, terminalAssertions));
+                    helper, registry, companionId, ticksRemaining - 1, terminalAssertions, completeTest));
             return;
         }
         helper.assertValueEqual(snapshot.behaviorState(), "IDLE",
                 "behavior reached an unexpected terminal state");
         terminalAssertions.accept(snapshot);
-        helper.succeed();
+        if (completeTest) helper.succeed();
     }
 
     private static double horizontalDistanceToSqr(Vec3 first, Vec3 second) {

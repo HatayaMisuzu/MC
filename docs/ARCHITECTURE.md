@@ -138,6 +138,10 @@ features extend these surfaces rather than creating parallel products.
 - Generic block/entity interaction is capability-gated per loader, bound to the durable lease/task,
   and rechecks dimension, loaded state, range, visibility, UUID, hand, and face immediately before
   invoking vanilla `ServerPlayer` interaction. It does not contain block- or Mod-specific handlers.
+- Menu mutation is a two-stage capability flow: live `menu.inspect` issues a random, process-local
+  ten-second handle bound to the exact `AbstractContainerMenu` instance and container ID; each
+  click, quick-move, or close revalidates that handle at execution time. Menu replacement, close,
+  expiry, reconnect, or Runtime/Mod process restart invalidates the handle.
 - Asynchronous results are revalidated against world, dimension, lease, behavior revision,
   companion, and owner.
 - Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.

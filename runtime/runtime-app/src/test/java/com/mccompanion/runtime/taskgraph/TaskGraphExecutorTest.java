@@ -70,6 +70,37 @@ class TaskGraphExecutorTest {
     }
 
     @Test
+    void retryRechecksLiveIdempotencyBeforeDispatch() {
+        AtomicInteger definitionReads = new AtomicInteger();
+        AtomicInteger dispatches = new AtomicInteger();
+        ToolGateway tools = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                boolean idempotent = definitionReads.incrementAndGet() == 1;
+                return List.of(new ToolDefinition("test.effect", "1.0", "effect",
+                        Json.object().put("type", "object"), "MEDIUM", "INTERACT",
+                        Duration.ofSeconds(1), idempotent));
+            }
+
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                dispatches.incrementAndGet();
+                return new ToolResult(call.callId(), call.name(), true, "OK", Json.object(), true);
+            }
+        };
+        var graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"changed-idempotency","permissions":["INTERACT"],
+                 "root":{"id":"retry","type":"retry","maxAttempts":2,"backoffMillis":0,
+                  "node":{"id":"effect","type":"call_tool","tool":"test.effect"}}}
+                """);
+
+        TaskGraphExecutionResult result = new TaskGraphExecutor(tools).execute("exec-live-idempotency",
+                new ToolContext("hermes", "brain-1", "companion-1"), graph);
+
+        assertFalse(result.success());
+        assertEquals("RETRY_NON_IDEMPOTENT_TOOL", result.code());
+        assertEquals(0, dispatches.get());
+    }
+
+    @Test
     void composesWorldScanCandidateIntoNavigationWithBoundedArrayReferences() {
         CandidateGateway tools = new CandidateGateway();
         TaskGraphExecutor executor = new TaskGraphExecutor(tools);

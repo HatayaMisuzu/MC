@@ -223,8 +223,11 @@ release/install verification remain incomplete.
 - An isolated real Fabric GameTest begins travel toward a stationary zombie and proves the active
   task is interrupted, distance from the hostile increases, the body actually moves, and terminal
   observation/evidence are present. The hostile fixture uses a separate GameTest batch and a
-  bounded two-dimensional support surface, so its production detection radius cannot contaminate
-  unrelated concurrent tests and minor lateral movement cannot fall out of the fixture.
+  bounded support surface with an explicitly cleared three-block-high movement corridor, so packed
+  cross-batch fixtures cannot leave an obstacle in the retreat path, its production detection radius
+  cannot contaminate unrelated concurrent tests, and minor lateral movement cannot fall out of the
+  fixture. The assertion waits for the terminal retreat observation before measuring clearance, so
+  an in-progress `PAUSED` snapshot cannot masquerade as a completed reflex.
   Terrain-aware escape, environmental-direction recovery, multiple/ranged threats, and
   restart/E2E remain `PARTIAL`.
 

@@ -181,10 +181,14 @@ the Runtime's four-worker parallel budget.
 Timed `wait` nodes and retry backoff persist an absolute deadline, release the fixed Graph execution
 worker, and are resumed by a separate bounded scheduler. Startup re-registers safely persisted
 deadlines; pause/cancel invalidates their scheduled continuation, and the scheduler resumes only a
-record that is still `WAITING` with the same deadline. `task.wait` is a bounded one-node convenience
-wrapper over this mechanism. `task.checkpoint` records a bounded external-Brain checkpoint only at a
-persistent node boundary. Task control Tools are not callable from inside a Task Graph, preventing
-recursive self-control from becoming an implicit planner or scheduler.
+record that is still `WAITING` with the same deadline. Graceful Runtime shutdown lets a worker finish
+persisting that boundary before stopping the scheduler, so restart cannot turn a committed wait or
+retry backoff into a cancellation. Automatic `retry` accepts only subtrees whose current Tool
+definitions are idempotent; validation rejects known non-idempotent effects and execution repeats
+the check against live definitions before the first attempt. `task.wait` is a bounded one-node
+convenience wrapper over this mechanism. `task.checkpoint` records a bounded external-Brain
+checkpoint only at a persistent node boundary. Task control Tools are not callable from inside a
+Task Graph, preventing recursive self-control from becoming an implicit planner or scheduler.
 The result of `task_graph.cancel` preserves the external request `callId`. Execution timeout requests
 cancellation of every active child Tool and waits for a bounded durable confirmation. Confirmed
 cancellation is returned as `TOOL_TIMEOUT_CANCELLED`; if cancellation cannot be confirmed, the
@@ -209,8 +213,10 @@ shape, current graph validity, Tool availability, permission and idempotency bef
 the durable boundary. An unconfirmed idempotent Tool may be reissued with its stable call ID; a
 confirmed completed Tool result is reused without repeating the effect. Unknown non-idempotent
 effects, changed Tool availability, malformed Evidence and graph-hash mismatch remain in
-`RECONCILIATION_REQUIRED`. Exact reconciliation of non-idempotent effects inside retry/loop scopes
-and live Mod status reconciliation are not yet claimed. A Tool transport or worker failure with
+`RECONCILIATION_REQUIRED`. Persisted retry attempt cursors and backoff deadlines resume at the next
+stable scoped call ID rather than replaying a prior attempt. Automatic retry of non-idempotent
+effects is rejected rather than treated as reconciliation. Exact reconciliation of non-idempotent
+effects inside loop scopes and live Mod status reconciliation are not yet claimed. A Tool transport or worker failure with
 unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
 reported as a verified failure.
 `read_memory` is implemented as a permission-bound convenience node over the generic

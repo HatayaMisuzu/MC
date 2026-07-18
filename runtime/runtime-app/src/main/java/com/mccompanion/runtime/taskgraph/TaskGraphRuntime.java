@@ -863,24 +863,55 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     @Override public void close() {
-        active.values().forEach(value -> {
-            value.control.requestCancel();
-            cancelActiveTool(value, "runtime shutdown");
-        });
-        workers.shutdownNow();
-        parallelWorkers.shutdownNow();
-        timedWaits.values().forEach(value -> value.cancel(false));
-        timedWaits.clear();
-        timers.shutdownNow();
-        try {
-            boolean workersStopped = workers.awaitTermination(5, TimeUnit.SECONDS);
-            boolean parallelStopped = parallelWorkers.awaitTermination(5, TimeUnit.SECONDS);
-            boolean timersStopped = timers.awaitTermination(5, TimeUnit.SECONDS);
-            if (!workersStopped || !parallelStopped || !timersStopped) {
-                throw new IllegalStateException("Task Graph workers did not terminate");
+        active.forEach((executionId, value) -> {
+            if (!persistedWaiting(executionId)) {
+                value.control.requestCancel();
+                cancelActiveTool(value, "runtime shutdown");
             }
+        });
+        workers.shutdown();
+        parallelWorkers.shutdownNow();
+        boolean workersStopped = false;
+        boolean parallelStopped = false;
+        boolean timersStopped = false;
+        boolean interrupted = false;
+        try {
+            workersStopped = workers.awaitTermination(5, TimeUnit.SECONDS);
+            if (!workersStopped) {
+                workers.shutdownNow();
+                workersStopped = workers.awaitTermination(1, TimeUnit.SECONDS);
+            }
+            parallelStopped = parallelWorkers.awaitTermination(5, TimeUnit.SECONDS);
         } catch (InterruptedException failure) {
+            interrupted = true;
+            workers.shutdownNow();
+            parallelWorkers.shutdownNow();
+        } finally {
+            timedWaits.values().forEach(value -> value.cancel(false));
+            timedWaits.clear();
+            timers.shutdownNow();
+            if (!interrupted) {
+                try {
+                    timersStopped = timers.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException failure) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
             Thread.currentThread().interrupt();
+            return;
+        }
+        if (!workersStopped || !parallelStopped || !timersStopped) {
+            throw new IllegalStateException("Task Graph workers did not terminate");
+        }
+    }
+
+    private boolean persistedWaiting(String executionId) {
+        try {
+            return repository.get(executionId).map(record -> record.state().equals("WAITING")).orElse(false);
+        } catch (SQLException failure) {
+            return false;
         }
     }
 

@@ -799,6 +799,38 @@ class TaskGraphRuntimeTest {
         }
     }
 
+    @Test
+    void retryBackoffSurvivesRestartAndAdvancesToTheNextStableAttempt() throws Exception {
+        Path databasePath = temporary.resolve("retry-backoff.db");
+        ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+        FlakyRetryGateway gateway = new FlakyRetryGateway();
+        var graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"retry-backoff",
+                 "permissions":["READ_WORLD"],
+                 "root":{"id":"retry","type":"retry","maxAttempts":2,"backoffMillis":1000,
+                  "node":{"id":"observe","type":"call_tool","tool":"test.retry"}}}
+                """);
+        try (RuntimeDatabase database = new RuntimeDatabase(databasePath)) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            ToolCall execute = new ToolCall("retry-backoff", "task_graph.execute", Json.object());
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, repository)) {
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                waitForExecutionState(runtime, context, execute.callId(), "WAITING");
+                assertEquals(List.of("retry-backoff:observe:1"), gateway.callIds);
+                TaskGraphExecutionRecord waiting = repository.get(execute.callId()).orElseThrow();
+                assertEquals(2, waiting.variables().path("_mcac").path("retries").path("retry").asInt());
+                assertEquals("retry:backoff", waiting.waitingQuestion().path("nodeKey").asText());
+            }
+            try (TaskGraphRuntime restarted = new TaskGraphRuntime(gateway, repository)) {
+                ToolResult terminal = restarted.await(context, execute, Duration.ofSeconds(3), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals(List.of("retry-backoff:observe:1", "retry-backoff:observe:2"), gateway.callIds);
+                assertEquals(2, terminal.observation().path("outputs").path("observe").path("attempt").asInt());
+            }
+        }
+    }
+
     private static void waitForState(TaskGraphRuntime runtime, ToolContext context, String executionId,
                                      String expected) throws Exception {
         long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
@@ -807,6 +839,18 @@ class TaskGraphRuntimeTest {
                     new ToolCall("inspect", "task_graph.inspect", Json.object()), executionId);
             if (inspected.observation().path("state").asText().equals(expected)
                     && inspected.observation().path("currentNodeId").asText().equals("wait")) return;
+            Thread.sleep(10);
+        }
+        fail("execution did not reach " + expected);
+    }
+
+    private static void waitForExecutionState(TaskGraphRuntime runtime, ToolContext context,
+                                              String executionId, String expected) throws Exception {
+        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+        while (System.nanoTime() < deadline) {
+            ToolResult inspected = runtime.inspect(context,
+                    new ToolCall("inspect-state", "task_graph.inspect", Json.object()), executionId);
+            if (inspected.observation().path("state").asText().equals(expected)) return;
             Thread.sleep(10);
         }
         fail("execution did not reach " + expected);
@@ -826,6 +870,24 @@ class TaskGraphRuntimeTest {
             return new ToolResult(call.callId(), call.name(), true, "OK",
                     Json.object().put("item", call.arguments().path("item").asText())
                             .put("count", arguments.size()), true);
+        }
+    }
+
+    private static final class FlakyRetryGateway implements ToolGateway {
+        private final List<String> callIds = new CopyOnWriteArrayList<>();
+
+        @Override public List<ToolDefinition> definitions(ToolContext context) {
+            return List.of(new ToolDefinition("test.retry", "1.0", "retry observation",
+                    Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                    Duration.ofSeconds(1), true));
+        }
+
+        @Override public ToolResult execute(ToolContext context, ToolCall call) {
+            callIds.add(call.callId());
+            int attempt = callIds.size();
+            return new ToolResult(call.callId(), call.name(), attempt > 1,
+                    attempt > 1 ? "OK" : "TEMPORARY_FAILURE",
+                    Json.object().put("attempt", attempt), true);
         }
     }
 

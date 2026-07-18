@@ -631,6 +631,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         for (int x = -9; x <= 9; x++) {
             for (int z = -4; z <= 4; z++) {
                 body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
             }
         }
         var zombie = EntityType.ZOMBIE.create(body.serverLevel());
@@ -653,6 +656,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
             helper.assertValueEqual(snapshot.behaviorState(), "PAUSED",
                     "active task was not interrupted after safety retreat");
+            helper.assertTrue(snapshot.behaviorObservation() != null,
+                    "safety retreat has not reached a terminal observation");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
+                    "retreat observation code mismatch");
             // The reflex measures its three-block displacement from the exact tick on which it
             // preempts travel. Depending on server scheduling, travel may first move toward the
             // threat, so the net delta from this earlier setup position can be smaller.
@@ -661,9 +668,6 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(zombie.distanceToSqr(body) >= 36.0D
                             && zombie.distanceToSqr(body) > initialThreatDistance,
                     "retreat did not reach the verified six-block hostile clearance");
-            helper.assertTrue(snapshot.behaviorObservation() != null, "retreat produced no observation");
-            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
-                    "retreat observation code mismatch");
             helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
                     "retreat did not produce successful movement evidence");
             zombie.discard();
@@ -690,6 +694,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         for (int x = -10; x <= 6; x++) {
             for (int z = -3; z <= 3; z++) {
                 body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
             }
         }
         var zombie = EntityType.ZOMBIE.create(body.serverLevel());

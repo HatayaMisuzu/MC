@@ -176,6 +176,11 @@ public final class TaskGraphExecutor {
 
     private Outcome retry(JsonNode node, String path, State state, String scope) {
         int maximum = node.path("maxAttempts").asInt();
+        String unsafeTool = firstNonIdempotentTool(node.path("node"), state.context);
+        if (unsafeTool != null) {
+            return Outcome.failure("RETRY_NON_IDEMPOTENT_TOOL",
+                    Json.object().put("tool", unsafeTool));
+        }
         String retryKey = scoped(node.path("id").asText(), scope);
         String waitKey = retryKey + ":backoff";
         JsonNode pending = state.existingTimedWait(waitKey);
@@ -197,6 +202,45 @@ public final class TaskGraphExecutor {
         }
         state.clearRetryAttempt(retryKey);
         return Outcome.failure("RETRY_EXHAUSTED", last.value);
+    }
+
+    private String firstNonIdempotentTool(JsonNode node, ToolContext context) {
+        String tool = switch (node.path("type").asText()) {
+            case "call_tool" -> node.path("tool").asText();
+            case "read_memory" -> "memory.search";
+            case "suggest_memory" -> "memory.suggest";
+            default -> "";
+        };
+        if (!tool.isBlank()) {
+            ToolDefinition definition = tools.definitions(context).stream()
+                    .filter(value -> value.name().equals(tool)).findFirst().orElse(null);
+            if (definition != null && !definition.idempotent()) return tool;
+        }
+        for (JsonNode child : nodeChildren(node)) {
+            String rejected = firstNonIdempotentTool(child, context);
+            if (rejected != null) return rejected;
+        }
+        return null;
+    }
+
+    private static List<JsonNode> nodeChildren(JsonNode node) {
+        ArrayList<JsonNode> children = new ArrayList<>();
+        switch (node.path("type").asText()) {
+            case "sequence", "fallback", "parallel" -> node.path("nodes").forEach(children::add);
+            case "retry" -> children.add(node.path("node"));
+            case "if" -> {
+                children.add(node.path("then"));
+                if (node.has("else")) children.add(node.path("else"));
+            }
+            case "switch" -> {
+                node.path("cases").forEach(value -> children.add(value.path("node")));
+                if (node.has("default")) children.add(node.path("default"));
+            }
+            case "repeat", "while" -> children.add(node.path("body"));
+            default -> {
+            }
+        }
+        return children;
     }
 
     private Outcome ifNode(JsonNode node, String path, State state, String scope) {

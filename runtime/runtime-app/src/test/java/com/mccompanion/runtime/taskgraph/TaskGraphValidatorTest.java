@@ -226,4 +226,23 @@ class TaskGraphValidatorTest {
         assertTrue(unknownPermission.issues().stream()
                 .anyMatch(issue -> issue.code().equals("UNKNOWN_PERMISSION")));
     }
+
+    @Test
+    void rejectsAutomaticRetryAroundNonIdempotentEffects() {
+        ToolDefinition mutation = new ToolDefinition("test.mutate", "1.0", "mutation",
+                Json.object().put("type", "object"), "MEDIUM", "INTERACT",
+                Duration.ofSeconds(1), false);
+        JsonNode graph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"unsafe-retry","permissions":["INTERACT"],
+                 "root":{"id":"retry","type":"retry","maxAttempts":2,"backoffMillis":10,
+                  "node":{"id":"mutate","type":"call_tool","tool":"test.mutate"}}}
+                """);
+
+        TaskGraphValidationResult result = validator.validateExecutable(
+                graph, Map.of(mutation.name(), mutation), TaskGraphExecutor.EXECUTABLE_NODE_TYPES);
+
+        assertFalse(result.valid());
+        assertTrue(result.issues().stream().anyMatch(issue ->
+                issue.code().equals("RETRY_NON_IDEMPOTENT_TOOL")));
+    }
 }

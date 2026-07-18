@@ -34,7 +34,7 @@ public final class TaskGraphValidator {
     public TaskGraphValidationResult validate(JsonNode graph, Set<String> availableTools) {
         Map<String, String> permissions = availableTools == null ? Map.of()
                 : availableTools.stream().collect(java.util.stream.Collectors.toMap(value -> value, value -> ""));
-        return validate(graph, permissions, Map.of(), NODE_TYPES, false);
+        return validate(graph, permissions, Map.of(), Map.of(), NODE_TYPES, false);
     }
 
     public TaskGraphValidationResult validateExecutable(JsonNode graph, Map<String, ToolDefinition> availableTools,
@@ -44,12 +44,15 @@ public final class TaskGraphValidator {
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::permission));
         Map<String, JsonNode> schemas = definitions.values().stream()
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::inputSchema));
-        return validate(graph, permissions, schemas,
+        Map<String, Boolean> idempotency = definitions.values().stream()
+                .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, ToolDefinition::idempotent));
+        return validate(graph, permissions, schemas, idempotency,
                 executableNodeTypes == null ? Set.of() : Set.copyOf(executableNodeTypes), true);
     }
 
     private TaskGraphValidationResult validate(JsonNode graph, Map<String, String> availableTools,
                                                Map<String, JsonNode> toolSchemas,
+                                               Map<String, Boolean> toolIdempotency,
                                                Set<String> executableNodeTypes,
                                                boolean rejectUnknownPermissions) {
         List<TaskGraphValidationIssue> issues = new ArrayList<>();
@@ -82,7 +85,7 @@ public final class TaskGraphValidator {
             }
         }
         TaskGraphLimits limits = TaskGraphLimits.parse(graph.path("limits"), issues);
-        State state = new State(limits, availableTools, toolSchemas,
+        State state = new State(limits, availableTools, toolSchemas, toolIdempotency,
                 executableNodeTypes, permissions, issues);
         validateNode(graph.path("root"), "$.root", 1, state);
         if (state.nodeCount > limits.maxNodes()) {
@@ -198,6 +201,11 @@ public final class TaskGraphValidator {
                 boundedInt(node, "maxAttempts", path, 1, state.limits.maxRetriesPerNode(), state.issues);
                 boundedInt(node, "backoffMillis", path, 0, 60_000, state.issues);
                 validateNode(node.path("node"), path + ".node", depth + 1, state);
+                String nonIdempotent = firstNonIdempotentTool(node.path("node"), state.toolIdempotency);
+                if (nonIdempotent != null) {
+                    state.issues.add(issue(path + ".node", "RETRY_NON_IDEMPOTENT_TOOL",
+                            "retry requires idempotent Tools; " + nonIdempotent + " is not idempotent"));
+                }
             }
             case "wait" -> {
                 rejectUnknown(node, path, Set.of("id", "type", "durationMillis"), state.issues);
@@ -402,6 +410,41 @@ public final class TaskGraphValidator {
         });
     }
 
+    private static String firstNonIdempotentTool(JsonNode node, Map<String, Boolean> idempotency) {
+        String tool = switch (node.path("type").asText()) {
+            case "call_tool" -> node.path("tool").asText();
+            case "read_memory" -> "memory.search";
+            case "suggest_memory" -> "memory.suggest";
+            default -> "";
+        };
+        if (!tool.isBlank() && Boolean.FALSE.equals(idempotency.get(tool))) return tool;
+        for (JsonNode child : children(node)) {
+            String rejected = firstNonIdempotentTool(child, idempotency);
+            if (rejected != null) return rejected;
+        }
+        return null;
+    }
+
+    private static List<JsonNode> children(JsonNode node) {
+        ArrayList<JsonNode> values = new ArrayList<>();
+        switch (node.path("type").asText()) {
+            case "sequence", "fallback", "parallel" -> node.path("nodes").forEach(values::add);
+            case "retry" -> values.add(node.path("node"));
+            case "if" -> {
+                values.add(node.path("then"));
+                if (node.has("else")) values.add(node.path("else"));
+            }
+            case "switch" -> {
+                node.path("cases").forEach(value -> values.add(value.path("node")));
+                if (node.has("default")) values.add(node.path("default"));
+            }
+            case "repeat", "while" -> values.add(node.path("body"));
+            default -> {
+            }
+        }
+        return values;
+    }
+
     private static TaskGraphValidationIssue issue(String path, String code, String message) {
         return new TaskGraphValidationIssue(path, code, message);
     }
@@ -410,6 +453,7 @@ public final class TaskGraphValidator {
         private final TaskGraphLimits limits;
         private final Map<String, String> availableTools;
         private final Map<String, JsonNode> toolSchemas;
+        private final Map<String, Boolean> toolIdempotency;
         private final Set<String> executableNodeTypes;
         private final Set<String> permissions;
         private final List<TaskGraphValidationIssue> issues;
@@ -421,11 +465,13 @@ public final class TaskGraphValidator {
 
         private State(TaskGraphLimits limits, Map<String, String> availableTools,
                       Map<String, JsonNode> toolSchemas,
+                      Map<String, Boolean> toolIdempotency,
                       Set<String> executableNodeTypes, Set<String> permissions,
                       List<TaskGraphValidationIssue> issues) {
             this.limits = limits;
             this.availableTools = availableTools;
             this.toolSchemas = toolSchemas;
+            this.toolIdempotency = toolIdempotency;
             this.executableNodeTypes = executableNodeTypes;
             this.permissions = permissions;
             this.issues = issues;

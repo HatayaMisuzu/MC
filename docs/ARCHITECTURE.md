@@ -94,7 +94,10 @@ validation, and resolved arguments are checked again immediately before dispatch
 `task.checkpoint`, and the `task_graph.*` lifecycle controls remain external control-plane Tools;
 graphs cannot call them recursively. A timed graph wait is stored as an absolute deadline and
 releases the execution worker. A separate bounded scheduler resumes only the matching persisted
-`WAITING` record, including after Runtime restart.
+`WAITING` record, including after Runtime restart. Graceful shutdown preserves a boundary already
+persisted as `WAITING` and drains the owning worker before stopping that scheduler. Retry cursors and
+backoff deadlines use the same mechanism, while both validation and execution reject automatic retry
+around a Tool currently declared non-idempotent.
 
 ## Registry and Mod compatibility
 

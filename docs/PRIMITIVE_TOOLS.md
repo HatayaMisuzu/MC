@@ -62,6 +62,8 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `item.use` | Selects a declared namespaced item into the requested hand through vanilla inventory-menu rules, invokes `ServerPlayerGameMode.useItem`, and bounds any hold duration |
 | `inventory.drop` | Drops 1..64 declared items through `ServerPlayer.drop`, verifies both the inventory delta and newly spawned vanilla `ItemEntity` |
 | `safety.retreat` | Retreats from one externally selected visible live entity through the existing vanilla player-input safety executor; completion requires three-block displacement and six-block threat clearance |
+| `task.wait` | Creates a one-node persistent Task Graph wait with a bounded 1..30000 ms deadline; the deadline releases the fixed Graph worker, survives Runtime restart, and remains pause/cancel/query capable |
+| `task.checkpoint` | Appends one bounded, session-owned external-Brain checkpoint at a persistent Task Graph node boundary; it expands neither graph permissions nor execution authority |
 
 These aliases are convenience primitive entry points, not new scenario Handlers. Runtime tests
 capture their actual Mod protocol payloads, including unknown namespaced IDs. Existing real Fabric
@@ -70,7 +72,6 @@ Runtime/Fabric E2E remains part of the RC gap.
 
 Still required for RC:
 
-- remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and
   composite-to-primitive equivalence.

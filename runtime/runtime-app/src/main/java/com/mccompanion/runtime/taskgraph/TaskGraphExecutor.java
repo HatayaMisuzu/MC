@@ -77,7 +77,8 @@ public final class TaskGraphExecutor {
                                      Consumer<TaskGraphExecutionSnapshot> snapshots) {
         String id = required(executionId);
         Map<String, ToolDefinition> available = tools.definitions(context).stream()
-                .filter(value -> !value.name().startsWith("task_graph."))
+                .filter(value -> !value.name().startsWith("task_graph.")
+                        && !value.name().startsWith("task."))
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
         TaskGraphValidationResult validation = validator.validateExecutable(graph, available, executableNodeTypes);
         if (!validation.valid()) {
@@ -97,7 +98,10 @@ public final class TaskGraphExecutor {
             case FAILURE -> "FAILED";
         };
         state.result = outcome.value.deepCopy();
-        state.publish(terminalState, null, outcome.code);
+        state.publish(terminalState,
+                terminalState.equals("WAITING") || terminalState.equals("PAUSED")
+                        || terminalState.equals("CANCELLED") ? state.currentNodeId : null,
+                outcome.code);
         return state.executionResult(terminalState, outcome);
     }
 
@@ -133,7 +137,7 @@ public final class TaskGraphExecutor {
                 case "ask_user" -> askUser(node, state);
                 case "read_memory" -> readMemory(node, path, state, nodeKey);
                 case "suggest_memory" -> suggestMemory(node, path, state, nodeKey);
-                case "wait" -> waitNode(node, state);
+                case "wait" -> waitNode(node, state, nodeKey);
                 case "checkpoint" -> event(nodeId, "CHECKPOINT", node.path("label"), state);
                 case "emit_progress" -> event(nodeId, "PROGRESS", node.path("message"), state);
                 case "return" -> new Outcome(Kind.RETURN, "OK",
@@ -172,17 +176,26 @@ public final class TaskGraphExecutor {
 
     private Outcome retry(JsonNode node, String path, State state, String scope) {
         int maximum = node.path("maxAttempts").asInt();
+        String retryKey = scoped(node.path("id").asText(), scope);
+        String waitKey = retryKey + ":backoff";
+        JsonNode pending = state.existingTimedWait(waitKey);
+        if (pending.isObject()) return Outcome.waitingTime(pending);
         Outcome last = Outcome.failure("RETRY_EXHAUSTED", Json.object());
-        for (int attempt = 1; attempt <= maximum; attempt++) {
+        for (int attempt = state.retryAttempt(retryKey); attempt <= maximum; attempt++) {
             String childId = node.path("node").path("id").asText();
             state.setAttempt(scoped(childId, scope), attempt);
             last = run(node.path("node"), path + ".node", state, scope);
-            if (last.kind != Kind.FAILURE) return last;
+            if (last.kind != Kind.FAILURE) {
+                state.clearRetryAttempt(retryKey);
+                return last;
+            }
             if (attempt < maximum && node.path("backoffMillis").asLong() > 0) {
-                Outcome waited = boundedSleep(node.path("backoffMillis").asLong(), state);
-                if (waited.kind == Kind.FAILURE) return waited;
+                state.setRetryAttempt(retryKey, attempt + 1);
+                return Outcome.waitingTime(state.startTimedWait(waitKey,
+                        node.path("id").asText(), node.path("backoffMillis").asLong()));
             }
         }
+        state.clearRetryAttempt(retryKey);
         return Outcome.failure("RETRY_EXHAUSTED", last.value);
     }
 
@@ -305,8 +318,10 @@ public final class TaskGraphExecutor {
     private Outcome callTool(JsonNode node, String path, State state, String nodeKey) {
         String nodeId = node.path("id").asText();
         ToolDefinition definition = tools.definitions(state.context).stream()
-                .filter(value -> value.name().equals(node.path("tool").asText())).findFirst().orElse(null);
-        if (definition == null || definition.name().startsWith("task_graph.")) {
+                .filter(value -> value.name().equals(node.path("tool").asText())
+                        && !value.name().startsWith("task_graph.")
+                        && !value.name().startsWith("task.")).findFirst().orElse(null);
+        if (definition == null) {
             return Outcome.failure("TOOL_UNAVAILABLE", Json.object().put("nodeId", nodeId));
         }
         if (!state.permissions.contains(definition.permission())) {
@@ -406,30 +421,17 @@ public final class TaskGraphExecutor {
                 : Outcome.failure(result.code(), result.observation());
     }
 
-    private Outcome waitNode(JsonNode node, State state) {
-        return boundedSleep(node.path("durationMillis").asLong(), state);
-    }
-
-    private Outcome boundedSleep(long millis, State state) {
+    private Outcome waitNode(JsonNode node, State state, String nodeKey) {
+        long millis = node.path("durationMillis").asLong();
         if (millis <= 0) return Outcome.success();
         long remainingNanos = state.deadline - System.nanoTime();
         if (remainingNanos <= 0 || Duration.ofNanos(remainingNanos).toMillis() < millis) {
             return Outcome.failure("WALL_TIME_LIMIT_EXCEEDED", Json.object());
         }
-        try {
-            long remaining = millis;
-            while (remaining > 0) {
-                Outcome stopped = state.controlOutcome();
-                if (stopped != null) return stopped;
-                long slice = Math.min(remaining, 25);
-                Thread.sleep(slice);
-                remaining -= slice;
-            }
-            return Outcome.success();
-        } catch (InterruptedException failure) {
-            Thread.currentThread().interrupt();
-            return Outcome.failure("EXECUTION_INTERRUPTED", Json.object());
-        }
+        JsonNode wait = state.existingTimedWait(nodeKey);
+        if (wait.isNull()) return Outcome.success();
+        if (!wait.isObject()) wait = state.startTimedWait(nodeKey, node.path("id").asText(), millis);
+        return Outcome.waitingTime(wait);
     }
 
     private static Outcome event(String nodeId, String type, JsonNode content, State state) {
@@ -472,6 +474,9 @@ public final class TaskGraphExecutor {
         static Outcome cancelled() { return new Outcome(Kind.CANCELLED, "TASK_GRAPH_CANCELLED", Json.object()); }
         static Outcome waiting(JsonNode value) {
             return new Outcome(Kind.WAITING, "TASK_GRAPH_WAITING_USER", value);
+        }
+        static Outcome waitingTime(JsonNode value) {
+            return new Outcome(Kind.WAITING, "TASK_GRAPH_WAITING_TIME", value);
         }
         static Outcome reconciliation(String code, JsonNode value) {
             return new Outcome(Kind.RECONCILIATION, code, value);
@@ -696,6 +701,54 @@ public final class TaskGraphExecutor {
 
         private synchronized void clearWaitingQuestion() {
             waitingQuestion = Json.MAPPER.nullNode();
+        }
+
+        private synchronized JsonNode existingTimedWait(String nodeKey) {
+            if (waitingQuestion.isObject()
+                    && waitingQuestion.path("kind").asText().equals("TIME")
+                    && waitingQuestion.path("nodeKey").asText().equals(nodeKey)) {
+                if (System.currentTimeMillis() >= waitingQuestion.path("wakeAtEpochMillis").asLong()) {
+                    clearWaitingQuestion();
+                    return Json.MAPPER.nullNode();
+                }
+                return waitingQuestion.deepCopy();
+            }
+            return Json.MAPPER.missingNode();
+        }
+
+        private synchronized JsonNode startTimedWait(String nodeKey, String nodeId, long durationMillis) {
+            waitingQuestion = Json.object().put("kind", "TIME").put("nodeKey", nodeKey)
+                    .put("nodeId", nodeId)
+                    .put("wakeAtEpochMillis", Math.addExact(System.currentTimeMillis(), durationMillis));
+            publish("WAITING", nodeId, "TASK_GRAPH_WAITING_TIME");
+            return waitingQuestion.deepCopy();
+        }
+
+        private synchronized int retryAttempt(String retryKey) {
+            return runtimeRetries().path(retryKey).asInt(1);
+        }
+
+        private synchronized void setRetryAttempt(String retryKey, int attempt) {
+            runtimeRetries().put(retryKey, attempt);
+        }
+
+        private synchronized void clearRetryAttempt(String retryKey) {
+            runtimeRetries().remove(retryKey);
+        }
+
+        private ObjectNode runtimeRetries() {
+            JsonNode runtime = variables.path("_mcac");
+            ObjectNode runtimeObject;
+            if (runtime.isObject()) runtimeObject = (ObjectNode) runtime;
+            else {
+                runtimeObject = Json.object();
+                variables.set("_mcac", runtimeObject);
+            }
+            JsonNode retries = runtimeObject.path("retries");
+            if (retries.isObject()) return (ObjectNode) retries;
+            ObjectNode retryObject = Json.object();
+            runtimeObject.set("retries", retryObject);
+            return retryObject;
         }
 
         private synchronized void recordNodeOutput(String nodeId, JsonNode value) {

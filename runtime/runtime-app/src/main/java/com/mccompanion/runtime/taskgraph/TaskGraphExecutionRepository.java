@@ -10,6 +10,8 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /** Durable execution state. Hidden reasoning is never stored. */
@@ -111,6 +113,19 @@ public final class TaskGraphExecutionRepository {
                         Instant.ofEpochMilli(row.getLong("updated_at"))));
             }
         }
+    }
+
+    public List<String> waitingTimeExecutionIds() throws SQLException {
+        ArrayList<String> values = new ArrayList<>();
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT execution_id FROM task_graph_execution
+                WHERE state='WAITING' AND json_extract(waiting_question_json,'$.kind')='TIME'
+                ORDER BY created_at, execution_id
+                """);
+             var rows = statement.executeQuery()) {
+            while (rows.next()) values.add(rows.getString(1));
+        }
+        return List.copyOf(values);
     }
 
     private static String required(String value) {

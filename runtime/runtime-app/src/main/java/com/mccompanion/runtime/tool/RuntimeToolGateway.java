@@ -65,7 +65,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
                                               Duration timeout, java.util.function.Consumer<ToolResult> progress) {
-        if (call.name().equals("task_graph.execute") && taskGraphRuntime != null && !accepted.terminal()) {
+        if ((call.name().equals("task_graph.execute") || call.name().equals("task.wait"))
+                && taskGraphRuntime != null && !accepted.terminal()) {
             return taskGraphRuntime.await(context, call, timeout, progress);
         }
         if (accepted.terminal() || !accepted.success() || tasks == null) return accepted;
@@ -189,6 +190,14 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         values.add(definition("task.pause", "Pause the active task safely", Json.object(), "LOW", "CONTROL_TASK", false));
         values.add(definition("task.resume", "Resume a paused task", Json.object(), "LOW", "CONTROL_TASK", false));
         values.add(definition("task.cancel", "Cancel the active task", Json.object(), "LOW", "CONTROL_TASK", false));
+        if (taskGraphRuntime != null) {
+            values.add(definition("task.wait",
+                    "Wait for a bounded duration as a persistent non-blocking execution",
+                    waitSchema(), "LOW", "CONTROL_TASK", true));
+            values.add(definition("task.checkpoint",
+                    "Append a bounded external-Brain checkpoint to a session-owned task graph",
+                    checkpointSchema(), "LOW", "CONTROL_TASK", true));
+        }
         values.add(definition("task_graph.validate",
                 "Statically validate a bounded declarative task graph without executing it",
                 taskGraphSchema(), "LOW", "VALIDATE_TASK_GRAPH", true));
@@ -286,7 +295,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             if (call.name().equals("task_graph.validate")) {
                 JsonNode graph = parsedTaskGraph(call.arguments());
                 var tools = definitions(context).stream()
-                        .filter(value -> !value.name().startsWith("task_graph."))
+                        .filter(value -> !value.name().startsWith("task_graph.")
+                                && !value.name().startsWith("task."))
                         .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
                 var validation = taskGraphs.validateExecutable(graph, tools,
                         taskGraphRuntime == null ? TaskGraphExecutor.EXECUTABLE_NODE_TYPES
@@ -302,6 +312,30 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 }
                 return taskGraphRuntime.start(context, call, graph, call.arguments().path("inputs"),
                         call.arguments().path("provenance"));
+            }
+            if (call.name().equals("task.wait")) {
+                rejectUnexpected(call.arguments(), Set.of("durationMillis"));
+                if (!call.arguments().path("durationMillis").canConvertToInt()) {
+                    throw new IllegalArgumentException("durationMillis must be an integer");
+                }
+                int durationMillis = call.arguments().path("durationMillis").asInt();
+                if (durationMillis < 1 || durationMillis > 30_000) {
+                    throw new IllegalArgumentException("durationMillis must be 1..30000");
+                }
+                ObjectNode graph = Json.object().put("version", "mcac-task-graph/1")
+                        .put("id", "atomic-wait");
+                graph.putArray("permissions");
+                graph.set("root", Json.object().put("id", "wait")
+                        .put("type", "wait").put("durationMillis", durationMillis));
+                return taskGraphRuntime.start(context, call, graph, Json.object(),
+                        Json.object().put("source", "ATOMIC_TASK_WAIT"));
+            }
+            if (call.name().equals("task.checkpoint")) {
+                rejectUnexpected(call.arguments(), Set.of("executionId", "label"));
+                String executionId = call.arguments().path("executionId").asText("");
+                String label = call.arguments().path("label").asText("");
+                if (executionId.isBlank()) throw new IllegalArgumentException("executionId is required");
+                return taskGraphRuntime.checkpoint(context, call, executionId, label);
             }
             if (call.name().startsWith("task_graph.") && !call.name().equals("task_graph.validate")) {
                 if (taskGraphRuntime == null) {
@@ -769,6 +803,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         } else if (name.equals("task_graph.inspect") || name.equals("task_graph.pause")
                 || name.equals("task_graph.resume") || name.equals("task_graph.cancel")) {
             root.putArray("required").add("executionId");
+        } else if (name.equals("task.wait")) {
+            root.putArray("required").add("durationMillis");
+        } else if (name.equals("task.checkpoint")) {
+            root.putArray("required").add("executionId").add("label");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
                 Duration.ofSeconds(30), idempotent);
@@ -778,6 +816,22 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
         properties.putObject("dimension").put("type", "string");
+        return properties;
+    }
+
+    private static ObjectNode waitSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("durationMillis").put("type", "integer")
+                .put("minimum", 1).put("maximum", 30_000);
+        return properties;
+    }
+
+    private static ObjectNode checkpointSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("executionId").put("type", "string")
+                .put("minLength", 1).put("maxLength", 128);
+        properties.putObject("label").put("type", "string")
+                .put("minLength", 1).put("maxLength", 512);
         return properties;
     }
 

@@ -90,7 +90,11 @@ production source, browser cookies, launcher credentials, Minecraft save mutatio
 editing, or direct world editing. Search is a separate authorized gateway, not arbitrary networking.
 Task Graph permissions must be known MCAC permissions and must include each current
 `ToolDefinition.permission`. Literal arguments are checked against the current Tool schema during
-validation, and resolved arguments are checked again immediately before dispatch.
+validation, and resolved arguments are checked again immediately before dispatch. `task.wait`,
+`task.checkpoint`, and the `task_graph.*` lifecycle controls remain external control-plane Tools;
+graphs cannot call them recursively. A timed graph wait is stored as an absolute deadline and
+releases the execution worker. A separate bounded scheduler resumes only the matching persisted
+`WAITING` record, including after Runtime restart.
 
 ## Registry and Mod compatibility
 

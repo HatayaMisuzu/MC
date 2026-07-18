@@ -178,6 +178,13 @@ inputs, persisted state, and prior Tool observations. Loop iterations receive st
 Tool call IDs, and loop cursors are persisted. Parallel branches use real bounded concurrency; state
 snapshots are serialized, pause/cancel reaches every active Tool call, and all active graphs share
 the Runtime's four-worker parallel budget.
+Timed `wait` nodes and retry backoff persist an absolute deadline, release the fixed Graph execution
+worker, and are resumed by a separate bounded scheduler. Startup re-registers safely persisted
+deadlines; pause/cancel invalidates their scheduled continuation, and the scheduler resumes only a
+record that is still `WAITING` with the same deadline. `task.wait` is a bounded one-node convenience
+wrapper over this mechanism. `task.checkpoint` records a bounded external-Brain checkpoint only at a
+persistent node boundary. Task control Tools are not callable from inside a Task Graph, preventing
+recursive self-control from becoming an implicit planner or scheduler.
 The result of `task_graph.cancel` preserves the external request `callId`. Execution timeout requests
 cancellation of every active child Tool and waits for a bounded durable confirmation. Confirmed
 cancellation is returned as `TOOL_TIMEOUT_CANCELLED`; if cancellation cannot be confirmed, the

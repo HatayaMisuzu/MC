@@ -73,12 +73,12 @@ class TaskGraphRuntimeTest {
                         {"version":"mcac-task-graph/1","id":"pausable","permissions":["READ_WORLD"],
                          "root":{"id":"root","type":"sequence","nodes":[
                            {"id":"observe","type":"call_tool","tool":"test.observe","arguments":{"item":"first"}},
-                           {"id":"wait","type":"wait","durationMillis":500},
+                           {"id":"wait","type":"wait","durationMillis":2000},
                            {"id":"done","type":"return","value":"ok"}
                          ]}}
                         """);
                 ToolResult accepted = runtime.start(context, execute, graph, Json.object(), Json.object());
-                waitForState(runtime, context, "execution-2", "RUNNING");
+                waitForState(runtime, context, "execution-2", "WAITING");
                 ToolResult pause = runtime.pause(context,
                         new ToolCall("pause-1", "task_graph.pause", Json.object()), "execution-2");
                 assertTrue(pause.success());
@@ -89,7 +89,7 @@ class TaskGraphRuntimeTest {
                 ToolResult resumed = runtime.resume(context,
                         new ToolCall("resume-1", "task_graph.resume", Json.object()), "execution-2");
                 assertTrue(resumed.success());
-                ToolResult completed = runtime.await(context, execute, Duration.ofSeconds(2), ignored -> { });
+                ToolResult completed = runtime.await(context, execute, Duration.ofSeconds(4), ignored -> { });
                 assertTrue(completed.success(), completed.observation().toString());
                 assertEquals(1, gateway.arguments.size(), "completed Tool effect repeated after resume");
             }
@@ -108,7 +108,7 @@ class TaskGraphRuntimeTest {
                 ToolCall call = new ToolCall("execution-3", "task_graph.execute", Json.object());
                 var graph = Json.parse("""
                         {"version":"mcac-task-graph/1","id":"identity","permissions":[],
-                         "root":{"id":"wait","type":"wait","durationMillis":300}}
+                         "root":{"id":"wait","type":"wait","durationMillis":2000}}
                         """);
                 ToolResult first = runtime.start(owner, call, graph, Json.object(), Json.object());
                 ToolResult duplicate = runtime.start(owner, call, graph, Json.object(), Json.object());
@@ -125,6 +125,7 @@ class TaskGraphRuntimeTest {
                         Json.object(), Json.object());
                 assertFalse(reused.success());
                 assertEquals("TASK_GRAPH_CALL_ID_REUSED", reused.code());
+                waitForState(runtime, owner, "execution-3", "WAITING");
 
                 ToolCall cancelCall = new ToolCall(
                         "external-cancel-request", "task_graph.cancel", Json.object());
@@ -244,11 +245,11 @@ class TaskGraphRuntimeTest {
                           "body":{"id":"iteration","type":"sequence","nodes":[
                            {"id":"observe","type":"call_tool","tool":"test.observe",
                             "arguments":{"item":"testmod:ore"}},
-                           {"id":"wait","type":"wait","durationMillis":400}
+                           {"id":"wait","type":"wait","durationMillis":2000}
                           ]}}}
                         """);
                 runtime.start(context, execute, graph, Json.object().put("target", 2), Json.object());
-                waitForState(runtime, context, "execution-7", "RUNNING");
+                waitForState(runtime, context, "execution-7", "WAITING");
                 ToolResult pause = runtime.pause(context,
                         new ToolCall("pause-repeat", "task_graph.pause", Json.object()), "execution-7");
                 assertTrue(pause.success());
@@ -258,7 +259,7 @@ class TaskGraphRuntimeTest {
 
                 assertTrue(runtime.resume(context,
                         new ToolCall("resume-repeat", "task_graph.resume", Json.object()), "execution-7").success());
-                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(3), ignored -> { });
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(5), ignored -> { });
                 assertTrue(terminal.success(), terminal.observation().toString());
                 assertEquals(2, gateway.arguments.size(),
                         "resume replayed a Tool already persisted in the interrupted iteration");
@@ -728,6 +729,72 @@ class TaskGraphRuntimeTest {
                                 "option_1", "Yes"));
                 assertFalse(late.success());
                 assertEquals("CANCELLED", repository.get("execution-14").orElseThrow().state());
+            }
+        }
+    }
+
+    @Test
+    void timedWaitsReleaseGraphWorkersAndResumeFromPersistentDeadlines() throws Exception {
+        Path databasePath = temporary.resolve("timed-waits.db");
+        ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+        var waitGraph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"bounded-wait","permissions":[],
+                 "root":{"id":"wait","type":"wait","durationMillis":800}}
+                """);
+        var immediateGraph = Json.parse("""
+                {"version":"mcac-task-graph/1","id":"immediate","permissions":[],
+                 "root":{"id":"done","type":"return","value":"ready"}}
+                """);
+        try (RuntimeDatabase database = new RuntimeDatabase(databasePath)) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(), repository)) {
+                for (String id : List.of("wait-a", "wait-b")) {
+                    runtime.start(context, new ToolCall(id, "task_graph.execute", Json.object()),
+                            waitGraph, Json.object(), Json.object());
+                    waitForState(runtime, context, id, "WAITING");
+                }
+                long started = System.nanoTime();
+                ToolCall immediate = new ToolCall("immediate-c", "task_graph.execute", Json.object());
+                runtime.start(context, immediate, immediateGraph, Json.object(), Json.object());
+                ToolResult terminal = runtime.await(context, immediate, Duration.ofSeconds(1), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertTrue(Duration.ofNanos(System.nanoTime() - started).toMillis() < 500,
+                        "two timed waits occupied both fixed Graph workers");
+                assertEquals("WAITING", repository.get("wait-a").orElseThrow().state());
+                assertEquals("TIME",
+                        repository.get("wait-a").orElseThrow().waitingQuestion().path("kind").asText());
+            }
+            try (TaskGraphRuntime recovered = new TaskGraphRuntime(new FakeGateway(), repository)) {
+                ToolCall first = new ToolCall("wait-a", "task_graph.execute", Json.object());
+                ToolResult completed = recovered.await(context, first, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(completed.success(), completed.observation().toString());
+                assertEquals("SUCCEEDED", completed.observation().path("state").asText());
+            }
+        }
+    }
+
+    @Test
+    void timedWaitCanBeCancelledWhileNoGraphWorkerIsActive() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("cancel-wait.db"))) {
+            database.initialize();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(), repository)) {
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"cancel-wait","permissions":[],
+                         "root":{"id":"wait","type":"wait","durationMillis":5000}}
+                        """);
+                ToolCall execute = new ToolCall("cancel-wait", "task_graph.execute", Json.object());
+                runtime.start(context, execute, graph, Json.object(), Json.object());
+                waitForState(runtime, context, execute.callId(), "WAITING");
+                ToolResult cancelled = runtime.cancel(context,
+                        new ToolCall("cancel-request", "task_graph.cancel", Json.object()),
+                        execute.callId(), "test cancellation");
+                assertTrue(cancelled.success(), cancelled.observation().toString());
+                assertEquals("CANCELLED", repository.get(execute.callId()).orElseThrow().state());
+                Thread.sleep(100);
+                assertEquals("CANCELLED", repository.get(execute.callId()).orElseThrow().state());
             }
         }
     }

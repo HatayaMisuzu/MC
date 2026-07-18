@@ -14,6 +14,8 @@ import com.mccompanion.runtime.conversation.WaitingQuestion;
 
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.Instant;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -23,6 +25,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import com.mccompanion.runtime.security.Digests;
 
@@ -42,7 +46,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
     private final TaskGraphValidator validator = new TaskGraphValidator();
     private final ExecutorService workers;
     private final ExecutorService parallelWorkers;
+    private final ScheduledExecutorService timers;
     private final Map<String, Running> active = new ConcurrentHashMap<>();
+    private final Map<String, ScheduledFuture<?>> timedWaits = new ConcurrentHashMap<>();
 
     public TaskGraphRuntime(ToolGateway tools, TaskGraphExecutionRepository repository) {
         this(tools, repository, null);
@@ -78,6 +84,17 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     thread.setDaemon(false);
                     return thread;
                 });
+        this.timers = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "mcac-task-graph-timer");
+            thread.setDaemon(false);
+            return thread;
+        });
+        try {
+            repository.waitingTimeExecutionIds().forEach(this::scheduleTimedWait);
+        } catch (SQLException failure) {
+            close();
+            throw new IllegalStateException("TASK_GRAPH_WAIT_RECOVERY_FAILED", failure);
+        }
     }
 
     public ToolResult start(ToolContext context, ToolCall call, JsonNode graph, JsonNode inputs,
@@ -156,16 +173,112 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
+    public ToolResult checkpoint(ToolContext context, ToolCall call, String executionId, String label) {
+        try {
+            if (label == null || label.isBlank() || label.length() > 512) {
+                throw new IllegalArgumentException("label must be 1..512 characters");
+            }
+            for (int attempt = 0; attempt < 20; attempt++) {
+                TaskGraphExecutionRecord record = owned(context, executionId);
+                String externalNodeId = "external:" + call.callId();
+                for (JsonNode checkpoint : record.checkpoints()) {
+                    if (checkpoint.path("nodeId").asText().equals(externalNodeId)) {
+                        return new ToolResult(call.callId(), call.name(), true, "OK",
+                                inspectJson(record), true);
+                    }
+                }
+                if (TERMINAL.contains(record.state())) {
+                    return ToolResult.rejected(call, "TASK_GRAPH_TERMINAL",
+                            "cannot append a checkpoint to a terminal execution");
+                }
+                if (active.containsKey(executionId)) {
+                    return ToolResult.rejected(call, "TASK_GRAPH_CHECKPOINT_BUSY",
+                            "execution must reach a persistent node boundary before checkpointing");
+                }
+                TaskGraphLimits limits = TaskGraphLimits.parse(record.limits(), new ArrayList<>());
+                JsonNode event = Json.object().put("nodeId", externalNodeId)
+                        .put("type", "CHECKPOINT").put("content", label)
+                        .put("source", "EXTERNAL_BRAIN").put("at", Instant.now().toString());
+                var checkpoints = (com.fasterxml.jackson.databind.node.ArrayNode) record.checkpoints().deepCopy();
+                checkpoints.add(event.deepCopy());
+                trim(checkpoints, limits.maxEvidenceEntries(), limits.maxEvidenceBytes());
+                var evidence = (com.fasterxml.jackson.databind.node.ArrayNode) record.evidence().deepCopy();
+                evidence.add(boundedEvidence(event, limits.maxEvidenceBytes()));
+                trim(evidence, limits.maxEvidenceEntries(), limits.maxEvidenceBytes());
+                try {
+                    TaskGraphExecutionRecord saved = repository.save(record.executionId(), record.revision(),
+                            record.state(), record.currentNodeId(), record.completedNodes(), record.toolResults(),
+                            record.variables(), record.outputs(), checkpoints, evidence, record.waitingQuestion(),
+                            record.result(), "EXTERNAL_CHECKPOINT");
+                    return new ToolResult(call.callId(), call.name(), true, "OK",
+                            inspectJson(saved), true);
+                } catch (IllegalStateException stale) {
+                    if (!"STALE_TASK_GRAPH_REVISION".equals(stale.getMessage())) throw stale;
+                }
+            }
+            return ToolResult.rejected(call, "TASK_GRAPH_CHECKPOINT_CONFLICT",
+                    "checkpoint could not be persisted after concurrent state changes");
+        } catch (SQLException | IllegalArgumentException failure) {
+            return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
+        }
+    }
+
     public ToolResult pause(ToolContext context, ToolCall call, String executionId) {
         try {
             TaskGraphExecutionRecord record = owned(context, executionId);
             if (TERMINAL.contains(record.state())) return terminal(call, record);
+            if (record.state().equals("WAITING") && isTimedWait(record)) {
+                cancelTimedWait(executionId);
+                for (int attempt = 0; attempt < 20; attempt++) {
+                    record = owned(context, executionId);
+                    if (record.state().equals("PAUSED")) {
+                        return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
+                                inspectJson(record), true);
+                    }
+                    if (TERMINAL.contains(record.state())) return terminal(call, record);
+                    if (!isTimedWait(record)) break;
+                    try {
+                        TaskGraphExecutionRecord paused = repository.save(record.executionId(), record.revision(),
+                                "PAUSED", record.currentNodeId(), record.completedNodes(), record.toolResults(),
+                                record.variables(), record.outputs(), record.checkpoints(), record.evidence(),
+                                record.waitingQuestion(), record.result(), "TASK_GRAPH_PAUSED");
+                        return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
+                                inspectJson(paused), true);
+                    } catch (IllegalStateException stale) {
+                        if (!"STALE_TASK_GRAPH_REVISION".equals(stale.getMessage())) throw stale;
+                    }
+                }
+            }
             Running running = active.get(executionId);
             if (running == null) return ToolResult.rejected(call, "TASK_GRAPH_NOT_RUNNING", "execution is not active");
             running.control.requestPause();
             cancelActiveTool(running, "task graph pause");
+            long deadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
+            while (System.nanoTime() < deadline) {
+                record = owned(context, executionId);
+                if (record.state().equals("PAUSED")) {
+                    return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
+                            inspectJson(record), true);
+                }
+                if (TERMINAL.contains(record.state())) {
+                    return terminal(call, record);
+                }
+                if (record.state().equals("WAITING") && isTimedWait(record)) {
+                    cancelTimedWait(executionId);
+                    TaskGraphExecutionRecord paused = repository.save(record.executionId(), record.revision(),
+                            "PAUSED", record.currentNodeId(), record.completedNodes(), record.toolResults(),
+                            record.variables(), record.outputs(), record.checkpoints(), record.evidence(),
+                            record.waitingQuestion(), record.result(), "TASK_GRAPH_PAUSED");
+                    return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
+                            inspectJson(paused), true);
+                }
+                Thread.sleep(5);
+            }
             return new ToolResult(call.callId(), call.name(), true, "PAUSE_REQUESTED",
                     inspectJson(record).put("state", "PAUSE_REQUESTED"), true);
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_INTERRUPTED", "pause was interrupted");
         } catch (SQLException | IllegalArgumentException failure) {
             return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
         }
@@ -185,6 +298,19 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     return ToolResult.rejected(call, assessment.code(), assessment.message());
                 }
             }
+            long inactiveDeadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
+            while (active.containsKey(executionId) && System.nanoTime() < inactiveDeadline) {
+                Thread.sleep(5);
+            }
+            if (active.containsKey(executionId)) {
+                return ToolResult.rejected(call, "TASK_GRAPH_STILL_PAUSING",
+                        "execution has not released its prior worker yet");
+            }
+            record = owned(context, executionId);
+            if (!record.state().equals("PAUSED") && !record.state().equals("RECONCILIATION_REQUIRED")) {
+                return ToolResult.rejected(call, "TASK_GRAPH_NOT_PAUSED",
+                        "execution changed state before resume");
+            }
             TaskGraphExecutionRecord ready = repository.save(record.executionId(), record.revision(),
                     "READY", record.currentNodeId(), record.completedNodes(), record.toolResults(),
                     record.variables(), record.outputs(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
@@ -193,6 +319,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
             return new ToolResult(call.callId(), call.name(), true,
                     recovery ? "RECOVERY_RESUME_ACCEPTED" : "RESUME_ACCEPTED",
                     inspectJson(ready).put("state", "ACCEPTED"), true);
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_INTERRUPTED", "resume was interrupted");
         } catch (SQLException | IllegalArgumentException failure) {
             return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
         }
@@ -209,13 +338,40 @@ public final class TaskGraphRuntime implements AutoCloseable {
         try {
             TaskGraphExecutionRecord record = owned(context, executionId);
             Running running = active.get(executionId);
+            if (record.state().equals("WAITING")) {
+                if (running != null) {
+                    running.control.requestCancel();
+                    cancelActiveTool(running, reason);
+                }
+                cancelTimedWait(executionId);
+                for (int attempt = 0; attempt < 20; attempt++) {
+                    record = owned(context, executionId);
+                    if (record.state().equals("CANCELLED")) {
+                        return new ToolResult(request.callId(), request.name(), true, "TASK_GRAPH_CANCELLED",
+                                inspectJson(record), true);
+                    }
+                    if (TERMINAL.contains(record.state())) return terminal(request, record);
+                    if (!record.state().equals("WAITING")) break;
+                    JsonNode cancelledQuestion = cancelWaitingQuestion(record, reason);
+                    try {
+                        TaskGraphExecutionRecord cancelled = repository.save(record.executionId(), record.revision(),
+                                "CANCELLED", null, record.completedNodes(), record.toolResults(), record.variables(),
+                                record.outputs(), record.checkpoints(), record.evidence(), cancelledQuestion,
+                                record.result(), "TASK_GRAPH_CANCELLED");
+                        return new ToolResult(request.callId(), request.name(), true, "TASK_GRAPH_CANCELLED",
+                                inspectJson(cancelled), true);
+                    } catch (IllegalStateException stale) {
+                        if (!"STALE_TASK_GRAPH_REVISION".equals(stale.getMessage())) throw stale;
+                    }
+                }
+            }
             if (running != null) {
                 running.control.requestCancel();
                 cancelActiveTool(running, reason);
                 return new ToolResult(request.callId(), request.name(), true, "CANCEL_REQUESTED",
                         inspectJson(record).put("state", "CANCEL_REQUESTED"), true);
             }
-            if (record.state().equals("PAUSED") || record.state().equals("WAITING")) {
+            if (record.state().equals("PAUSED")) {
                 JsonNode cancelledQuestion = cancelWaitingQuestion(record, reason);
                 TaskGraphExecutionRecord cancelled = repository.save(record.executionId(), record.revision(),
                         "CANCELLED", null, record.completedNodes(), record.toolResults(), record.variables(),
@@ -308,8 +464,24 @@ public final class TaskGraphRuntime implements AutoCloseable {
                         });
                 if (result.state().equals("WAITING")) {
                     active.remove(record.executionId(), running);
-                    materializeWaitingQuestion(record.executionId());
+                    TaskGraphExecutionRecord waiting = repository.get(record.executionId()).orElseThrow();
+                    if (TERMINAL.contains(waiting.state())) return;
+                    if (control.cancelRequested() || control.pauseRequested()) {
+                        String state = control.cancelRequested() ? "CANCELLED" : "PAUSED";
+                        repository.save(waiting.executionId(), waiting.revision(), state,
+                                waiting.currentNodeId(), waiting.completedNodes(), waiting.toolResults(),
+                                waiting.variables(), waiting.outputs(), waiting.checkpoints(), waiting.evidence(),
+                                waiting.waitingQuestion(), waiting.result(),
+                                control.cancelRequested() ? "TASK_GRAPH_CANCELLED" : "TASK_GRAPH_PAUSED");
+                    } else if (isTimedWait(waiting)) {
+                        scheduleTimedWait(record.executionId());
+                    } else {
+                        materializeWaitingQuestion(record.executionId());
+                    }
                 }
+            } catch (SQLException failure) {
+                reconcileWorkerFailure(record.executionId(),
+                        new IllegalStateException("TASK_GRAPH_WAIT_PERSISTENCE_ERROR", failure));
             } catch (RuntimeException failure) {
                 reconcileWorkerFailure(record.executionId(), failure);
             } finally {
@@ -419,6 +591,55 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
+    private static boolean isTimedWait(TaskGraphExecutionRecord record) {
+        return record.state().equals("WAITING")
+                && record.waitingQuestion().path("kind").asText().equals("TIME")
+                && record.waitingQuestion().path("wakeAtEpochMillis").canConvertToLong();
+    }
+
+    private void scheduleTimedWait(String executionId) {
+        try {
+            TaskGraphExecutionRecord record = repository.get(executionId).orElse(null);
+            if (record == null || !isTimedWait(record)) return;
+            long wakeAt = record.waitingQuestion().path("wakeAtEpochMillis").asLong();
+            long delay = Math.max(0L, wakeAt - System.currentTimeMillis());
+            ScheduledFuture<?> scheduled = timers.schedule(
+                    () -> resumeTimedWait(executionId, wakeAt), delay, TimeUnit.MILLISECONDS);
+            ScheduledFuture<?> prior = timedWaits.put(executionId, scheduled);
+            if (prior != null) prior.cancel(false);
+        } catch (SQLException failure) {
+            reconcileWorkerFailure(executionId,
+                    new IllegalStateException("TASK_GRAPH_WAIT_PERSISTENCE_ERROR", failure));
+        }
+    }
+
+    private void resumeTimedWait(String executionId, long expectedWakeAt) {
+        timedWaits.remove(executionId);
+        try {
+            TaskGraphExecutionRecord record = repository.get(executionId).orElse(null);
+            if (record == null || !isTimedWait(record)
+                    || record.waitingQuestion().path("wakeAtEpochMillis").asLong() != expectedWakeAt) {
+                return;
+            }
+            TaskGraphExecutionRecord ready = repository.save(executionId, record.revision(), "READY",
+                    record.currentNodeId(), record.completedNodes(), record.toolResults(), record.variables(),
+                    record.outputs(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
+                    record.result(), "TIME_WAIT_ELAPSED");
+            ToolContext context = new ToolContext(
+                    record.controllerId(), record.brainSessionId(), record.companionId());
+            submit(context, ready);
+        } catch (SQLException | IllegalArgumentException | IllegalStateException failure) {
+            reconcileWorkerFailure(executionId,
+                    failure instanceof RuntimeException runtime ? runtime
+                            : new IllegalStateException("TASK_GRAPH_WAIT_RESUME_FAILED", failure));
+        }
+    }
+
+    private void cancelTimedWait(String executionId) {
+        ScheduledFuture<?> scheduled = timedWaits.remove(executionId);
+        if (scheduled != null) scheduled.cancel(false);
+    }
+
     private static boolean waitingReady(TaskGraphExecutionRecord record) {
         return record.state().equals("WAITING") && record.waitingQuestion().hasNonNull("questionId");
     }
@@ -441,7 +662,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     private Map<String, ToolDefinition> ordinaryDefinitions(ToolContext context) {
-        return tools.definitions(context).stream().filter(value -> !value.name().startsWith("task_graph."))
+        return tools.definitions(context).stream().filter(TaskGraphRuntime::isGraphCallable)
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
     }
 
@@ -460,7 +681,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
         ToolContext context = new ToolContext(
                 record.controllerId(), record.brainSessionId(), record.companionId());
         Map<String, ToolDefinition> definitions = tools.definitions(context).stream()
-                .filter(value -> !value.name().startsWith("task_graph."))
+                .filter(TaskGraphRuntime::isGraphCallable)
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
         TaskGraphValidationResult validation =
                 validator.validateExecutable(record.graph(), definitions, executableNodeTypes);
@@ -589,6 +810,32 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
+    private static boolean isGraphCallable(ToolDefinition definition) {
+        return !definition.name().startsWith("task_graph.") && !definition.name().startsWith("task.");
+    }
+
+    private static JsonNode boundedEvidence(JsonNode value, int maxBytes) {
+        int bytes = serializedBytes(value);
+        if (bytes <= maxBytes) return value.deepCopy();
+        return Json.object().put("code", "EVIDENCE_ENTRY_OVERSIZED")
+                .put("originalBytes", bytes)
+                .put("sha256", Digests.sha256(Json.canonical(value)));
+    }
+
+    private static void trim(com.fasterxml.jackson.databind.node.ArrayNode values,
+                             int maxEntries, int maxBytes) {
+        int bytes = serializedBytes(values);
+        while (values.size() > maxEntries || bytes > maxBytes) {
+            if (values.isEmpty()) break;
+            values.remove(0);
+            bytes = serializedBytes(values);
+        }
+    }
+
+    private static int serializedBytes(JsonNode value) {
+        return Json.write(value).getBytes(StandardCharsets.UTF_8).length;
+    }
+
     private void cancelActiveTool(Running running, String reason) {
         running.control.activeCallIds().forEach(callId -> tools.cancel(running.context, callId, reason));
     }
@@ -622,10 +869,14 @@ public final class TaskGraphRuntime implements AutoCloseable {
         });
         workers.shutdownNow();
         parallelWorkers.shutdownNow();
+        timedWaits.values().forEach(value -> value.cancel(false));
+        timedWaits.clear();
+        timers.shutdownNow();
         try {
             boolean workersStopped = workers.awaitTermination(5, TimeUnit.SECONDS);
             boolean parallelStopped = parallelWorkers.awaitTermination(5, TimeUnit.SECONDS);
-            if (!workersStopped || !parallelStopped) {
+            boolean timersStopped = timers.awaitTermination(5, TimeUnit.SECONDS);
+            if (!workersStopped || !parallelStopped || !timersStopped) {
                 throw new IllegalStateException("Task Graph workers did not terminate");
             }
         } catch (InterruptedException failure) {

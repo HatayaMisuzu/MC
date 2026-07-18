@@ -148,6 +148,65 @@ class RuntimeToolGatewayTest {
                 assertTrue(executed.success(), executed.observation().toString());
                 assertEquals(20, executed.observation().path("outputs").path("observe").path("health").asInt());
 
+                var controlNames = gateway.definitions(context).stream().map(ToolDefinition::name).toList();
+                assertTrue(controlNames.containsAll(List.of("task.wait", "task.checkpoint")));
+                ToolCall waitCall = new ToolCall("atomic-wait-1", "task.wait",
+                        Json.object().put("durationMillis", 1000));
+                ToolResult waitAccepted = gateway.execute(context, waitCall);
+                assertTrue(waitAccepted.success(), waitAccepted.observation().toString());
+                assertFalse(waitAccepted.terminal());
+                long waitBoundaryDeadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+                while (System.nanoTime() < waitBoundaryDeadline) {
+                    ToolResult state = gateway.execute(context,
+                            new ToolCall("inspect-wait", "task_graph.inspect",
+                                    Json.object().put("executionId", waitCall.callId())));
+                    if (state.observation().path("state").asText().equals("WAITING")) break;
+                    Thread.sleep(5);
+                }
+                ToolResult checkpoint;
+                long checkpointDeadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+                do {
+                    checkpoint = gateway.execute(context,
+                            new ToolCall("checkpoint-1", "task.checkpoint",
+                                    Json.object().put("executionId", waitCall.callId())
+                                            .put("label", "external brain approved next observation")));
+                    if (!checkpoint.success() && checkpoint.code().equals("TASK_GRAPH_CHECKPOINT_BUSY")) {
+                        Thread.sleep(5);
+                    }
+                } while (!checkpoint.success() && checkpoint.code().equals("TASK_GRAPH_CHECKPOINT_BUSY")
+                        && System.nanoTime() < checkpointDeadline);
+                assertTrue(checkpoint.success(), checkpoint.observation().toString());
+                assertTrue(checkpoint.observation().path("checkpoints").toString()
+                        .contains("external brain approved next observation"));
+                int checkpointCount = checkpoint.observation().path("checkpoints").size();
+                ToolResult duplicateCheckpoint = gateway.execute(context,
+                        new ToolCall("checkpoint-1", "task.checkpoint",
+                                Json.object().put("executionId", waitCall.callId())
+                                        .put("label", "external brain approved next observation")));
+                assertTrue(duplicateCheckpoint.success(), duplicateCheckpoint.observation().toString());
+                assertEquals(checkpointCount, duplicateCheckpoint.observation().path("checkpoints").size());
+                ToolResult waited = gateway.awaitTerminal(context, waitCall, waitAccepted,
+                        Duration.ofSeconds(2), ignored -> { });
+                assertTrue(waited.success(), waited.observation().toString());
+                assertEquals("SUCCEEDED", waited.observation().path("state").asText());
+                ToolResult excessiveWait = gateway.execute(context,
+                        new ToolCall("atomic-wait-invalid", "task.wait",
+                                Json.object().put("durationMillis", 30_001)));
+                assertFalse(excessiveWait.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", excessiveWait.code());
+
+                ToolResult recursiveControl = gateway.execute(context,
+                        new ToolCall("graph-recursive-control", "task_graph.validate",
+                                Json.object().set("graph", Json.parse("""
+                                        {"version":"mcac-task-graph/1","id":"recursive-control",
+                                         "permissions":["CONTROL_TASK"],
+                                         "root":{"id":"nested","type":"call_tool","tool":"task.wait",
+                                          "arguments":{"durationMillis":10}}}
+                                        """))));
+                assertFalse(recursiveControl.success());
+                assertTrue(recursiveControl.observation().path("issues").toString()
+                        .contains("TOOL_UNAVAILABLE"));
+
                 ToolCall cancelCall = new ToolCall("external-cancel-request", "task_graph.cancel",
                         Json.object().put("executionId", executeCall.callId()));
                 ToolResult cancelledTerminal = gateway.execute(context, cancelCall);

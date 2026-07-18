@@ -248,6 +248,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("SmeltItem")) values.add(definition("item.smelt",
                 "Smelt a bounded quantity in a verified nearby furnace using held input and fuel",
                 smeltSchema(), "LOW", "CRAFT", false));
+        if (available.contains("UseItem")) values.add(definition("item.use",
+                "Use one held namespaced item through vanilla player interaction for a bounded duration",
+                itemUseSchema(), "LOW", "INTERACT", false));
         if (available.contains("DefendOwner")) values.add(definition("combat.defend_owner",
                 "Defend the owner from one nearby hostile using vanilla movement and attacks",
                 Json.object(), "MEDIUM", "COMBAT", false));
@@ -260,6 +263,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         }
         if (available.contains("CraftItem")) values.add(definition("item.craft", "Craft an item through a vanilla crafting menu", craftSchema(), "LOW", "CRAFT", false));
         if (available.contains("DeliverItem")) values.add(definition("inventory.deliver", "Deliver held items to the owner", itemQuantitySchema(), "LOW", "INVENTORY", false));
+        if (available.contains("DropItem")) values.add(definition("inventory.drop",
+                "Drop a bounded quantity from the connected body through vanilla player rules",
+                dropSchema(), "MEDIUM", "INVENTORY", false));
         if (available.contains("EatAndRecover")) values.add(definition("item.eat_and_recover", "Eat food using normal game interaction", foodSchema(), "LOW", "SURVIVAL", false));
         return List.copyOf(values);
     }
@@ -365,12 +371,14 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "entity.collect" -> skill("CollectResource", validatedItemQuantity(call.arguments(), false));
             case "resource.mine_vein" -> skill("MineResourceVein", validatedMine(call.arguments()));
             case "item.smelt" -> skill("SmeltItem", validatedSmelt(call.arguments()));
+            case "item.use" -> skill("UseItem", validatedItemUse(call.arguments()));
             case "combat.defend_owner" -> skill("DefendOwner", noArgumentsNode(call.arguments()));
             case "inventory.withdraw" -> skill("WithdrawFromStorage", validatedWithdraw(call.arguments()));
             case "inventory.deposit" -> skill("DepositToStorage", validatedWithdraw(call.arguments()));
             case "inventory.transfer" -> transfer(call.arguments());
             case "item.craft" -> skill("CraftItem", validatedCraft(call.arguments()));
             case "inventory.deliver" -> skill("DeliverItem", validatedItemQuantity(call.arguments(), false));
+            case "inventory.drop" -> skill("DropItem", validatedDrop(call.arguments()));
             case "item.eat_and_recover" -> skill("EatAndRecover", validatedFood(call.arguments()));
             case "task.pause" -> noArgumentsStop(call, "pause");
             case "task.resume" -> noArgumentsStop(call, "resume");
@@ -469,6 +477,30 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         return values;
     }
 
+    private static JsonNode validatedItemUse(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "hand", "durationTicks"));
+        String item = namespacedId(arguments.path("item").asText(""), "item");
+        String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
+                Set.of("MAIN_HAND", "OFF_HAND"));
+        int durationTicks = arguments.path("durationTicks").asInt(0);
+        if (!arguments.path("durationTicks").isMissingNode()
+                && !arguments.path("durationTicks").canConvertToInt()) {
+            throw new IllegalArgumentException("durationTicks must be an integer");
+        }
+        if (durationTicks < 0 || durationTicks > 720) {
+            throw new IllegalArgumentException("durationTicks must be between 0 and 720");
+        }
+        return Json.object().put("item", item).put("hand", hand).put("durationTicks", durationTicks);
+    }
+
+    private static JsonNode validatedDrop(JsonNode arguments) {
+        ObjectNode values = (ObjectNode) validatedItemQuantity(arguments, false);
+        if (values.path("quantity").asInt() > 64) {
+            throw new IllegalArgumentException("quantity must be between 1 and 64");
+        }
+        return values;
+    }
+
     private static ObjectNode validatedBoundedPosition(JsonNode position) {
         ObjectNode target = Json.object();
         for (String field : List.of("x", "y", "z")) {
@@ -487,6 +519,13 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     private static String enumValue(String value, String label, Set<String> allowed) {
         if (!allowed.contains(value)) throw new IllegalArgumentException(label + " is invalid");
+        return value;
+    }
+
+    private static String namespacedId(String value, String label) {
+        if (!value.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException(label + " must be a namespaced identifier");
+        }
         return value;
     }
 
@@ -664,11 +703,14 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("sessionToken").add("slot");
         } else if (name.equals("menu.close")) {
             root.putArray("required").add("sessionToken");
+        } else if (name.equals("item.use")) {
+            root.putArray("required").add("item");
         } else if (name.equals("inventory.withdraw") || name.equals("inventory.deposit")) {
             root.putArray("required").add("item").add("quantity").add("container");
         } else if (name.equals("inventory.transfer")) {
             root.putArray("required").add("direction").add("item").add("quantity").add("container");
-        } else if (name.equals("inventory.deliver") || name.equals("item.craft")
+        } else if (name.equals("inventory.deliver") || name.equals("inventory.drop")
+                || name.equals("item.craft")
                 || name.equals("resource.collect") || name.equals("entity.collect")) {
             root.putArray("required").add("item").add("quantity");
         } else if (name.equals("world.scan")) {
@@ -761,6 +803,23 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         properties.putObject("sessionToken").put("type", "string")
                 .put("pattern", "^[A-Za-z0-9_-]{32}$");
+        return properties;
+    }
+
+    private static ObjectNode itemUseSchema() {
+        ObjectNode properties = Json.object();
+        properties.putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("hand").put("type", "string").putArray("enum")
+                .add("MAIN_HAND").add("OFF_HAND");
+        properties.putObject("durationTicks").put("type", "integer")
+                .put("minimum", 0).put("maximum", 720);
+        return properties;
+    }
+
+    private static ObjectNode dropSchema() {
+        ObjectNode properties = itemQuantitySchema();
+        ((ObjectNode) properties.path("quantity")).put("maximum", 64);
         return properties;
     }
 

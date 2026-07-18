@@ -142,6 +142,9 @@ features extend these surfaces rather than creating parallel products.
   ten-second handle bound to the exact `AbstractContainerMenu` instance and container ID; each
   click, quick-move, or close revalidates that handle at execution time. Menu replacement, close,
   expiry, reconnect, or Runtime/Mod process restart invalidates the handle.
+- Generic item use and drop select declared Registry items through vanilla inventory-menu state,
+  invoke `ServerPlayerGameMode.useItem` or `ServerPlayer.drop`, and require observed consumption,
+  projectile/world-entity, inventory-delta, and action-path evidence rather than editing stacks.
 - Asynchronous results are revalidated against world, dimension, lease, behavior revision,
   companion, and owner.
 - Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.

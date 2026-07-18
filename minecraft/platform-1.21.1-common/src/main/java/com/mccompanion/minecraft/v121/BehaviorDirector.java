@@ -145,6 +145,9 @@ final class BehaviorDirector {
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
         navigation.remove(entry.companionId);
         SkillProgress skill = skills.get(entry.companionId);
+        if (skill != null && skill.parameters.capability().equals("UseItem") && body.isUsingItem()) {
+            body.releaseUsingItem();
+        }
         if (skill != null && (skill.parameters.capability().equals("WithdrawFromStorage")
                 || skill.parameters.capability().equals("DepositToStorage"))) body.closeContainer();
         if (skill != null && skill.parameters.capability().equals("CraftItem")) {
@@ -339,6 +342,34 @@ final class BehaviorDirector {
 
     private SkillProgress createSkill(CompanionPlayer body, CompanionEntry entry, SkillParameters parameters) {
         ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (parameters.capability().equals("UseItem")) {
+            Item item = resolveItem(parameters.itemId());
+            if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
+            if (count(body, item) < 1) return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            try {
+                InteractionHand.valueOf(parameters.hand());
+            } catch (IllegalArgumentException invalid) {
+                return SkillProgress.failed(parameters, "INTERACTION_HAND_INVALID");
+            }
+            int duration = parameters.durationTicks() == null ? 0 : parameters.durationTicks();
+            if (duration < 0 || duration > 720) {
+                return SkillProgress.failed(parameters, "ITEM_USE_DURATION_INVALID");
+            }
+            return new SkillProgress(parameters, item, 1, 0, body.getFoodData().getFoodLevel(),
+                    count(body, item), server.getTickCount(), null);
+        }
+        if (parameters.capability().equals("DropItem")) {
+            Item item = resolveItem(parameters.itemId());
+            if (item == null) return SkillProgress.failed(parameters, "ITEM_UNKNOWN");
+            int available = count(body, item);
+            if (available < parameters.quantity() && !parameters.allowPartial()) {
+                return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            }
+            int target = Math.min(available, parameters.quantity());
+            if (target < 1) return SkillProgress.failed(parameters, "ITEM_INSUFFICIENT");
+            return new SkillProgress(parameters, item, target, 0, body.getFoodData().getFoodLevel(),
+                    available, server.getTickCount(), null);
+        }
         if (parameters.capability().equals("LookAt")) {
             if (!parameters.hasBlockTarget()) return SkillProgress.failed(parameters, "LOOK_TARGET_MISSING");
             if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
@@ -600,6 +631,8 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "SKILL_TIMEOUT"); return;
         }
         if (progress.parameters.capability().equals("DeliverItem")) tickDelivery(entry, body, progress);
+        else if (progress.parameters.capability().equals("DropItem")) tickDrop(entry, body, progress);
+        else if (progress.parameters.capability().equals("UseItem")) tickUseItem(entry, body, progress);
         else if (progress.parameters.capability().equals("LookAt")) tickLook(entry, body, progress);
         else if (progress.parameters.capability().equals("WithdrawFromStorage")) tickWithdrawal(entry, body, progress);
         else if (progress.parameters.capability().equals("DepositToStorage")) tickDeposit(entry, body, progress);
@@ -1268,6 +1301,72 @@ final class BehaviorDirector {
         progress.actions++; progress.lastActionTick = server.getTickCount();
     }
 
+    private void tickDrop(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        int dropped = progress.itemBaseline - count(body, progress.item);
+        if (dropped >= progress.target) {
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "DROP_COMPLETE", progress.parameters.itemId(), progress.parameters.quantity(), dropped));
+            stop(entry, body, true, "NONE");
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed();
+            return;
+        }
+        if (server.getTickCount() - progress.lastActionTick < 2) return;
+        int slot = ensureHotbarItem(body, progress.item);
+        if (slot < 0 || slot > 8) {
+            pauseSafely(entry, body, "ITEM_NOT_IN_HOTBAR");
+            return;
+        }
+        body.getInventory().selected = slot;
+        if (!body.drop(false)) {
+            pauseSafely(entry, body, "DROP_FAILED");
+            return;
+        }
+        actionGateway.markVanillaDrop(body);
+        boolean spawned = body.serverLevel().getEntitiesOfClass(ItemEntity.class,
+                        body.getBoundingBox().inflate(2.5D),
+                        entity -> entity.getAge() <= 1 && entity.getItem().is(progress.item))
+                .stream().anyMatch(entity -> progress.droppedEntities.add(entity.getUUID()));
+        if (!spawned) {
+            pauseSafely(entry, body, "DROP_OBSERVATION_MISSING");
+            return;
+        }
+        progress.actions++;
+        progress.lastActionTick = server.getTickCount();
+    }
+
+    private void tickUseItem(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
+        InteractionHand hand = InteractionHand.valueOf(progress.parameters.hand());
+        int duration = progress.parameters.durationTicks() == null ? 0 : progress.parameters.durationTicks();
+        if (progress.actions == 0) {
+            if (!ensureHandItem(body, progress.item, hand)) {
+                pauseSafely(entry, body, "ITEM_NOT_IN_HAND");
+                return;
+            }
+            net.minecraft.world.InteractionResult result = body.gameMode.useItem(
+                    body, body.serverLevel(), body.getItemInHand(hand), hand);
+            actionGateway.markVanillaGameModeAction(body);
+            if (!result.consumesAction()) {
+                pauseSafely(entry, body, "ITEM_USE_REJECTED");
+                return;
+            }
+            progress.actions = 1;
+            progress.lastActionTick = server.getTickCount();
+            if (duration > 0 && body.isUsingItem()) return;
+        } else if (duration > 0 && body.isUsingItem()
+                && server.getTickCount() - progress.lastActionTick < duration) {
+            return;
+        }
+        if (body.isUsingItem()) body.releaseUsingItem();
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                "ITEM_USE_COMPLETE", progress.parameters.itemId(), 1, 1));
+        stop(entry, body, true, "NONE");
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        savedData.changed();
+    }
+
     private void tickEating(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
         boolean consumed = count(body, progress.item) < progress.itemBaseline;
         boolean recovered = body.getFoodData().getFoodLevel() > progress.foodBaseline || !body.canEat(false);
@@ -1342,6 +1441,29 @@ final class BehaviorDirector {
             return -1;
         }
         return findSlot(body, item);
+    }
+
+    private static boolean ensureHandItem(CompanionPlayer body, Item item, InteractionHand hand) {
+        if (body.getItemInHand(hand).is(item)) return true;
+        if (hand == InteractionHand.MAIN_HAND) {
+            int slot = ensureHotbarItem(body, item);
+            if (slot < 0) return false;
+            body.getInventory().selected = slot;
+            return body.getMainHandItem().is(item);
+        }
+        int inventorySlot = -1;
+        for (int slot = 0; slot < 36; slot++) {
+            if (body.getInventory().getItem(slot).is(item)) {
+                inventorySlot = slot;
+                break;
+            }
+        }
+        if (inventorySlot < 0 || !body.inventoryMenu.getCarried().isEmpty()) return false;
+        int menuSlot = inventorySlot < 9 ? 36 + inventorySlot : inventorySlot;
+        body.inventoryMenu.clicked(menuSlot, 0, ClickType.PICKUP, body);
+        body.inventoryMenu.clicked(45, 0, ClickType.PICKUP, body);
+        body.inventoryMenu.clicked(menuSlot, 0, ClickType.PICKUP, body);
+        return body.inventoryMenu.getCarried().isEmpty() && body.getOffhandItem().is(item);
     }
 
     private static int count(ServerPlayer player, Item item) {

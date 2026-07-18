@@ -155,6 +155,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("InteractBlock", true)
                 .put("InteractEntity", true)
                 .put("MenuAction", true)
+                .put("UseItem", true)
+                .put("DropItem", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)
@@ -377,7 +379,9 @@ final class RuntimeBridge implements AutoCloseable {
                 values.path("sessionToken").asText(""),
                 values.path("slot").canConvertToInt() ? values.path("slot").asInt() : null,
                 values.path("button").canConvertToInt() ? values.path("button").asInt() : null,
-                values.path("action").asText("")); }
+                values.path("action").asText(""),
+                values.path("durationTicks").canConvertToInt()
+                        ? values.path("durationTicks").asInt() : null); }
         catch (IllegalArgumentException invalid) { return null; }
     }
 

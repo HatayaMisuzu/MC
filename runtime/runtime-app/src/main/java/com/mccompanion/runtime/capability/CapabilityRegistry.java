@@ -24,6 +24,7 @@ public final class CapabilityRegistry {
                 implemented("NavigateTo", RiskLevel.LOW), implemented("FollowOwner", RiskLevel.LOW),
                 implemented("LookAt", RiskLevel.LOW), implemented("InteractBlock", RiskLevel.LOW),
                 implemented("InteractEntity", RiskLevel.LOW), implemented("MenuAction", RiskLevel.LOW),
+                implemented("UseItem", RiskLevel.LOW), implemented("DropItem", RiskLevel.MEDIUM),
                 implemented("ExploreArea", RiskLevel.MEDIUM), implemented("LocateKnownContainer", RiskLevel.LOW),
                 implemented("WithdrawFromStorage", RiskLevel.LOW), implemented("DepositToStorage", RiskLevel.LOW),
                 implemented("CollectResource", RiskLevel.MEDIUM), implemented("MineResourceVein", RiskLevel.MEDIUM),

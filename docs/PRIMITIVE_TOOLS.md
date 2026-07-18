@@ -57,6 +57,8 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `menu.click` | Performs one bounded left/right vanilla pickup click using the exact unexpired menu capability and rejects no-effect actions |
 | `menu.quick_move` | Performs one bounded vanilla quick-move using the exact unexpired menu capability and verifies a menu/inventory delta |
 | `menu.close` | Closes only the menu bound to the exact unexpired capability and invalidates that capability immediately |
+| `item.use` | Selects a declared namespaced item into the requested hand through vanilla inventory-menu rules, invokes `ServerPlayerGameMode.useItem`, and bounds any hold duration |
+| `inventory.drop` | Drops 1..64 declared items through `ServerPlayer.drop`, verifies both the inventory delta and newly spawned vanilla `ItemEntity` |
 
 These aliases are convenience primitive entry points, not new scenario Handlers. Runtime tests
 capture their actual Mod protocol payloads, including unknown namespaced IDs. Existing real Fabric
@@ -66,8 +68,6 @@ Runtime/Fabric E2E remains part of the RC gap.
 Still required for RC:
 
 - block place;
-- inventory drop;
-- item use;
 - entity attack;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;

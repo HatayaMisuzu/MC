@@ -3,7 +3,8 @@ package com.mccompanion.minecraft.v121;
 public record SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
                               String dimension, Integer x, Integer y, Integer z,
                               String targetId, String face, String hand,
-                              String sessionToken, Integer slot, Integer button, String menuAction) {
+                              String sessionToken, Integer slot, Integer button, String menuAction,
+                              Integer durationTicks) {
     public SkillParameters {
         capability = capability == null ? "" : capability;
         itemId = itemId == null ? "" : itemId;
@@ -18,20 +19,28 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
 
     public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial) {
         this(capability, itemId, quantity, allowPartial, "minecraft:overworld",
-                null, null, null, "", "UP", "MAIN_HAND", "", null, null, "");
+                null, null, null, "", "UP", "MAIN_HAND", "", null, null, "", null);
     }
 
     public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
                            String dimension, Integer x, Integer y, Integer z) {
         this(capability, itemId, quantity, allowPartial, dimension, x, y, z,
-                "", "UP", "MAIN_HAND", "", null, null, "");
+                "", "UP", "MAIN_HAND", "", null, null, "", null);
     }
 
     public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
                            String dimension, Integer x, Integer y, Integer z,
                            String targetId, String face, String hand) {
         this(capability, itemId, quantity, allowPartial, dimension, x, y, z,
-                targetId, face, hand, "", null, null, "");
+                targetId, face, hand, "", null, null, "", null);
+    }
+
+    public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
+                           String dimension, Integer x, Integer y, Integer z,
+                           String targetId, String face, String hand,
+                           String sessionToken, Integer slot, Integer button, String menuAction) {
+        this(capability, itemId, quantity, allowPartial, dimension, x, y, z,
+                targetId, face, hand, sessionToken, slot, button, menuAction, null);
     }
 
     public boolean hasBlockTarget() { return x != null && y != null && z != null; }

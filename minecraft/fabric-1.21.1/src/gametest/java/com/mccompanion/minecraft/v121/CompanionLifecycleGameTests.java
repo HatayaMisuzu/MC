@@ -294,6 +294,88 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "item_use")
+    public void itemUseInvokesVanillaGameModeAndVerifiesProjectileEffect(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "ItemUser").success(), "item-use test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "item-use test created no live body");
+        body.getInventory().setItem(0, new ItemStack(Items.SNOWBALL, 2));
+        body.getInventory().selected = 0;
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-item-use";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "item-use lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "throw-snowball", "skill",
+                null, null, null, new SkillParameters("UseItem", "minecraft:snowball", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        null, null, null, "", "UP", "MAIN_HAND",
+                        "", null, null, "", 0)).success(),
+                "item-use skill failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertValueEqual(body.getInventory().countItem(Items.SNOWBALL), 1,
+                    "vanilla item use did not consume one snowball");
+            helper.assertTrue(!body.serverLevel().getEntitiesOfClass(
+                            net.minecraft.world.entity.projectile.Snowball.class,
+                            body.getBoundingBox().inflate(8.0D)).isEmpty(),
+                    "vanilla item use did not create a snowball projectile");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "ITEM_USE_COMPLETE",
+                    "item-use observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
+                    "item-use evidence did not identify ServerPlayerGameMode");
+            helper.assertTrue(registry.remove(owner).success(), "item-use test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "inventory_drop")
+    public void inventoryDropUsesVanillaPlayerDropAndVerifiesWorldEntities(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Dropper").success(), "drop test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "drop test created no live body");
+        body.getInventory().setItem(0, new ItemStack(Items.STONE, 3));
+        body.getInventory().selected = 0;
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-drop";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "drop lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "drop-stone", "skill",
+                null, null, null, new SkillParameters("DropItem", "minecraft:stone", 2, false)).success(),
+                "drop skill failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 40, snapshot -> {
+            helper.assertValueEqual(body.getInventory().countItem(Items.STONE), 1,
+                    "vanilla drop did not remove exactly two items");
+            int dropped = body.serverLevel().getEntitiesOfClass(ItemEntity.class,
+                            body.getBoundingBox().inflate(4.0D),
+                            entity -> entity.getItem().is(Items.STONE))
+                    .stream().mapToInt(entity -> entity.getItem().getCount()).sum();
+            helper.assertValueEqual(dropped, 2, "vanilla drop did not create two world items");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "DROP_COMPLETE",
+                    "drop observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_DROP"),
+                    "drop evidence did not identify ServerPlayer.drop");
+            helper.assertTrue(registry.remove(owner).success(), "drop test cleanup failed");
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "entity_interaction")
     public void entityInteractUsesVisibleReachableVanillaPlayerAction(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")

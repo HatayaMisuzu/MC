@@ -231,6 +231,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (available.contains("InteractBlock")) values.add(definition("block.interact",
                 "Interact once with a visible reachable block through vanilla player rules",
                 blockInteractionSchema(), "LOW", "INTERACT", false));
+        if (available.contains("PlaceBlock")) values.add(definition("block.place",
+                "Place one declared block at an exact reachable position through vanilla player rules",
+                blockPlaceSchema(), "MEDIUM", "BUILD", false));
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
                 "Interact once with a visible reachable entity through vanilla player rules",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
@@ -365,6 +368,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "movement.look" -> skill("LookAt", validatedLook(call.arguments()));
             case "block.break" -> breakBlock(call.arguments());
             case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
+            case "block.place" -> skill("PlaceBlock", validatedBlockPlacement(call.arguments()));
             case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
             case "entity.attack" -> skill("AttackEntity", validatedEntityAttack(call.arguments()));
             case "menu.click" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLICK"));
@@ -436,6 +440,23 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
                 Set.of("MAIN_HAND", "OFF_HAND"));
         return Json.object().put("face", face).put("hand", hand).set("target", target);
+    }
+
+    private static JsonNode validatedBlockPlacement(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("block", "position", "face", "hand"));
+        String block = arguments.path("block").asText("");
+        if (!block.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException("block must be a namespaced block id");
+        }
+        JsonNode position = arguments.path("position");
+        if (!position.isObject()) throw new IllegalArgumentException("position must be an object");
+        rejectUnexpected(position, Set.of("dimension", "x", "y", "z"));
+        ObjectNode target = validatedBoundedPosition(position);
+        String face = enumValue(arguments.path("face").asText("UP"), "face",
+                Set.of("DOWN", "UP", "NORTH", "SOUTH", "WEST", "EAST"));
+        String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
+                Set.of("MAIN_HAND", "OFF_HAND"));
+        return Json.object().put("item", block).put("face", face).put("hand", hand).set("target", target);
     }
 
     private static JsonNode validatedEntityInteraction(JsonNode arguments) {
@@ -710,6 +731,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("block").add("position");
         } else if (name.equals("block.interact")) {
             root.putArray("required").add("position");
+        } else if (name.equals("block.place")) {
+            root.putArray("required").add("block").add("position");
         } else if (name.equals("entity.interact") || name.equals("entity.attack")) {
             root.putArray("required").add("entityId");
         } else if (name.equals("menu.click")) {
@@ -790,6 +813,13 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 .add("DOWN").add("UP").add("NORTH").add("SOUTH").add("WEST").add("EAST");
         properties.putObject("hand").put("type", "string").putArray("enum")
                 .add("MAIN_HAND").add("OFF_HAND");
+        return properties;
+    }
+
+    private static ObjectNode blockPlaceSchema() {
+        ObjectNode properties = blockInteractionSchema();
+        properties.putObject("block").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
         return properties;
     }
 

@@ -25,6 +25,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.crafting.CraftingRecipe;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
@@ -106,6 +107,7 @@ final class BehaviorDirector {
             smelts.remove(entry.companionId);
             defends.put(entry.companionId, createDefend(body, entry, parameters));
         } else if (parameters.capability().equals("InteractBlock")
+                || parameters.capability().equals("PlaceBlock")
                 || parameters.capability().equals("InteractEntity")
                 || parameters.capability().equals("AttackEntity")) {
             skills.remove(entry.companionId);
@@ -542,7 +544,8 @@ final class BehaviorDirector {
         } catch (IllegalArgumentException invalid) {
             return InteractionProgress.failed(parameters, "INTERACTION_HAND_INVALID");
         }
-        if (parameters.capability().equals("InteractBlock")) {
+        if (parameters.capability().equals("InteractBlock")
+                || parameters.capability().equals("PlaceBlock")) {
             if (!parameters.hasBlockTarget()) return InteractionProgress.failed(parameters, "BLOCK_TARGET_MISSING");
             if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
                 return InteractionProgress.failed(parameters, "WORLD_CHANGED");
@@ -550,6 +553,47 @@ final class BehaviorDirector {
             BlockPos target = new BlockPos(parameters.x(), parameters.y(), parameters.z());
             if (!body.serverLevel().hasChunkAt(target)) {
                 return InteractionProgress.failed(parameters, "CHUNK_NOT_LOADED");
+            }
+            final Direction face;
+            try {
+                face = Direction.valueOf(parameters.face());
+            } catch (IllegalArgumentException invalid) {
+                return InteractionProgress.failed(parameters, "INTERACTION_FACE_INVALID");
+            }
+            if (parameters.capability().equals("PlaceBlock")) {
+                ResourceLocation key = ResourceLocation.tryParse(parameters.itemId());
+                if (key == null || !BuiltInRegistries.BLOCK.containsKey(key)) {
+                    return InteractionProgress.failed(parameters, "BLOCK_UNKNOWN");
+                }
+                Block block = BuiltInRegistries.BLOCK.get(key);
+                Item item = block.asItem();
+                if (!(item instanceof BlockItem blockItem) || blockItem.getBlock() != block) {
+                    return InteractionProgress.failed(parameters, "BLOCK_ITEM_UNAVAILABLE");
+                }
+                if (count(body, item) < 1) {
+                    return InteractionProgress.failed(parameters, "ITEM_INSUFFICIENT");
+                }
+                if (!body.serverLevel().getBlockState(target).canBeReplaced()) {
+                    return InteractionProgress.failed(parameters, "PLACEMENT_TARGET_OCCUPIED");
+                }
+                BlockPos support = target.relative(face.getOpposite());
+                if (!body.serverLevel().hasChunkAt(support)
+                        || body.serverLevel().getBlockState(support).canBeReplaced()) {
+                    return InteractionProgress.failed(parameters, "PLACEMENT_SUPPORT_MISSING");
+                }
+                Vec3 hitLocation = Vec3.atCenterOf(support).add(
+                        face.getStepX() * 0.5D, face.getStepY() * 0.5D, face.getStepZ() * 0.5D);
+                if (body.distanceToSqr(hitLocation) > 25.0D) {
+                    return InteractionProgress.failed(parameters, "BLOCK_OUT_OF_REACH");
+                }
+                var visible = body.serverLevel().clip(new ClipContext(body.getEyePosition(),
+                        Vec3.atCenterOf(support),
+                        ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, body));
+                if (visible.getType() != HitResult.Type.BLOCK || !visible.getBlockPos().equals(support)) {
+                    return InteractionProgress.failed(parameters, "PLACEMENT_SUPPORT_NOT_VISIBLE");
+                }
+                return new InteractionProgress(parameters, target, null, hand, face,
+                        server.getTickCount(), null, null, block, item, count(body, item));
             }
             if (body.distanceToSqr(Vec3.atCenterOf(target)) > 25.0D) {
                 return InteractionProgress.failed(parameters, "BLOCK_OUT_OF_REACH");
@@ -559,14 +603,8 @@ final class BehaviorDirector {
             if (visible.getType() != HitResult.Type.BLOCK || !visible.getBlockPos().equals(target)) {
                 return InteractionProgress.failed(parameters, "BLOCK_NOT_VISIBLE");
             }
-            final Direction face;
-            try {
-                face = Direction.valueOf(parameters.face());
-            } catch (IllegalArgumentException invalid) {
-                return InteractionProgress.failed(parameters, "INTERACTION_FACE_INVALID");
-            }
             return new InteractionProgress(parameters, target, null, hand, face,
-                    server.getTickCount(), null, null);
+                    server.getTickCount(), null, null, null, null, 0);
         }
         final UUID entityId;
         try {
@@ -589,7 +627,7 @@ final class BehaviorDirector {
         }
         Float healthBaseline = target instanceof LivingEntity living ? living.getHealth() : null;
         return new InteractionProgress(parameters, null, entityId, hand, Direction.UP,
-                server.getTickCount(), null, healthBaseline);
+                server.getTickCount(), null, healthBaseline, null, null, 0);
     }
 
     private MenuProgress createMenuAction(CompanionPlayer body, SkillParameters parameters) {
@@ -675,7 +713,39 @@ final class BehaviorDirector {
             return;
         }
         actionGateway.stopInput(body);
-        if (progress.blockPosition != null) {
+        if (progress.placementBlock != null) {
+            BlockPos support = progress.blockPosition.relative(progress.face.getOpposite());
+            Vec3 hitLocation = Vec3.atCenterOf(support).add(progress.face.getStepX() * 0.5D,
+                    progress.face.getStepY() * 0.5D, progress.face.getStepZ() * 0.5D);
+            if (!body.serverLevel().hasChunkAt(progress.blockPosition)
+                    || !body.serverLevel().getBlockState(progress.blockPosition).canBeReplaced()
+                    || body.serverLevel().getBlockState(support).canBeReplaced()
+                    || body.distanceToSqr(hitLocation) > 25.0D) {
+                pauseSafely(entry, body, "PLACEMENT_CONTEXT_CHANGED");
+                return;
+            }
+            var visible = body.serverLevel().clip(new ClipContext(body.getEyePosition(),
+                    Vec3.atCenterOf(support),
+                    ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, body));
+            if (visible.getType() != HitResult.Type.BLOCK || !visible.getBlockPos().equals(support)) {
+                pauseSafely(entry, body, "PLACEMENT_SUPPORT_NOT_VISIBLE");
+                return;
+            }
+            if (!ensureHandItem(body, progress.placementItem, progress.hand)) {
+                pauseSafely(entry, body, "ITEM_NOT_IN_HAND");
+                return;
+            }
+            BlockHitResult hit = new BlockHitResult(hitLocation, progress.face, support, false);
+            var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
+                    progress.hand, hit);
+            actionGateway.markVanillaGameModeAction(body);
+            if (!result.consumesAction()
+                    || !body.serverLevel().getBlockState(progress.blockPosition).is(progress.placementBlock)
+                    || count(body, progress.placementItem) >= progress.itemBaseline) {
+                pauseSafely(entry, body, "BLOCK_PLACE_NO_EFFECT");
+                return;
+            }
+        } else if (progress.blockPosition != null) {
             BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(progress.blockPosition),
                     progress.face, progress.blockPosition, false);
             var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
@@ -713,9 +783,11 @@ final class BehaviorDirector {
             }
         }
         observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
-                progress.parameters.capability().equals("AttackEntity")
-                        ? "ENTITY_ATTACK_COMPLETE" : "INTERACTION_COMPLETE",
-                progress.parameters.targetId(), 1, 1));
+                progress.parameters.capability().equals("AttackEntity") ? "ENTITY_ATTACK_COMPLETE"
+                        : progress.parameters.capability().equals("PlaceBlock")
+                        ? "BLOCK_PLACE_COMPLETE" : "INTERACTION_COMPLETE",
+                progress.parameters.capability().equals("PlaceBlock")
+                        ? progress.parameters.itemId() : progress.parameters.targetId(), 1, 1));
         stop(entry, body, true, "NONE");
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
@@ -1790,10 +1862,14 @@ final class BehaviorDirector {
         private final int startedTick;
         private final String failureCode;
         private final Float healthBaseline;
+        private final Block placementBlock;
+        private final Item placementItem;
+        private final int itemBaseline;
 
         private InteractionProgress(SkillParameters parameters, BlockPos blockPosition, UUID entityId,
                                     InteractionHand hand, Direction face, int startedTick, String failureCode,
-                                    Float healthBaseline) {
+                                    Float healthBaseline, Block placementBlock, Item placementItem,
+                                    int itemBaseline) {
             this.parameters = parameters;
             this.blockPosition = blockPosition;
             this.entityId = entityId;
@@ -1802,11 +1878,14 @@ final class BehaviorDirector {
             this.startedTick = startedTick;
             this.failureCode = failureCode;
             this.healthBaseline = healthBaseline;
+            this.placementBlock = placementBlock;
+            this.placementItem = placementItem;
+            this.itemBaseline = itemBaseline;
         }
 
         private static InteractionProgress failed(SkillParameters parameters, String code) {
             return new InteractionProgress(parameters, null, null, InteractionHand.MAIN_HAND,
-                    Direction.UP, 0, code, null);
+                    Direction.UP, 0, code, null, null, null, 0);
         }
     }
 

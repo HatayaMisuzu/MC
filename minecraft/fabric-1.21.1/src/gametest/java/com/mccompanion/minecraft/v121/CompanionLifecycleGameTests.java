@@ -7,6 +7,7 @@ import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.level.block.Blocks;
@@ -463,6 +464,54 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     "entity attack evidence did not identify ServerPlayer.attack");
             cow.discard();
             helper.assertTrue(registry.remove(owner).success(), "entity attack cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "block_place")
+    public void blockPlaceUsesExactTargetAndVanillaBlockItemAction(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "BlockPlacer").success(),
+                "block-place test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "block-place test created no live body");
+        BlockPos target = body.blockPosition().offset(2, 0, 0);
+        BlockPos support = target.below();
+        body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
+        var fixtureItem = BuiltInRegistries.ITEM.get(RegistryFixtureInitializer.BLUE_BLOCK_ID);
+        body.getInventory().setItem(0, new ItemStack(fixtureItem, 2));
+        body.getInventory().selected = 0;
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-block-place";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "block-place lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "place-blue-concrete", "skill",
+                null, null, null, new SkillParameters("PlaceBlock",
+                        RegistryFixtureInitializer.BLUE_BLOCK_ID.toString(), 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND")).success(),
+                "block-place skill failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertTrue(body.serverLevel().getBlockState(target).is(RegistryFixtureInitializer.BLUE_BLOCK),
+                    "vanilla block placement did not create the declared block at the exact target");
+            helper.assertValueEqual(body.getInventory().countItem(fixtureItem), 1,
+                    "vanilla block placement did not consume exactly one item");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "BLOCK_PLACE_COMPLETE",
+                    "block-place observation code mismatch");
+            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
+                    "block-place evidence did not identify ServerPlayerGameMode");
+            body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(support, Blocks.AIR.defaultBlockState());
+            helper.assertTrue(registry.remove(owner).success(), "block-place cleanup failed");
         });
     }
 

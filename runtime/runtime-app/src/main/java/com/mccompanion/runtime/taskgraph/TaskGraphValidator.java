@@ -28,6 +28,7 @@ public final class TaskGraphValidator {
     private static final Set<String> KNOWN_PERMISSIONS = Set.of(
             "READ_WORLD", "CONTROL_TASK", "VALIDATE_TASK_GRAPH", "EXECUTE_TASK_GRAPH",
             "MOVE", "COLLECT", "MINE", "CRAFT", "COMBAT", "INVENTORY", "SURVIVAL",
+            "INTERACT", "BUILD",
             "MEMORY", "SEARCH_WEB", "MANAGE_SKILLS");
 
     public TaskGraphValidationResult validate(JsonNode graph, Set<String> availableTools) {

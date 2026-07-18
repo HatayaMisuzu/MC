@@ -50,6 +50,7 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `movement.stop` | Is exposed only when durable task state is attached and cancels only an active `TRAVEL`, `FOLLOW`, or `RETURN` task |
 | `block.break` | Converts one observed namespaced block position into `MineResourceVein` with `quantity=1`, preserving vanilla hardness, tool, drop, pickup, and evidence behavior |
 | `block.interact` | Performs one same-dimension, loaded, visible interaction within five blocks through `ServerPlayerGameMode.useItemOn`; face and hand are explicit and bounded |
+| `block.place` | Places one declared Registry block at an exact same-dimension target through its vanilla `BlockItem`; the external Brain supplies face/hand and placement succeeds only after block and inventory deltas are verified |
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `entity.attack` | Attacks one externally selected UUID-bound living entity within five blocks through `ServerPlayer.attack`; alive/range/visibility are revalidated and success requires an observed health decrease or death |
@@ -68,7 +69,6 @@ Runtime/Fabric E2E remains part of the RC gap.
 
 Still required for RC:
 
-- block place;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and

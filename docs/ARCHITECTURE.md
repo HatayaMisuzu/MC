@@ -138,6 +138,10 @@ features extend these surfaces rather than creating parallel products.
 - Generic block/entity interaction is capability-gated per loader, bound to the durable lease/task,
   and rechecks dimension, loaded state, range, visibility, UUID, hand, and face immediately before
   invoking vanilla `ServerPlayer` interaction. It does not contain block- or Mod-specific handlers.
+- `block.place` receives an exact Registry block ID, target, face, and hand from the external Brain;
+  the body resolves the live `BlockItem`, rechecks replaceability/support/range/visibility, invokes
+  vanilla `ServerPlayerGameMode.useItemOn`, and verifies both the placed block and consumed item.
+  It does not infer a blueprint, placement sequence, or construction strategy.
 - `entity.attack` is a separate `COMBAT` primitive: the external Brain supplies the exact entity
   UUID, the body revalidates a reachable visible living target, invokes vanilla
   `ServerPlayer.attack`, and accepts only observed damage/death. Neither the Tool Gateway nor Task

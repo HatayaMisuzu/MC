@@ -86,7 +86,7 @@ class RuntimeToolGatewayTest {
                         new TaskRepository(database, new TaskEventStore(database)), new LeaseService(database),
                         new IdempotencyStore(database), new ProtocolCommandSender(), log);
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
-                        ignored -> List.of("NavigateTo"));
+                        ignored -> List.of("NavigateTo", "InteractBlock", "PlaceBlock"));
                 gateway.attachTaskGraphRuntime(new TaskGraphRuntime(gateway,
                         new TaskGraphExecutionRepository(database)));
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
@@ -103,6 +103,22 @@ class RuntimeToolGatewayTest {
                         Json.object().set("graph", graph)));
                 assertTrue(valid.success(), valid.observation().toString());
                 assertTrue(valid.observation().path("valid").asBoolean());
+
+                ToolResult boundedMutationPermissions = gateway.execute(context,
+                        new ToolCall("graph-build", "task_graph.validate",
+                                Json.object().set("graph", Json.parse("""
+                                        {"version":"mcac-task-graph/1","id":"interact-and-place",
+                                         "permissions":["INTERACT","BUILD"],
+                                         "root":{"id":"root","type":"sequence","nodes":[
+                                           {"id":"interact","type":"call_tool","tool":"block.interact",
+                                            "arguments":{"position":{"x":1,"y":64,"z":1}}},
+                                           {"id":"place","type":"call_tool","tool":"block.place",
+                                            "arguments":{"block":"examplemod:blue_bricks",
+                                             "position":{"x":1,"y":65,"z":1}}}
+                                         ]}}
+                                        """))));
+                assertTrue(boundedMutationPermissions.success(),
+                        boundedMutationPermissions.observation().toString());
 
                 ((com.fasterxml.jackson.databind.node.ObjectNode) graph.path("root").path("nodes").path(1))
                         .put("tool", "shell.execute");
@@ -254,7 +270,8 @@ class RuntimeToolGatewayTest {
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of(
                         "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-block-interact",
-                        "c-entity-interact", "c-entity-attack", "c-menu-click", "c-menu-quick", "c-menu-close",
+                        "c-block-place", "c-entity-interact", "c-entity-attack",
+                        "c-menu-click", "c-menu-quick", "c-menu-close",
                         "c-use", "c-drop", "c-collect", "c-from", "c-to")) {
                     CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
                             "minecraft:overworld", new PositionDto(10, 64, -5), CompanionBodyState.SPAWNED,
@@ -268,7 +285,7 @@ class RuntimeToolGatewayTest {
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
                         ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
                                 "WithdrawFromStorage", "DepositToStorage", "LookAt",
-                                "InteractBlock", "InteractEntity", "AttackEntity",
+                                "InteractBlock", "PlaceBlock", "InteractEntity", "AttackEntity",
                                 "MenuAction", "UseItem", "DropItem"));
 
                 var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
@@ -276,7 +293,8 @@ class RuntimeToolGatewayTest {
                         "movement.step", "movement.stop", "block.break", "entity.collect", "inventory.transfer")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().contains("movement.look"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
-                        .containsAll(List.of("block.interact", "entity.interact", "entity.attack")));
+                        .containsAll(List.of("block.interact", "block.place",
+                                "entity.interact", "entity.attack")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
                         .containsAll(List.of("menu.click", "menu.quick_move", "menu.close")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
@@ -284,6 +302,9 @@ class RuntimeToolGatewayTest {
                 assertEquals("MOVE", definition(definitions, "movement.step").permission());
                 assertEquals("MOVE", definition(definitions, "movement.look").permission());
                 assertEquals("INTERACT", definition(definitions, "block.interact").permission());
+                assertEquals("BUILD", definition(definitions, "block.place").permission());
+                assertEquals("MEDIUM", definition(definitions, "block.place").risk());
+                assertEquals(List.of("block", "position"), required(definition(definitions, "block.place")));
                 assertEquals("INTERACT", definition(definitions, "entity.interact").permission());
                 assertEquals("COMBAT", definition(definitions, "entity.attack").permission());
                 assertEquals("MEDIUM", definition(definitions, "entity.attack").risk());
@@ -336,6 +357,22 @@ class RuntimeToolGatewayTest {
                 assertEquals("OFF_HAND", blockInteractionParameters.path("parameters").path("hand").asText());
                 assertEquals("examplemod:moon", blockInteractionParameters.path("parameters")
                         .path("target").path("dimension").asText());
+
+                ToolResult blockPlacement = gateway.execute(
+                        new ToolContext("hermes", "session", "c-block-place"),
+                        new ToolCall("place-block", "block.place", Json.object()
+                                .put("block", "examplemod:blue_bricks")
+                                .put("face", "UP").put("hand", "MAIN_HAND")
+                                .set("position", Json.object().put("dimension", "examplemod:moon")
+                                        .put("x", 5).put("y", 70).put("z", 6))));
+                assertTrue(blockPlacement.success(), blockPlacement.observation().toString());
+                var blockPlacementParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("PlaceBlock", blockPlacementParameters.path("capability").asText());
+                assertEquals("examplemod:blue_bricks",
+                        blockPlacementParameters.path("parameters").path("item").asText());
+                assertEquals("UP", blockPlacementParameters.path("parameters").path("face").asText());
+                assertEquals(5, blockPlacementParameters.path("parameters")
+                        .path("target").path("x").asInt());
 
                 String entityId = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
                 ToolResult entityInteraction = gateway.execute(

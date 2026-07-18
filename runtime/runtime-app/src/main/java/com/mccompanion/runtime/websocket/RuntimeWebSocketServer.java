@@ -260,7 +260,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             case "command_accepted" -> commands.onCommandAccepted(convert(payload, CommandAccepted.class));
             case "behavior_event", "event" -> commands.onBehaviorEvent(convert(payload, BehaviorEvent.class));
             case "protocol_error", "error" -> commands.onProtocolError(convert(payload, ErrorEnvelope.class));
-            case "registry_result" -> {
+            case "registry_result", "observation_result" -> {
                 if (registryQueries == null || !registryQueries.complete(session, payload)) {
                     sendError(session.peer(), session, "UNKNOWN_QUERY_RESULT",
                             "Registry result has no active query binding");

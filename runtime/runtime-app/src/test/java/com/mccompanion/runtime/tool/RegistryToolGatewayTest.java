@@ -41,9 +41,11 @@ class RegistryToolGatewayTest {
                 ToolContext context = new ToolContext("hermes", "brain-session", "c1");
 
                 List<ToolDefinition> definitions = gateway.definitions(context);
-                assertEquals(List.of("registry.search", "registry.describe", "recipe.query"),
+                assertEquals(List.of("registry.search", "registry.describe", "recipe.query",
+                                "block.inspect", "item.inspect", "entity.inspect"),
                         definitions.stream().map(ToolDefinition::name).toList());
-                assertTrue(definitions.stream().allMatch(value -> value.permission().equals("READ_WORLD")));
+                assertEquals("INVENTORY", definitions.stream()
+                        .filter(value -> value.name().equals("item.inspect")).findFirst().orElseThrow().permission());
 
                 ToolCall search = new ToolCall("search-1", "registry.search",
                         Json.object().put("kind", "ITEM").put("namespace", "examplemod")
@@ -91,10 +93,29 @@ class RegistryToolGatewayTest {
                 assertFalse(cancelled.success());
                 assertEquals("QUERY_CANCELLED", cancelled.code());
 
+                ToolCall block = new ToolCall("block-1", "block.inspect",
+                        Json.object().set("position", Json.object().put("dimension", "examplemod:moon")
+                                .put("x", 2).put("y", 70).put("z", -3)));
+                ToolResult blockAccepted = gateway.execute(context, block);
+                assertFalse(blockAccepted.terminal());
+                assertEquals("query_observation", peer.lastPayload().path("command").asText());
+                assertEquals("block.inspect", peer.lastPayload().path("arguments").path("tool").asText());
+                String blockQueryId = peer.lastPayload().path("arguments").path("queryId").asText();
+                assertTrue(gateway.complete(session, Json.object().put("queryId", blockQueryId)
+                        .put("companionId", "c1").put("success", true).put("code", "OK")
+                        .set("observation", Json.object().put("source", "LIVE_SERVER_OBSERVATION")
+                                .put("kind", "BLOCK").put("block", "examplemod:moon_ore"))));
+                ToolResult inspected = gateway.awaitTerminal(context, block, blockAccepted,
+                        Duration.ofSeconds(1), ignored -> { });
+                assertEquals("examplemod:moon_ore", inspected.observation().path("block").asText());
+
                 ToolResult invalid = gateway.execute(context, new ToolCall("bad", "registry.describe",
                         Json.object().put("kind", "ITEM").put("id", "../server.properties")));
                 assertFalse(invalid.success());
                 assertEquals("INVALID_TOOL_ARGUMENTS", invalid.code());
+                assertEquals("INVALID_TOOL_ARGUMENTS", gateway.execute(context,
+                        new ToolCall("bad-radius", "entity.inspect",
+                                Json.object().put("radius", 64))).code());
             }
         }
     }
@@ -120,7 +141,8 @@ class RegistryToolGatewayTest {
     private static RuntimeSession register(SessionRegistry sessions, CapturingPeer peer, String world,
                                            String companionId, boolean queries) throws Exception {
         var capabilities = Json.object();
-        if (queries) capabilities.put("registry_query", true).put("recipe_query", true);
+        if (queries) capabilities.put("registry_query", true).put("recipe_query", true)
+                .put("primitive_observation_query", true);
         RuntimeSession session = sessions.register(peer,
                 new Handshake("mc-companion/1", "test", "1.21.1", "fabric", world, capabilities));
         CompanionStatus status = new CompanionStatus(companionId, "owner-" + companionId, companionId, world,

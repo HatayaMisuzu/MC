@@ -302,7 +302,8 @@ class RuntimeApplicationTest {
                     {"type":"hello","protocol":"mc-companion/1","token":"%s",
                      "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
                      "worldId":"registry-world",
-                     "capabilities":{"registry_query":true,"recipe_query":true}}
+                     "capabilities":{"registry_query":true,"recipe_query":true,
+                       "primitive_observation_query":true}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -361,6 +362,39 @@ class RuntimeApplicationTest {
             assertFalse(result.path("isError").asBoolean(), completed.body());
             assertEquals("unknownmod:blue_gem", result.path("structuredContent")
                     .path("observation").path("entries").path(0).path("id").asText());
+
+            HttpRequest inspectRequest = HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .header("MCP-Protocol-Version", "2025-06-18")
+                    .header("X-MCAC-Controller-Id", "hermes-test")
+                    .header("X-MCAC-Brain-Session-Id", "registry-brain-session")
+                    .header("X-MCAC-Companion-Id", "registry-companion")
+                    .POST(HttpRequest.BodyPublishers.ofString("""
+                            {"jsonrpc":"2.0","id":"block-inspect","method":"tools/call","params":{
+                              "name":"block.inspect","arguments":{
+                                "position":{"dimension":"unknownmod:moon","x":2,"y":70,"z":-3}}}}
+                            """)).build();
+            CompletableFuture<HttpResponse<String>> inspectResponse = CompletableFuture.supplyAsync(() -> {
+                try {
+                    return http.send(inspectRequest, HttpResponse.BodyHandlers.ofString());
+                } catch (Exception failure) {
+                    throw new IllegalStateException(failure);
+                }
+            });
+            JsonNode inspectCommand = client.awaitCommand("query_observation", 5);
+            String inspectQueryId = inspectCommand.path("payload").path("arguments").path("queryId").asText();
+            assertEquals("block.inspect",
+                    inspectCommand.path("payload").path("arguments").path("tool").asText());
+            client.send("""
+                    {"type":"observation_result","sessionId":"%s","sequence":2,"payload":{
+                      "queryId":"%s","companionId":"registry-companion","success":true,"code":"OK",
+                      "observation":{"source":"LIVE_SERVER_OBSERVATION","kind":"BLOCK",
+                        "block":"unknownmod:blue_block","visible":true}}}
+                    """.formatted(sessionId, inspectQueryId));
+            HttpResponse<String> inspected = inspectResponse.get(5, TimeUnit.SECONDS);
+            assertEquals("unknownmod:blue_block", Json.parse(inspected.body()).path("result")
+                    .path("structuredContent").path("observation").path("block").asText());
             client.closeBlocking();
         }
     }

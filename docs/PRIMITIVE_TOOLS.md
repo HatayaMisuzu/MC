@@ -18,6 +18,9 @@ Current read-only observation primitives:
 | `registry.search` | Bounded namespace-aware ITEM/BLOCK/ENTITY/DIMENSION/MENU search over the authenticated connected server |
 | `registry.describe` | Exact namespaced identifier lookup with bounded type-specific details from the connected server |
 | `recipe.query` | Bounded crafting/smelting recipe query over the connected server recipe manager |
+| `block.inspect` | Visible loaded block within 16 blocks, including live Registry ID, state properties, fluid, collision, replaceability, and destroy speed |
+| `item.inspect` | Exact live Registry item definition plus matching connected-body inventory slots, counts, selection, and durability |
+| `entity.inspect` | Visible live entities within a declared 1..16-block radius, with bounded type/UUID filtering, distance, position, health, or dropped-item data |
 
 Every body-derived result identifies `CONNECTED_BODY_OBSERVATION`, retains the observation time and
 dimension when present, and returns `OBSERVATION_UNAVAILABLE` instead of inventing missing data.
@@ -25,11 +28,13 @@ Capability state is not inferred from a Tool name alone: it is computed from for
 the authenticated Mod handshake, Minecraft/loader support, body declaration, Runtime connectivity,
 and the current spawned-body status.
 
-The Registry Tools are exposed only when the authenticated Mod handshake advertises
-`registry_query`/`recipe_query`. Runtime binds each result to the Brain session, companion, Runtime
+The Registry and spatial observation Tools are exposed only when the authenticated Mod handshake
+advertises `registry_query`/`recipe_query`/`primitive_observation_query`. Runtime binds each result
+to the Brain session, companion, Runtime
 session, query ID, size limit, and timeout. Fabric 1.21.1 currently supplies live Registry and recipe
-observations; loaders without that implementation do not advertise the Tools. Unknown namespaces
-are discovered through the live Registry rather than a per-Mod adapter.
+observations plus block/item/entity inspection; loaders without that implementation do not advertise
+the Tools. Unknown namespaces are discovered through the live Registry and actual connected body
+rather than a per-Mod adapter or fabricated observation.
 
 Existing action Tools still include movement, bounded scan, collect, vein mining, smelting,
 inventory withdraw/deposit/deliver, crafting, eating, owner defense, and task controls. Several are
@@ -54,10 +59,10 @@ Runtime/Fabric E2E remains part of the RC gap.
 Still required for RC:
 
 - movement look;
-- block inspect/interact/place;
+- block interact/place;
 - inventory drop;
-- item inspect/use;
-- entity inspect/interact/attack;
+- item use;
+- entity interact/attack;
 - menu session inspect/click/quick-move/close;
 - explicit safety retreat Tool and remaining task wait/checkpoint controls;
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;

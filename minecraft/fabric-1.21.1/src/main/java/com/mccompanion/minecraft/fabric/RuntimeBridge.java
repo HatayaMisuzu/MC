@@ -149,6 +149,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("inventory_observation", true)
                 .put("registry_query", true)
                 .put("recipe_query", true)
+                .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
                 .put("NavigateTo", true)
                 .put("FollowOwner", true)
@@ -309,6 +310,11 @@ final class RuntimeBridge implements AutoCloseable {
                         RegistryObservationService.recipes(server, arguments));
                 result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
             }
+            case "QUERY_OBSERVATION" -> {
+                sendObservationResult(commandId, companionId, arguments,
+                        PrimitiveObservationService.inspect(registry, companionId, arguments));
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
             default -> result = new CompanionRegistry.RuntimeResult(false, "UNKNOWN_COMMAND", null, 0, "FAILED");
         }
         if (!result.success()) {
@@ -335,6 +341,18 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("code", result.code());
         payload.set("observation", result.observation());
         sendEnvelope("registry_result", payload);
+    }
+
+    private void sendObservationResult(String commandId, String companionId, JsonNode arguments,
+                                       PrimitiveObservationService.Result result) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("queryId", arguments.path("queryId").asText())
+                .put("commandId", commandId)
+                .put("companionId", companionId)
+                .put("success", result.success())
+                .put("code", result.code());
+        payload.set("observation", result.observation());
+        sendEnvelope("observation_result", payload);
     }
 
     private static SkillParameters skillParameters(JsonNode parameters) {

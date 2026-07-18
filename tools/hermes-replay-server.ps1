@@ -50,7 +50,8 @@ function Assert-TerminalObservation($request, [string]$expectedTool) {
     $results = @($request.toolResults)
     if ($results.Count -ne 1 -or $results[0].toolName -ne $expectedTool -or
         -not $results[0].terminal -or $results[0].observation.state -ne 'SUCCEEDED') {
-        throw "Hermes replay expected terminal SUCCEEDED observation for $expectedTool."
+        $actual = $request.toolResults | ConvertTo-Json -Compress -Depth 20
+        throw "Hermes replay expected terminal SUCCEEDED observation for $expectedTool; actual=$actual"
     }
 }
 

@@ -294,6 +294,12 @@ public final class CompanionRegistry {
         return java.util.List.copyOf(snapshots);
     }
 
+    /** Returns only the live authenticated Runtime body; callers must remain on the server thread. */
+    public CompanionPlayer runtimeBody(String companionId) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        return entry == null ? null : liveBodies.get(entry.companionId);
+    }
+
     private static java.util.List<ContainerSnapshot> visibleContainers(CompanionPlayer body) {
         java.util.List<ContainerSnapshot> visible = new ArrayList<>();
         BlockPos origin = body.blockPosition();

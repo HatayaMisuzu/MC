@@ -140,7 +140,12 @@ public final class LeaseService {
             statement.setString(3, Digests.sha256(lease.token()));
             statement.executeUpdate();
         }
-        processLeases.remove(lease.companionId(), lease);
+        // A caller may have observed the lease immediately before the renewal sweep replaced the
+        // in-process record with a later expiry. The bearer and epoch are unchanged by renewal, so
+        // remove that equivalent record too; retaining it after deleting the durable row causes the
+        // next command to reuse a bearer that validate() can no longer find.
+        processLeases.computeIfPresent(lease.companionId(), (ignored, current) ->
+                sameAuthority(current, lease) ? null : current);
     }
 
     /** Invalidates leases whose unpersisted bearer token was lost in a previous process. Epochs remain monotonic. */
@@ -252,6 +257,13 @@ public final class LeaseService {
                 || !value.matches("[A-Za-z0-9][A-Za-z0-9._:/-]*")) {
             throw new IllegalArgumentException(field + " is missing or invalid");
         }
+    }
+
+    private static boolean sameAuthority(ControlLease left, ControlLease right) {
+        return left.epoch() == right.epoch()
+                && left.companionId().equals(right.companionId())
+                && left.controllerId().equals(right.controllerId())
+                && Digests.constantTimeHexEquals(Digests.sha256(left.token()), Digests.sha256(right.token()));
     }
 
     private record LeaseRow(String controllerId, long epoch, String tokenHash, String mode, long expiresAt) {

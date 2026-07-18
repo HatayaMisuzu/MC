@@ -62,6 +62,22 @@ class LeaseServiceTest {
     }
 
     @Test
+    void releaseOfObservedLeaseAlsoClearsEquivalentRenewedProcessBearer() throws Exception {
+        ControlLease observed = leases.acquire("companion-release-race", "runtime-main", Duration.ofSeconds(10),
+                ControlLease.ControlMode.EXTERNAL_RUNTIME);
+        clock.advance(Duration.ofSeconds(5));
+        ControlLease renewed = leases.renew(observed, Duration.ofMinutes(1));
+        assertNotEquals(observed.expiresAt(), renewed.expiresAt());
+
+        leases.release(observed);
+
+        assertTrue(leases.processLease(observed.companionId()).isEmpty());
+        assertEquals("LEASE_EXPIRED", assertThrows(LeaseException.class,
+                () -> leases.validate(observed.companionId(), observed.controllerId(),
+                        observed.token(), observed.epoch())).code());
+    }
+
+    @Test
     void recoveredBearerlessLeasesAreInvalidatedButEpochPersists() throws Exception {
         leases.acquire("companion-3", "runtime-main", Duration.ofMinutes(1),
                 ControlLease.ControlMode.EXTERNAL_RUNTIME);

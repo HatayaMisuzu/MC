@@ -129,10 +129,12 @@ class ProtocolModelTest {
         CommandEnvelope acquire = command(CommandType.ACQUIRE_LEASE, null, null, 0);
         CommandEnvelope registryQuery = command(CommandType.QUERY_REGISTRY, null, null, 0);
         CommandEnvelope recipeQuery = command(CommandType.QUERY_RECIPE, null, null, 0);
+        CommandEnvelope observationQuery = command(CommandType.QUERY_OBSERVATION, null, null, 0);
         assertEquals(1, start.controlEpoch());
         assertEquals(0, acquire.controlEpoch());
         assertEquals(CommandType.QUERY_REGISTRY, registryQuery.command());
         assertEquals(CommandType.QUERY_RECIPE, recipeQuery.command());
+        assertEquals(CommandType.QUERY_OBSERVATION, observationQuery.command());
     }
 
     private static HandshakeRequest handshake(String token) {

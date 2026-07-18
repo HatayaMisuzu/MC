@@ -19,7 +19,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/** Bounded live server Registry/recipe observations supplied by the authenticated Mod session. */
+/** Bounded live server Registry, recipe, and spatial observations supplied by the authenticated Mod session. */
 public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
     private static final Duration QUERY_TIMEOUT = Duration.ofSeconds(5);
     private static final int MAX_RESULT_CHARS = 262_144;
@@ -39,6 +39,8 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
         if (session == null) return List.of();
         boolean registry = session.handshake().capabilities().path("registry_query").asBoolean(false);
         boolean recipes = session.handshake().capabilities().path("recipe_query").asBoolean(false);
+        boolean observations = session.handshake().capabilities()
+                .path("primitive_observation_query").asBoolean(false);
         java.util.ArrayList<ToolDefinition> values = new java.util.ArrayList<>();
         if (registry) {
             values.add(new ToolDefinition("registry.search", "1.0",
@@ -52,6 +54,17 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
             values.add(new ToolDefinition("recipe.query", "1.0",
                     "Query bounded live crafting or smelting recipes from the connected server",
                     recipeQuerySchema(), "LOW", "READ_WORLD", QUERY_TIMEOUT, true));
+        }
+        if (observations) {
+            values.add(new ToolDefinition("block.inspect", "1.0",
+                    "Inspect one visible loaded block near the connected body",
+                    blockInspectSchema(), "LOW", "READ_WORLD", QUERY_TIMEOUT, true));
+            values.add(new ToolDefinition("item.inspect", "1.0",
+                    "Inspect one namespaced item in the connected body inventory",
+                    itemInspectSchema(), "LOW", "INVENTORY", QUERY_TIMEOUT, true));
+            values.add(new ToolDefinition("entity.inspect", "1.0",
+                    "Inspect bounded visible entities near the connected body",
+                    entityInspectSchema(), "LOW", "READ_WORLD", QUERY_TIMEOUT, true));
         }
         return List.copyOf(values);
     }
@@ -69,9 +82,14 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
                 case "registry.search" -> validatedRegistrySearch(call.arguments());
                 case "registry.describe" -> validatedRegistryDescribe(call.arguments());
                 case "recipe.query" -> validatedRecipeQuery(call.arguments());
+                case "block.inspect" -> validatedBlockInspect(call.arguments());
+                case "item.inspect" -> validatedItemInspect(call.arguments());
+                case "entity.inspect" -> validatedEntityInspect(call.arguments());
                 default -> throw new IllegalArgumentException("Unsupported Registry tool");
             };
-            command = call.name().startsWith("registry.") ? CommandType.QUERY_REGISTRY : CommandType.QUERY_RECIPE;
+            command = call.name().startsWith("registry.") ? CommandType.QUERY_REGISTRY
+                    : call.name().equals("recipe.query") ? CommandType.QUERY_RECIPE
+                    : CommandType.QUERY_OBSERVATION;
         } catch (IllegalArgumentException invalid) {
             return ToolResult.rejected(call, "INVALID_TOOL_ARGUMENTS", invalid.getMessage());
         }
@@ -94,7 +112,7 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
         } catch (RuntimeException dispatchFailure) {
             pendingByQuery.remove(queryId, pending);
             queryByCall.remove(callKey, queryId);
-            return ToolResult.rejected(call, "RUNTIME_OFFLINE", "Live Registry query could not be dispatched");
+            return ToolResult.rejected(call, "RUNTIME_OFFLINE", "Live server query could not be dispatched");
         }
     }
 
@@ -127,23 +145,23 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
     /** Completes one authenticated Mod result; returns false for an unknown or already-finished query. */
     public boolean complete(RuntimeSession session, JsonNode payload) {
         if (session == null || payload == null || !payload.isObject()) {
-            throw new IllegalArgumentException("registry result must be an object from an authenticated session");
+            throw new IllegalArgumentException("query result must be an object from an authenticated session");
         }
         String queryId = payload.path("queryId").asText("");
         Pending pending = pendingByQuery.get(queryId);
         if (pending == null) return false;
         if (!pending.runtimeSessionId().equals(session.sessionId())) {
-            throw new IllegalArgumentException("registry result belongs to another Runtime session");
+            throw new IllegalArgumentException("query result belongs to another Runtime session");
         }
         if (!pending.context().companionId().equals(payload.path("companionId").asText(""))) {
-            throw new IllegalArgumentException("registry result companion binding mismatch");
+            throw new IllegalArgumentException("query result companion binding mismatch");
         }
         boolean success = payload.path("success").asBoolean(false);
         String code = payload.path("code").asText(success ? "OK" : "QUERY_FAILED");
         JsonNode observation = payload.path("observation");
         if (!observation.isObject() || Json.write(observation).length() > MAX_RESULT_CHARS) {
             pending.result().complete(ToolResult.rejected(pending.call(), "INVALID_QUERY_RESULT",
-                    "Connected server returned an invalid or oversized Registry observation"));
+                    "Connected server returned an invalid or oversized observation"));
             return true;
         }
         ToolResult result = new ToolResult(pending.call().callId(), pending.call().name(), success, code,
@@ -215,6 +233,60 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
         return values;
     }
 
+    private static ObjectNode validatedBlockInspect(JsonNode input) {
+        rejectUnexpected(input, Set.of("position"));
+        return Json.object().set("position", validatedPosition(input.path("position"), "position"));
+    }
+
+    private static ObjectNode validatedItemInspect(JsonNode input) {
+        rejectUnexpected(input, Set.of("item"));
+        return Json.object().put("item", namespacedId(input.path("item").asText(""), "item"));
+    }
+
+    private static ObjectNode validatedEntityInspect(JsonNode input) {
+        rejectUnexpected(input, Set.of("radius", "type", "entityId", "limit"));
+        ObjectNode values = Json.object();
+        if (!input.path("radius").isNumber()) throw new IllegalArgumentException("radius must be a number");
+        double radius = input.path("radius").asDouble();
+        if (!Double.isFinite(radius) || radius < 1.0D || radius > 16.0D) {
+            throw new IllegalArgumentException("radius must be 1..16");
+        }
+        values.put("radius", radius).put("limit", boundedLimit(input, 32));
+        if (input.has("type")) values.put("type", namespacedId(input.path("type").asText(""), "type"));
+        if (input.has("entityId")) {
+            String entityId = input.path("entityId").asText("");
+            try {
+                values.put("entityId", UUID.fromString(entityId).toString());
+            } catch (IllegalArgumentException invalid) {
+                throw new IllegalArgumentException("entityId must be a UUID");
+            }
+        }
+        return values;
+    }
+
+    private static ObjectNode validatedPosition(JsonNode input, String label) {
+        if (!input.isObject()) throw new IllegalArgumentException(label + " must be an object");
+        rejectUnexpected(input, Set.of("dimension", "x", "y", "z"));
+        ObjectNode values = Json.object();
+        for (String field : List.of("x", "y", "z")) {
+            if (!input.path(field).isIntegralNumber() || !input.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException(label + "." + field + " must be an integer");
+            }
+            values.put(field, input.path(field).asInt());
+        }
+        if (input.has("dimension")) {
+            values.put("dimension", namespacedId(input.path("dimension").asText(""), label + ".dimension"));
+        }
+        return values;
+    }
+
+    private static String namespacedId(String value, String label) {
+        if (!value.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) {
+            throw new IllegalArgumentException(label + " must be a namespaced identifier");
+        }
+        return value;
+    }
+
     private static int boundedLimit(JsonNode input, int maximum) {
         if (!input.has("limit")) return maximum;
         if (!input.path("limit").isIntegralNumber() || !input.path("limit").canConvertToInt()) {
@@ -278,6 +350,44 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
                 .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
         properties.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 32);
         root.putArray("required").add("query");
+        return root;
+    }
+
+    private static ObjectNode blockInspectSchema() {
+        ObjectNode root = objectSchema();
+        root.withObject("/properties").set("position", positionSchema());
+        root.putArray("required").add("position");
+        return root;
+    }
+
+    private static ObjectNode itemInspectSchema() {
+        ObjectNode root = objectSchema();
+        root.withObject("/properties").putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        root.putArray("required").add("item");
+        return root;
+    }
+
+    private static ObjectNode entityInspectSchema() {
+        ObjectNode root = objectSchema();
+        ObjectNode properties = root.withObject("/properties");
+        properties.putObject("radius").put("type", "number").put("minimum", 1).put("maximum", 16);
+        properties.putObject("type").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        properties.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 32);
+        root.putArray("required").add("radius");
+        return root;
+    }
+
+    private static ObjectNode positionSchema() {
+        ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("dimension").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
+        root.putArray("required").add("x").add("y").add("z");
         return root;
     }
 

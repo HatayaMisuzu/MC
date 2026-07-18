@@ -1,6 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
+import com.mccompanion.minecraft.fabric.PrimitiveObservationService;
 import com.mccompanion.minecraft.fabric.RegistryObservationService;
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.gametest.framework.GameTest;
@@ -55,6 +56,58 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "live recipe manager did not expose oak planks");
         helper.assertValueEqual(recipes.observation().path("source").asText(),
                 "LIVE_SERVER_RECIPE_MANAGER", "recipe query source was not the live server");
+        helper.succeed();
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "observation")
+    public void livePrimitiveInspectionsReadVisibleWorldInventoryAndEntities(GameTestHelper helper) {
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Observer").success(), "observation test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "observation test created no live body");
+        BlockPos blockPosition = body.blockPosition().offset(2, 0, 0);
+        body.serverLevel().setBlockAndUpdate(blockPosition, RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
+        body.getInventory().add(new ItemStack(RegistryFixtureInitializer.BLUE_ITEM, 3));
+        var zombie = EntityType.ZOMBIE.create(body.serverLevel());
+        helper.assertTrue(zombie != null, "observation test could not create entity");
+        zombie.setNoAi(true);
+        zombie.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(zombie),
+                "observation test could not add entity");
+
+        var block = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("tool", "block.inspect")
+                        .set("position", com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                                .put("dimension", body.serverLevel().dimension().location().toString())
+                                .put("x", blockPosition.getX()).put("y", blockPosition.getY())
+                                .put("z", blockPosition.getZ())));
+        helper.assertTrue(block.success(), "live block inspection failed: " + block.code());
+        helper.assertValueEqual(block.observation().path("block").asText(),
+                RegistryFixtureInitializer.BLUE_BLOCK_ID.toString(),
+                "live block inspection did not return unknown namespace state");
+
+        var item = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("tool", "item.inspect")
+                        .put("item", RegistryFixtureInitializer.BLUE_ITEM_ID.toString()));
+        helper.assertTrue(item.success(), "live item inspection failed: " + item.code());
+        helper.assertValueEqual(item.observation().path("totalCount").asInt(), 3,
+                "live item inspection did not read inventory state");
+
+        var entity = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("tool", "entity.inspect").put("radius", 8).put("limit", 4)
+                        .put("type", "minecraft:zombie"));
+        helper.assertTrue(entity.success(), "live entity inspection failed: " + entity.code());
+        helper.assertValueEqual(entity.observation().path("totalMatches").asInt(), 1,
+                "live entity inspection did not return the visible zombie");
+        helper.assertValueEqual(entity.observation().path("entities").path(0).path("entityId").asText(),
+                zombie.getUUID().toString(), "live entity inspection returned the wrong entity");
+
+        zombie.discard();
+        helper.assertTrue(registry.remove(owner).success(), "observation test cleanup failed");
         helper.succeed();
     }
 

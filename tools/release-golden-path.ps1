@@ -6,6 +6,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $zip = (Resolve-Path -LiteralPath $ReleaseZip).Path
+$zipSha = "$zip.sha256"
+if (-not (Test-Path -LiteralPath $zipSha -PathType Leaf)) { throw 'Release ZIP SHA-256 sidecar is missing' }
+$expected = ((Get-Content -LiteralPath $zipSha -Raw -Encoding UTF8).Trim() -split '\s+')[0]
+$actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($expected -ne $actual) { throw 'Release ZIP SHA-256 sidecar mismatch' }
 $web = (Resolve-Path -LiteralPath $WebUiDir).Path
 $workspace = [IO.Path]::GetFullPath($WorkDir)
 $repository = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -17,7 +22,8 @@ if (Test-Path -LiteralPath $workspace) { Remove-Item -LiteralPath $workspace -Re
 New-Item -ItemType Directory -Path $workspace | Out-Null
 $release = Join-Path $workspace 'release'
 Expand-Archive -LiteralPath $zip -DestinationPath $release
-foreach ($required in @('mcac.exe', 'mcac-cli.exe', 'web', 'artifacts\fabric-1.21.1')) {
+foreach ($required in @('mcac.exe', 'mcac-cli.exe', 'web', 'artifacts\fabric-1.21.1',
+        'release-manifest.json', 'sbom.spdx.json', 'SHA256SUMS.txt', 'KNOWN_LIMITATIONS.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $release $required))) {
         throw "Extracted release is missing $required"
     }

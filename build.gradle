@@ -2,6 +2,8 @@ plugins {
     id 'base'
 }
 
+import groovy.json.JsonOutput
+
 def powershellExecutable = System.getProperty('os.name').toLowerCase().contains('windows')
         ? 'powershell' : 'pwsh'
 
@@ -256,11 +258,40 @@ tasks.register('stageTerminal') {
             from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
             from('minecraft/forge-1.20.1/build/libs') { into 'artifacts/forge-1.20.1'; include '*.jar'; exclude '*sources*' }
             from('README.md') { rename { 'README.txt' } }
+            from('KNOWN_LIMITATIONS.md')
+            from('CODEX_EXECUTION.md')
+            from('docs/ARCHITECTURE.md') { into 'docs' }
+            from('docs/CONTROL_TERMINAL.md') { into 'docs' }
+            from('docs/MCP_PROTOCOL.md') { into 'docs' }
+            from('docs/TASK_GRAPH_DSL.md') { into 'docs' }
+            from('docs/RC_COMPLETION_MATRIX.md') { into 'docs' }
             from('LICENSE') { into 'legal' }
         }
         def root=terminalImage.get().asFile
+        def sha256={f->java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()}
+        def relative={f->root.toPath().relativize(f.toPath()).toString().replace('\\','/')}
+        def stdout=new ByteArrayOutputStream()
+        exec { commandLine 'git','rev-parse','HEAD'; standardOutput=stdout }
+        def sourceCommit=stdout.toString('UTF-8').trim()
+        def payload=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt','release-manifest.json','sbom.spdx.json' }
+                .files.findAll { it.isFile() }.sort { relative(it) }
+        def manifest=[schemaVersion:1,product:'Minecraft AI Companion',version:project.version.toString(),
+                buildType:'RC_CANDIDATE',sourceCommit:sourceCommit,
+                files:payload.collect{f->[path:relative(f),size:f.length(),sha256:sha256(f)]}]
+        file("${root}/release-manifest.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson(manifest))+'\n','UTF-8')
+        def packages=payload.findAll{f->f.name.endsWith('.jar')}.withIndex().collect{f,index->[
+                SPDXID:"SPDXRef-Package-${index+1}",name:f.name,versionInfo:project.version.toString(),
+                downloadLocation:'NOASSERTION',filesAnalyzed:false,licenseConcluded:'NOASSERTION',
+                licenseDeclared:'NOASSERTION',copyrightText:'NOASSERTION',packageFileName:relative(f),
+                checksums:[[algorithm:'SHA256',checksumValue:sha256(f)]]
+        ]}
+        def sbom=[spdxVersion:'SPDX-2.3',dataLicense:'CC0-1.0',SPDXID:'SPDXRef-DOCUMENT',
+                name:"mcac-${project.version}",documentNamespace:"https://github.com/HatayaMisuzu/MC/spdx/${sourceCommit}",
+                creationInfo:[created:java.time.Instant.now().toString(),creators:['Organization: HatayaMisuzu/MC']],
+                packages:packages,documentDescribes:packages.collect{it.SPDXID}]
+        file("${root}/sbom.spdx.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson(sbom))+'\n','UTF-8')
         def files=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt' }.files.findAll { it.isFile() }.sort { it.absolutePath }
-        file("${root}/SHA256SUMS.txt").withWriter('UTF-8'){w->files.each{f->def digest=java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString();w.write("${digest}  ${root.toPath().relativize(f.toPath()).toString().replace('\\','/')}\n")}}
+        file("${root}/SHA256SUMS.txt").withWriter('UTF-8'){w->files.each{f->w.write("${sha256(f)}  ${relative(f)}\n")}}
     }
 }
 
@@ -273,6 +304,13 @@ tasks.register('packageTerminalZip', Zip) {
     archiveFileName = 'mcac-release.zip'
     destinationDirectory = layout.buildDirectory.dir('distributions')
     from(terminalImage)
+    outputs.file(layout.buildDirectory.file('distributions/mcac-release.zip.sha256'))
+    doLast {
+        def archive=archiveFile.get().asFile
+        def digest=java.security.MessageDigest.getInstance('SHA-256').digest(archive.bytes).encodeHex().toString()
+        layout.buildDirectory.file('distributions/mcac-release.zip.sha256').get().asFile
+                .setText("${digest}  mcac-release.zip\n",'UTF-8')
+    }
 }
 
 tasks.register('verifyTerminalPackage') { group='verification'; dependsOn 'packageTerminalZip'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/verify-terminal-package.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }

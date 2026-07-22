@@ -58,7 +58,18 @@ jobs:
         run: >-
           ./gradlew.bat verifyTerminalPackage tuiIntegrationTest rootLauncherTest
           releaseStarterTest htmlTerminalStartTest runtimeMultiProfileTest
-          runtimeDisabledLaunchTest --stacktrace
+          runtimeDisabledLaunchTest releaseGoldenPathTest --stacktrace
+      - name: Upload verified RC candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcac-rc-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/distributions/mcac-release.zip
+            build/distributions/mcac-release.zip.sha256
+            build/distributions/mcac-release/release-manifest.json
+            build/distributions/mcac-release/sbom.spdx.json
       - name: Upload safe reports and launch logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

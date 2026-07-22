@@ -17,6 +17,9 @@ $required = @(
     'artifacts\forge-1.20.1',
     'legal',
     'README.txt',
+    'KNOWN_LIMITATIONS.md',
+    'release-manifest.json',
+    'sbom.spdx.json',
     'SHA256SUMS.txt'
 )
 
@@ -45,13 +48,55 @@ foreach ($line in Get-Content -LiteralPath $sumFile -Encoding UTF8) {
     if ($actual -ne $Matches[1]) { throw "SHA-256 mismatch: $($Matches[2])" }
 }
 
+$manifest = Get-Content -LiteralPath (Join-Path $release 'release-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'Minecraft AI Companion') {
+    throw 'Release manifest identity/schema is invalid'
+}
+if ($manifest.sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Release manifest source commit is invalid' }
+$manifestPaths = @{}
+foreach ($entry in $manifest.files) {
+    if ($entry.path -match '(^|/)\.\.(/|$)' -or [IO.Path]::IsPathRooted([string]$entry.path)) {
+        throw "Unsafe release manifest path: $($entry.path)"
+    }
+    $target = Join-Path $release ([string]$entry.path -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "Manifest target is missing: $($entry.path)" }
+    if ((Get-Item -LiteralPath $target).Length -ne [long]$entry.size) { throw "Manifest size mismatch: $($entry.path)" }
+    if ((Get-Sha256 $target) -ne [string]$entry.sha256) { throw "Manifest hash mismatch: $($entry.path)" }
+    $manifestPaths[[string]$entry.path] = $true
+}
+$payloadPaths = Get-ChildItem -Recurse -File -LiteralPath $release | ForEach-Object {
+    $relative = $_.FullName.Substring($release.Length).TrimStart('\').Replace('\', '/')
+    if ($relative -notin @('SHA256SUMS.txt', 'release-manifest.json', 'sbom.spdx.json')) { $relative }
+}
+foreach ($path in $payloadPaths) { if (-not $manifestPaths.ContainsKey($path)) { throw "Manifest omitted payload: $path" } }
+if ($manifestPaths.Count -ne @($payloadPaths).Count) { throw 'Release manifest contains duplicate or extra paths' }
+
+$sbom = Get-Content -LiteralPath (Join-Path $release 'sbom.spdx.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($sbom.spdxVersion -ne 'SPDX-2.3' -or $sbom.dataLicense -ne 'CC0-1.0') { throw 'SPDX SBOM header is invalid' }
+if (@($sbom.packages).Count -lt 1) { throw 'SPDX SBOM contains no packages' }
+foreach ($package in $sbom.packages) {
+    $target = Join-Path $release ([string]$package.packageFileName -replace '/', '\')
+    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "SBOM package target missing: $($package.packageFileName)" }
+    $checksum = @($package.checksums | Where-Object algorithm -eq 'SHA256') | Select-Object -First 1
+    if (-not $checksum -or (Get-Sha256 $target) -ne [string]$checksum.checksumValue) {
+        throw "SBOM package checksum mismatch: $($package.packageFileName)"
+    }
+}
+
 $zipPath = Join-Path (Split-Path $release -Parent) 'mcac-release.zip'
 if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Release ZIP is missing' }
+$zipShaPath = "$zipPath.sha256"
+if (-not (Test-Path -LiteralPath $zipShaPath -PathType Leaf)) { throw 'Release ZIP SHA-256 sidecar is missing' }
+$zipShaLine = (Get-Content -LiteralPath $zipShaPath -Raw -Encoding UTF8).Trim()
+if ($zipShaLine -notmatch '^([0-9a-f]{64})  mcac-release\.zip$' -or (Get-Sha256 $zipPath) -ne $Matches[1]) {
+    throw 'Release ZIP SHA-256 sidecar does not match the package'
+}
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [IO.Compression.ZipFile]::OpenRead($zipPath)
 try {
     $names = @($zip.Entries | ForEach-Object FullName)
-    foreach ($name in @('mcac.exe', 'mcac-cli.exe', 'mcac.cmd', 'mcac.ps1', $starterName, 'web/index.html')) {
+    foreach ($name in @('mcac.exe', 'mcac-cli.exe', 'mcac.cmd', 'mcac.ps1', $starterName, 'web/index.html',
+            'release-manifest.json', 'sbom.spdx.json', 'SHA256SUMS.txt')) {
         if ($names -notcontains $name) { throw "ZIP first layer is missing $name" }
     }
     if ($names | Where-Object { $_ -match '^mcac-release/' }) {

@@ -777,7 +777,10 @@ final class WebTerminalApi {
             .put("redaction", "secret, token, key, password, account, email, JWT, IP, path, UUID, hostname"),
         progress -> {
           progress.update(45, "正在收集允许列表中的诊断证据");
-          new SupportBundleService().collect(instance, profileIfPresent(instanceId), output);
+          RuntimeProfile profile = profileIfPresent(instanceId);
+          List<DiagnosticResult> doctor = profile == null ? List.of() : new TerminalDiagnosticService()
+              .run(instance, profile, root.launcher(instance), ControlTerminalMain.controlHome());
+          new SupportBundleService().collect(instance, profile, doctor, output);
           return JSON.createObjectNode()
               .put("created", true)
               .put("output", output.toString())

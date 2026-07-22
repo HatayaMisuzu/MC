@@ -29,10 +29,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         var search = RegistryObservationService.registry(helper.getLevel().getServer(),
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
                         .put("tool", "registry.search").put("kind", "ITEM")
-                        .put("namespace", "mcac_registry_fixture").put("query", "blue").put("limit", 8));
+                        .put("namespace", "mcac_unknown_fixture").put("query", "blue").put("limit", 8));
         helper.assertTrue(search.success(), "unknown namespace Registry search failed: " + search.code());
-        helper.assertValueEqual(search.observation().path("totalMatches").asInt(), 2,
-                "Registry search did not discover both fixture items");
+        helper.assertValueEqual(search.observation().path("totalMatches").asInt(), 3,
+                "Registry search did not discover all fixture items");
         helper.assertTrue(java.util.stream.StreamSupport.stream(
                         search.observation().path("entries").spliterator(), false)
                         .anyMatch(value -> value.path("id").asText().equals(
@@ -47,14 +47,30 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertValueEqual(described.observation().path("entry").path("id").asText(),
                 RegistryFixtureInitializer.BLUE_BLOCK_ID.toString(),
                 "Registry describe returned the wrong block");
+        helper.assertTrue(described.observation().path("entry").path("details")
+                        .path("toolRequirement").path("correctToolRequired").asBoolean(),
+                "Registry describe omitted the unknown block tool requirement");
+        helper.assertTrue(java.util.stream.StreamSupport.stream(described.observation().path("entry")
+                        .path("details").path("tags").spliterator(), false)
+                        .anyMatch(value -> value.asText().equals("minecraft:mineable/pickaxe")),
+                "Registry describe omitted the unknown block tag");
+
+        var entity = RegistryObservationService.registry(helper.getLevel().getServer(),
+                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                        .put("tool", "registry.describe").put("kind", "ENTITY")
+                        .put("id", RegistryFixtureInitializer.WATCHER_ENTITY_ID.toString()));
+        helper.assertTrue(entity.success(), "unknown entity Registry describe failed: " + entity.code());
 
         var recipes = RegistryObservationService.recipes(helper.getLevel().getServer(),
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
-                        .put("type", "CRAFTING").put("query", "oak_planks")
-                        .put("output", "minecraft:oak_planks").put("limit", 8));
+                        .put("type", "CRAFTING").put("query", "charged_blue_item")
+                        .put("output", RegistryFixtureInitializer.CHARGED_ITEM_ID.toString()).put("limit", 8));
         helper.assertTrue(recipes.success(), "live recipe query failed: " + recipes.code());
-        helper.assertTrue(recipes.observation().path("totalMatches").asInt() >= 1,
-                "live recipe manager did not expose oak planks");
+        helper.assertValueEqual(recipes.observation().path("totalMatches").asInt(), 1,
+                "live recipe manager did not expose the unknown recipe");
+        helper.assertValueEqual(recipes.observation().path("recipes").path(0)
+                        .path("stationRequirement").asText(), "PLAYER_CRAFTING_OR_CRAFTING_TABLE",
+                "recipe query omitted station requirements");
         helper.assertValueEqual(recipes.observation().path("source").asText(),
                 "LIVE_SERVER_RECIPE_MANAGER", "recipe query source was not the live server");
         helper.succeed();
@@ -1429,9 +1445,13 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         recovered.serverLevel().setBlockAndUpdate(shortageChestPos, Blocks.CHEST.defaultBlockState());
                         Container shortageChest = (Container) recovered.serverLevel().getBlockEntity(shortageChestPos);
                         shortageChest.setItem(0, new ItemStack(Items.IRON_INGOT, 6));
+                        BlockPos unknownContainerPos = recovered.blockPosition().offset(-2, 0, 0);
+                        recovered.serverLevel().setBlockAndUpdate(unknownContainerPos,
+                                RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
                         int ownerIronBaseline = count(owner, Items.IRON_INGOT);
-                        LOGGER.info("runtime_e2e_ready companion={} chest={},{},{}",
-                                recovered.getUUID(), shortageChestPos.getX(), shortageChestPos.getY(), shortageChestPos.getZ());
+                        LOGGER.info("runtime_e2e_ready companion={} chest={},{},{} unknown={},{},{}",
+                                recovered.getUUID(), shortageChestPos.getX(), shortageChestPos.getY(), shortageChestPos.getZ(),
+                                unknownContainerPos.getX(), unknownContainerPos.getY(), unknownContainerPos.getZ());
                         helper.succeedWhen(() -> {
                             helper.assertTrue(registry.runtimeCommandCount() >= 5,
                                     "waiting for Runtime lease/follow/pause/resume/stop commands");
@@ -1441,6 +1461,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                     "partial shortage delivery did not consume exactly the verified chest quantity");
                             helper.assertValueEqual(count(recovered, Items.IRON_INGOT), 0,
                                     "partial shortage delivery left duplicate iron in companion inventory");
+                            helper.assertValueEqual(count(recovered, RegistryFixtureInitializer.BLUE_ITEM), 2,
+                                    "generic unknown-menu flow did not move the discovered material into inventory");
                             var deliveredSnapshot = registry.runtimeSnapshots(false).stream()
                                     .filter(snapshot -> snapshot.companionId().equals(recovered.getUUID().toString()))
                                     .findFirst().orElseThrow();

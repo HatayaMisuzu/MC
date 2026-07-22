@@ -276,7 +276,7 @@ the separate suggestion store. It never writes a `MemoryFact` or verified World 
 
 `runtimeFabricE2E` includes the first production-path representative graph. An authenticated
 external MCP client submits a graph that searches the live Fabric Registry for an otherwise unknown
-`mcac_registry_fixture` namespace, checks the length of the prior Tool output, selects its first
+`mcac_unknown_fixture` namespace, checks the length of the prior Tool output, selects its first
 entry, and passes that Observation into `registry.describe`. The graph contains no namespace-specific
 Java Handler and the Runtime does not decide what to search for or how to branch.
 

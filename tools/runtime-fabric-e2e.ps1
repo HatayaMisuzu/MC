@@ -479,19 +479,22 @@ try {
     Write-Output '[runtime-e2e] Fabric companion registered; exercising behavior controls'
 
     $readyMatch = [regex]::Match((Get-Content -Raw -LiteralPath $gameLog),
-        'runtime_e2e_ready companion=([0-9a-f-]{36}) chest=(-?\d+),(-?\d+),(-?\d+)')
+        'runtime_e2e_ready companion=([0-9a-f-]{36}) chest=(-?\d+),(-?\d+),(-?\d+) unknown=(-?\d+),(-?\d+),(-?\d+)')
     if (-not $readyMatch.Success) { throw 'Runtime E2E readiness marker has no companion id.' }
     $companionId = $readyMatch.Groups[1].Value
     $chestX = [int]$readyMatch.Groups[2].Value
     $chestY = [int]$readyMatch.Groups[3].Value
     $chestZ = [int]$readyMatch.Groups[4].Value
+    $unknownX = [int]$readyMatch.Groups[5].Value
+    $unknownY = [int]$readyMatch.Groups[6].Value
+    $unknownZ = [int]$readyMatch.Groups[7].Value
 
     Write-Output '[runtime-e2e] executing external-client Task Graph over live unknown Registry content'
     $graphBrainSession = "representative-graph-$([Guid]::NewGuid())"
     $graph = @{
         version = 'mcac-task-graph/1'
         id = 'unknown-registry-observation-chain'
-        permissions = @('READ_WORLD')
+        permissions = @('READ_WORLD', 'MOVE', 'INTERACT', 'INVENTORY')
         root = @{
             id = 'root'
             type = 'sequence'
@@ -502,8 +505,8 @@ try {
                     tool = 'registry.search'
                     arguments = @{
                         kind = 'ITEM'
-                        namespace = 'mcac_registry_fixture'
-                        query = 'blue'
+                        namespace = 'mcac_unknown_fixture'
+                        query = 'charged'
                         limit = 8
                     }
                 },
@@ -512,12 +515,13 @@ try {
                     type = 'if'
                     condition = '${outputs.search.entries.length > 0}'
                     then = @{
-                        id = 'describe'
+                        id = 'recipe'
                         type = 'call_tool'
-                        tool = 'registry.describe'
+                        tool = 'recipe.query'
                         arguments = @{
-                            kind = '${outputs.search.entries[0].kind}'
-                            id = '${outputs.search.entries[0].id}'
+                            type = 'CRAFTING'
+                            query = 'charged'
+                            output = '${outputs.search.entries[0].id}'
                         }
                     }
                     else = @{
@@ -528,12 +532,80 @@ try {
                     }
                 },
                 @{
+                    id = 'describe-material'
+                    type = 'call_tool'
+                    tool = 'registry.describe'
+                    arguments = @{
+                        kind = 'ITEM'
+                        id = '${outputs.recipe.recipes[0].ingredients[0].choices[0]}'
+                    }
+                },
+                @{
+                    id = 'inspect-before'
+                    type = 'call_tool'
+                    tool = 'item.inspect'
+                    arguments = @{ item = '${outputs.describe-material.entry.id}' }
+                },
+                @{
+                    id = 'look'
+                    type = 'call_tool'
+                    tool = 'movement.look'
+                    arguments = @{ dimension = 'minecraft:overworld'; x = $unknownX; y = $unknownY; z = $unknownZ }
+                },
+                @{
+                    id = 'inspect-block'
+                    type = 'call_tool'
+                    tool = 'block.inspect'
+                    arguments = @{ position = @{ dimension = 'minecraft:overworld'; x = $unknownX; y = $unknownY; z = $unknownZ } }
+                },
+                @{
+                    id = 'open'
+                    type = 'call_tool'
+                    tool = 'block.interact'
+                    arguments = @{ position = '${outputs.inspect-block.position}'; face = 'UP'; hand = 'MAIN_HAND' }
+                },
+                @{
+                    id = 'menu'
+                    type = 'call_tool'
+                    tool = 'menu.inspect'
+                    arguments = @{}
+                },
+                @{
+                    id = 'take'
+                    type = 'call_tool'
+                    tool = 'menu.quick_move'
+                    arguments = @{ sessionToken = '${outputs.menu.sessionToken}'; slot = 0 }
+                },
+                @{
+                    id = 'menu-after'
+                    type = 'call_tool'
+                    tool = 'menu.inspect'
+                    arguments = @{}
+                },
+                @{
+                    id = 'close'
+                    type = 'call_tool'
+                    tool = 'menu.close'
+                    arguments = @{ sessionToken = '${outputs.menu-after.sessionToken}' }
+                },
+                @{
+                    id = 'inspect-after'
+                    type = 'call_tool'
+                    tool = 'item.inspect'
+                    arguments = @{ item = '${outputs.describe-material.entry.id}' }
+                },
+                @{
                     id = 'done'
                     type = 'return'
                     value = @{
                         searchSource = '${outputs.search.source}'
-                        descriptionSource = '${outputs.describe.source}'
-                        entry = '${outputs.describe.entry}'
+                        recipeSource = '${outputs.recipe.source}'
+                        entry = '${outputs.describe-material.entry}'
+                        toolRequirement = '${outputs.inspect-block.destroySpeed}'
+                        menuType = '${outputs.menu.menuType}'
+                        slotRole = '${outputs.menu.slots[0].role}'
+                        materialBefore = '${outputs.inspect-before.totalCount}'
+                        materialAfter = '${outputs.inspect-after.totalCount}'
                     }
                 }
             )
@@ -556,9 +628,12 @@ try {
     $graphValue = $graphTerminal.observation.value
     if ($graphTerminal.observation.state -ne 'SUCCEEDED' -or
         $graphValue.searchSource -ne 'LIVE_SERVER_REGISTRY' -or
-        $graphValue.descriptionSource -ne 'LIVE_SERVER_REGISTRY' -or
-        $graphValue.entry.namespace -ne 'mcac_registry_fixture' -or
-        $graphValue.entry.id -notmatch '^mcac_registry_fixture:') {
+        $graphValue.recipeSource -ne 'LIVE_SERVER_RECIPE_MANAGER' -or
+        $graphValue.entry.namespace -ne 'mcac_unknown_fixture' -or
+        $graphValue.entry.id -notmatch '^mcac_unknown_fixture:' -or
+        $graphValue.menuType -ne 'minecraft:generic_9x1' -or
+        $graphValue.slotRole -ne 'CONTAINER' -or
+        $graphValue.materialBefore -ne 0 -or $graphValue.materialAfter -ne 2) {
         throw "Unknown-namespace Task Graph did not return verified live Registry evidence: $($graphTerminal | ConvertTo-Json -Compress -Depth 30)"
     }
     $registryGraphEvidence = [pscustomobject]@{
@@ -567,7 +642,7 @@ try {
         started = $graphStarted
         terminal = $graphTerminal
     }
-    Write-Output '[runtime-e2e] Task Graph composed live Registry search output into Registry describe'
+    Write-Output '[runtime-e2e] Task Graph discovered an unknown recipe and moved its material through generic menu primitives'
 
     Write-Output '[runtime-e2e] executing Observation-to-body-effect Task Graph'
     $effectBrainSession = "representative-effect-$([Guid]::NewGuid())"
@@ -707,7 +782,7 @@ try {
                         tool = 'registry.describe'
                         arguments = @{
                             kind = 'ITEM'
-                            id = 'mcac_registry_fixture:blue_block'
+                            id = 'mcac_unknown_fixture:blue_block'
                         }
                     }
                 )
@@ -740,7 +815,7 @@ try {
     }
     if ($correctedTerminal.observation.state -ne 'SUCCEEDED' -or
         $correctedTerminal.observation.value.source -ne 'LIVE_SERVER_REGISTRY' -or
-        $correctedTerminal.observation.value.entry.id -ne 'mcac_registry_fixture:blue_block') {
+        $correctedTerminal.observation.value.entry.id -ne 'mcac_unknown_fixture:blue_block') {
         throw "Corrected fallback graph did not complete from live Registry state: $($correctedTerminal | ConvertTo-Json -Compress -Depth 30)"
     }
     $correctedGraphEvidence = [pscustomobject]@{
@@ -777,7 +852,7 @@ try {
                         tool = 'registry.describe'
                         arguments = @{
                             kind = 'ITEM'
-                            id = 'mcac_registry_fixture:blue_block'
+                            id = 'mcac_unknown_fixture:blue_block'
                         }
                     }
                     else = @{
@@ -824,7 +899,7 @@ try {
     if ($askTerminal.observation.state -ne 'SUCCEEDED' -or
         $askTerminal.observation.value.answer.optionId -ne 'option_1' -or
         $askTerminal.observation.value.source -ne 'LIVE_SERVER_REGISTRY' -or
-        $askTerminal.observation.value.entry.id -ne 'mcac_registry_fixture:blue_block') {
+        $askTerminal.observation.value.entry.id -ne 'mcac_unknown_fixture:blue_block') {
         throw "ASK_USER graph did not resume into its selected live Tool branch: $($askTerminal | ConvertTo-Json -Compress -Depth 30)"
     }
     $askGraphEvidence = [pscustomobject]@{

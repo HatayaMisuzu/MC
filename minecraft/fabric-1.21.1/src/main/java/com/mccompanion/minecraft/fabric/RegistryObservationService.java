@@ -13,6 +13,7 @@ import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.item.crafting.SmeltingRecipe;
+import net.minecraft.tags.BlockTags;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -113,18 +114,34 @@ public final class RegistryObservationService {
         ObjectNode details = observation.withObject("/entry/details");
         switch (kind) {
             case "ITEM" -> {
-                ItemStack stack = BuiltInRegistries.ITEM.get(id).getDefaultInstance();
+                var item = BuiltInRegistries.ITEM.get(id);
+                ItemStack stack = item.getDefaultInstance();
                 details.put("maxStackSize", stack.getMaxStackSize())
                         .put("damageable", stack.isDamageableItem())
                         .put("maxDamage", stack.getMaxDamage());
+                boundedTags(details, item.builtInRegistryHolder().tags());
+                boundedComponents(details, stack);
             }
             case "BLOCK" -> {
-                ResourceLocation itemForm = BuiltInRegistries.ITEM.getKey(BuiltInRegistries.BLOCK.get(id).asItem());
+                var block = BuiltInRegistries.BLOCK.get(id);
+                ResourceLocation itemForm = BuiltInRegistries.ITEM.getKey(block.asItem());
                 details.put("hasItemForm", itemForm != null && !itemForm.toString().equals("minecraft:air"));
                 if (itemForm != null) details.put("itemForm", itemForm.toString());
+                boundedTags(details, block.builtInRegistryHolder().tags());
+                var state = block.defaultBlockState();
+                ObjectNode tools = details.putObject("toolRequirement")
+                        .put("correctToolRequired", state.requiresCorrectToolForDrops());
+                ArrayNode effective = tools.putArray("effectiveToolTags");
+                if (state.is(BlockTags.MINEABLE_WITH_PICKAXE)) effective.add("minecraft:mineable/pickaxe");
+                if (state.is(BlockTags.MINEABLE_WITH_AXE)) effective.add("minecraft:mineable/axe");
+                if (state.is(BlockTags.MINEABLE_WITH_SHOVEL)) effective.add("minecraft:mineable/shovel");
+                if (state.is(BlockTags.MINEABLE_WITH_HOE)) effective.add("minecraft:mineable/hoe");
             }
-            case "ENTITY" -> details.put("category",
-                    BuiltInRegistries.ENTITY_TYPE.get(id).getCategory().getName());
+            case "ENTITY" -> {
+                var entity = BuiltInRegistries.ENTITY_TYPE.get(id);
+                details.put("category", entity.getCategory().getName());
+                boundedTags(details, entity.builtInRegistryHolder().tags());
+            }
             case "DIMENSION" -> details.put("loaded", server.levelKeys().stream()
                     .anyMatch(key -> key.location().equals(id)));
             case "MENU" -> details.put("serverRegistered", true);
@@ -156,9 +173,12 @@ public final class RegistryObservationService {
                 .put("ingredientsTruncated", holder.value().getIngredients().size() > 16);
         if (holder.value() instanceof CraftingRecipe crafting) {
             value.put("craftsIn2x2", crafting.canCraftInDimensions(2, 2))
-                    .put("craftsIn3x3", crafting.canCraftInDimensions(3, 3));
+                    .put("craftsIn3x3", crafting.canCraftInDimensions(3, 3))
+                    .put("stationRequirement", crafting.canCraftInDimensions(2, 2)
+                            ? "PLAYER_CRAFTING_OR_CRAFTING_TABLE" : "CRAFTING_TABLE");
         } else if (holder.value() instanceof SmeltingRecipe smelting) {
-            value.put("cookingTime", smelting.getCookingTime()).put("experience", smelting.getExperience());
+            value.put("cookingTime", smelting.getCookingTime()).put("experience", smelting.getExperience())
+                    .put("stationRequirement", "FURNACE");
         }
         return value;
     }
@@ -185,7 +205,24 @@ public final class RegistryObservationService {
     }
 
     private static ObjectNode envelope(String source) {
-        return JSON.createObjectNode().put("source", source).put("observedAt", Instant.now().toString());
+        return JSON.createObjectNode().put("source", source).put("observedAt", Instant.now().toString())
+                .put("trust", "VERIFIED_LIVE_SERVER").put("confidence", "HIGH");
+    }
+
+    private static void boundedTags(ObjectNode parent, Stream<? extends net.minecraft.tags.TagKey<?>> tags) {
+        ArrayNode target = parent.putArray("tags");
+        List<String> values = tags.map(tag -> tag.location().toString()).sorted().limit(65).toList();
+        values.stream().limit(64).forEach(target::add);
+        parent.put("tagsTruncated", values.size() > 64);
+    }
+
+    private static void boundedComponents(ObjectNode parent, ItemStack stack) {
+        ArrayNode target = parent.putArray("components");
+        List<String> values = stack.getComponents().stream()
+                .map(component -> BuiltInRegistries.DATA_COMPONENT_TYPE.getKey(component.type()))
+                .filter(java.util.Objects::nonNull).map(ResourceLocation::toString).sorted().limit(33).toList();
+        values.stream().limit(32).forEach(target::add);
+        parent.put("componentsTruncated", values.size() > 32);
     }
 
     private static Result failure(String code, String message) {

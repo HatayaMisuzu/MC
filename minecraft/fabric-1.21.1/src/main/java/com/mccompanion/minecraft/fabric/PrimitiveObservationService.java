@@ -89,6 +89,17 @@ public final class PrimitiveObservationService {
         var item = BuiltInRegistries.ITEM.get(id);
         ObjectNode observation = envelope(body, "ITEM").put("item", id.toString())
                 .put("maxStackSize", item.getDefaultInstance().getMaxStackSize());
+        ArrayNode tags = observation.putArray("tags");
+        var tagValues = item.builtInRegistryHolder().tags().map(tag -> tag.location().toString())
+                .sorted().limit(65).toList();
+        tagValues.stream().limit(64).forEach(tags::add);
+        observation.put("tagsTruncated", tagValues.size() > 64);
+        ArrayNode componentTypes = observation.putArray("observableComponentTypes");
+        var componentValues = item.getDefaultInstance().getComponents().stream()
+                .map(component -> BuiltInRegistries.DATA_COMPONENT_TYPE.getKey(component.type()))
+                .filter(java.util.Objects::nonNull).map(ResourceLocation::toString).sorted().limit(33).toList();
+        componentValues.stream().limit(32).forEach(componentTypes::add);
+        observation.put("componentsTruncated", componentValues.size() > 32);
         ArrayNode slots = observation.putArray("slots");
         int total = 0;
         for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
@@ -177,6 +188,11 @@ public final class PrimitiveObservationService {
             var slot = menu.getSlot(index);
             ItemStack stack = slot.getItem();
             ObjectNode value = slots.addObject().put("slot", index)
+                    .put("role", slot.container == body.getInventory()
+                            ? slot.getContainerSlot() < 9 ? "PLAYER_HOTBAR" : "PLAYER_INVENTORY"
+                            : "CONTAINER")
+                    .put("containerSlot", slot.getContainerSlot())
+                    .put("mayPlace", slot.mayPlace(ItemStack.EMPTY))
                     .put("mayPickup", slot.mayPickup(body))
                     .put("empty", stack.isEmpty());
             if (!stack.isEmpty()) {

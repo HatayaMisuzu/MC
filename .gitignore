@@ -10,6 +10,8 @@
 .idea/
 .vscode/
 data/
+!minecraft/fabric-1.21.1/src/gametest/resources/data/
+!minecraft/fabric-1.21.1/src/gametest/resources/data/**
 *.db
 *.db-shm
 *.db-wal

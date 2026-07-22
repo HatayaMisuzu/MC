@@ -111,6 +111,12 @@ tasks.register('runtimeFabricE2E') {
     }
 }
 
+tasks.register('unknownModGenericE2E') {
+    group = 'verification'
+    description = 'Runs the Fabric external-client unknown-Mod Registry/recipe/observation/menu primitive chain (liveModel=false).'
+    dependsOn 'runtimeFabricE2E'
+}
+
 tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {

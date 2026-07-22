@@ -165,7 +165,16 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                 inspectJson(record), false));
                     }
                 }
-                if (TERMINAL.contains(record.state()) || waitingReady(record)) return terminal(call, record);
+                if (TERMINAL.contains(record.state())) {
+                    // The worker persists the terminal row before its separate lifecycle-feedback
+                    // transaction and cleanup. Match the duplicate-start boundary: awaiters must not
+                    // observe completion until appendOnce confirms the terminal feedback is durable.
+                    if (!active.containsKey(record.executionId()) && notifyTerminalLifecycle(record)) {
+                        return terminal(call, record);
+                    }
+                } else if (waitingReady(record)) {
+                    return terminal(call, record);
+                }
                 Thread.sleep(25);
             }
             cancel(context, new ToolCall("timeout-cancel-" + call.callId(), "task_graph.cancel",

@@ -243,6 +243,45 @@ function Invoke-McpTool(
     return $result
 }
 
+function Wait-McpToolsAvailable(
+    [string]$pairingToken,
+    [string]$companionId,
+    [string]$brainSessionId,
+    [string[]]$requiredTools
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $missing = $requiredTools
+    $lastError = $null
+    do {
+        try {
+            $body = @{
+                jsonrpc = '2.0'
+                id = "tools-$([Guid]::NewGuid())"
+                method = 'tools/list'
+                params = @{}
+            } | ConvertTo-Json -Compress -Depth 10
+            $reply = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18766/mcp' -Headers @{
+                Authorization = "Bearer $pairingToken"
+                'MCP-Protocol-Version' = '2025-06-18'
+                'Mcp-Session-Id' = (Get-McpSession $pairingToken $companionId $brainSessionId)
+                'X-MCAC-Controller-Id' = 'representative-e2e'
+                'X-MCAC-Brain-Session-Id' = $brainSessionId
+                'X-MCAC-Companion-Id' = $companionId
+            } -ContentType 'application/json' -Body $body -TimeoutSec 3
+            if ($reply.error) { throw ($reply.error | ConvertTo-Json -Compress -Depth 10) }
+            $available = @($reply.result.tools | ForEach-Object { $_.name })
+            $missing = @($requiredTools | Where-Object { $_ -notin $available })
+            $lastError = $null
+            if ($missing.Count -eq 0) { return }
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $transport = if ($lastError) { "; lastError=$lastError" } else { '' }
+    throw "Runtime did not expose the required connected-body tools: $($missing -join ', ')$transport"
+}
+
 function Get-McpCallId(
     [string]$controllerId,
     [string]$brainSessionId,
@@ -491,6 +530,9 @@ try {
 
     Write-Output '[runtime-e2e] executing external-client Task Graph over live unknown Registry content'
     $graphBrainSession = "representative-graph-$([Guid]::NewGuid())"
+    Wait-McpToolsAvailable $pairingToken $companionId $graphBrainSession @(
+        'registry.search', 'recipe.query', 'registry.describe', 'item.inspect', 'movement.look',
+        'block.inspect', 'block.interact', 'menu.inspect', 'menu.quick_move', 'menu.close')
     $graph = @{
         version = 'mcac-task-graph/1'
         id = 'unknown-registry-observation-chain'
@@ -619,7 +661,9 @@ try {
         }
     } "graph-$([Guid]::NewGuid())"
     $graphExecutionId = $graphStarted.observation.executionId
-    if (-not $graphExecutionId) { throw 'Task Graph did not return an execution id.' }
+    if (-not $graphExecutionId) {
+        throw "Task Graph did not return an execution id: $($graphStarted | ConvertTo-Json -Compress -Depth 30)"
+    }
     $graphTerminal = if ($graphStarted.observation.state -eq 'SUCCEEDED') {
         $graphStarted
     } else {

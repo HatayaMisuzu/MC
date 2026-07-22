@@ -669,7 +669,7 @@ final class BehaviorDirector {
             return MenuProgress.failed(parameters, "MENU_ACTION_INVALID");
         }
         MenuSessionTracker.Validation session = MenuSessionTracker.validate(
-                body, parameters.sessionToken(), server.getTickCount());
+                body, parameters.sessionToken());
         if (!session.valid()) return MenuProgress.failed(parameters, session.code());
         if (!action.equals("CLOSE")) {
             if (parameters.slot() == null || parameters.slot() < 0
@@ -840,7 +840,7 @@ final class BehaviorDirector {
             return;
         }
         MenuSessionTracker.Validation session = MenuSessionTracker.validate(
-                body, progress.parameters.sessionToken(), server.getTickCount());
+                body, progress.parameters.sessionToken());
         if (!session.valid()) {
             pauseSafely(entry, body, session.code());
             return;

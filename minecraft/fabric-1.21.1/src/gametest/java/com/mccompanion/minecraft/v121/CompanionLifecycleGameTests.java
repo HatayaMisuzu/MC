@@ -248,9 +248,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertValueEqual(inspected.observation().path("slots").path(0).path("item").asText(),
                     "minecraft:stone", "menu inspection did not read the live chest slot");
             helper.assertTrue(!MenuSessionTracker.validate(body,
-                            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                            body.serverLevel().getServer().getTickCount()).valid(),
+                            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").valid(),
                     "forged menu session capability was accepted");
+            helper.assertTrue(!MenuSessionTracker.isExpired(1L,
+                            1L + java.time.Duration.ofSeconds(60).toNanos()),
+                    "menu session expired before its full wall-clock lifetime");
+            helper.assertTrue(MenuSessionTracker.isExpired(1L,
+                            2L + java.time.Duration.ofSeconds(60).toNanos()),
+                    "menu session remained valid beyond its wall-clock lifetime");
 
             helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "menu-click-pickup", "skill",
                     null, null, null, new SkillParameters("MenuAction", "", 1, false,
@@ -299,8 +304,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         awaitBehaviorIdle(helper, registry, companionId, 20, closed -> {
                             helper.assertTrue(body.containerMenu == body.inventoryMenu,
                                     "menu close did not restore the inventory menu");
-                            helper.assertTrue(!MenuSessionTracker.validate(body, token,
-                                            body.serverLevel().getServer().getTickCount()).valid(),
+                            helper.assertTrue(!MenuSessionTracker.validate(body, token).valid(),
                                     "closed menu session capability remained usable");
                             helper.assertValueEqual(closed.behaviorObservation().failureCode(),
                                     "MENU_ACTION_COMPLETE", "menu close observation code mismatch");

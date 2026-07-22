@@ -2,7 +2,7 @@
 
 Updated: 2026-07-22
 Audited source baseline: `1a3fab4a022fbd5380041e992e7baf82bd8d4581`
-Execution contract: `F:\MCAC_CODEX_PRODUCTIZATION_CLOSURE_v5.md`
+Execution contract: `MCAC_CODEX_PRODUCTIZATION_CLOSURE_v5.md` (external execution contract)
 
 This is the required pre-change audit table for the v5 closure pass. It is evidence and work
 tracking, not a second completion matrix. `docs/RC_COMPLETION_MATRIX.md` remains the only authority
@@ -31,6 +31,18 @@ No known P0/P1 product defect was established by the document/source scan or loc
 documentation contradictions, missing roadmap, and packaged logging-provider conflict were repaired.
 Non-cached base tests, Loader builds/launches/GameTests, Runtime/Fabric and unknown-Mod E2E,
 persistence/restart, multi-profile, Brain/Capsule/Memory/long-play/soak, Web, package verification,
-arbitrary-working-directory launch, and clean-extraction Golden Path passed locally. Closure remains
-conditional on committing these changes, rebuilding the release from that exact commit, and three
-green remote workflows on the exact final SHA.
+arbitrary-working-directory launch, and clean-extraction Golden Path passed locally. The v5 closure
+commit `2bdb030d65425c20113ab260eeacfa7fdb9f72d9` was rebuilt into the verified
+release and passed PR fast run `29896989946`, Windows run `29896989922`, and Minecraft heavy run
+`29896989911`. During the v5.1 final gate, accelerated GameTest ticks exposed that a documented
+60-second menu capability was actually tick-bound; it now uses a monotonic 60-second wall-clock
+lifetime, still invalidates on menu replacement/close, and has boundary assertions plus repeated
+Runtime/Fabric E2E coverage. Live-provider and human-play verification remain the only external
+follow-up. The same final gate also exposed an asynchronous Task Graph terminal-feedback race:
+`await()` could observe the durable terminal row before the separate lifecycle event transaction.
+Awaiters now receive a terminal result only after the idempotent lifecycle event is durable; the
+previously failing boundary assertion passed five repeated non-cached targeted runs. Repeated
+Runtime/Fabric runs also exposed a harness race between companion registration and asynchronous
+connected-body capability publication; the external client now waits, with a fixed bound, for its
+declared Tool set through authenticated MCP `tools/list` before submitting the Graph. Runtime Tool
+availability validation remains unchanged and strict.

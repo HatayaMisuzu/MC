@@ -169,8 +169,7 @@ public final class PrimitiveObservationService {
     }
 
     private static Result menu(CompanionPlayer body) {
-        MenuSessionTracker.Snapshot session = MenuSessionTracker.inspect(
-                body, body.getServer().getTickCount());
+        MenuSessionTracker.Snapshot session = MenuSessionTracker.inspect(body);
         if (session == null) {
             return failure("MENU_NOT_OPEN", "The connected body has no open container menu");
         }
@@ -179,7 +178,7 @@ public final class PrimitiveObservationService {
         ObjectNode observation = envelope(body, "MENU")
                 .put("sessionToken", session.token())
                 .put("containerId", session.containerId())
-                .put("expiresAtTick", session.expiresAtTick())
+                .put("expiresAtEpochMillis", session.expiresAtEpochMillis())
                 .put("menuType", menuType == null ? "minecraft:unknown" : menuType.toString())
                 .put("slotCount", menu.slots.size())
                 .put("slotsTruncated", menu.slots.size() > 128);

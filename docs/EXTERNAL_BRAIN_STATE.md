@@ -11,9 +11,11 @@ updating the Codex Goal UI.
 This is a chronological engineering log, not the completion authority. Current status is in
 `docs/RC_COMPLETION_MATRIX.md`.
 
-The release is not yet `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`. Primitive Tool coverage,
-Task Graph execution/recovery, Skill Workspace, product UI controls, and current-version
-release/install verification remain incomplete.
+The authoritative matrix currently classifies the repository as
+`READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`, with Live-provider verification and human playtesting
+still pending. This file is a chronological implementation log: earlier slice-level statements
+about incomplete Primitive, Task Graph, Workspace, UI, or release work are historical and must not
+override the current matrix.
 
 ## Completed in this slice
 

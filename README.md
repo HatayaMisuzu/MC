@@ -110,4 +110,5 @@ build/distributions/mcac-release.zip
 - [Typed Task Graph DSL](docs/TASK_GRAPH_DSL.md)
 - [MCP 协议](docs/MCP_PROTOCOL.md)
 - [真实 Brain 与真人试玩指南](docs/LIVE_BRAIN_HUMAN_PLAYTEST.md)
+- [产品化闭环后的三个 P0](docs/POST_PRODUCTIZATION_P0.md)
 - [已知限制](KNOWN_LIMITATIONS.md)

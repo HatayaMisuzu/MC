@@ -18,6 +18,7 @@ $required = @(
     'legal',
     'README.txt',
     'KNOWN_LIMITATIONS.md',
+    'docs\POST_PRODUCTIZATION_P0.md',
     'release-manifest.json',
     'sbom.spdx.json',
     'SHA256SUMS.txt'
@@ -27,6 +28,13 @@ foreach ($item in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $release $item))) {
         throw "Missing release item: $item"
     }
+}
+
+$slf4jProviders = @(Get-ChildItem -LiteralPath (Join-Path $release 'app') -File | Where-Object {
+    $_.Name -match '^(slf4j-(simple|nop|jdk14|reload4j)|logback-classic)-.*\.jar$'
+})
+if ($slf4jProviders.Count -ne 1 -or $slf4jProviders[0].Name -notmatch '^slf4j-simple-') {
+    throw "Release must contain exactly one SLF4J provider (slf4j-simple): $($slf4jProviders.Name -join ', ')"
 }
 
 function Get-Sha256([string]$Path) {

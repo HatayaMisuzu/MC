@@ -85,6 +85,7 @@ CLI 仅为测试和自动化保留，使用 `mcac-cli.exe` 或带参数调用 `m
 .\gradlew.bat clean check buildPlatforms
 .\gradlew.bat runtimeFabricE2E persistenceRestartTest
 .\gradlew.bat verifyTerminalPackage htmlTerminalStartTest
+.\gradlew.bat releaseGoldenPathTest
 cd terminal\web-ui
 npm run e2e
 ```

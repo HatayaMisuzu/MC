@@ -10,6 +10,7 @@ import com.mccompanion.runtime.search.SearchPage;
 import com.mccompanion.runtime.search.SearchSource;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.workspace.SkillRepository;
+import com.mccompanion.runtime.workspace.AgentWorkspace;
 import com.mccompanion.runtime.security.Digests;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
@@ -76,18 +77,51 @@ class RuntimeApplicationTest {
                     .header("Authorization", "Bearer " + token)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
-                            .put("action", "approve").put("requestId", pending.requestId()))))
+                            .put("action", "approve").put("companionId", "other-companion")
+                            .put("requestId", pending.requestId()))))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(400, approved.statusCode(), approved.body());
+            assertEquals("PENDING_REVIEW", repository.get(pending.requestId()).orElseThrow().status());
+
+            approved = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
+                            .put("action", "approve").put("companionId", "companion-1")
+                            .put("requestId", pending.requestId()))))
                     .build(), HttpResponse.BodyHandlers.ofString());
             assertEquals(200, approved.statusCode(), approved.body());
             assertEquals("ACTIVE", Json.parse(approved.body()).path("status").asText());
             assertEquals("LOCAL_MANAGEMENT_USER", Json.parse(approved.body()).path("approvedBy").asText());
+
+            AgentWorkspace workspace = new AgentWorkspace(config.databasePath().getParent()
+                    .resolve("agent-workspace"), config.server.profileId);
+            workspace.save("companion-1", "skills/local_draft/draft.yaml", "version: one");
+            workspace.save("companion-1", "skills/local_draft/draft.yaml", "version: two");
 
             HttpResponse<String> listed = http.send(HttpRequest.newBuilder(new URI(
                             endpoint + "?companionId=companion-1"))
                     .header("Authorization", "Bearer " + token).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             assertEquals(200, listed.statusCode(), listed.body());
-            assertEquals("ACTIVE", Json.parse(listed.body()).path("versions").path(0).path("status").asText());
+            JsonNode snapshot = Json.parse(listed.body());
+            assertEquals("ACTIVE", snapshot.path("versions").path(0).path("status").asText());
+            assertEquals(6, snapshot.path("builtins").size());
+            assertEquals("skills/local_draft/draft.yaml",
+                    snapshot.path("drafts").path(0).path("logicalPath").asText());
+            assertEquals(1, snapshot.path("drafts").path(0).path("retainedVersions").size());
+
+            HttpResponse<String> restored = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
+                            .put("action", "restore_draft").put("companionId", "companion-1")
+                            .put("skillId", "local_draft").put("format", "yaml").put("version", 1))))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, restored.statusCode(), restored.body());
+            assertEquals(3, Json.parse(restored.body()).path("version").asInt());
+            assertEquals("version: one",
+                    workspace.read("companion-1", "skills/local_draft/draft.yaml").content());
         }
     }
 

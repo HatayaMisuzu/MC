@@ -82,6 +82,10 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/task-graphs", "companionId"));
       else if ("POST".equals(method) && "/api/task-graphs/control".equals(path))
         send(exchange, 200, controlTaskGraph(body(exchange)));
+      else if ("GET".equals(method) && "/api/skills".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/skills", "companionId"));
+      else if ("POST".equals(method) && "/api/skills/manage".equals(path))
+        send(exchange, 200, manageSkill(body(exchange)));
       else if ("GET".equals(method) && "/api/logs/tail".equals(path))
         send(exchange, 200, logSnapshot(exchange));
       else if ("POST".equals(method) && path.endsWith("/plan"))
@@ -365,6 +369,20 @@ final class WebTerminalApi {
         .put("executionId", required(request, "executionId"));
     return new RuntimeControlClient().manage(
         root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
+  }
+
+  private JsonNode manageSkill(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    ObjectNode bounded = JSON.createObjectNode()
+        .put("action", required(request, "action"))
+        .put("companionId", required(request, "companionId"));
+    if (request.hasNonNull("requestId")) bounded.put("requestId", required(request, "requestId"));
+    if (request.hasNonNull("skillId")) bounded.put("skillId", required(request, "skillId"));
+    if (request.hasNonNull("format")) bounded.put("format", required(request, "format"));
+    if (request.hasNonNull("version")) bounded.put("version", requiredPositiveLong(request, "version"));
+    if (request.hasNonNull("reason")) bounded.put("reason", required(request, "reason"));
+    return new RuntimeControlClient().manage(
+        root.profile(root.instance(instanceId)), "/skills", bounded, Duration.ofSeconds(8));
   }
 
   ObjectNode logSnapshot(HttpExchange exchange) throws Exception {
@@ -894,6 +912,13 @@ final class WebTerminalApi {
     if (!Double.isFinite(value) || Math.abs(value) > 30_000_000)
       throw new IllegalArgumentException(key + " 超出安全范围");
     return value;
+  }
+
+  private static long requiredPositiveLong(JsonNode node, String key) {
+    JsonNode value = node.path(key);
+    if (!value.isIntegralNumber() || !value.canConvertToLong() || value.asLong() < 1)
+      throw new IllegalArgumentException(key + " must be a positive integer");
+    return value.asLong();
   }
 
   private static List<String> textList(JsonNode node) {

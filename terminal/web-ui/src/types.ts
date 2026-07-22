@@ -168,6 +168,23 @@ export interface TaskGraphExecution {
   resultCode: string; revision: number; createdAt: string; updatedAt: string
 }
 export interface TaskGraphSnapshot { companionId: string; executions: TaskGraphExecution[] }
+export interface SkillVersion {
+  requestId: string; companionId: string; skillId: string; version: number; format: string
+  document: string; sha256: string; permissions: unknown; provenance: unknown; validation: unknown
+  status: string; statusReason?: string; controllerId: string; brainSessionId: string
+  approvedBy?: string; approvedAt?: string; createdAt: string; updatedAt: string
+}
+export interface BuiltinSkill {
+  skillId: string; format: string; sha256: string; trust: 'BUILT_IN'
+}
+export interface WorkspaceRetainedVersion { version: number; sha256: string; sizeBytes: number }
+export interface WorkspaceDraft {
+  logicalPath: string; version: number; sha256: string; sizeBytes: number; updatedAt: string
+  document: string; retainedVersions: WorkspaceRetainedVersion[]
+}
+export interface SkillSnapshot {
+  companionId: string; builtins: BuiltinSkill[]; drafts: WorkspaceDraft[]; versions: SkillVersion[]
+}
 
 export interface OperationPlan {
   planId: string

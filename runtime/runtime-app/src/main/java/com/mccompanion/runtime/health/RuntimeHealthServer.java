@@ -38,6 +38,7 @@ import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.mccompanion.runtime.workspace.SkillRepository;
+import com.mccompanion.runtime.workspace.SkillToolGateway;
 import com.mccompanion.runtime.search.SearchSessionRepository;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -71,6 +72,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final ToolGateway toolGateway;
     private final TaskGraphRuntime taskGraphRuntime;
     private final SkillRepository skills;
+    private final SkillToolGateway skillTools;
     private final McpReplayRepository mcpReplay;
     private final McpSessionRepository mcpSessions;
     private final McpEventRepository mcpEvents;
@@ -100,7 +102,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             RuntimeLog log) throws IOException {
         this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
-                null, null, null, null, null, null, log);
+                null, null, null, null, null, null, null, log);
     }
 
     public RuntimeHealthServer(
@@ -120,6 +122,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             ToolGateway toolGateway,
             TaskGraphRuntime taskGraphRuntime,
             SkillRepository skills,
+            SkillToolGateway skillTools,
             McpReplayRepository mcpReplay,
             McpSessionRepository mcpSessions,
             McpEventRepository mcpEvents,
@@ -141,6 +144,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.toolGateway = toolGateway;
         this.taskGraphRuntime = taskGraphRuntime;
         this.skills = skills;
+        this.skillTools = skillTools;
         this.mcpReplay = mcpReplay;
         this.mcpSessions = mcpSessions;
         this.mcpEvents = mcpEvents;
@@ -776,8 +780,9 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED"));
                         return;
                     }
-                    ObjectNode body = Json.object().put("companionId", companionId);
-                    body.set("versions", Json.MAPPER.valueToTree(
+                    ObjectNode body = skillTools == null
+                            ? Json.object().put("companionId", companionId) : skillTools.managementSnapshot(companionId);
+                    if (skillTools == null) body.set("versions", Json.MAPPER.valueToTree(
                             skills.list(config.server.profileId, companionId)));
                     sendJson(exchange, 200, body);
                     return;
@@ -785,18 +790,32 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 if ("POST".equals(exchange.getRequestMethod())) {
                     JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
                     String action = required(request, "action");
+                    String companionId = required(request, "companionId");
                     Object result = switch (action) {
-                        case "approve" -> skills.approve(required(request, "requestId"),
-                                "LOCAL_MANAGEMENT_USER");
-                        case "reject" -> skills.reject(required(request, "requestId"),
-                                "LOCAL_MANAGEMENT_USER", requiredText(request, "reason", 256));
+                        case "approve" -> {
+                            String requestId = required(request, "requestId");
+                            requireSkillScope(requestId, companionId);
+                            yield skills.approve(requestId, "LOCAL_MANAGEMENT_USER");
+                        }
+                        case "reject" -> {
+                            String requestId = required(request, "requestId");
+                            requireSkillScope(requestId, companionId);
+                            yield skills.reject(requestId, "LOCAL_MANAGEMENT_USER",
+                                    requiredText(request, "reason", 256));
+                        }
                         case "disable" -> skills.disable(config.server.profileId,
-                                required(request, "companionId"), required(request, "skillId"),
+                                companionId, required(request, "skillId"),
                                 "LOCAL_MANAGEMENT_USER", requiredText(request, "reason", 256));
                         case "rollback" -> skills.rollback(config.server.profileId,
-                                required(request, "companionId"), required(request, "skillId"),
+                                companionId, required(request, "skillId"),
                                 requiredPositiveLong(request, "version"), "LOCAL_MANAGEMENT_USER",
                                 requiredText(request, "reason", 256));
+                        case "restore_draft" -> {
+                            if (skillTools == null) throw new IllegalArgumentException("Skill workspace is unavailable");
+                            yield skillTools.restoreDraftForLocalUser(companionId,
+                                    required(request, "skillId"), required(request, "format"),
+                                    requiredPositiveLong(request, "version"));
+                        }
                         default -> throw new IllegalArgumentException("skill action is invalid");
                     };
                     sendJson(exchange, 200, Json.MAPPER.valueToTree(result));
@@ -809,7 +828,19 @@ public final class RuntimeHealthServer implements AutoCloseable {
             } catch (java.sql.SQLException failure) {
                 log.error("Skill management failed", failure);
                 sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+            } catch (IOException failure) {
+                log.error("Skill workspace management failed", failure);
+                sendJson(exchange, 500, Json.object().put("code", "SKILL_WORKSPACE_ERROR"));
             }
+        }
+    }
+
+    private void requireSkillScope(String requestId, String companionId) throws SQLException {
+        var version = skills.get(requestId).orElseThrow(
+                () -> new IllegalArgumentException("skill promotion request does not exist"));
+        if (!version.profileId().equals(config.server.profileId)
+                || !version.companionId().equals(companionId)) {
+            throw new IllegalArgumentException("skill promotion request is outside management scope");
         }
     }
 

@@ -12,6 +12,7 @@ import java.text.Normalizer;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -81,6 +82,10 @@ class AgentWorkspaceTest {
             assertEquals(AgentWorkspace.BACKUP_RETENTION,
                     backups.filter(file -> file.getFileName().toString().endsWith(".bak")).count());
         }
+        List<WorkspaceRetainedVersion> retained = workspace.retainedVersions("c1", path);
+        assertEquals(List.of(10L, 9L, 8L, 7L, 6L, 5L, 4L, 3L),
+                retained.stream().map(WorkspaceRetainedVersion::version).toList());
+        assertEquals(Digests.sha256("version: 10"), retained.get(0).sha256());
         assertThrows(IllegalArgumentException.class, () -> workspace.restore("c1", path, 2),
                 "a version outside the retention window must not be fabricated");
 

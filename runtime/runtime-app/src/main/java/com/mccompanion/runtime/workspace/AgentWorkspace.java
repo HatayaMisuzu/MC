@@ -177,6 +177,44 @@ public final class AgentWorkspace {
         return List.copyOf(resources);
     }
 
+    public synchronized List<WorkspaceRetainedVersion> retainedVersions(
+            String companionId, String logicalPath) throws IOException {
+        String path = validateLogicalPath(logicalPath);
+        Scope scope = scopeFor(companionId);
+        ensureScope(scope);
+        if (loadIndex(scope).path(path).isMissingNode()) {
+            throw new IllegalArgumentException("workspace resource does not exist");
+        }
+        Path directory = backupDirectory(scope, path);
+        if (Files.notExists(directory, LinkOption.NOFOLLOW_LINKS)) return List.of();
+        rejectLink(directory, scope.root());
+        List<WorkspaceRetainedVersion> retained = new ArrayList<>();
+        try (var files = Files.list(directory)) {
+            for (Path backup : files.filter(value -> value.getFileName().toString()
+                    .matches("[1-9][0-9]*\\.bak")).toList()) {
+                rejectLink(backup, scope.root());
+                long version = backupVersion(backup);
+                Path checksum = directory.resolve(version + ".sha256");
+                rejectLink(checksum, scope.root());
+                if (Files.notExists(checksum, LinkOption.NOFOLLOW_LINKS)) {
+                    throw new IOException("workspace backup checksum is missing");
+                }
+                byte[] bytes = Files.readAllBytes(backup);
+                if (bytes.length == 0 || bytes.length > quota.maxFileBytes()) {
+                    throw new IOException("workspace backup exceeds file quota");
+                }
+                String content = new String(bytes, StandardCharsets.UTF_8);
+                String hash = Files.readString(checksum, StandardCharsets.US_ASCII).strip();
+                if (!Digests.sha256(content).equals(hash)) {
+                    throw new IOException("workspace backup integrity check failed");
+                }
+                retained.add(new WorkspaceRetainedVersion(version, hash, bytes.length));
+            }
+        }
+        retained.sort(Comparator.comparingLong(WorkspaceRetainedVersion::version).reversed());
+        return List.copyOf(retained);
+    }
+
     private Scope scopeFor(String companionId) {
         Path profile = root.resolve(profileScope);
         Path scopeRoot = profile.resolve(scope(required(companionId, "companionId")));

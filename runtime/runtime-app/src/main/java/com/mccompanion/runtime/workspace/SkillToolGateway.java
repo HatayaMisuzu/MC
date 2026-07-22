@@ -50,6 +50,38 @@ public final class SkillToolGateway implements ToolGateway {
         taskGraphRuntime = java.util.Objects.requireNonNull(runtime, "runtime");
     }
 
+    /** Authenticated local-management snapshot; contains logical metadata but never host paths. */
+    public ObjectNode managementSnapshot(String companionId) throws IOException, SQLException {
+        String scopedCompanion = requiredIdentifier(companionId, "companionId");
+        ObjectNode observation = Json.object().put("companionId", scopedCompanion);
+        var drafts = Json.MAPPER.createArrayNode();
+        for (WorkspaceResource draft : workspace.list(scopedCompanion, "skills/")) {
+            ObjectNode value = Json.MAPPER.valueToTree(draft);
+            value.put("document", workspace.read(scopedCompanion, draft.logicalPath()).content());
+            value.set("retainedVersions", Json.MAPPER.valueToTree(
+                    workspace.retainedVersions(scopedCompanion, draft.logicalPath())));
+            drafts.add(value);
+        }
+        observation.set("drafts", drafts);
+        observation.set("builtins", Json.MAPPER.valueToTree(builtins.list().stream()
+                .map(SkillToolGateway::withoutBuiltinDocument).toList()));
+        observation.set("versions", Json.MAPPER.valueToTree(skills.list(profileId, scopedCompanion)));
+        return observation;
+    }
+
+    public WorkspaceResource restoreDraftForLocalUser(
+            String companionId, String requestedSkillId, String requestedFormat, long version) throws IOException {
+        String scopedCompanion = requiredIdentifier(companionId, "companionId");
+        ObjectNode arguments = Json.object().put("skillId", requestedSkillId)
+                .put("format", requestedFormat);
+        String parsedSkillId = skillId(arguments);
+        rejectBuiltinId(parsedSkillId);
+        if (version < 1 || version > Integer.MAX_VALUE) {
+            throw new IllegalArgumentException("version is out of range");
+        }
+        return workspace.restore(scopedCompanion, path(parsedSkillId, format(arguments)), version);
+    }
+
     @Override
     public List<ToolDefinition> definitions(ToolContext context) {
         return List.of(

@@ -15,6 +15,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Sparkles,
   SunMoon,
 } from 'lucide-react'
 import { useEffect, useState, type ReactNode } from 'react'
@@ -34,6 +35,7 @@ export type Route =
   | 'provider'
   | 'search'
   | 'brain'
+  | 'skills'
   | 'doctor'
   | 'logs'
   | 'settings'
@@ -49,6 +51,7 @@ const navigation: Array<{ id: Route; label: string; icon: typeof Gauge }> = [
   { id: 'provider', label: 'Provider', icon: Activity },
   { id: 'search', label: 'Search 与隐私', icon: Search },
   { id: 'brain', label: 'External Brain', icon: BrainCircuit },
+  { id: 'skills', label: 'Skills', icon: Sparkles },
   { id: 'doctor', label: 'Doctor', icon: HeartPulse },
   { id: 'logs', label: '日志与支持', icon: FileText },
   { id: 'settings', label: '设置与安全', icon: Settings },

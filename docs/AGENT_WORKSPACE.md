@@ -55,6 +55,13 @@ Workspace invariants:
   and keeps the previous content in a Runtime-only backup area;
 - reads verify the persisted SHA-256 before returning content.
 
-This slice does not yet implement the terminal review UI, signed/administrator promotion policies,
-temporary execution policy, workspace migration tooling, or backup retention controls. Those
-remain visible in `docs/RC_COMPLETION_MATRIX.md`.
+The existing Terminal now has a scoped Generated Skills page. It lists the read-only built-in catalog,
+current quarantined drafts, integrity-checked retained draft versions, and persisted promotion records.
+It displays logical paths only (never host paths), document/hash/permission/validation/version state,
+and calls only the authenticated, CSRF-protected `/skills` management boundary for draft restore,
+approve, reject, disable, and rollback. Draft restore creates a new monotonic quarantined version;
+approve/reject also recheck profile plus companion scope instead of trusting a request ID alone. A
+general Workspace file browser is intentionally not exposed.
+
+Signed/administrator promotion policies, temporary execution policy and workspace migration/export
+tooling remain visible in `docs/RC_COMPLETION_MATRIX.md`.

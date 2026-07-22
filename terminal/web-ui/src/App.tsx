@@ -13,6 +13,7 @@ import { OverviewPage } from './pages/OverviewPage'
 import { ProviderPage } from './pages/ProviderPage'
 import { SearchPage } from './pages/SearchPage'
 import { BrainPage } from './pages/BrainPage'
+import { SkillsPage } from './pages/SkillsPage'
 import { RuntimePage } from './pages/RuntimePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SmokePage } from './pages/SmokePage'
@@ -28,6 +29,7 @@ const pages: Record<Route, React.ComponentType> = {
   provider: ProviderPage,
   search: SearchPage,
   brain: BrainPage,
+  skills: SkillsPage,
   doctor: DoctorPage,
   logs: LogsPage,
   settings: SettingsPage,

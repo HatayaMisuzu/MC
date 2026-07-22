@@ -205,8 +205,9 @@ public final class RuntimeApplication implements AutoCloseable {
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
                     "database parent").resolve("agent-workspace");
             SkillRepository skillRepository = new SkillRepository(database);
+            AgentWorkspace agentWorkspace = new AgentWorkspace(workspaceRoot, config.server.profileId);
             SkillToolGateway skillTools = new SkillToolGateway(
-                    new AgentWorkspace(workspaceRoot, config.server.profileId),
+                    agentWorkspace,
                     skillRepository, config.server.profileId,
                     context -> {
                         CompositeToolGateway current = toolGatewayReference.get();
@@ -272,7 +273,7 @@ public final class RuntimeApplication implements AutoCloseable {
             webSocket.startAndAwait(Duration.ofSeconds(15));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
                     kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,
-                    toolGateway, taskGraphRuntime, skillRepository, mcpReplay, mcpSessions, mcpEvents,
+                    toolGateway, taskGraphRuntime, skillRepository, skillTools, mcpReplay, mcpSessions, mcpEvents,
                     searchSessions, log);
             healthServer.start();
 

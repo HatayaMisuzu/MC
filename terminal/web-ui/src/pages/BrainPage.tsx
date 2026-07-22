@@ -30,6 +30,7 @@ export function BrainPage() {
     ? api<MemorySnapshot>(`/api/memories?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
     : Promise.resolve({ companionId: '', byKind: {} }), [selectedId, companionId])
   const refresh = () => { void status.refresh(); void audit.refresh(); void memories.refresh(); void companions.refresh() }
+  const reconnectState = audit.data?.[0]?.state ?? 'IDLE'
   const reviewSuggestion = async (suggestionId: string, action: 'approve_suggestion' | 'reject_suggestion') => {
     setReviewing(suggestionId)
     setReviewError('')
@@ -64,6 +65,7 @@ export function BrainPage() {
       </select></label>
       <StatusBadge value={status.data?.health.status ?? 'WAITING'} />
       <span>{status.data?.health.adapter || 'No adapter'} · controller {status.data?.activeControllerId || 'none'}</span>
+      <span>Reconnect <StatusBadge value={reconnectState} /></span>
     </section>
     {!companionId ? <EmptyState title="No connected companion">Connect a Fabric companion before starting a Brain turn.</EmptyState> : <>
       <section className="companion-chat"><h2>Chat / think / search / act</h2><p>Actions occur only when the external Brain explicitly calls an AVAILABLE_NOW MCAC tool.</p>
@@ -77,6 +79,11 @@ export function BrainPage() {
           <div className="event-row" key={`${session.sessionId}-${tool.callId}`}><time>{new Date(session.updatedAt).toLocaleTimeString()}</time><strong>{tool.toolName}</strong>
             <StatusBadge value={tool.success ? 'PASS' : 'FAILED'} /><span>{tool.code}</span><p>{JSON.stringify(tool.observation ?? {})}</p></div>) :
           [<div className="event-row" key={session.sessionId}><time>{new Date(session.updatedAt).toLocaleTimeString()}</time><strong>{session.provider}</strong><StatusBadge value={session.state} /><span>{session.lastCode}</span></div>])}</div>
+      </section>
+      <section className="main-panel"><header className="panel-header"><h2>Bounded context</h2>
+        <span>aggregate budgets only</span></header>
+        <p>Total {status.data?.contextBudget?.totalChars ?? 0} chars · world {status.data?.contextBudget?.worldChars ?? 0} · conversation {status.data?.contextBudget?.conversationChars ?? 0} · task {status.data?.contextBudget?.taskChars ?? 0} · approved Memory {status.data?.contextBudget?.approvedMemoryChars ?? 0} · Capsule {status.data?.contextBudget?.episodeCapsuleChars ?? 0}</p>
+        <p>Full Graph, Tool logs, Search pages, prompts and secrets are not shown or injected here.</p>
       </section>
       <section className="main-panel"><header className="panel-header"><h2>Typed memory</h2><span>provenance and verification shown</span></header>
         <div className="event-rows">{Object.entries(memories.data?.byKind ?? {}).flatMap(([kind, facts]) => facts.map((fact) =>

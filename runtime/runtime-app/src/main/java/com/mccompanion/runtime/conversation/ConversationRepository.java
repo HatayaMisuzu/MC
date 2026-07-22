@@ -54,6 +54,15 @@ public final class ConversationRepository {
         }
     }
 
+    /** Confirms that an idempotent lifecycle write is visible before a terminal result is exposed. */
+    public boolean eventExists(String eventId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT 1 FROM conversation_event WHERE event_id=?")) {
+            statement.setString(1, required(eventId));
+            try (ResultSet result = statement.executeQuery()) { return result.next(); }
+        }
+    }
+
     public WaitingQuestion ask(String companionId, String planId, String prompt, String reason,
                                List<ConversationOption> options, boolean freeTextAllowed,
                                JsonNode context, Instant expiresAt) throws SQLException {

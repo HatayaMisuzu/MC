@@ -109,4 +109,5 @@ build/distributions/mcac-release.zip
 - [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md)
 - [Typed Task Graph DSL](docs/TASK_GRAPH_DSL.md)
 - [MCP 协议](docs/MCP_PROTOCOL.md)
+- [真实 Brain 与真人试玩指南](docs/LIVE_BRAIN_HUMAN_PLAYTEST.md)
 - [已知限制](KNOWN_LIMITATIONS.md)

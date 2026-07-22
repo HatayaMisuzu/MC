@@ -14,6 +14,7 @@ import com.mccompanion.runtime.agent.StepState;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.brain.BrainAuditRepository;
+import com.mccompanion.runtime.brain.BoundedBrainContextAssembler;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.intent.Intent;
@@ -873,6 +874,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 ObjectNode body = Json.object().put("activeControllerId",
                         externalBrain.activeControllerId() == null ? "" : externalBrain.activeControllerId());
                 body.set("health", Json.MAPPER.valueToTree(externalBrain.health()));
+                body.set("contextBudget", BoundedBrainContextAssembler.budgetSummary());
                 sendJson(exchange, 200, body);
                 return;
             }

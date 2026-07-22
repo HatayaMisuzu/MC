@@ -141,6 +141,9 @@ export interface WaitingQuestion {
 export interface BrainStatus {
   activeControllerId: string
   health: { status: string; adapter: string; detail: string; checkedAt: string }
+  contextBudget?: { totalChars: number; worldChars: number; conversationChars: number
+    taskChars: number; approvedMemoryChars: number; episodeCapsuleChars: number
+    fullGraphIncluded: boolean; fullToolLogIncluded: boolean; fullSearchPageIncluded: boolean }
 }
 export interface BrainToolAudit {
   callId: string; toolName: string; success: boolean; code: string; terminal: boolean

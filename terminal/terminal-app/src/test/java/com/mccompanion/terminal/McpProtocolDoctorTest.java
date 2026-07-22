@@ -30,7 +30,10 @@ class McpProtocolDoctorTest {
 
             assertTrue(result.healthy(), result.detail());
             assertEquals("2025-06-18", result.protocolVersion());
-            assertEquals(1, result.toolCount());
+            assertEquals(4, result.toolCount());
+            assertTrue(result.genericRegistry());
+            assertTrue(result.episodeCapsules());
+            assertTrue(result.memoryCandidateSubmission());
             assertTrue(!result.detail().contains("doctor-secret"));
             assertTrue(McpProtocolDoctor.isForbiddenToolName("shell.execute"));
             assertTrue(McpProtocolDoctor.isForbiddenToolName("filesystem.read"));
@@ -59,7 +62,10 @@ class McpProtocolDoctorTest {
                 assertEquals("doctor-opaque-session", exchange.getRequestHeaders().getFirst("Mcp-Session-Id"));
                 response = """
                         {"jsonrpc":"2.0","id":"doctor-list","result":{"tools":[
-                         {"name":"world.observe","description":"Observe","inputSchema":{"type":"object"}}]}}
+                         {"name":"world.observe","description":"Observe","inputSchema":{"type":"object"}},
+                         {"name":"registry.search","description":"Registry","inputSchema":{"type":"object"}},
+                         {"name":"memory.episode_capsules","description":"Capsules","inputSchema":{"type":"object"}},
+                         {"name":"memory.suggest","description":"Candidate","inputSchema":{"type":"object"}}]}}
                         """;
             }
             byte[] bytes = response.getBytes(StandardCharsets.UTF_8);

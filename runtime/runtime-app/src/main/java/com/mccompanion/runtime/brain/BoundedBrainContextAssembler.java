@@ -20,6 +20,14 @@ public final class BoundedBrainContextAssembler {
 
     private BoundedBrainContextAssembler() { }
 
+    public static ObjectNode budgetSummary() {
+        return Json.object().put("totalChars", DEFAULT_TOTAL_CHARS).put("worldChars", WORLD_CHARS)
+                .put("conversationChars", CONVERSATION_CHARS).put("taskChars", TASK_CHARS)
+                .put("approvedMemoryChars", MEMORY_CHARS).put("episodeCapsuleChars", CAPSULE_CHARS)
+                .put("fullGraphIncluded", false).put("fullToolLogIncluded", false)
+                .put("fullSearchPageIncluded", false);
+    }
+
     public static Result assemble(AgentContext context) {
         ObjectNode value = Json.object().put("companionId", boundedText(context.companionId(), 128))
                 .put("maxPlanSteps", context.maxPlanSteps());

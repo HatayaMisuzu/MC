@@ -819,7 +819,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
         try {
             conversations.appendOnce(eventId, record.companionId(), null, null,
                     "ASSISTANT", "TASK_GRAPH_LIFECYCLE", message, details);
-            return true;
+            return conversations.eventExists(eventId);
         } catch (SQLException | RuntimeException failure) {
             LOGGER.warn("Unable to enqueue Task Graph lifecycle feedback: execution={} transition={}",
                     record.executionId(), transition, failure);

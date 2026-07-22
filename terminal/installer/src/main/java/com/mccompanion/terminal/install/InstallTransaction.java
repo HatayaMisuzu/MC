@@ -25,10 +25,28 @@ import java.util.concurrent.ConcurrentHashMap;
 public final class InstallTransaction {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final ConcurrentHashMap<Path, Object> JVM_LOCKS = new ConcurrentHashMap<>();
+    private final FaultInjector faultInjector;
+
+    public InstallTransaction() {
+        this(phase -> { });
+    }
+
+    InstallTransaction(FaultInjector faultInjector) {
+        this.faultInjector = java.util.Objects.requireNonNull(faultInjector);
+    }
 
     public Result execute(InstallPlan plan) throws IOException {
         Path game = safeGameDirectory(plan.instance().gameDirectory());
         return locked(game, () -> executeLocked(plan, game));
+    }
+
+    /** Completes rollback of an interrupted installer journal without starting a new install. */
+    public void recover(Path gameDir) throws IOException {
+        Path game = safeGameDirectory(gameDir);
+        locked(game, () -> {
+            recoverInterrupted(game, state(game));
+            return null;
+        });
     }
 
     private Result executeLocked(InstallPlan plan, Path game) throws IOException {
@@ -40,7 +58,12 @@ public final class InstallTransaction {
         assertNoReparseEscape(game, plan.instance().modsDirectory());
         Files.createDirectories(backup);
         Path temporary = plan.destination().resolveSibling(plan.destination().getFileName() + ".mcac.tmp");
+        Path manifest = state.resolve("install-manifest.json");
+        Path previousManifest = state.resolve("transaction-previous-manifest.json");
         List<Path> moved = new ArrayList<>();
+        boolean destinationInstalled = false;
+        Files.deleteIfExists(previousManifest);
+        if (Files.isRegularFile(manifest)) Files.copy(manifest, previousManifest);
         writeJournal(state, plan, backup, "PREPARED");
         try {
             for (Path existing : plan.replacedFiles()) {
@@ -53,20 +76,26 @@ public final class InstallTransaction {
                 moved.add(target);
             }
             writeJournal(state, plan, backup, "BACKED_UP");
+            faultInjector.at(Phase.AFTER_BACKUP);
             Files.copy(plan.artifact(), temporary, StandardCopyOption.REPLACE_EXISTING);
             if (!sha256(plan.artifact()).equals(sha256(temporary))) {
                 throw new IOException("Artifact hash mismatch after copy");
             }
             atomicMove(temporary, plan.destination());
+            destinationInstalled = true;
             writeJournal(state, plan, backup, "INSTALLED");
+            faultInjector.at(Phase.AFTER_INSTALL);
             String hash = sha256(plan.destination());
-            writeManifest(plan, state.resolve("install-manifest.json"), hash);
+            writeManifest(plan, manifest, hash);
+            faultInjector.at(Phase.AFTER_MANIFEST);
             Files.deleteIfExists(state.resolve("transaction.json"));
+            Files.deleteIfExists(previousManifest);
             return new Result(plan.destination(), hash, plan.rollbackId());
         } catch (IOException failure) {
             Files.deleteIfExists(temporary);
-            Files.deleteIfExists(plan.destination());
+            if (destinationInstalled) Files.deleteIfExists(plan.destination());
             restoreBackup(plan.instance().modsDirectory(), backup, moved);
+            restorePreviousManifest(manifest, previousManifest);
             Files.deleteIfExists(state.resolve("transaction.json"));
             throw failure;
         }
@@ -102,6 +131,10 @@ public final class InstallTransaction {
     }
 
     public void uninstall(Path gameDir) throws IOException {
+        uninstall(gameDir, UninstallMode.PRESERVE_USER_DATA);
+    }
+
+    public void uninstall(Path gameDir, UninstallMode mode) throws IOException {
         Path game = safeGameDirectory(gameDir);
         locked(game, () -> {
             Path state = state(game);
@@ -112,6 +145,10 @@ public final class InstallTransaction {
             Files.deleteIfExists(manifest);
             return null;
         });
+        if (mode == UninstallMode.DELETE_INSTANCE_USER_DATA) {
+            deleteTree(game.resolve("config").resolve("minecraft-ai-companion"), game);
+            deleteTree(game.resolve(".mccompanion"), game);
+        }
     }
 
     public List<String> rollbackPoints(Path gameDir) throws IOException {
@@ -133,11 +170,16 @@ public final class InstallTransaction {
         Path backup = state.resolve(node.path("backup").asText()).normalize();
         requireInside(backup, state.resolve("backups"), "Interrupted backup is unsafe");
         Files.deleteIfExists(destination.resolveSibling(destination.getFileName() + ".mcac.tmp"));
-        if (!Files.isRegularFile(state.resolve("install-manifest.json"))) {
-            Files.deleteIfExists(destination);
-            if (Files.isDirectory(backup)) restoreBackup(game.resolve("mods"), backup, null);
-        }
+        if ("INSTALLED".equals(node.path("phase").asText())) Files.deleteIfExists(destination);
+        if (Files.isDirectory(backup)) restoreBackup(game.resolve("mods"), backup, null);
+        restorePreviousManifest(state.resolve("install-manifest.json"),
+                state.resolve("transaction-previous-manifest.json"));
         Files.deleteIfExists(journal);
+    }
+
+    private static void restorePreviousManifest(Path manifest, Path previousManifest) throws IOException {
+        if (Files.isRegularFile(previousManifest)) atomicMove(previousManifest, manifest);
+        else Files.deleteIfExists(manifest);
     }
 
     private static void writeJournal(Path state, InstallPlan plan, Path backup, String phase) throws IOException {
@@ -232,6 +274,16 @@ public final class InstallTransaction {
         }
     }
 
+    private static void deleteTree(Path target, Path boundary) throws IOException {
+        Path normalized = target.toAbsolutePath().normalize();
+        requireInside(normalized, boundary.toAbsolutePath().normalize(), "Unsafe user-data deletion path");
+        if (!Files.exists(normalized, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
+        if (Files.isSymbolicLink(normalized)) throw new IOException("Refusing to delete linked user-data root");
+        try (var paths = Files.walk(normalized)) {
+            for (Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) Files.delete(path);
+        }
+    }
+
     private static String sha256(Path file) throws IOException {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(file))); }
         catch (NoSuchAlgorithmException impossible) { throw new IllegalStateException(impossible); }
@@ -261,5 +313,8 @@ public final class InstallTransaction {
     }
 
     @FunctionalInterface private interface IoSupplier<T> { T get() throws IOException; }
+    @FunctionalInterface interface FaultInjector { void at(Phase phase) throws IOException; }
+    enum Phase { AFTER_BACKUP, AFTER_INSTALL, AFTER_MANIFEST }
+    public enum UninstallMode { PRESERVE_USER_DATA, DELETE_INSTANCE_USER_DATA }
     public record Result(Path installedFile, String sha256, String rollbackId) { }
 }

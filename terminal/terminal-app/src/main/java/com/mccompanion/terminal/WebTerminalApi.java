@@ -447,11 +447,14 @@ final class WebTerminalApi {
             return JSON.createObjectNode().put("rolledBack", true).put("rollbackId", rollbackId);
           });
     }
-    if ("uninstall".equals(action)) {
+    if (List.of("uninstall", "uninstall-delete-data").contains(action)) {
+      boolean deleteData = "uninstall-delete-data".equals(action);
       ObjectNode details =
           JSON.createObjectNode()
               .put("summary", "仅卸载 mcac 清单管理的文件")
-              .put("gameDir", instance.gameDirectory().toString());
+              .put("gameDir", instance.gameDirectory().toString())
+              .put("dataPolicy", deleteData ? "DELETE" : "PRESERVE")
+              .put("preservesWorldsLaunchersAccountsAndOtherMods", true);
       return operations.create(
           "install",
           action,
@@ -460,8 +463,12 @@ final class WebTerminalApi {
           details,
           progress -> {
             progress.update(40, "正在验证清单和文件哈希");
-            transaction.uninstall(instance.gameDirectory());
-            return JSON.createObjectNode().put("uninstalled", true);
+            new InstanceUninstallService().uninstall(instance, profileIfPresent(instanceId),
+                ControlTerminalMain.controlHome(), deleteData
+                    ? InstanceUninstallService.DataPolicy.DELETE
+                    : InstanceUninstallService.DataPolicy.PRESERVE);
+            return JSON.createObjectNode().put("uninstalled", true)
+                .put("dataPolicy", deleteData ? "DELETE" : "PRESERVE");
           });
     }
     if (!List.of("install", "update", "repair").contains(action)) {

@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
+import { Socket } from 'node:net'
 import { resolve } from 'node:path'
 
 async function confirmAndWait(page: Page) {
@@ -12,6 +13,29 @@ async function confirmAndWait(page: Page) {
   const error = stateText === 'FAILED' ? await dialog.locator('.inline-error').textContent() : ''
   expect(stateText, error ?? '').toBe('SUCCEEDED')
   await dialog.locator('footer').getByRole('button', { name: '关闭', exact: true }).click()
+}
+
+async function apiJson(page: Page, path: string) {
+  return page.evaluate(async (url) => {
+    const response = await fetch(url, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'X-MCAC-CSRF': sessionStorage.getItem('mcac.csrf') ?? '' },
+    })
+    if (!response.ok) throw new Error(`API ${url} failed with ${response.status}`)
+    return response.json()
+  }, path)
+}
+
+async function portOpen(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = new Socket()
+    const finish = (open: boolean) => { socket.destroy(); resolve(open) }
+    socket.setTimeout(500)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+    socket.connect(port, '127.0.0.1')
+  })
 }
 
 test('ordinary user completes the managed HTML product loop', async ({ page }) => {
@@ -72,10 +96,6 @@ test('ordinary user completes the managed HTML product loop', async ({ page }) =
   await page.getByRole('button', { name: '生成支持包', exact: true }).click()
   await confirmAndWait(page)
 
-  await page.locator('nav[aria-label="主要功能"]').getByRole('button', { name: 'Runtime', exact: true }).click()
-  await page.getByRole('button', { name: '停止', exact: true }).click()
-  await confirmAndWait(page)
-
   await page.getByRole('button', { name: '安装管理', exact: true }).click()
   const rollback = page.locator('.action-sections section select')
   await rollback.selectOption({ index: 1 })
@@ -84,8 +104,22 @@ test('ordinary user completes the managed HTML product loop', async ({ page }) =
 
   await page.getByRole('button', { name: '生成安装计划', exact: true }).click()
   await confirmAndWait(page)
-  await page.getByRole('button', { name: '审阅卸载计划', exact: true }).click()
+  await page.getByRole('button', { name: '卸载并保留数据', exact: true }).click()
   await confirmAndWait(page)
+  const instances = await apiJson(page, '/api/instances')
+  const instanceId = instances[0].id as string
+  const preservedRuntime = await apiJson(page, `/api/runtime/status?instanceId=${encodeURIComponent(instanceId)}`)
+  expect(preservedRuntime.configured).toBe(true)
+  expect(preservedRuntime.pidAlive).toBe(false)
+  expect(await portOpen(preservedRuntime.port as number)).toBe(false)
+  expect(await portOpen(preservedRuntime.healthPort as number)).toBe(false)
+
+  await page.getByRole('button', { name: '生成安装计划', exact: true }).click()
+  await confirmAndWait(page)
+  await page.getByRole('button', { name: '卸载并删除 MCAC 数据', exact: true }).click()
+  await confirmAndWait(page)
+  const deletedRuntime = await apiJson(page, `/api/runtime/status?instanceId=${encodeURIComponent(instanceId)}`)
+  expect(deletedRuntime.configured).toBe(false)
 
   expect(consoleErrors).toEqual([])
 

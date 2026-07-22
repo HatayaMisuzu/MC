@@ -122,6 +122,16 @@ tasks.register('brainReconnectE2E') {
     dependsOn ':runtime:runtime-app:brainReconnectE2E'
 }
 
+tasks.register('episodeCapsuleTest') {
+    group = 'verification'
+    dependsOn ':runtime:runtime-app:episodeCapsuleTest'
+}
+
+tasks.register('episodicCandidateReviewTest') {
+    group = 'verification'
+    dependsOn ':runtime:runtime-app:episodicCandidateReviewTest'
+}
+
 tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {

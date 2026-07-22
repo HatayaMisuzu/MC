@@ -352,7 +352,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 AgentContext context = new AgentContext(companionId, verifiedWorld, recentConversation,
                         active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
                         memories.verifiedLandmarkKeys(companionId),
-                        visible.availableNames(), memories.preferenceContext(companionId, 24), 5);
+                        visible.availableNames(), memories.preferenceContext(companionId, 24),
+                        memories.latestCapsuleContext(companionId), 5);
                 if (externalBrain != null) {
                     if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                             && incoming.kind() == IncomingMessageKind.CONTROL) {

@@ -158,9 +158,17 @@ export interface MemorySuggestion {
   suggestionId: string; companionId: string; kind: string; key: string; value: unknown
   confidence: number; status: string; source: string; brainSessionId: string
   expiresAt: string; createdAt: string; updatedAt: string
+  capsuleId?: string; conflictsWithVerified: boolean; conflictingMemoryId?: string
+}
+export interface EpisodeCapsule {
+  episodeId: string; companionId: string; brainSessionId: string; startedAt: string; endedAt: string
+  taskSummaries: unknown[]; verifiedWorldChanges: unknown[]; verifiedInventoryChanges: unknown[]
+  verifiedLocations: unknown[]; askUserDecisions: unknown[]; userConfirmedChoices: unknown[]
+  failureCategories: string[]; evidenceRefs: unknown[]; sourceSha: string; createdAt: string
 }
 export interface MemorySnapshot {
   companionId: string; byKind: Record<string, MemoryFact[]>; suggestions?: MemorySuggestion[]
+  episodeCapsules?: EpisodeCapsule[]
 }
 export interface TaskGraphExecution {
   executionId: string; companionId: string; graphId: string; graphVersion: string

@@ -52,6 +52,20 @@ tasks.register('brainReconnectE2E', Test) {
     filter { includeTestsMatching 'com.mccompanion.runtime.brain.BrainReconnectE2ETest' }
 }
 
+tasks.register('episodeCapsuleTest', Test) {
+    group = 'verification'
+    description = 'Verifies deterministic bounded episode projection from durable verified Runtime records.'
+    useJUnitPlatform()
+    filter { includeTestsMatching 'com.mccompanion.runtime.memory.EpisodeCapsuleRepositoryTest' }
+}
+
+tasks.register('episodicCandidateReviewTest', Test) {
+    group = 'verification'
+    description = 'Verifies capsule provenance, quarantine, conflicts, and local-only memory review.'
+    useJUnitPlatform()
+    filter { includeTestsMatching 'com.mccompanion.runtime.memory.EpisodicCandidateReviewTest' }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'

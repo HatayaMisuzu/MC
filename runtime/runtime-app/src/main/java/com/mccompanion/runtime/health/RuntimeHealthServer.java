@@ -670,6 +670,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                                     Json.MAPPER.valueToTree(memories.list(companionId, kind, 100)));
                             body.set("suggestions", Json.MAPPER.valueToTree(
                                     memories.suggestions(companionId, "QUARANTINED", 100)));
+                            body.set("episodeCapsules", Json.MAPPER.valueToTree(
+                                    memories.capsules().list(companionId, 20)));
                         }
                     }
                     sendJson(exchange, 200, body); return;
@@ -680,6 +682,9 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     if (!action.isBlank()) {
                         String suggestionId = requiredText(request, "suggestionId", 256);
                         Object result = switch (action) {
+                            case "generate_episode_capsule" -> memories.capsules().generate(
+                                    companionId, requiredText(request, "brainSessionId", 256),
+                                    requiredText(request, "sourceSha", 64));
                             case "approve_suggestion" -> memories.approveSuggestion(
                                     companionId, suggestionId, "LOCAL_MANAGEMENT_USER");
                             case "reject_suggestion" -> memories.rejectSuggestion(
@@ -895,7 +900,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 waiting.ifPresent(value -> taskContext.set("waitingQuestion", Json.MAPPER.valueToTree(value)));
                 AgentContext context = new AgentContext(companionId, verifiedWorld, recent, taskContext,
                         memories.verifiedLandmarkKeys(companionId), visible.availableNames(),
-                        memories.preferenceContext(companionId, 24), 5);
+                        memories.preferenceContext(companionId, 24), memories.latestCapsuleContext(companionId), 5);
                 if (waiting.isPresent() && taskGraphRuntime != null
                         && taskGraphRuntime.handles(waiting.orElseThrow())) {
                     if (incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
@@ -1036,7 +1041,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 AgentContext context = new AgentContext(companionId, companion.status(), recentConversation,
                         active.<com.fasterxml.jackson.databind.JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
                         strings(request.path("knownLandmarks"), 64), visible.availableNames(),
-                        memories.preferenceContext(companionId, 24), 5);
+                        memories.preferenceContext(companionId, 24), memories.latestCapsuleContext(companionId), 5);
                 var result = providers.plan(text, context);
                 ObjectNode body = Json.object().put("accepted", result.accepted())
                         .put("source", result.source());

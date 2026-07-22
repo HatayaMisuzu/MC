@@ -22,9 +22,19 @@ public final class MemoryRepository {
     private static final Duration MAX_WORKING_TTL = Duration.ofHours(24);
     private final RuntimeDatabase database;
     private final Clock clock;
+    private final EpisodeCapsuleRepository capsules;
 
     public MemoryRepository(RuntimeDatabase database) { this(database, Clock.systemUTC()); }
-    MemoryRepository(RuntimeDatabase database, Clock clock) { this.database = database; this.clock = clock; }
+    MemoryRepository(RuntimeDatabase database, Clock clock) {
+        this.database = database; this.clock = clock; this.capsules = new EpisodeCapsuleRepository(database, clock);
+    }
+
+    public EpisodeCapsuleRepository capsules() { return capsules; }
+
+    public JsonNode latestCapsuleContext(String companionId) throws SQLException {
+        List<EpisodeCapsule> values = capsules.list(companionId, 1);
+        return values.isEmpty() ? Json.object() : Json.MAPPER.valueToTree(values.getFirst());
+    }
 
     public MemoryFact remember(String companionId, MemoryKind kind, String key, JsonNode value,
                                boolean verified, double confidence, Duration ttl) throws SQLException {
@@ -90,6 +100,12 @@ public final class MemoryRepository {
     public MemorySuggestion suggest(String companionId, MemoryKind kind, String key, JsonNode value,
                                     double confidence, Duration ttl, String source,
                                     String brainSessionId) throws SQLException {
+        return suggest(companionId, kind, key, value, confidence, ttl, source, brainSessionId, null);
+    }
+
+    public MemorySuggestion suggest(String companionId, MemoryKind kind, String key, JsonNode value,
+                                    double confidence, Duration ttl, String source,
+                                    String brainSessionId, String capsuleId) throws SQLException {
         if (kind == MemoryKind.WORKING) throw new IllegalArgumentException("working memory cannot be suggested");
         if (confidence < 0 || confidence > 0.9 || Double.isNaN(confidence)) {
             throw new IllegalArgumentException("suggestion confidence must be 0..0.9");
@@ -105,6 +121,12 @@ public final class MemoryRepository {
         long now = clock.millis();
         long expires = Math.addExact(now, ttl.toMillis());
         String id = UUID.randomUUID().toString();
+        if (capsuleId != null) {
+            EpisodeCapsule capsule = capsules.require(companionId, capsuleId);
+            if (!capsule.brainSessionId().equals(brainSessionId)) {
+                throw new IllegalArgumentException("episode capsule does not belong to the active brain session");
+            }
+        }
         try (var connection = database.open()) {
             connection.setAutoCommit(false);
             try {
@@ -123,8 +145,8 @@ public final class MemoryRepository {
                 }
                 try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO memory_suggestion(suggestion_id,companion_id,kind,suggestion_key,value_json,
-                        confidence,status,source,brain_session_id,expires_at,created_at,updated_at)
-                        VALUES(?,?,?,?,?,?,'QUARANTINED',?,?,?,?,?)
+                        confidence,status,source,brain_session_id,expires_at,created_at,updated_at,capsule_id)
+                        VALUES(?,?,?,?,?,?,'QUARANTINED',?,?,?,?,?,?)
                         """)) {
                     statement.setString(1, id);
                     statement.setString(2, required(companionId));
@@ -132,11 +154,13 @@ public final class MemoryRepository {
                     statement.setString(4, required(key));
                     statement.setString(5, Json.write(boundedValue));
                     statement.setDouble(6, confidence);
-                    statement.setString(7, required(source));
+                    statement.setString(7, capsuleId == null ? required(source) : "EPISODE_CAPSULE");
                     statement.setString(8, required(brainSessionId));
                     statement.setLong(9, expires);
                     statement.setLong(10, now);
                     statement.setLong(11, now);
+                    if (capsuleId == null) statement.setNull(12, java.sql.Types.VARCHAR);
+                    else statement.setString(12, capsuleId);
                     statement.executeUpdate();
                 }
                 connection.commit();
@@ -154,9 +178,11 @@ public final class MemoryRepository {
         int bounded = Math.max(1, Math.min(limit, 100));
         long now = clock.millis();
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
-                SELECT * FROM memory_suggestion
-                WHERE companion_id=? AND status=? AND expires_at>?
-                ORDER BY updated_at DESC LIMIT ?
+                SELECT ms.*,mf.memory_id AS conflicting_memory_id FROM memory_suggestion ms
+                LEFT JOIN memory_fact mf ON mf.companion_id=ms.companion_id AND mf.kind=ms.kind
+                  AND mf.fact_key=ms.suggestion_key AND mf.verified=1
+                WHERE ms.companion_id=? AND ms.status=? AND ms.expires_at>?
+                ORDER BY ms.updated_at DESC LIMIT ?
                 """)) {
             statement.setString(1, required(companionId));
             statement.setString(2, required(status));
@@ -199,7 +225,8 @@ public final class MemoryRepository {
                     statement.setString(3, candidate.kind().name());
                     statement.setString(4, candidate.key());
                     statement.setString(5, Json.write(candidate.value()));
-                    statement.setString(6, "USER_APPROVED_SUGGESTION");
+                    statement.setString(6, candidate.capsuleId() == null ? "USER_APPROVED_SUGGESTION"
+                            : "USER_APPROVED_EPISODE_CAPSULE:" + candidate.capsuleId());
                     statement.setLong(7, candidate.expiresAt().toEpochMilli());
                     statement.setLong(8, createdAt);
                     statement.setLong(9, now);
@@ -242,7 +269,11 @@ public final class MemoryRepository {
 
     private java.util.Optional<MemorySuggestion> suggestion(String suggestionId) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
-                "SELECT * FROM memory_suggestion WHERE suggestion_id=?")) {
+                """
+                SELECT ms.*,mf.memory_id AS conflicting_memory_id FROM memory_suggestion ms
+                LEFT JOIN memory_fact mf ON mf.companion_id=ms.companion_id AND mf.kind=ms.kind
+                  AND mf.fact_key=ms.suggestion_key AND mf.verified=1 WHERE ms.suggestion_id=?
+                """)) {
             statement.setString(1, required(suggestionId));
             try (ResultSet result = statement.executeQuery()) {
                 return result.next() ? java.util.Optional.of(readSuggestion(result)) : java.util.Optional.empty();
@@ -253,7 +284,10 @@ public final class MemoryRepository {
     private static MemorySuggestion suggestion(java.sql.Connection connection, String companionId,
                                                String suggestionId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement("""
-                SELECT * FROM memory_suggestion WHERE companion_id=? AND suggestion_id=?
+                SELECT ms.*,mf.memory_id AS conflicting_memory_id FROM memory_suggestion ms
+                LEFT JOIN memory_fact mf ON mf.companion_id=ms.companion_id AND mf.kind=ms.kind
+                  AND mf.fact_key=ms.suggestion_key AND mf.verified=1
+                WHERE ms.companion_id=? AND ms.suggestion_id=?
                 """)) {
             statement.setString(1, required(companionId));
             statement.setString(2, required(suggestionId));
@@ -344,9 +378,12 @@ public final class MemoryRepository {
             long now = clock.millis();
             statement.setLong(1, now);
             int expired = statement.executeUpdate();
-            try (PreparedStatement suggestions = connection.prepareStatement(
-                    "DELETE FROM memory_suggestion WHERE expires_at<=?")) {
-                suggestions.setLong(1, now);
+            try (PreparedStatement suggestions = connection.prepareStatement("""
+                    UPDATE memory_suggestion SET status='EXPIRED',reviewed_by='SYSTEM_TTL',
+                    review_reason='TTL_EXPIRED',reviewed_at=?,updated_at=?
+                    WHERE status='QUARANTINED' AND expires_at<=?
+                    """)) {
+                suggestions.setLong(1, now); suggestions.setLong(2, now); suggestions.setLong(3, now);
                 return expired + suggestions.executeUpdate();
             }
         }
@@ -388,9 +425,12 @@ public final class MemoryRepository {
     }
 
     private static int deleteExpiredSuggestions(java.sql.Connection connection, long now) throws SQLException {
-        try (PreparedStatement suggestions = connection.prepareStatement(
-                "DELETE FROM memory_suggestion WHERE expires_at<=?")) {
-            suggestions.setLong(1, now);
+        try (PreparedStatement suggestions = connection.prepareStatement("""
+                UPDATE memory_suggestion SET status='EXPIRED',reviewed_by='SYSTEM_TTL',
+                review_reason='TTL_EXPIRED',reviewed_at=?,updated_at=?
+                WHERE status='QUARANTINED' AND expires_at<=?
+                """)) {
+            suggestions.setLong(1, now); suggestions.setLong(2, now); suggestions.setLong(3, now);
             return suggestions.executeUpdate();
         }
     }
@@ -469,7 +509,9 @@ public final class MemoryRepository {
                 Instant.ofEpochMilli(result.getLong("created_at")),
                 Instant.ofEpochMilli(result.getLong("updated_at")),
                 result.getString("reviewed_by"), result.getString("review_reason"),
-                nullableInstant(result, "reviewed_at"));
+                nullableInstant(result, "reviewed_at"), result.getString("capsule_id"),
+                result.getString("conflicting_memory_id") != null,
+                result.getString("conflicting_memory_id"));
     }
 
     private static Instant nullableInstant(ResultSet result, String column) throws SQLException {

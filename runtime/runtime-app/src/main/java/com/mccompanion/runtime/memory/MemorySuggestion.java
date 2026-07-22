@@ -9,5 +9,7 @@ public record MemorySuggestion(String suggestionId, String companionId, MemoryKi
                                JsonNode value, double confidence, String status, String source,
                                String brainSessionId, Instant expiresAt,
                                Instant createdAt, Instant updatedAt,
-                               String reviewedBy, String reviewReason, Instant reviewedAt) {
+                               String reviewedBy, String reviewReason, Instant reviewedAt,
+                               String capsuleId, boolean conflictsWithVerified,
+                               String conflictingMemoryId) {
 }

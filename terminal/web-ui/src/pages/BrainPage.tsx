@@ -90,12 +90,24 @@ export function BrainPage() {
         <div className="event-rows">{(memories.data?.suggestions ?? []).map((suggestion) =>
           <div className="event-row" key={suggestion.suggestionId}><time>{suggestion.kind}</time><strong>{suggestion.key}</strong>
             <StatusBadge value="QUARANTINED" /><span>{suggestion.source} · {suggestion.confidence.toFixed(2)}</span>
+            {suggestion.capsuleId && <span>Capsule {suggestion.capsuleId}</span>}
+            {suggestion.conflictsWithVerified && <StatusBadge value="CONFLICT" />}
             <p>{JSON.stringify(suggestion.value)}</p><div className="inline-actions">
               <ActionButton tone="primary" disabled={reviewing === suggestion.suggestionId}
                 onClick={() => void reviewSuggestion(suggestion.suggestionId, 'approve_suggestion')}>Approve</ActionButton>
               <ActionButton disabled={reviewing === suggestion.suggestionId}
                 onClick={() => void reviewSuggestion(suggestion.suggestionId, 'reject_suggestion')}>Reject</ActionButton>
             </div></div>)}</div>
+      </section>
+      <section className="main-panel"><header className="panel-header"><h2>Episode capsules</h2>
+        <span>deterministic safe summaries; not verified Memory</span></header>
+        <p>Capsules contain bounded evidence references and verified state summaries, never full chat, prompts, or search pages.</p>
+        <div className="event-rows">{(memories.data?.episodeCapsules ?? []).map((capsule) =>
+          <div className="event-row" key={capsule.episodeId}><time>{new Date(capsule.endedAt).toLocaleString()}</time>
+            <strong>{capsule.episodeId}</strong><StatusBadge value="CAPSULE" />
+            <span>{capsule.taskSummaries.length} tasks · {capsule.evidenceRefs.length} evidence refs · {capsule.failureCategories.length} failure categories</span>
+            <p>world {capsule.verifiedWorldChanges.length} / inventory {capsule.verifiedInventoryChanges.length} / locations {capsule.verifiedLocations.length} / user choices {capsule.userConfirmedChoices.length}</p>
+          </div>)}</div>
       </section>
     </>}
   </div>

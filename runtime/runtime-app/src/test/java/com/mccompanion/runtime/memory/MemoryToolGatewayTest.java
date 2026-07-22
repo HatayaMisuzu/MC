@@ -24,7 +24,7 @@ class MemoryToolGatewayTest {
             MemoryToolGateway gateway = new MemoryToolGateway(repository);
             ToolContext context = new ToolContext("controller", "brain-session", "c1");
             assertEquals(java.util.List.of("world.locate_known_container", "memory.list", "memory.search",
-                            "memory.suggest", "memory.suggest_preference"),
+                            "memory.episode_capsules", "memory.suggest", "memory.suggest_preference"),
                     gateway.definitions(context).stream().map(value -> value.name()).toList());
 
             var listed = gateway.execute(context, new ToolCall("l1", "memory.list",

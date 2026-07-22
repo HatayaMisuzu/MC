@@ -1,6 +1,6 @@
 # External Brain productization state
 
-Updated: 2026-07-16
+Updated: 2026-07-22
 
 ## Current status
 
@@ -73,6 +73,25 @@ release/install verification remain incomplete.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,
   exposes verification provenance/time, marks same- versus cross-dimension candidates, and
   filters unverified inferences instead of presenting them as world facts.
+
+## Episode capsule and reviewed episodic candidate slice
+
+- Schema migration 23 adds a dedicated `episode_capsule` store and optional Capsule provenance on
+  quarantined suggestions. Runtime deterministically projects only bounded task state, verified
+  change/location references, ASK_USER decision metadata, confirmed option IDs, failure categories,
+  Tool/Evidence references, time bounds, and source SHA. It never copies prompt/chat/Search bodies,
+  Tool arguments, full observations, credentials, personality, emotion, or relationship inference.
+- Re-generating the same companion + Brain session + source SHA is idempotent. Capsule JSON is
+  capped at 32 KiB with independent field-count ceilings and is not inserted into `memory_fact`.
+  The latest safe Capsule summary occupies its own 6,000-character category in bounded Brain context.
+- `memory.episode_capsules` is read-only. Suggestion Tools may reference a Capsule only from the
+  exact companion and Brain session. The candidate remains quarantined, exposes Capsule provenance
+  and any same-key verified-fact conflict, and still has no Brain-callable review operation.
+- Local approval retains the Capsule ID in verified provenance; rejection writes no Memory. TTL
+  expiry now transitions candidates to an audited `EXPIRED` state instead of silently deleting them.
+  The Brain page displays safe Capsule counts and candidate conflicts, not raw episode content.
+- These deterministic tests prove the reviewed-candidate workflow, not automatic reliable long-term
+  model memory or live-provider behavior.
 
 ## Brain persistence and restart slice
 

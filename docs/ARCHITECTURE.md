@@ -41,7 +41,7 @@ External Brain adapters
                               │
 Runtime Tool Gateway / MCP / authenticated Brain ingress
                               │
-Task Graph Runtime · Skill Workspace · Memory · Search · Audit
+Task Graph Runtime · Skill Workspace · reviewed Memory · Episode Capsule · Search · Audit
                               │ authenticated WebSocket
 Minecraft loader bridge (Fabric full bridge; Forge/NeoForge LOCAL_ONLY)
                               │
@@ -98,6 +98,13 @@ releases the execution worker. A separate bounded scheduler resumes only the mat
 persisted as `WAITING` and drains the owning worker before stopping that scheduler. Retry cursors and
 backoff deadlines use the same mechanism, while both validation and execution reject automatic retry
 around a Tool currently declared non-idempotent.
+
+Episode Capsules are deterministic Runtime projections of durable verified records, not model
+summaries and not formal Memory. They contain bounded task/change/location/decision/failure metadata
+and Evidence references, never full chat, prompts, Search pages, Tool arguments, or arbitrary
+observations. The external Brain may read this safe projection and submit a typed candidate, but that
+candidate remains in quarantine until an authenticated local user approves it. The Brain has no
+review Tool, and Capsule generation grants no planning authority to Runtime.
 
 ## Registry and Mod compatibility
 

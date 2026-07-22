@@ -23,6 +23,7 @@ public final class MemoryToolGateway implements ToolGateway {
                         "List only body-verified known containers, with dimension compatibility", containerSchema()),
                 definition("memory.list", "List one typed memory category with provenance", listSchema()),
                 definition("memory.search", "Search bounded memory keys and values", searchSchema()),
+                definition("memory.episode_capsules", "Read bounded deterministic episode summaries", capsuleSchema()),
                 definition("memory.suggest", "Quarantine an unverified typed memory suggestion for review",
                         suggestionSchema()),
                 definition("memory.suggest_preference",
@@ -36,6 +37,7 @@ public final class MemoryToolGateway implements ToolGateway {
                 case "world.locate_known_container" -> locateContainers(context, call);
                 case "memory.list" -> list(context, call);
                 case "memory.search" -> search(context, call);
+                case "memory.episode_capsules" -> capsules(context, call);
                 case "memory.suggest" -> suggest(context, call, false);
                 case "memory.suggest_preference" -> suggest(context, call, true);
                 default -> ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Memory tool is unavailable");
@@ -93,11 +95,18 @@ public final class MemoryToolGateway implements ToolGateway {
                 boundedLimit(call.arguments().path("limit").asInt(25)))));
     }
 
+    private ToolResult capsules(ToolContext context, ToolCall call) throws java.sql.SQLException {
+        rejectUnexpected(call.arguments(), Set.of("limit"));
+        int limit = call.arguments().path("limit").asInt(10);
+        if (limit < 1 || limit > 20) throw new IllegalArgumentException("limit must be 1..20");
+        return ok(call, Json.MAPPER.valueToTree(memories.capsules().list(context.companionId(), limit)));
+    }
+
     private ToolResult suggest(ToolContext context, ToolCall call, boolean preferenceOnly)
             throws java.sql.SQLException {
         rejectUnexpected(call.arguments(), preferenceOnly
-                ? Set.of("key", "value", "confidence", "ttlSeconds")
-                : Set.of("kind", "key", "value", "confidence", "ttlSeconds"));
+                ? Set.of("key", "value", "confidence", "ttlSeconds", "capsuleId")
+                : Set.of("kind", "key", "value", "confidence", "ttlSeconds", "capsuleId"));
         MemoryKind kind = preferenceOnly ? MemoryKind.PREFERENCE
                 : kind(call.arguments().path("kind").asText(""));
         if (kind == MemoryKind.WORKING) throw new IllegalArgumentException("WORKING suggestions are not supported");
@@ -109,9 +118,10 @@ public final class MemoryToolGateway implements ToolGateway {
         if (confidence < 0 || confidence > 0.9 || Double.isNaN(confidence)) throw new IllegalArgumentException("confidence must be 0..0.9");
         long ttlSeconds = call.arguments().path("ttlSeconds").asLong(2_592_000L);
         if (ttlSeconds < 60 || ttlSeconds > 31_536_000L) throw new IllegalArgumentException("ttlSeconds must be 60..31536000");
+        String capsuleId = call.arguments().path("capsuleId").asText("").strip();
         MemorySuggestion suggestion = memories.suggest(context.companionId(), kind, key, value,
                 confidence, Duration.ofSeconds(ttlSeconds), "EXTERNAL_BRAIN_SUGGESTION",
-                context.brainSessionId());
+                context.brainSessionId(), capsuleId.isBlank() ? null : capsuleId);
         return new ToolResult(call.callId(), call.name(), true, "MEMORY_SUGGESTION_QUARANTINED",
                 Json.MAPPER.valueToTree(suggestion), true);
     }
@@ -128,7 +138,8 @@ public final class MemoryToolGateway implements ToolGateway {
         if (name.equals("memory.suggest")) schema.putArray("required").add("kind").add("key").add("value");
         if (name.equals("memory.suggest_preference")) schema.putArray("required").add("key").add("value");
         return new ToolDefinition(name, "1.0", description, schema, "LOW", "MEMORY",
-                Duration.ofSeconds(5), name.equals("memory.list") || name.equals("memory.search"));
+                Duration.ofSeconds(5), name.equals("memory.list") || name.equals("memory.search")
+                || name.equals("memory.episode_capsules"));
     }
 
     private static ObjectNode listSchema() {
@@ -152,9 +163,15 @@ public final class MemoryToolGateway implements ToolGateway {
         p.putObject("query").put("type", "string").put("maxLength", 128);
         p.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 100); return p;
     }
+    private static ObjectNode capsuleSchema() {
+        ObjectNode p = Json.object();
+        p.putObject("limit").put("type", "integer").put("minimum", 1).put("maximum", 20);
+        return p;
+    }
     private static ObjectNode preferenceSchema() {
         ObjectNode p = Json.object(); p.putObject("key").put("type", "string").put("maxLength", 128);
         p.putObject("value"); p.putObject("confidence").put("type", "number").put("minimum", 0).put("maximum", 0.9);
+        p.putObject("capsuleId").put("type", "string").put("maxLength", 256);
         p.putObject("ttlSeconds").put("type", "integer").put("minimum", 60).put("maximum", 31_536_000); return p;
     }
     private static ObjectNode suggestionSchema() {

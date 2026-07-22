@@ -125,7 +125,16 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     return ToolResult.rejected(call, "TASK_GRAPH_CALL_ID_REUSED",
                             "execution ID was reused with different graph input");
                 }
-                if (TERMINAL.contains(record.state()) || waitingReady(record)) return terminal(call, record);
+                // A terminal database row is persisted immediately before lifecycle feedback and worker
+                // cleanup. Do not expose completion to awaiters until that boundary is fully observable.
+                if (TERMINAL.contains(record.state())) {
+                    if (!active.containsKey(record.executionId())) {
+                        // appendOnce makes this a safe reconciliation point if worker cleanup became
+                        // visible just before the lifecycle event's separate transaction committed.
+                        notifyTerminalLifecycle(record);
+                        return terminal(call, record);
+                    }
+                } else if (waitingReady(record)) return terminal(call, record);
                 if (record.state().equals("READY") && !active.containsKey(record.executionId())) submit(context, record);
                 return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_ACCEPTED",
                         inspectJson(record).put("state", "ACCEPTED"), false);

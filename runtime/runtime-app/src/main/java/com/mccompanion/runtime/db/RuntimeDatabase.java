@@ -22,7 +22,7 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "memory_suggestion", "conversation_event", "waiting_question",
+            "memory_fact", "memory_suggestion", "episode_capsule", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call",
             "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
@@ -721,6 +721,22 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "ALTER TABLE memory_suggestion ADD COLUMN reviewed_by TEXT",
                 "ALTER TABLE memory_suggestion ADD COLUMN review_reason TEXT",
                 "ALTER TABLE memory_suggestion ADD COLUMN reviewed_at INTEGER");
+        List<String> episodeCapsules = List.of(
+                """
+                CREATE TABLE episode_capsule (
+                  episode_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  started_at INTEGER NOT NULL,
+                  ended_at INTEGER NOT NULL,
+                  capsule_json TEXT NOT NULL,
+                  source_sha TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  UNIQUE(companion_id, brain_session_id, source_sha)
+                )
+                """,
+                "CREATE INDEX episode_capsule_scope_idx ON episode_capsule(companion_id,ended_at)",
+                "ALTER TABLE memory_suggestion ADD COLUMN capsule_id TEXT REFERENCES episode_capsule(episode_id) ON DELETE SET NULL");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -743,6 +759,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(19, "bind expiring MCP transport sessions", mcpSessionLifecycle),
                 new Migration(20, "persist bounded MCP SSE replay events", mcpEventReplay),
                 new Migration(21, "persist isolated search source sessions", searchSessionLifecycle),
-                new Migration(22, "audit local review of memory suggestions", memorySuggestionReview));
+                new Migration(22, "audit local review of memory suggestions", memorySuggestionReview),
+                new Migration(23, "persist deterministic episode capsules and candidate provenance", episodeCapsules));
     }
 }

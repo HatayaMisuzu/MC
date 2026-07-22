@@ -772,9 +772,12 @@ final class BehaviorDirector {
             var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
                     progress.hand, hit);
             actionGateway.markVanillaGameModeAction(body);
-            if (!result.consumesAction()
-                    || !body.serverLevel().getBlockState(progress.blockPosition).is(progress.placementBlock)
-                    || count(body, progress.placementItem) >= progress.itemBaseline) {
+            boolean placed = body.serverLevel().getBlockState(progress.blockPosition).is(progress.placementBlock);
+            int remaining = count(body, progress.placementItem);
+            if (!result.consumesAction() || !placed || remaining >= progress.itemBaseline) {
+                logger.warn("companion_block_place_no_effect companion={} result={} placed={} remaining={} baseline={} target={}",
+                        entry.companionId, result, placed, remaining, progress.itemBaseline,
+                        progress.blockPosition);
                 pauseSafely(entry, body, "BLOCK_PLACE_NO_EFFECT");
                 return;
             }

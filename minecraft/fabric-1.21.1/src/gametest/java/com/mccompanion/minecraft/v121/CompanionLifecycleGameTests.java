@@ -16,6 +16,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -518,7 +519,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "block-place test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "block-place test created no live body");
-        BlockPos target = body.blockPosition().offset(2, 0, 0);
+        // Player-shaped GameTest fixtures are retained until the server exits. Keep the placement
+        // volume above their collision boxes so an earlier mock owner cannot reject BlockItem.place.
+        BlockPos target = body.blockPosition().offset(2, 2, 0);
         BlockPos support = target.below();
         body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
@@ -551,7 +554,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "exploration")
     public void exploreAreaScansIncrementallyAndReturnsRankedVerifiedCandidates(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -619,14 +622,36 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         owner.moveTo(body.getX() + 8.0D, body.getY(), body.getZ() + 8.0D,
                 owner.getYRot(), owner.getXRot());
         BlockPos origin = body.blockPosition();
-        // Move away from the preceding combat batch. A failed earlier GameTest can leave a player
-        // body alive, and vanilla ItemEntity pickup must still be isolated to this collector.
-        for (int x = -7; x <= 1; x++) {
-            for (int z = -2; z <= 2; z++) {
-                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+        // Mock owners from completed GameTests stay in the shared server until shutdown. Select a
+        // clear endpoint so only the declared companion can exercise vanilla ItemEntity pickup.
+        int[][] offsets = {{-5, 0}, {5, 0}, {0, -5}, {0, 5}, {-5, -5}, {5, 5}};
+        int[] selectedOffset = null;
+        for (int[] offset : offsets) {
+            AABB pickupArea = body.getBoundingBox().move(offset[0], 0.0D, offset[1]).inflate(1.25D);
+            boolean occupied = !body.serverLevel().getEntitiesOfClass(ServerPlayer.class, pickupArea,
+                    player -> player != body && player != owner).isEmpty();
+            if (!occupied) {
+                selectedOffset = offset;
+                break;
             }
         }
-        ItemEntity first = new ItemEntity(body.serverLevel(), body.getX() - 4.0D, body.getY() + 0.25D, body.getZ(),
+        helper.assertTrue(selectedOffset != null, "collect test found no isolated pickup endpoint");
+        int dx = selectedOffset[0];
+        int dz = selectedOffset[1];
+        int steps = Math.max(Math.abs(dx), Math.abs(dz));
+        for (int step = 0; step <= steps; step++) {
+            int x = Integer.signum(dx) * step;
+            int z = Integer.signum(dz) * step;
+            for (int side = -1; side <= 1; side++) {
+                BlockPos path = origin.offset(x + (dz == 0 ? 0 : side), 0,
+                        z + (dx == 0 ? 0 : side));
+                body.serverLevel().setBlockAndUpdate(path.below(), Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(path, Blocks.AIR.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(path.above(), Blocks.AIR.defaultBlockState());
+            }
+        }
+        ItemEntity first = new ItemEntity(body.serverLevel(), body.getX() + dx, body.getY() + 0.25D,
+                body.getZ() + dz,
                 new ItemStack(Items.COAL, 2));
         first.setNoPickUpDelay();
         helper.assertTrue(body.serverLevel().addFreshEntity(first),
@@ -881,7 +906,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 700)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 700, batch = "smelting")
     public void smeltItemUsesRealFurnaceFuelTimeAndMenuResultPickup(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -929,7 +954,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600, batch = "runtime_skills")
     public void runtimeSkillsUseVanillaActionsAndVerifyWorldDeltas(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -1086,7 +1111,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "deposit")
     public void depositStopsSafelyWhenContainerIsFull(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -1137,7 +1162,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400, batch = "recipe_crafting")
     public void craftingUsesVanillaRecipesAndMenusAndReportsMaterialShortage(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -1276,7 +1301,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         return x * x + z * z;
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000, batch = "blocked_navigation")
     public void blockedGotoStopsWithBoundedStuckFailure(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -1313,7 +1338,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300000)
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300000, batch = "companion_lifecycle")
     public void createMoveStopSleepAndWake(GameTestHelper helper) {
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
         helper.assertTrue(registry != null, "server companion registry was not initialized");

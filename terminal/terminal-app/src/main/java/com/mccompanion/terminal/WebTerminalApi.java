@@ -774,10 +774,10 @@ final class WebTerminalApi {
         JSON.createObjectNode()
             .put("summary", "收集并脱敏支持包")
             .put("output", output.toString())
-            .put("redaction", "secret, token, key, account, IP, path, UUID, hostname"),
+            .put("redaction", "secret, token, key, password, account, email, JWT, IP, path, UUID, hostname"),
         progress -> {
           progress.update(45, "正在收集允许列表中的诊断证据");
-          new SupportBundleService().collect(instance, output);
+          new SupportBundleService().collect(instance, profileIfPresent(instanceId), output);
           return JSON.createObjectNode()
               .put("created", true)
               .put("output", output.toString())

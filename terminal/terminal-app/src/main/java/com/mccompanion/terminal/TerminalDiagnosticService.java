@@ -54,9 +54,20 @@ final class TerminalDiagnosticService {
                 "Start or update Runtime, then inspect MCP configuration"));
 
         try {
-            var search = new SearchConfigurationService().inspect(profile);
-            results.add(result(search.healthy(), "search.configuration", search.message(),
-                    Map.of("mode", search.mode(), "tokenEnvironment", search.tokenEnvironment()),
+            var brain = new ProviderConfigurationService().test(profile);
+            results.add(result(brain.success(), "brain.provider", brain.message(),
+                    Map.of("model", brain.model(), "latencyMillis", Long.toString(brain.latencyMillis())),
+                    "Review Brain provider settings and its credential environment variable"));
+        } catch (Exception failure) {
+            results.add(result(false, "brain.provider", "Brain provider could not be tested",
+                    Map.of("error", failure.getClass().getSimpleName()), "Review Brain provider settings"));
+        }
+
+        try {
+            var search = new SearchConfigurationService().test(profile);
+            results.add(result(search.success(), "search.protocol", search.message(),
+                    Map.of("code", search.code(), "networkAttempted", Boolean.toString(search.networkAttempted()),
+                            "latencyMillis", Long.toString(search.latencyMillis())),
                     "Configure the Search token environment variable or disable Search"));
         } catch (Exception failure) {
             results.add(result(false, "search.configuration", "Search configuration could not be validated",

@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.regex.Pattern;
 
 final class ProviderConfigurationService {
+    private static final int MAX_TEST_RESPONSE_BYTES = 1_048_576;
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern ENVIRONMENT = Pattern.compile("[A-Za-z_][A-Za-z0-9_]{0,127}");
     private static final Pattern MODEL = Pattern.compile("[^\\p{Cntrl}]{1,256}");
@@ -76,11 +77,11 @@ final class ProviderConfigurationService {
                     + "/chat/completions");
             ObjectNode body = JSON.createObjectNode().put("model", model).put("max_tokens", 1);
             body.putArray("messages").addObject().put("role", "user").put("content", "ping");
-            HttpResponse<String> response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
+            HttpResponse<java.io.InputStream> response = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
                     .send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(timeoutSeconds))
                             .header("Authorization", "Bearer " + key).header("Content-Type", "application/json")
                             .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body))).build(),
-                            HttpResponse.BodyHandlers.ofString());
+                            HttpResponse.BodyHandlers.ofInputStream());
             long latency = (System.nanoTime() - started) / 1_000_000;
             String message = switch (response.statusCode()) {
                 case 401 -> "HTTP 401: credentials rejected";
@@ -90,9 +91,14 @@ final class ProviderConfigurationService {
                 default -> response.statusCode() >= 500 ? "HTTP " + response.statusCode() + ": provider unavailable"
                         : "HTTP " + response.statusCode();
             };
+            byte[] responseBytes;
+            try (var input = response.body()) { responseBytes = input.readNBytes(MAX_TEST_RESPONSE_BYTES + 1); }
+            if (responseBytes.length > MAX_TEST_RESPONSE_BYTES) {
+                return new TestResult(false, latency, model, "Provider response exceeded 1 MiB");
+            }
             if (response.statusCode() / 100 != 2) return new TestResult(false, latency, model, message);
             JsonNode responseJson;
-            try { responseJson = JSON.readTree(response.body()); }
+            try { responseJson = JSON.readTree(responseBytes); }
             catch (IOException nonJson) { return new TestResult(false, latency, model, "Provider returned non-JSON success response"); }
             boolean valid = responseJson.has("choices") || responseJson.has("id") || responseJson.has("output");
             return new TestResult(valid, latency, model,

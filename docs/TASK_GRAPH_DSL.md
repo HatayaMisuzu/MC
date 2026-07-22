@@ -182,6 +182,14 @@ node, completed-node count, result code and timestamps; graph inputs, variables 
 not returned. Pause/resume/cancel ownership is reconstructed from the durable execution and is
 rejected across companion scope. These are execution controls only: neither endpoint can create,
 edit, repair or choose a graph, goal or strategy.
+
+The Runtime also writes only coarse Task Graph lifecycle transitions to the existing durable game
+conversation outbox: started, paused, resumed, cancelled, completed, and failed with a bounded reason
+code. `ask_user` continues to deliver the external Brain's own prompt instead of Runtime-authored
+strategy text. Stable transition IDs prevent duplicate outbox records after retries, equal-timestamp
+events retain insertion order, and lifecycle notices are excluded from model transcript context so a
+system status cannot be mistaken for something the external Brain said. Node-level progress is not
+sent to game chat.
 Parallel branches use real bounded concurrency; state
 snapshots are serialized, pause/cancel reaches every active Tool call, and all active graphs share
 the Runtime's four-worker parallel budget.

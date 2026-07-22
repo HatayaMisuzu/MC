@@ -861,6 +861,15 @@ class RuntimeApplicationTest {
             var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(
                     new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()));
             String questionId = conversations.activeForTaskGraph(executionId).orElseThrow().questionId();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":1,"payload":{
+                      "companionId":"graph-companion","ownerId":"owner-1","displayName":"Graph Companion",
+                      "worldId":"graph-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            client.awaitConversationReplies(List.of("Task started.", "Continue?"), 5);
 
             HttpResponse<String> ordinary = http.send(HttpRequest.newBuilder(
                             new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
@@ -875,7 +884,7 @@ class RuntimeApplicationTest {
                     .filter(event -> event.kind().equals("ANSWER")).count());
 
             client.send("""
-                    {"type":"player_request","sessionId":"%s","sequence":1,"payload":{
+                    {"type":"player_request","sessionId":"%s","sequence":2,"payload":{
                       "requestId":"graph-game-answer","companionId":"graph-companion","ownerId":"owner-1",
                       "text":"Yes"}}
                     """.formatted(sessionId));
@@ -887,6 +896,16 @@ class RuntimeApplicationTest {
             JsonNode inspectedGraph = awaitTaskGraphState(http, mcpRequest, executionId, "SUCCEEDED");
             assertEquals("SUCCEEDED", inspectedGraph.path("state").asText(), inspectedGraph.toString());
             assertEquals("Yes", inspectedGraph.path("value").asText());
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":3,"payload":{
+                      "companionId":"graph-companion","ownerId":"owner-1","displayName":"Graph Companion",
+                      "worldId":"graph-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            client.awaitConversationReplies(List.of(
+                    "Task started.", "Continue?", "Task resumed.", "Task completed."), 5);
             URI graphManagement = new URI("http://127.0.0.1:" + config.server.managementPort
                     + "/task-graphs?companionId=graph-companion");
             HttpResponse<String> graphList = http.send(HttpRequest.newBuilder(graphManagement)
@@ -1030,6 +1049,19 @@ class RuntimeApplicationTest {
             }
             fail("Timed out waiting for player_reply " + requestId + "; received=" + messages);
             return Json.object();
+        }
+
+        private void awaitConversationReplies(List<String> expected, int seconds) throws InterruptedException {
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(seconds);
+            while (System.nanoTime() < deadline) {
+                List<String> replies = messages.stream()
+                        .filter(message -> "conversation_event".equals(message.path("type").asText()))
+                        .map(message -> message.path("payload").path("reply").asText())
+                        .distinct().toList();
+                if (replies.containsAll(expected)) return;
+                messageArrived.await(20, TimeUnit.MILLISECONDS);
+            }
+            fail("Timed out waiting for conversation replies " + expected + "; received=" + messages);
         }
 
         private JsonNode awaitCommand(String command, int seconds) throws InterruptedException {

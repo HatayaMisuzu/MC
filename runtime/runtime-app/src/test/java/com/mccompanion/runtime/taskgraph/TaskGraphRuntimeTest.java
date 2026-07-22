@@ -207,8 +207,9 @@ class TaskGraphRuntimeTest {
     void whileFailsExplicitlyWhenItsBoundIsExhausted() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("while.db"))) {
             database.initialize();
+            var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(database);
             try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(),
-                    new TaskGraphExecutionRepository(database))) {
+                    new TaskGraphExecutionRepository(database), conversations)) {
                 ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
                 ToolCall call = new ToolCall("execution-6", "task_graph.execute", Json.object());
                 var graph = Json.parse("""
@@ -224,6 +225,8 @@ class TaskGraphRuntimeTest {
                 assertFalse(terminal.success());
                 assertEquals("LOOP_EXHAUSTED", terminal.code());
                 assertEquals("FAILED", terminal.observation().path("state").asText());
+                assertEquals(List.of("Task started.", "Task cannot continue (LOOP_EXHAUSTED)."),
+                        lifecycleMessages(conversations, "companion-1"));
             }
         }
     }
@@ -233,8 +236,9 @@ class TaskGraphRuntimeTest {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("repeat-resume.db"))) {
             database.initialize();
             FakeGateway gateway = new FakeGateway();
+            var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(database);
             try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
-                    new TaskGraphExecutionRepository(database))) {
+                    new TaskGraphExecutionRepository(database), conversations)) {
                 ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
                 ToolCall execute = new ToolCall("execution-7", "task_graph.execute", Json.object());
                 var graph = Json.parse("""
@@ -264,6 +268,10 @@ class TaskGraphRuntimeTest {
                 assertTrue(terminal.success(), terminal.observation().toString());
                 assertEquals(2, gateway.arguments.size(),
                         "resume replayed a Tool already persisted in the interrupted iteration");
+                assertEquals(List.of("Task started.",
+                                "Task paused. Use the Terminal to resume or cancel.",
+                                "Task resumed.", "Task completed."),
+                        lifecycleMessages(conversations, "companion-1"));
             }
         }
     }
@@ -850,6 +858,8 @@ class TaskGraphRuntimeTest {
                 assertEquals("Yes", terminal.observation().path("outputs").path("ask").path("text").asText());
                 assertEquals("Yes", terminal.observation().path("value").asText());
                 assertTrue(conversations.activeForCompanion("companion-1").isEmpty());
+                assertEquals(List.of("Task started.", "Task resumed.", "Task completed."),
+                        lifecycleMessages(conversations, "companion-1"));
             }
         }
     }
@@ -917,6 +927,8 @@ class TaskGraphRuntimeTest {
                                 "option_1", "Yes"));
                 assertFalse(late.success());
                 assertEquals("CANCELLED", repository.get("execution-14").orElseThrow().state());
+                assertEquals(List.of("Task started.", "Task cancelled."),
+                        lifecycleMessages(conversations, "companion-1"));
             }
         }
     }
@@ -1089,6 +1101,15 @@ class TaskGraphRuntimeTest {
                 assertEquals(2, terminal.observation().path("outputs").path("observe").path("attempt").asInt());
             }
         }
+    }
+
+    private static List<String> lifecycleMessages(
+            com.mccompanion.runtime.conversation.ConversationRepository conversations,
+            String companionId) throws Exception {
+        return conversations.list(companionId, 50).stream()
+                .filter(event -> event.kind().equals("TASK_GRAPH_LIFECYCLE"))
+                .map(com.mccompanion.runtime.conversation.ConversationEvent::content)
+                .toList();
     }
 
     private static void waitForState(TaskGraphRuntime runtime, ToolContext context, String executionId,

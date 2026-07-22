@@ -34,6 +34,26 @@ public final class ConversationRepository {
         return event(id).orElseThrow();
     }
 
+    /** Appends a durable outbox event once for a caller-provided stable transition identity. */
+    public boolean appendOnce(String eventId, String companionId, String planId, String questionId,
+                              String direction, String kind, String content, JsonNode payload) throws SQLException {
+        String id = required(eventId);
+        if (id.length() > 128) throw new IllegalArgumentException("eventId is too long");
+        long now = clock.millis();
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                INSERT OR IGNORE INTO conversation_event(event_id,companion_id,plan_id,question_id,direction,kind,
+                  content,payload_json,game_delivered,created_at) VALUES(?,?,?,?,?,?,?,?,0,?)
+                """)) {
+            statement.setString(1, id); statement.setString(2, required(companionId));
+            statement.setString(3, planId); statement.setString(4, questionId);
+            statement.setString(5, required(direction)); statement.setString(6, required(kind));
+            statement.setString(7, required(content));
+            statement.setString(8, Json.write(payload == null ? Json.object() : payload));
+            statement.setLong(9, now);
+            return statement.executeUpdate() == 1;
+        }
+    }
+
     public WaitingQuestion ask(String companionId, String planId, String prompt, String reason,
                                List<ConversationOption> options, boolean freeTextAllowed,
                                JsonNode context, Instant expiresAt) throws SQLException {
@@ -193,10 +213,27 @@ public final class ConversationRepository {
         int bounded = Math.max(1, Math.min(limit, 200));
         List<ConversationEvent> values = new ArrayList<>();
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
-                SELECT * FROM conversation_event WHERE companion_id=? ORDER BY created_at DESC LIMIT ?
+                SELECT * FROM conversation_event WHERE companion_id=? ORDER BY created_at DESC, rowid DESC LIMIT ?
                 """)) {
             statement.setString(1, companionId); statement.setInt(2, bounded);
             try (ResultSet result = statement.executeQuery()) { while (result.next()) values.add(readEvent(result)); }
+        }
+        java.util.Collections.reverse(values);
+        return List.copyOf(values);
+    }
+
+    /** Bounded transcript source that never presents Runtime-authored lifecycle notices as Brain speech. */
+    public List<ConversationEvent> listForModelContext(String companionId, int limit) throws SQLException {
+        int bounded = Math.max(1, Math.min(limit, 200));
+        List<ConversationEvent> values = new ArrayList<>();
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM conversation_event WHERE companion_id=? AND kind<>'TASK_GRAPH_LIFECYCLE'
+                ORDER BY created_at DESC, rowid DESC LIMIT ?
+                """)) {
+            statement.setString(1, companionId); statement.setInt(2, bounded);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) values.add(readEvent(result));
+            }
         }
         java.util.Collections.reverse(values);
         return List.copyOf(values);
@@ -207,7 +244,7 @@ public final class ConversationRepository {
         List<ConversationEvent> values = new ArrayList<>();
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 SELECT * FROM conversation_event WHERE companion_id=? AND direction='ASSISTANT'
-                  AND game_delivered=0 ORDER BY created_at LIMIT ?
+                  AND game_delivered=0 ORDER BY created_at, rowid LIMIT ?
                 """)) {
             statement.setString(1, companionId); statement.setInt(2, bounded);
             try (ResultSet result = statement.executeQuery()) { while (result.next()) values.add(readEvent(result)); }

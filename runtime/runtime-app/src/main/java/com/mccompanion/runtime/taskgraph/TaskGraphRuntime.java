@@ -32,12 +32,15 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import com.mccompanion.runtime.security.Digests;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Persistent asynchronous execution service. It schedules deterministic graph execution only;
  * it never creates goals, graphs, or high-level strategies.
  */
 public final class TaskGraphRuntime implements AutoCloseable {
+    private static final Logger LOGGER = LoggerFactory.getLogger(TaskGraphRuntime.class);
     private static final Duration DEFAULT_CANCELLATION_CONFIRMATION_TIMEOUT = Duration.ofSeconds(5);
     private static final Set<String> TERMINAL =
             Set.of("SUCCEEDED", "FAILED", "CANCELLED", "PAUSED", "RECONCILIATION_REQUIRED");
@@ -129,6 +132,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
             }
             TaskGraphExecutionRecord record = repository.create(call.callId(), context, graph,
                     validation.limits(), boundedInputs, provenance);
+            notifyLifecycle(record, "STARTED");
             submit(context, record);
             return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_ACCEPTED",
                     inspectJson(record).put("state", "ACCEPTED"), false);
@@ -276,6 +280,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                 "PAUSED", record.currentNodeId(), record.completedNodes(), record.toolResults(),
                                 record.variables(), record.outputs(), record.checkpoints(), record.evidence(),
                                 record.waitingQuestion(), record.result(), "TASK_GRAPH_PAUSED");
+                        notifyLifecycle(paused, "PAUSED");
                         return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
                                 inspectJson(paused), true);
                     } catch (IllegalStateException stale) {
@@ -303,6 +308,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                             "PAUSED", record.currentNodeId(), record.completedNodes(), record.toolResults(),
                             record.variables(), record.outputs(), record.checkpoints(), record.evidence(),
                             record.waitingQuestion(), record.result(), "TASK_GRAPH_PAUSED");
+                    notifyLifecycle(paused, "PAUSED");
                     return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
                             inspectJson(paused), true);
                 }
@@ -350,6 +356,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     "READY", record.currentNodeId(), record.completedNodes(), record.toolResults(),
                     record.variables(), record.outputs(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
                     record.result(), recovery ? "RECOVERY_RESUME_REQUESTED" : "RESUME_REQUESTED");
+            notifyLifecycle(ready, "RESUMED");
             submit(context, ready);
             return new ToolResult(call.callId(), call.name(), true,
                     recovery ? "RECOVERY_RESUME_ACCEPTED" : "RESUME_ACCEPTED",
@@ -436,6 +443,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                 "CANCELLED", null, record.completedNodes(), record.toolResults(), record.variables(),
                                 record.outputs(), record.checkpoints(), record.evidence(), cancelledQuestion,
                                 record.result(), "TASK_GRAPH_CANCELLED");
+                        notifyLifecycle(cancelled, "CANCELLED");
                         return new ToolResult(request.callId(), request.name(), true, "TASK_GRAPH_CANCELLED",
                                 inspectJson(cancelled), true);
                     } catch (IllegalStateException stale) {
@@ -455,6 +463,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                         "CANCELLED", null, record.completedNodes(), record.toolResults(), record.variables(),
                         record.outputs(), record.checkpoints(), record.evidence(), cancelledQuestion, record.result(),
                         "TASK_GRAPH_CANCELLED");
+                notifyLifecycle(cancelled, "CANCELLED");
                 return new ToolResult(request.callId(), request.name(), true, "TASK_GRAPH_CANCELLED",
                         inspectJson(cancelled), true);
             }
@@ -501,12 +510,14 @@ public final class TaskGraphRuntime implements AutoCloseable {
             TaskGraphExecutionRecord record = owned(context, executionId);
             if (TERMINAL.contains(record.state())) return record;
             try {
-                return repository.save(record.executionId(), record.revision(),
+                TaskGraphExecutionRecord failed = repository.save(record.executionId(), record.revision(),
                         "RECONCILIATION_REQUIRED", record.currentNodeId(), record.completedNodes(),
                         record.toolResults(), record.variables(), record.outputs(), record.checkpoints(),
                         record.evidence(), record.waitingQuestion(),
                         Json.object().put("message", "timeout cancellation was not confirmed"),
                         "TOOL_TIMEOUT_RECONCILIATION_REQUIRED");
+                notifyLifecycle(failed, "FAILED");
+                return failed;
             } catch (IllegalStateException stale) {
                 if (!"STALE_TASK_GRAPH_REVISION".equals(stale.getMessage())) throw stale;
                 Thread.sleep(5);
@@ -536,6 +547,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                         snapshot.waitingQuestion(),
                                         snapshot.result(), snapshot.resultCode());
                                 revision.set(saved.revision());
+                                notifyTerminalLifecycle(saved);
                             } catch (SQLException failure) {
                                 throw new IllegalStateException("TASK_GRAPH_PERSISTENCE_ERROR", failure);
                             }
@@ -546,11 +558,12 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     if (TERMINAL.contains(waiting.state())) return;
                     if (control.cancelRequested() || control.pauseRequested()) {
                         String state = control.cancelRequested() ? "CANCELLED" : "PAUSED";
-                        repository.save(waiting.executionId(), waiting.revision(), state,
+                        TaskGraphExecutionRecord stopped = repository.save(waiting.executionId(), waiting.revision(), state,
                                 waiting.currentNodeId(), waiting.completedNodes(), waiting.toolResults(),
                                 waiting.variables(), waiting.outputs(), waiting.checkpoints(), waiting.evidence(),
                                 waiting.waitingQuestion(), waiting.result(),
                                 control.cancelRequested() ? "TASK_GRAPH_CANCELLED" : "TASK_GRAPH_PAUSED");
+                        notifyLifecycle(stopped, state);
                     } else if (result.code().equals("TASK_GRAPH_WAITING_TIME") || isTimedWait(waiting)) {
                         // The executor outcome is authoritative for this just-persisted boundary. During
                         // pause/resume, control can race the follow-up repository read; never reinterpret
@@ -593,6 +606,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     record.currentNodeId(), record.completedNodes(), record.toolResults(), record.variables(),
                     record.outputs(), record.checkpoints(), record.evidence(),
                     Json.MAPPER.valueToTree(answered), record.result(), "USER_ANSWERED");
+            notifyLifecycle(ready, "RESUMED");
             ToolContext context = new ToolContext(record.controllerId(), record.brainSessionId(), record.companionId());
             submit(context, ready);
             return new ToolResult(call.callId(), call.name(), true, "RESUME_ACCEPTED",
@@ -756,14 +770,57 @@ public final class TaskGraphRuntime implements AutoCloseable {
             String message = failure.getMessage();
             if (message == null || message.isBlank()) message = failure.getClass().getSimpleName();
             if (message.length() > 1_024) message = message.substring(0, 1_024);
-            repository.save(executionId, latest.revision(), "RECONCILIATION_REQUIRED",
+            TaskGraphExecutionRecord failed = repository.save(executionId, latest.revision(), "RECONCILIATION_REQUIRED",
                     latest.currentNodeId(), latest.completedNodes(), latest.toolResults(), latest.variables(),
                     latest.outputs(), latest.checkpoints(), latest.evidence(), latest.waitingQuestion(),
                     Json.object().put("message", message), "TASK_GRAPH_WORKER_FAILED");
+            notifyLifecycle(failed, "FAILED");
         } catch (SQLException | RuntimeException ignored) {
             // The original failure remains observable through Runtime logs/health. If persistence itself
             // is unavailable, fabricating a durable terminal state would be unsafe.
         }
+    }
+
+    private void notifyTerminalLifecycle(TaskGraphExecutionRecord record) {
+        switch (record.state()) {
+            case "SUCCEEDED" -> notifyLifecycle(record, "SUCCEEDED");
+            case "FAILED", "RECONCILIATION_REQUIRED" -> notifyLifecycle(record, "FAILED");
+            case "CANCELLED" -> notifyLifecycle(record, "CANCELLED");
+            case "PAUSED" -> notifyLifecycle(record, "PAUSED");
+            default -> { }
+        }
+    }
+
+    private void notifyLifecycle(TaskGraphExecutionRecord record, String transition) {
+        if (conversations == null) return;
+        String reasonCode = boundedReasonCode(record);
+        String message = switch (transition) {
+            case "STARTED" -> "Task started.";
+            case "PAUSED" -> "Task paused. Use the Terminal to resume or cancel.";
+            case "RESUMED" -> "Task resumed.";
+            case "CANCELLED" -> "Task cancelled.";
+            case "SUCCEEDED" -> "Task completed.";
+            case "FAILED" -> "Task cannot continue (" + reasonCode + ").";
+            default -> throw new IllegalArgumentException("unknown lifecycle transition");
+        };
+        String identity = record.executionId() + ':' + record.revision() + ':' + transition;
+        String eventId = "task-graph-" + Digests.sha256(identity).substring(0, 32);
+        JsonNode details = Json.object().put("source", "TASK_GRAPH_RUNTIME")
+                .put("executionId", record.executionId()).put("state", record.state())
+                .put("transition", transition).put("reasonCode", reasonCode);
+        try {
+            conversations.appendOnce(eventId, record.companionId(), null, null,
+                    "ASSISTANT", "TASK_GRAPH_LIFECYCLE", message, details);
+        } catch (SQLException | RuntimeException failure) {
+            LOGGER.warn("Unable to enqueue Task Graph lifecycle feedback: execution={} transition={}",
+                    record.executionId(), transition, failure);
+        }
+    }
+
+    private static String boundedReasonCode(TaskGraphExecutionRecord record) {
+        String code = record.resultCode();
+        if (code == null || !code.matches("[A-Z0-9_]{1,64}")) return record.state();
+        return code;
     }
 
     private Map<String, ToolDefinition> ordinaryDefinitions(ToolContext context) {

@@ -63,7 +63,7 @@ public final class ConversationService {
 
     /** Oldest-to-newest, bounded transcript suitable for model context. */
     public List<String> recentTranscript(String companionId, int limit) throws SQLException {
-        return repository.list(companionId, limit).stream()
+        return repository.listForModelContext(companionId, limit).stream()
                 .map(event -> event.direction() + ": " + event.content())
                 .toList();
     }

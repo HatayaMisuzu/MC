@@ -85,11 +85,18 @@ class ConversationServiceTest {
                         Json.object().put("decision", "RESPOND"));
                 service.markDirectReplyDelivered(reply.eventId());
 
+                for (int index = 0; index < 5; index++) {
+                    repository.appendOnce("lifecycle-" + index, "c1", null, null,
+                            "ASSISTANT", "TASK_GRAPH_LIFECYCLE", "Task status " + index, Json.object());
+                }
+
                 assertEquals(List.of(
                         "USER: 今天有点累，不想冒险。",
                         "ASSISTANT: 那我们今天轻松一点，可以整理箱子或在家附近看看。"),
-                        service.recentTranscript("c1", 12));
-                assertTrue(repository.list("c1", 12).getLast().gameDelivered());
+                        service.recentTranscript("c1", 2));
+                assertTrue(repository.list("c1", 12).stream()
+                        .filter(event -> event.eventId().equals(reply.eventId())).findFirst().orElseThrow()
+                        .gameDelivered());
             }
         }
     }

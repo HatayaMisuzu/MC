@@ -73,6 +73,13 @@ tasks.register('longPlay100TurnTest', Test) {
     filter { includeTestsMatching 'com.mccompanion.runtime.brain.LongPlay100TurnTest' }
 }
 
+tasks.register('realPlaySoakTest', Test) {
+    group = 'verification'
+    description = 'Runs the deterministic 200-turn-first bounded local soak and writes aggregate resource evidence.'
+    useJUnitPlatform()
+    filter { includeTestsMatching 'com.mccompanion.runtime.brain.RealPlaySoakTest' }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'

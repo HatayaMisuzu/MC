@@ -108,6 +108,16 @@ release/install verification remain incomplete.
 - This is a deterministic continuity/load result. It does not prove model intelligence, live-provider
   quality, human play quality, or the still-pending short soak.
 
+## 200-turn-first local soak
+
+- `realPlaySoakTest` implements the contract's “20 minutes or 200 turns, first reached” rule and
+  reached 200 deterministic turns in 5.127 seconds. It is `liveModel=false` and `humanPlay=false`.
+- The bounded aggregate report records heap 14,972,128 → 33,587,864 bytes with the same 33,587,864
+  byte peak, threads 10 → 10, database 425,984 bytes, WAL 0, average turn/Tool latency 23.77 ms,
+  p95 26.18 ms, one recovered disconnect, and zero duplicate calls or reconciliation records.
+- Final cleanup reports zero Brain sessions, database connections, queue depth, and active workers.
+  No chat, identifiers, Tool arguments, observations, paths, secrets, or raw logs enter the report.
+
 ## Brain persistence and restart slice
 
 - Schema migrations 8 and 9 persist external Brain sessions, each bounded tool call result,

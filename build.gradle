@@ -137,6 +137,11 @@ tasks.register('longPlay100TurnTest') {
     dependsOn ':runtime:runtime-app:longPlay100TurnTest'
 }
 
+tasks.register('realPlaySoakTest') {
+    group = 'verification'
+    dependsOn ':runtime:runtime-app:realPlaySoakTest'
+}
+
 tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {

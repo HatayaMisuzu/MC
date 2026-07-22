@@ -819,6 +819,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
         ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        owner.setUUID(java.util.UUID.randomUUID());
         helper.assertTrue(registry.create(owner, "Miner").success(), "mine test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "mine test created no live body");

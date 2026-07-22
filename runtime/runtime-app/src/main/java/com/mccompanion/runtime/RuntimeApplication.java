@@ -8,6 +8,7 @@ import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.brain.ExternalBrainAdapter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainAuditRepository;
+import com.mccompanion.runtime.brain.BudgetedExternalBrainAdapter;
 import com.mccompanion.runtime.brain.HermesBrainAdapter;
 import com.mccompanion.runtime.brain.OpenAiCompatibleBrainAdapter;
 import com.mccompanion.runtime.config.RuntimeConfig;
@@ -377,12 +378,13 @@ public final class RuntimeApplication implements AutoCloseable {
             return null;
         }
         redactor.registerSecret(token);
-        ExternalBrainAdapter adapter = switch (config.brain.mode) {
+        ExternalBrainAdapter providerAdapter = switch (config.brain.mode) {
             case "hermes" -> new HermesBrainAdapter(config.brain.endpoint, token, config.brain.timeout());
             case "openai-compatible" -> new OpenAiCompatibleBrainAdapter(config.brain.endpoint, token,
                     config.brain.model, config.brain.timeout(), config.brain.maxOutputTokens);
             default -> throw new IllegalArgumentException("Unsupported external Brain mode");
         };
+        ExternalBrainAdapter adapter = new BudgetedExternalBrainAdapter(providerAdapter, config.brain.liveBudget());
         return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn, brainAudit, conversations);
     }
 

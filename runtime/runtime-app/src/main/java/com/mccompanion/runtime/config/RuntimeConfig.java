@@ -119,6 +119,21 @@ public final class RuntimeConfig {
         if (brain.maxOutputTokens < 128 || brain.maxOutputTokens > 4096) {
             throw new IllegalArgumentException("brain.max_output_tokens must be 128..4096");
         }
+        if (brain.maxRequests < 1 || brain.maxRequests > 1_000) {
+            throw new IllegalArgumentException("brain.max_requests must be 1..1000");
+        }
+        if (brain.maxInputTokens < 128 || brain.maxInputTokens > 2_000_000) {
+            throw new IllegalArgumentException("brain.max_input_tokens must be 128..2000000");
+        }
+        if (brain.maxTotalOutputTokens < 128 || brain.maxTotalOutputTokens > 500_000) {
+            throw new IllegalArgumentException("brain.max_total_output_tokens must be 128..500000");
+        }
+        if (brain.maxWallClockMinutes < 1 || brain.maxWallClockMinutes > 480) {
+            throw new IllegalArgumentException("brain.max_wall_clock_minutes must be 1..480");
+        }
+        if (brain.maxRetries < 0 || brain.maxRetries > 5) {
+            throw new IllegalArgumentException("brain.max_retries must be 0..5");
+        }
         brain.tokenEnv = requireText(brain.tokenEnv, "brain.token_env");
         if (!ENVIRONMENT_NAME.matcher(brain.tokenEnv).matches()) {
             throw new IllegalArgumentException("brain.token_env must be a valid environment variable name");
@@ -211,6 +226,11 @@ public final class RuntimeConfig {
                   timeout_seconds: 60
                   max_output_tokens: 1400
                   max_tool_calls_per_turn: 8
+                  max_requests: 24
+                  max_input_tokens: 30000
+                  max_total_output_tokens: 8000
+                  max_wall_clock_minutes: 15
+                  max_retries: 2
 
                 # Search is disabled until an explicit provider and environment-only token are configured.
                 search:
@@ -308,12 +328,26 @@ public final class RuntimeConfig {
         public int maxOutputTokens = 1400;
         @JsonProperty("max_tool_calls_per_turn")
         public int maxToolCallsPerTurn = 8;
+        @JsonProperty("max_requests")
+        public int maxRequests = 24;
+        @JsonProperty("max_input_tokens")
+        public int maxInputTokens = 30_000;
+        @JsonProperty("max_total_output_tokens")
+        public int maxTotalOutputTokens = 8_000;
+        @JsonProperty("max_wall_clock_minutes")
+        public int maxWallClockMinutes = 15;
+        @JsonProperty("max_retries")
+        public int maxRetries = 2;
 
         @JsonIgnore public Optional<String> resolveToken() {
             String value = System.getenv(tokenEnv);
             return value == null || value.isBlank() ? Optional.empty() : Optional.of(value.strip());
         }
         @JsonIgnore public Duration timeout() { return Duration.ofSeconds(timeoutSeconds); }
+        @JsonIgnore public com.mccompanion.runtime.brain.LiveBrainBudget liveBudget() {
+            return new com.mccompanion.runtime.brain.LiveBrainBudget(maxRequests, maxInputTokens,
+                    maxTotalOutputTokens, Duration.ofMinutes(maxWallClockMinutes), maxRetries);
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = false)

@@ -30,6 +30,21 @@ dependencies {
 
 tasks.withType(Test).configureEach { useJUnitPlatform() }
 
+tasks.register('liveBrainHarnessContractTest', Test) {
+    group = 'verification'
+    description = 'Verifies the credential-safe, budgeted real Brain harness contract without making live calls.'
+    useJUnitPlatform()
+    filter { includeTestsMatching 'com.mccompanion.runtime.brain.LiveBrainHarnessContractTest' }
+}
+
+tasks.register('liveBrainHarness', JavaExec) {
+    group = 'verification'
+    description = 'Writes a safe live Brain preflight report; credentials are read only from the named environment variable.'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.mccompanion.runtime.brain.LiveBrainHarnessMain'
+    args layout.buildDirectory.file('reports/live-brain/preflight.json').get().asFile.absolutePath
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'

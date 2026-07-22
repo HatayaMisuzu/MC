@@ -296,6 +296,7 @@ tasks.register('stageTerminal') {
             from('docs/MCP_PROTOCOL.md') { into 'docs' }
             from('docs/TASK_GRAPH_DSL.md') { into 'docs' }
             from('docs/RC_COMPLETION_MATRIX.md') { into 'docs' }
+            from('docs/LIVE_BRAIN_HUMAN_PLAYTEST.md') { into 'docs' }
             from('LICENSE') { into 'legal' }
         }
         def root=terminalImage.get().asFile

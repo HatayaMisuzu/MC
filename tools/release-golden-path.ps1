@@ -9,7 +9,13 @@ $zip = (Resolve-Path -LiteralPath $ReleaseZip).Path
 $zipSha = "$zip.sha256"
 if (-not (Test-Path -LiteralPath $zipSha -PathType Leaf)) { throw 'Release ZIP SHA-256 sidecar is missing' }
 $expected = ((Get-Content -LiteralPath $zipSha -Raw -Encoding UTF8).Trim() -split '\s+')[0]
-$actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+$algorithm = [Security.Cryptography.SHA256]::Create()
+try {
+    $stream = [IO.File]::OpenRead($zip)
+    try { $actual = ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
+    finally { $stream.Dispose() }
+}
+finally { $algorithm.Dispose() }
 if ($expected -ne $actual) { throw 'Release ZIP SHA-256 sidecar mismatch' }
 $web = (Resolve-Path -LiteralPath $WebUiDir).Path
 $workspace = [IO.Path]::GetFullPath($WorkDir)

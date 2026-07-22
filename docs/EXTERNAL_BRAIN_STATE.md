@@ -93,6 +93,21 @@ release/install verification remain incomplete.
 - These deterministic tests prove the reviewed-candidate workflow, not automatic reliable long-term
   model memory or live-provider behavior.
 
+## Bounded 105-turn continuity regression
+
+- `longPlay100TurnTest` drives 105 external turns through the real coordinator/audit/database path
+  with `liveModel=false`. It includes repeated read and mutation Tools, one ASK_USER/answer, one
+  injected transport disconnect with SAFE_IDLE/recovery, one Runtime session interruption/resume,
+  Task Graph pause/resume, user cancellation, Capsule generation, and locally reviewed Episodic Memory.
+- Stable call IDs and the audit ledger prove 104 unique Tool calls, 20 intended mutation effects and
+  zero duplicate mutation effects. The bounded JSON report records aggregate counts only: no chat,
+  Tool arguments, observations, identifiers, paths, or secrets.
+- The local run held the database to 397,312 bytes with no retained WAL growth; Conversation contained
+  two events, the Capsule retained 28 bounded Evidence references, and process threads returned from
+  10 to 10 with zero open Brain sessions, active Graph workers, or queued work after cleanup.
+- This is a deterministic continuity/load result. It does not prove model intelligence, live-provider
+  quality, human play quality, or the still-pending short soak.
+
 ## Brain persistence and restart slice
 
 - Schema migrations 8 and 9 persist external Brain sessions, each bounded tool call result,

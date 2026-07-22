@@ -132,6 +132,11 @@ tasks.register('episodicCandidateReviewTest') {
     dependsOn ':runtime:runtime-app:episodicCandidateReviewTest'
 }
 
+tasks.register('longPlay100TurnTest') {
+    group = 'verification'
+    dependsOn ':runtime:runtime-app:longPlay100TurnTest'
+}
+
 tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {

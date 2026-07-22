@@ -66,6 +66,13 @@ tasks.register('episodicCandidateReviewTest', Test) {
     filter { includeTestsMatching 'com.mccompanion.runtime.memory.EpisodicCandidateReviewTest' }
 }
 
+tasks.register('longPlay100TurnTest', Test) {
+    group = 'verification'
+    description = 'Runs 105 deterministic external turns across reconnect, restart, ASK_USER, control and reviewed Memory.'
+    useJUnitPlatform()
+    filter { includeTestsMatching 'com.mccompanion.runtime.brain.LongPlay100TurnTest' }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'

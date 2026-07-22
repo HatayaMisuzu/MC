@@ -131,8 +131,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     if (!active.containsKey(record.executionId())) {
                         // appendOnce makes this a safe reconciliation point if worker cleanup became
                         // visible just before the lifecycle event's separate transaction committed.
-                        notifyTerminalLifecycle(record);
-                        return terminal(call, record);
+                        if (notifyTerminalLifecycle(record)) return terminal(call, record);
                     }
                 } else if (waitingReady(record)) return terminal(call, record);
                 if (record.state().equals("READY") && !active.containsKey(record.executionId())) submit(context, record);
@@ -790,18 +789,18 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
-    private void notifyTerminalLifecycle(TaskGraphExecutionRecord record) {
-        switch (record.state()) {
+    private boolean notifyTerminalLifecycle(TaskGraphExecutionRecord record) {
+        return switch (record.state()) {
             case "SUCCEEDED" -> notifyLifecycle(record, "SUCCEEDED");
             case "FAILED", "RECONCILIATION_REQUIRED" -> notifyLifecycle(record, "FAILED");
             case "CANCELLED" -> notifyLifecycle(record, "CANCELLED");
             case "PAUSED" -> notifyLifecycle(record, "PAUSED");
-            default -> { }
-        }
+            default -> true;
+        };
     }
 
-    private void notifyLifecycle(TaskGraphExecutionRecord record, String transition) {
-        if (conversations == null) return;
+    private boolean notifyLifecycle(TaskGraphExecutionRecord record, String transition) {
+        if (conversations == null) return true;
         String reasonCode = boundedReasonCode(record);
         String message = switch (transition) {
             case "STARTED" -> "Task started.";
@@ -820,9 +819,11 @@ public final class TaskGraphRuntime implements AutoCloseable {
         try {
             conversations.appendOnce(eventId, record.companionId(), null, null,
                     "ASSISTANT", "TASK_GRAPH_LIFECYCLE", message, details);
+            return true;
         } catch (SQLException | RuntimeException failure) {
             LOGGER.warn("Unable to enqueue Task Graph lifecycle feedback: execution={} transition={}",
                     record.executionId(), transition, failure);
+            return false;
         }
     }
 

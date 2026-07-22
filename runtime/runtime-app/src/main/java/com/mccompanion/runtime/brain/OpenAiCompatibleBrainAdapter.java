@@ -69,15 +69,20 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         if (state == null) throw new IllegalStateException("BRAIN_SESSION_NOT_FOUND");
         for (ToolResult result : request.toolResults()) {
             ObjectNode tool = Json.object().put("role", "tool").put("tool_call_id", result.callId());
-            tool.put("content", Json.write(Json.MAPPER.valueToTree(result)));
+            ObjectNode clipping = Json.object();
+            tool.put("content", Json.write(BoundedBrainContextAssembler.bounded(
+                    Json.MAPPER.valueToTree(result), 8_192, clipping, "toolResult")));
             state.history.add(tool);
         }
         if (!request.userMessage().isBlank()) {
             ObjectNode supplied = Json.object().put("message", request.userMessage())
                     .put("remainingToolCalls", request.remainingToolCalls());
-            supplied.set("context", Json.MAPPER.valueToTree(request.context()));
+            var assembled = BoundedBrainContextAssembler.assemble(request.context());
+            supplied.set("context", assembled.context());
+            supplied.set("contextBudget", assembled.clippingStats());
             state.history.add(Json.object().put("role", "user").put("content", Json.write(supplied)));
         }
+        trimHistory(state.history);
         ObjectNode body = Json.object().put("model", model).put("temperature", 0.2)
                 .put("max_tokens", maxOutputTokens);
         ArrayNode messages = body.putArray("messages");
@@ -189,6 +194,13 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         properties.putObject("context").put("type", "object");
         properties.putObject("taskId").put("type", "string").put("maxLength", 128);
         return schema;
+    }
+
+    private static void trimHistory(List<ObjectNode> history) {
+        while (history.size() > 40 || history.stream().mapToInt(value -> Json.write(value).length()).sum() > 48_000) {
+            if (history.size() <= 1) break;
+            history.remove(1);
+        }
     }
 
     private static BrainQuestion parseQuestion(JsonNode value) {

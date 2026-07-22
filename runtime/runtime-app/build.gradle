@@ -45,6 +45,13 @@ tasks.register('liveBrainHarness', JavaExec) {
     args layout.buildDirectory.file('reports/live-brain/preflight.json').get().asFile.absolutePath
 }
 
+tasks.register('brainReconnectE2E', Test) {
+    group = 'verification'
+    description = 'Verifies bounded transport retry, SAFE_IDLE signalling, cancellation priority, and session isolation.'
+    useJUnitPlatform()
+    filter { includeTestsMatching 'com.mccompanion.runtime.brain.BrainReconnectE2ETest' }
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
     options.encoding = 'UTF-8'

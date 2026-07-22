@@ -117,6 +117,11 @@ tasks.register('unknownModGenericE2E') {
     dependsOn 'runtimeFabricE2E'
 }
 
+tasks.register('brainReconnectE2E') {
+    group = 'verification'
+    dependsOn ':runtime:runtime-app:brainReconnectE2E'
+}
+
 tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {

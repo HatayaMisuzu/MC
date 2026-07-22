@@ -38,7 +38,9 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
     @Override public BrainSession openSession(BrainSessionRequest request) {
         ObjectNode body = Json.object().put("protocol", "mcac-brain/1")
                 .put("controllerId", request.controllerId()).put("companionId", request.companionId());
-        body.set("context", Json.MAPPER.valueToTree(request.context()));
+        var assembled = BoundedBrainContextAssembler.assemble(request.context());
+        body.set("context", assembled.context());
+        body.set("contextBudget", assembled.clippingStats());
         body.set("tools", Json.MAPPER.valueToTree(request.tools()));
         JsonNode response = post("sessions", body);
         String sessionId = required(response, "sessionId");
@@ -52,7 +54,9 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         requireSessionId(sessionId);
         ObjectNode body = Json.object().put("protocol", "mcac-brain/1")
                 .put("controllerId", request.controllerId()).put("companionId", request.companionId());
-        body.set("context", Json.MAPPER.valueToTree(request.context()));
+        var assembled = BoundedBrainContextAssembler.assemble(request.context());
+        body.set("context", assembled.context());
+        body.set("contextBudget", assembled.clippingStats());
         body.set("tools", Json.MAPPER.valueToTree(request.tools()));
         JsonNode response = post("sessions/" + sessionId + "/resume", body);
         if (!response.path("resumed").asBoolean(false)) throw new IllegalStateException("HERMES_RESUME_REJECTED");
@@ -63,8 +67,12 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         requireSessionId(request.sessionId());
         ObjectNode body = Json.object().put("protocol", "mcac-brain/1")
                 .put("userMessage", request.userMessage()).put("remainingToolCalls", request.remainingToolCalls());
-        body.set("context", Json.MAPPER.valueToTree(request.context()));
-        body.set("toolResults", Json.MAPPER.valueToTree(request.toolResults()));
+        var assembled = BoundedBrainContextAssembler.assemble(request.context());
+        body.set("context", assembled.context());
+        body.set("contextBudget", assembled.clippingStats());
+        var results = body.putArray("toolResults");
+        for (var result : request.toolResults()) results.add(BoundedBrainContextAssembler.bounded(
+                Json.MAPPER.valueToTree(result), 8_192, Json.object(), "toolResult"));
         JsonNode response = post("sessions/" + request.sessionId() + "/turns", body);
         BrainTurnResult.Kind kind;
         try { kind = BrainTurnResult.Kind.valueOf(required(response, "kind")); }

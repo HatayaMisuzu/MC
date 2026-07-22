@@ -9,6 +9,9 @@ import com.mccompanion.runtime.brain.ExternalBrainAdapter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainAuditRepository;
 import com.mccompanion.runtime.brain.BudgetedExternalBrainAdapter;
+import com.mccompanion.runtime.brain.BrainReconnectListener;
+import com.mccompanion.runtime.brain.BrainSession;
+import com.mccompanion.runtime.brain.LiveBrainFailureCategory;
 import com.mccompanion.runtime.brain.HermesBrainAdapter;
 import com.mccompanion.runtime.brain.OpenAiCompatibleBrainAdapter;
 import com.mccompanion.runtime.config.RuntimeConfig;
@@ -46,6 +49,9 @@ import com.mccompanion.runtime.tool.ObservationToolGateway;
 import com.mccompanion.runtime.tool.CompositeToolGateway;
 import com.mccompanion.runtime.tool.RegistryToolGateway;
 import com.mccompanion.runtime.tool.ToolGateway;
+import com.mccompanion.runtime.tool.ToolCall;
+import com.mccompanion.runtime.tool.ToolContext;
+import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.workspace.AgentWorkspace;
 import com.mccompanion.runtime.workspace.SkillRepository;
 import com.mccompanion.runtime.workspace.SkillToolGateway;
@@ -384,7 +390,25 @@ public final class RuntimeApplication implements AutoCloseable {
                     config.brain.model, config.brain.timeout(), config.brain.maxOutputTokens);
             default -> throw new IllegalArgumentException("Unsupported external Brain mode");
         };
-        ExternalBrainAdapter adapter = new BudgetedExternalBrainAdapter(providerAdapter, config.brain.liveBudget());
+        BrainReconnectListener reconnect = new BrainReconnectListener() {
+            @Override public void safeIdle(BrainSession session, int attempt, java.time.Duration delay,
+                                           LiveBrainFailureCategory category) {
+                if (session == null) return;
+                brainAudit.state(session.sessionId(), "RECONNECTING", "SAFE_IDLE_" + category.name());
+                ToolContext context = new ToolContext(session.controllerId(), session.sessionId(), session.companionId());
+                if (tools.definitions(context).stream().noneMatch(tool -> tool.name().equals("movement.stop"))) return;
+                ToolCall stop = new ToolCall("brain-reconnect-safe-idle-" + attempt, "movement.stop", Json.object());
+                var accepted = tools.execute(context, stop);
+                if (!accepted.terminal()) tools.awaitTerminal(context, stop, accepted, java.time.Duration.ofSeconds(5),
+                        ignored -> { });
+            }
+
+            @Override public void recovered(BrainSession session, int attempts) {
+                if (session != null) brainAudit.state(session.sessionId(), "ACTIVE", "RECONNECTED_" + attempts);
+            }
+        };
+        ExternalBrainAdapter adapter = new BudgetedExternalBrainAdapter(
+                providerAdapter, config.brain.liveBudget(), reconnect);
         return new ExternalBrainCoordinator(adapter, tools, config.brain.maxToolCallsPerTurn, brainAudit, conversations);
     }
 

@@ -354,6 +354,7 @@ public final class CommandService implements SessionRegistry.Listener {
     @Override
     public void onCompanionUpdated(RuntimeSession session, CompanionStatus status, JsonNode statusJson) {
         try {
+            leases.observeRemoteEpoch(status.companionId(), status.controlEpoch());
             Optional<TaskRecord> active = tasks.activeForCompanion(status.companionId());
             if (active.isEmpty() || active.get().state() != TaskState.RECONCILIATION_REQUIRED) {
                 return;

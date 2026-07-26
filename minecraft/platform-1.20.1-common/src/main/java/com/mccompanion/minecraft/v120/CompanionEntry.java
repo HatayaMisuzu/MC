@@ -25,6 +25,9 @@ final class CompanionEntry {
     double targetX;
     double targetY;
     double targetZ;
+    long runtimeEpoch;
+    String runtimeBehaviorId;
+    long runtimeBehaviorRevision;
 
     CompanionEntry(UUID companionId, UUID ownerId, String profileName) {
         this.companionId = Objects.requireNonNull(companionId, "companionId");
@@ -48,6 +51,9 @@ final class CompanionEntry {
         entry.targetX = tag.getDouble("targetX");
         entry.targetY = tag.getDouble("targetY");
         entry.targetZ = tag.getDouble("targetZ");
+        entry.runtimeEpoch = Math.max(0L, tag.getLong("runtimeEpoch"));
+        entry.runtimeBehaviorId = tag.getString("runtimeBehaviorId");
+        entry.runtimeBehaviorRevision = Math.max(0L, tag.getLong("runtimeBehaviorRevision"));
         return entry;
     }
 
@@ -64,6 +70,11 @@ final class CompanionEntry {
         tag.putDouble("targetX", targetX);
         tag.putDouble("targetY", targetY);
         tag.putDouble("targetZ", targetZ);
+        tag.putLong("runtimeEpoch", runtimeEpoch);
+        if (runtimeBehaviorId != null && !runtimeBehaviorId.isBlank()) {
+            tag.putString("runtimeBehaviorId", runtimeBehaviorId);
+        }
+        tag.putLong("runtimeBehaviorRevision", runtimeBehaviorRevision);
         return tag;
     }
 

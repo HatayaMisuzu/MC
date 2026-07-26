@@ -171,6 +171,7 @@ final class BehaviorDirector {
             body.closeContainer();
         }
         if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
+                || code.equals("RUNTIME_OFFLINE")
                 || code.equals("LEASE_EXPIRED"))) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);

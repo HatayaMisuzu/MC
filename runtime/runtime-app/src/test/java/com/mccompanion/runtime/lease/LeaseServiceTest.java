@@ -89,6 +89,34 @@ class LeaseServiceTest {
     }
 
     @Test
+    void authenticatedRemoteEpochAdvancesFloorAndRevokesOlderLocalAuthority() throws Exception {
+        ControlLease stale = leases.acquire("companion-remote-ahead", "runtime-main", Duration.ofMinutes(1),
+                ControlLease.ControlMode.EXTERNAL_RUNTIME);
+        assertEquals(1L, stale.epoch());
+
+        leases.observeRemoteEpoch("companion-remote-ahead", 7L);
+
+        assertTrue(leases.processLease("companion-remote-ahead").isEmpty());
+        assertEquals("LEASE_EXPIRED", assertThrows(LeaseException.class,
+                () -> leases.validate(stale.companionId(), stale.controllerId(), stale.token(), stale.epoch())).code());
+        ControlLease reconciled = leases.acquire(
+                "companion-remote-ahead",
+                "runtime-main",
+                Duration.ofMinutes(1),
+                ControlLease.ControlMode.EXTERNAL_RUNTIME);
+        assertEquals(8L, reconciled.epoch());
+
+        leases.release(reconciled);
+        leases.observeRemoteEpoch("companion-remote-ahead", 3L);
+        assertEquals(9L, leases.acquire(
+                "companion-remote-ahead",
+                "runtime-main",
+                Duration.ofMinutes(1),
+                ControlLease.ControlMode.EXTERNAL_RUNTIME).epoch(),
+                "an older remote observation must not lower the durable epoch floor");
+    }
+
+    @Test
     void expiryAtomicallyReturnsRemovedLeasesAndClearsProcessBearer() throws Exception {
         ControlLease expired = leases.acquire("companion-expired", "runtime-main", Duration.ofSeconds(1),
                 ControlLease.ControlMode.EXTERNAL_RUNTIME);

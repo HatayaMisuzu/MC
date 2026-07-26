@@ -864,7 +864,7 @@ public final class CompanionLifecycleForgeGameTests {
                         .success(),
                 "smelt failed to start");
         registry.tick();
-        helper.runAfterDelay(260, () -> {
+        helper.runAfterDelay(200, () -> helper.succeedWhen(() -> {
             helper.assertTrue(
                     body.getInventory().countItem(Items.IRON_INGOT) == ingotsBefore + 1,
                     "smelt did not retrieve the real furnace result");
@@ -887,7 +887,119 @@ public final class CompanionLifecycleForgeGameTests {
             helper.getLevel().getServer().getPlayerList().remove(owner);
             ownerConnection.disconnect(Component.literal("Forge craft/smelt GameTest complete"));
             helper.succeed();
-        });
+        }));
+    }
+
+    @GameTest(
+            batch = "runtimeReconnect",
+            templateNamespace = "minecraft",
+            template = "bastion/mobs/empty",
+            timeoutTicks = 300000)
+    public static void runtimeReconnectPreservesIdentityAndEpoch(GameTestHelper helper) {
+        CompanionEntry persistedProbe =
+                new CompanionEntry(UUID.randomUUID(), UUID.randomUUID(), "ForgeRestart");
+        persistedProbe.mode = CompanionEntry.Mode.SKILL;
+        persistedProbe.resumeMode = CompanionEntry.Mode.SKILL;
+        persistedProbe.runtimeEpoch = 7L;
+        persistedProbe.runtimeBehaviorId = "forge-restart-behavior";
+        persistedProbe.runtimeBehaviorRevision = 4L;
+        CompanionEntry restoredProbe = CompanionEntry.load(persistedProbe.save());
+        helper.assertTrue(
+                restoredProbe.mode == CompanionEntry.Mode.SKILL
+                        && restoredProbe.resumeMode == CompanionEntry.Mode.SKILL
+                        && restoredProbe.runtimeEpoch == 7L
+                        && "forge-restart-behavior".equals(restoredProbe.runtimeBehaviorId)
+                        && restoredProbe.runtimeBehaviorRevision == 4L,
+                "runtime recovery metadata did not survive the saved-data NBT round trip");
+
+        FakeConnection ownerConnection = new FakeConnection();
+        ServerPlayer owner = new ServerPlayer(
+                helper.getLevel().getServer(),
+                helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-reconnect-owner"));
+        Vec3 ownerSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(ownerSpawn.x, ownerSpawn.y, ownerSpawn.z, 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(ownerConnection, owner);
+        CompanionRegistry registry =
+                MinecraftAiCompanionForge.integrationRegistryFor(helper.getLevel().getServer());
+        helper.assertTrue(registry != null, "reconnect registry was not initialized");
+        helper.assertTrue(registry.create(owner, "ForgeReconnect").success(), "reconnect create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "reconnect body was not spawned");
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst()
+                .orElseThrow();
+        helper.assertTrue(
+                registry.runtimeAcquireLease(
+                                companionId,
+                                "forge-reconnect-lease-1",
+                                1L,
+                                System.currentTimeMillis() + 60_000L)
+                        .success(),
+                "initial reconnect lease failed");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-reconnect-lease-1",
+                                1L,
+                                "forge-reconnect-behavior",
+                                "travel",
+                                body.getX() + 8.0D,
+                                body.getY(),
+                                body.getZ(),
+                                null)
+                        .success(),
+                "reconnect behavior failed to start");
+        registry.runtimeDisconnected();
+        CompanionRegistry.RuntimeSnapshot disconnected = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.companionId().equals(companionId))
+                .findFirst()
+                .orElseThrow();
+        helper.assertTrue(
+                disconnected.behaviorState().equals("PAUSED")
+                        && "forge-reconnect-behavior".equals(disconnected.behaviorId())
+                        && disconnected.controlEpoch() == 1L,
+                "disconnect did not retain the paused behavior identity and epoch");
+        helper.assertTrue(
+                !registry.runtimeAcquireLease(
+                                companionId,
+                                "forge-replayed-lease",
+                                1L,
+                                System.currentTimeMillis() + 60_000L)
+                        .success(),
+                "disconnect allowed a replayed control epoch");
+        CompanionRegistry.RuntimeResult reacquired = registry.runtimeAcquireLease(
+                companionId,
+                "forge-reconnect-lease-2",
+                2L,
+                System.currentTimeMillis() + 60_000L);
+        helper.assertTrue(
+                reacquired.success()
+                        && "forge-reconnect-behavior".equals(reacquired.behaviorId())
+                        && reacquired.state().equals("PAUSED"),
+                "higher-epoch reconnect did not reconcile the paused behavior");
+        CompanionRegistry.RuntimeResult resumed = registry.runtimeResume(
+                companionId,
+                "forge-reconnect-lease-2",
+                2L);
+        helper.assertTrue(
+                resumed.success()
+                        && "forge-reconnect-behavior".equals(resumed.behaviorId())
+                        && resumed.state().equals("RUNNING"),
+                "reconciled movement did not resume");
+        helper.assertTrue(
+                registry.runtimeReleaseLease(
+                                companionId,
+                                "forge-reconnect-lease-2",
+                                2L)
+                        .success(),
+                "reconnect lease release failed");
+        helper.assertTrue(registry.remove(owner).success(), "reconnect cleanup failed");
+        helper.getLevel().getServer().getPlayerList().remove(owner);
+        ownerConnection.disconnect(Component.literal("Forge reconnect GameTest complete"));
+        helper.succeed();
     }
 
     private static void continueAfterRetreat(

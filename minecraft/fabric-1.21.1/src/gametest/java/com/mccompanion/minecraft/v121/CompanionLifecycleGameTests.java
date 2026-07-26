@@ -3,6 +3,7 @@ package com.mccompanion.minecraft.v121;
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import com.mccompanion.minecraft.fabric.PrimitiveObservationService;
 import com.mccompanion.minecraft.fabric.RegistryObservationService;
+import java.util.UUID;
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -1395,6 +1396,91 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 });
             });
         });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "runtime_reconnect")
+    public void runtimeReconnectPreservesIdentityAndEpoch(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionEntry persistedProbe =
+                new CompanionEntry(UUID.randomUUID(), UUID.randomUUID(), "FabRestart");
+        persistedProbe.mode = CompanionEntry.Mode.SKILL;
+        persistedProbe.resumeMode = CompanionEntry.Mode.SKILL;
+        persistedProbe.runtimeEpoch = 7L;
+        persistedProbe.runtimeBehaviorId = "fabric-restart-behavior";
+        persistedProbe.runtimeBehaviorRevision = 4L;
+        CompanionEntry restoredProbe = CompanionEntry.load(persistedProbe.save());
+        helper.assertTrue(
+                restoredProbe.mode == CompanionEntry.Mode.SKILL
+                        && restoredProbe.resumeMode == CompanionEntry.Mode.SKILL
+                        && restoredProbe.runtimeEpoch == 7L
+                        && "fabric-restart-behavior".equals(restoredProbe.runtimeBehaviorId)
+                        && restoredProbe.runtimeBehaviorRevision == 4L,
+                "runtime recovery metadata did not survive the saved-data NBT round trip");
+
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "FabReconnect").success(), "reconnect create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "reconnect test created no live body");
+        String companionId = body.getUUID().toString();
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, "fabric-reconnect-lease-1", 1L,
+                        System.currentTimeMillis() + 30_000L).success(),
+                "initial reconnect lease failed");
+        helper.assertTrue(registry.runtimeStart(
+                        companionId,
+                        "fabric-reconnect-lease-1",
+                        1L,
+                        "fabric-reconnect-behavior",
+                        "travel",
+                        body.getX() + 8.0D,
+                        body.getY(),
+                        body.getZ(),
+                        null).success(),
+                "reconnect behavior failed to start");
+
+        registry.runtimeDisconnected();
+        CompanionRegistry.RuntimeSnapshot disconnected = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.companionId().equals(companionId))
+                .findFirst()
+                .orElseThrow();
+        helper.assertTrue(
+                disconnected.behaviorState().equals("PAUSED")
+                        && "fabric-reconnect-behavior".equals(disconnected.behaviorId())
+                        && disconnected.controlEpoch() == 1L,
+                "disconnect did not retain the paused behavior identity and epoch");
+        helper.assertTrue(!registry.runtimeAcquireLease(
+                        companionId, "fabric-replayed-lease", 1L,
+                        System.currentTimeMillis() + 30_000L).success(),
+                "disconnect allowed a replayed control epoch");
+        CompanionRegistry.RuntimeResult reacquired = registry.runtimeAcquireLease(
+                companionId,
+                "fabric-reconnect-lease-2",
+                2L,
+                System.currentTimeMillis() + 30_000L);
+        helper.assertTrue(
+                reacquired.success()
+                        && "fabric-reconnect-behavior".equals(reacquired.behaviorId())
+                        && reacquired.state().equals("PAUSED"),
+                "higher-epoch reconnect did not reconcile the paused behavior");
+        CompanionRegistry.RuntimeResult resumed = registry.runtimeResume(
+                companionId, "fabric-reconnect-lease-2", 2L);
+        helper.assertTrue(
+                resumed.success()
+                        && "fabric-reconnect-behavior".equals(resumed.behaviorId())
+                        && resumed.state().equals("RUNNING"),
+                "reconciled movement did not resume");
+        helper.assertTrue(registry.runtimeReleaseLease(
+                        companionId, "fabric-reconnect-lease-2", 2L).success(),
+                "reconnect lease release failed");
+        helper.assertTrue(registry.remove(owner).success(), "reconnect test cleanup failed");
+        helper.succeed();
     }
 
     private static int count(ServerPlayer player, net.minecraft.world.item.Item item) {

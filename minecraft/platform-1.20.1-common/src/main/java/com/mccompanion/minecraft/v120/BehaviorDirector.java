@@ -90,6 +90,7 @@ final class BehaviorDirector {
         navigation.remove(entry.companionId);
         if (success || !(code.equals("RUNTIME_PAUSE")
                 || code.equals("RUNTIME_DISCONNECTED")
+                || code.equals("RUNTIME_OFFLINE")
                 || code.equals("LEASE_EXPIRED"))) {
             primitives.remove(entry.companionId);
         }

@@ -354,6 +354,13 @@ Passed on the frozen SHA:
   Forge tests, authenticated Runtime/Forge E2E, root `check`, Web tests and all
   Loader builds pass. Broader cancellation/restart/reconnect and global
   navigation remain open before Forge Full Bridge.
+- Stage 3 scan/step slice `834cea8` publishes Forge `NavigateTo` for the
+  existing bounded vanilla travel executor and adds incremental `ExploreArea`.
+  Scans are limited to radius 1..16, loaded chunks, 256 blocks per tick and 64
+  distance-ranked candidates; those candidates are included in the authenticated
+  behavior lifecycle evidence. Forge GameTest verifies two live gold-ore
+  candidates and ordering. Authenticated Runtime/Forge E2E, root `check`, Web
+  tests and all Loader builds pass.
 
 ## Remaining work
 

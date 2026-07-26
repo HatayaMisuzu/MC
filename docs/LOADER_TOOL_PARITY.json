@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "9e222f58c0abf3a70cdb5099fbdbc02a245df444",
-  "generatedAt": "2026-07-26T22:58:00+08:00",
+  "sourceCommit": "834cea885d4683703104463a508cac62c5a5ba11",
+  "generatedAt": "2026-07-26T23:05:00+08:00",
   "statusValues": ["PASS", "PARTIAL", "NOT_IMPLEMENTED", "NOT_RUN"],
   "loaders": {
     "fabric-1.21.1": {"java":21,"bridge":"PASS","automatedEvidence":"PASS","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"},
@@ -15,10 +15,10 @@
     {"name":"movement.follow","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge uses its bounded 1.20.1 collision-aware travel executor."},
     {"name":"movement.navigate","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge global-pathfinding parity is not implemented."},
     {"name":"movement.return","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PARTIAL"},"knownDifference":"Forge Runtime lease GameTest covers travel rather than return."},
-    {"name":"movement.step","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":"Forge does not advertise the NavigateTo primitive capability yet."},
+    {"name":"movement.step","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge publishes NavigateTo over the authenticated capability intersection and reuses its already-verified bounded vanilla travel executor."},
     {"name":"movement.look","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both use bounded vanilla body rotation and verify the resulting view vector."},
     {"name":"movement.stop","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"world.scan","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
+    {"name":"world.scan","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both scan only loaded chunks with a 256-block-per-tick budget and return at most 64 distance-ranked candidates; Forge evidence is from live 1.20.1 block state."},
     {"name":"resource.collect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge GameTest verifies bounded nearest-item movement and vanilla ItemEntity pickup."},
     {"name":"entity.collect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both collection aliases share the same bounded ItemEntity executor."},
     {"name":"resource.mine_vein","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PARTIAL"},"knownDifference":"Forge implements bounded six-neighbor discovery, hardness progress, tool checks, exact break verification and drop pickup; its current GameTest covers the one-block alias case."},

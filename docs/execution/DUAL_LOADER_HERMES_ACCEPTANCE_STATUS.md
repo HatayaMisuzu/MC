@@ -119,10 +119,21 @@ Passed on the frozen SHA:
   evidence.
 - Completed the repository-declared stage-0 baseline without skipped failures
   and generated a fresh verified baseline package.
+- Replaced both unbounded Task Graph executor queues with fair bounded queues.
+- Added explicit 64-per-Runtime/Profile, 16-per-Brain-session, and
+  24-per-Companion admission. Overload returns `QUEUE_FULL` or
+  `ADMISSION_REJECTED`; a rejected new execution is not persisted.
+- Preserved timed-wait consistency under saturation by leaving it `WAITING` and
+  retrying admission instead of fabricating failure or silently losing work.
+- Added saturation and cross-Companion capacity tests; the complete Runtime test
+  suite passes after the change.
 
 ## Remaining work
 
 - Execute stage-1 audits and repairs without weakening current guarantees.
+- Continue stage-1 thread isolation, same-Profile startup, SBOM, body-limit,
+  SSRF, operation-retention, bootstrap-ticket, supply-chain, and generic-effect
+  verification audits.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

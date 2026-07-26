@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 12:14 +08:00
+Updated: 2026-07-26 13:54 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `1 — AUDIT_HARDENING`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest working source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
+- Latest committed source SHA: `84b34fc4c5f5d04d12edd369117ebc5e4ebe8afb`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -192,11 +192,30 @@ Passed on the frozen SHA:
 - Extended the release SBOM and verifier from 27 JAR entries to 31 components:
   the exact four production npm bundle components now carry real versions,
   licenses, purls, source tarballs, and lockfile SHA-512 checksums.
+- Replaced single-side-effect generic interaction checks with bounded
+  multi-postcondition verification. Block/entity interactions now accept
+  observable world/entity/inventory/vehicle/menu changes; menu actions also
+  observe synchronized menu data and state ID in addition to slot/carried
+  changes.
+- Made exact placed-world state authoritative, so verified Creative and
+  reusable-item placement no longer fails merely because inventory did not
+  decrease.
+- Unobserved generic effects now stop with exact `UNCERTAIN_EFFECT` propagation
+  to the external Brain. The stopped non-idempotent progress is discarded, so
+  explicit resume requires recovery and cannot repeat the uncertain action.
+- Expanded Fabric from 23 baseline GameTests to 26. The complete 26/26 suite
+  passes, including real-server Creative placement, a synthetic Mod-style
+  synchronized-data-only menu, and uncertain-effect/no-replay cases. This is
+  GameTest evidence, not Live Hermes, third-party-Mod, or human-play evidence.
+- After the slice, the complete repository `check` and all three Loader builds
+  pass; Web remains nine files/thirteen tests and dependency, documentation,
+  forbidden-API, independence, and secret gates remain green.
 
 ## Remaining work
 
 - Execute stage-1 audits and repairs without weakening current guarantees.
-- Continue the stage-1 generic-effect verification audit.
+- Continue the remaining stage-1 repository/security audit after the stable
+  generic-effect vertical slice.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

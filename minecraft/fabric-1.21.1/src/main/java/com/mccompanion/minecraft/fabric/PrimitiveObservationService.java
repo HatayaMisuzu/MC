@@ -181,7 +181,14 @@ public final class PrimitiveObservationService {
                 .put("expiresAtEpochMillis", session.expiresAtEpochMillis())
                 .put("menuType", menuType == null ? "minecraft:unknown" : menuType.toString())
                 .put("slotCount", menu.slots.size())
-                .put("slotsTruncated", menu.slots.size() > 128);
+                .put("slotsTruncated", menu.slots.size() > 128)
+                .put("effectVerification", "MULTI_POSTCONDITION")
+                .put("uncertainEffectRequiresReview", true);
+        observation.putArray("acceptedPostconditions")
+                .add("SLOT_OR_CARRIED_CHANGED")
+                .add("MENU_SYNCHRONIZED_DATA_CHANGED")
+                .add("MENU_STATE_ID_CHANGED")
+                .add("MENU_CLOSED");
         ArrayNode slots = observation.putArray("slots");
         for (int index = 0; index < Math.min(128, menu.slots.size()); index++) {
             var slot = menu.getSlot(index);

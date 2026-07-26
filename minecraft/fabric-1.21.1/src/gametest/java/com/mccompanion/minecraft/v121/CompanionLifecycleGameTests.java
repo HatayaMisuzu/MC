@@ -10,6 +10,12 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
+import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.inventory.AbstractContainerMenu;
+import net.minecraft.world.inventory.DataSlot;
+import net.minecraft.world.inventory.MenuType;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
@@ -87,11 +93,11 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         BlockPos blockPosition = body.blockPosition().offset(2, 0, 0);
         body.serverLevel().setBlockAndUpdate(blockPosition, RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
         body.getInventory().add(new ItemStack(RegistryFixtureInitializer.BLUE_ITEM, 3));
-        var zombie = EntityType.ZOMBIE.create(body.serverLevel());
-        helper.assertTrue(zombie != null, "observation test could not create entity");
-        zombie.setNoAi(true);
-        zombie.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
-        helper.assertTrue(body.serverLevel().addFreshEntity(zombie),
+        var cow = EntityType.COW.create(body.serverLevel());
+        helper.assertTrue(cow != null, "observation test could not create entity");
+        cow.setNoAi(true);
+        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(cow),
                 "observation test could not add entity");
 
         var block = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
@@ -117,14 +123,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         var entity = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
                         .put("tool", "entity.inspect").put("radius", 8).put("limit", 4)
-                        .put("type", "minecraft:zombie"));
+                        .put("type", "minecraft:cow"));
         helper.assertTrue(entity.success(), "live entity inspection failed: " + entity.code());
         helper.assertValueEqual(entity.observation().path("totalMatches").asInt(), 1,
-                "live entity inspection did not return the visible zombie");
+                "live entity inspection did not return the visible cow");
         helper.assertValueEqual(entity.observation().path("entities").path(0).path("entityId").asText(),
-                zombie.getUUID().toString(), "live entity inspection returned the wrong entity");
+                cow.getUUID().toString(), "live entity inspection returned the wrong entity");
 
-        zombie.discard();
+        cow.discard();
         helper.assertTrue(registry.remove(owner).success(), "observation test cleanup failed");
         helper.succeed();
     }
@@ -249,6 +255,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     "menu inspection did not issue an opaque capability");
             helper.assertValueEqual(inspected.observation().path("slots").path(0).path("item").asText(),
                     "minecraft:stone", "menu inspection did not read the live chest slot");
+            helper.assertValueEqual(inspected.observation().path("effectVerification").asText(),
+                    "MULTI_POSTCONDITION", "menu inspection omitted its generic effect-verification capability");
+            helper.assertTrue(inspected.observation().path("uncertainEffectRequiresReview").asBoolean(),
+                    "menu inspection did not declare uncertain effects for external review");
+            helper.assertTrue(java.util.stream.StreamSupport.stream(inspected.observation()
+                            .path("acceptedPostconditions").spliterator(), false)
+                            .anyMatch(value -> value.asText().equals("MENU_SYNCHRONIZED_DATA_CHANGED")),
+                    "menu inspection omitted synchronized menu data as an accepted postcondition");
             helper.assertTrue(!MenuSessionTracker.validate(body,
                             "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA").valid(),
                     "forged menu session capability was accepted");
@@ -315,6 +329,55 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     });
                 });
             });
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "menu_state_effect")
+    public void genericMenuAcceptsSynchronizedStateChangeWithoutSlotOrCarriedChange(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "StateMenuOperator").success(),
+                "state-only menu test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "state-only menu test created no live body");
+        DataOnlyMenu menu = new DataOnlyMenu(91);
+        body.containerMenu = menu;
+        MenuSessionTracker.Snapshot session = MenuSessionTracker.inspect(body);
+        helper.assertTrue(session != null, "state-only menu did not create a session capability");
+        int slotDigestBefore = menu.getSlot(0).getItem().hashCode();
+        int stateBefore = menu.getStateId();
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-menu-state-effect";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "state-only menu lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "state-only-menu-click", "skill",
+                null, null, null, new SkillParameters("MenuAction", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        null, null, null, "", "UP", "MAIN_HAND",
+                        session.token(), 0, 0, "CLICK")).success(),
+                "state-only menu click failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertValueEqual(menu.dataValue(), 1,
+                    "state-only menu click did not change its synchronized data");
+            helper.assertValueEqual(menu.getStateId(), stateBefore,
+                    "state-only fixture unexpectedly changed the menu state ID");
+            helper.assertValueEqual(menu.getSlot(0).getItem().hashCode(), slotDigestBefore,
+                    "state-only menu unexpectedly changed its slot");
+            helper.assertTrue(menu.getCarried().isEmpty(),
+                    "state-only menu unexpectedly changed the carried cursor");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "MENU_ACTION_COMPLETE",
+                    "state-only menu action was not accepted through the generic postcondition");
+            body.containerMenu = body.inventoryMenu;
+            MenuSessionTracker.invalidate(body.getUUID());
+            helper.assertTrue(registry.remove(owner).success(), "state-only menu cleanup failed");
         });
     }
 
@@ -557,6 +620,96 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
             body.serverLevel().setBlockAndUpdate(support, Blocks.AIR.defaultBlockState());
             helper.assertTrue(registry.remove(owner).success(), "block-place cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "block_place_creative")
+    public void creativeBlockPlaceUsesExactWorldPostconditionWithoutConsumingItem(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "CreativeBlockPlacer").success(),
+                "creative block-place test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "creative block-place test created no live body");
+        body.setGameMode(GameType.CREATIVE);
+        BlockPos target = body.blockPosition().offset(2, 2, 0);
+        BlockPos support = target.below();
+        body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
+        var fixtureItem = BuiltInRegistries.ITEM.get(RegistryFixtureInitializer.BLUE_BLOCK_ID);
+        body.getInventory().setItem(0, new ItemStack(fixtureItem, 1));
+        body.getInventory().selected = 0;
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-block-place-creative";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "creative block-place lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L,
+                "place-creative-blue-concrete", "skill", null, null, null,
+                new SkillParameters("PlaceBlock", RegistryFixtureInitializer.BLUE_BLOCK_ID.toString(),
+                        1, false, body.serverLevel().dimension().location().toString(),
+                        target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND")).success(),
+                "creative block-place skill failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+            helper.assertTrue(body.serverLevel().getBlockState(target).is(RegistryFixtureInitializer.BLUE_BLOCK),
+                    "creative block placement did not create the declared block at the exact target");
+            helper.assertValueEqual(body.getInventory().countItem(fixtureItem), 1,
+                    "creative block placement unexpectedly consumed the reusable item");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "BLOCK_PLACE_COMPLETE",
+                    "creative block-place observation code mismatch");
+            helper.assertTrue(registry.remove(owner).success(), "creative block-place cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "uncertain_effect")
+    public void unobservedGenericInteractionStopsAsUncertainAndDoesNotReplayOnResume(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "UncertainInteractor").success(),
+                "uncertain interaction test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "uncertain interaction test created no live body");
+        BlockPos target = body.blockPosition().offset(1, 0, 0);
+        body.serverLevel().setBlockAndUpdate(target, Blocks.BEDROCK.defaultBlockState());
+        String companionId = body.getUUID().toString();
+        String leaseId = "gametest-uncertain-effect";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "uncertain interaction lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "interact-inert-block", "skill",
+                null, null, null, new SkillParameters("InteractBlock", "", 1, false,
+                        body.serverLevel().dimension().location().toString(),
+                        target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND")).success(),
+                "uncertain block interaction failed to start");
+        awaitBehaviorPaused(helper, registry, companionId, 20, uncertain -> {
+            helper.assertTrue(uncertain.evidenceSummary().contains("failure=UNCERTAIN_EFFECT"),
+                    "unobserved generic interaction did not expose UNCERTAIN_EFFECT");
+            helper.assertTrue(body.serverLevel().getBlockState(target).is(Blocks.BEDROCK),
+                    "uncertain interaction changed the inert fixture");
+            helper.assertTrue(registry.runtimeResume(companionId, leaseId, 1L).success(),
+                    "uncertain interaction did not accept explicit reconciliation resume");
+            awaitBehaviorPaused(helper, registry, companionId, 3, resumed -> {
+                helper.assertTrue(resumed.evidenceSummary().contains("failure=UNCERTAIN_EFFECT"),
+                        "explicit resume overwrote the original uncertain-effect evidence");
+                helper.assertTrue(body.serverLevel().getBlockState(target).is(Blocks.BEDROCK),
+                        "reconciliation resume repeated the uncertain interaction");
+                helper.assertTrue(registry.remove(owner).success(), "uncertain interaction cleanup failed");
+                helper.succeed();
+            });
         });
     }
 
@@ -1301,10 +1454,59 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         if (completeTest) helper.succeed();
     }
 
+    private static void awaitBehaviorPaused(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            String companionId,
+            int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+        var snapshot = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        if (snapshot.behaviorState().equals("RUNNING")) {
+            helper.assertTrue(ticksRemaining > 0, "timed out waiting for behavior to stop safely");
+            helper.runAfterDelay(1, () -> awaitBehaviorPaused(
+                    helper, registry, companionId, ticksRemaining - 1, terminalAssertions));
+            return;
+        }
+        helper.assertValueEqual(snapshot.behaviorState(), "PAUSED",
+                "behavior did not stop in the expected safe state");
+        terminalAssertions.accept(snapshot);
+    }
+
     private static double horizontalDistanceToSqr(Vec3 first, Vec3 second) {
         double x = first.x - second.x;
         double z = first.z - second.z;
         return x * x + z * z;
+    }
+
+    /** Synthetic Mod-style menu fixture whose click changes only synchronized menu data. */
+    private static final class DataOnlyMenu extends AbstractContainerMenu {
+        private final DataSlot data = DataSlot.standalone();
+
+        private DataOnlyMenu(int containerId) {
+            super(MenuType.GENERIC_9x1, containerId);
+            addSlot(new Slot(new SimpleContainer(1), 0, 0, 0));
+            addDataSlot(data);
+        }
+
+        @Override
+        public void clicked(int slot, int button, net.minecraft.world.inventory.ClickType clickType, Player player) {
+            data.set(data.get() + 1);
+        }
+
+        @Override
+        public ItemStack quickMoveStack(Player player, int slot) {
+            return ItemStack.EMPTY;
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return true;
+        }
+
+        private int dataValue() {
+            return data.get();
+        }
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000, batch = "blocked_navigation")

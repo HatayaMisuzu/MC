@@ -190,7 +190,12 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(task.taskId());
         if (!events.isEmpty()) observation.set("fabricObservation", events.getLast().payload());
         boolean success = state == TaskState.COMPLETED;
+        String durableFailure = events.isEmpty() ? ""
+                : events.getLast().payload().path("code").asText(
+                        events.getLast().payload().path("snapshot").path("failureCode").asText(""));
         String code = success ? "OK" : state == TaskState.CANCELLED ? "TOOL_CANCELLED"
+                : (state == TaskState.BLOCKED || state == TaskState.PAUSED)
+                        && durableFailure.equals("UNCERTAIN_EFFECT") ? "UNCERTAIN_EFFECT"
                 : state == TaskState.BLOCKED || state == TaskState.PAUSED ? "TOOL_BLOCKED"
                 : state == TaskState.RECONCILIATION_REQUIRED ? "TOOL_RECONCILIATION_REQUIRED" : "TOOL_FAILED";
         return new ToolResult(call.callId(), call.name(), success, code, observation, true);
@@ -295,23 +300,29 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Break one observed block through vanilla block-breaking rules", blockBreakSchema(),
                 "MEDIUM", "MINE", false));
         if (available.contains("InteractBlock")) values.add(definition("block.interact",
-                "Interact once with a visible reachable block through vanilla player rules",
+                "Interact once with a visible reachable block through vanilla player rules; success requires an "
+                        + "observed world, inventory, or menu postcondition and otherwise returns UNCERTAIN_EFFECT",
                 blockInteractionSchema(), "LOW", "INTERACT", false));
         if (available.contains("PlaceBlock")) values.add(definition("block.place",
-                "Place one declared block at an exact reachable position through vanilla player rules",
+                "Place one declared block at an exact reachable position through vanilla player rules; the exact "
+                        + "world block is authoritative in Survival, Creative, and reusable-item modes",
                 blockPlaceSchema(), "MEDIUM", "BUILD", false));
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
-                "Interact once with a visible reachable entity through vanilla player rules",
+                "Interact once with a visible reachable entity through vanilla player rules; success requires an "
+                        + "observed entity, inventory, vehicle, or menu postcondition and otherwise returns "
+                        + "UNCERTAIN_EFFECT",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
         if (available.contains("AttackEntity")) values.add(definition("entity.attack",
                 "Attack one externally selected visible reachable living entity through vanilla player rules",
                 entityAttackSchema(), "MEDIUM", "COMBAT", false));
         if (available.contains("MenuAction")) {
             values.add(definition("menu.click",
-                    "Perform one bounded pickup click in the exact short-lived open menu session",
+                    "Perform one bounded pickup click in the exact short-lived open menu session; slot/carried or "
+                            + "synchronized menu data/state must change, otherwise the result is UNCERTAIN_EFFECT",
                     menuClickSchema(), "LOW", "INVENTORY", false));
             values.add(definition("menu.quick_move",
-                    "Quick-move one slot in the exact short-lived open menu session",
+                    "Quick-move one slot in the exact short-lived open menu session; slot/carried or synchronized "
+                            + "menu data/state must change, otherwise the result is UNCERTAIN_EFFECT",
                     menuSlotSchema(), "LOW", "INVENTORY", false));
             values.add(definition("menu.close",
                     "Close the exact short-lived open menu session",

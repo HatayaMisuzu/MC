@@ -508,7 +508,7 @@ final class RuntimeBridge implements AutoCloseable {
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("failureCode", failure).put("evidence", snapshot.evidenceSummary());
             appendBehaviorObservation(evidence, snapshot.behaviorObservation());
-            sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, null, evidence);
+            sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, failure, evidence);
         }
     }
 

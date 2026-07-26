@@ -3,6 +3,7 @@ package com.mccompanion.minecraft.v121;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -773,22 +774,30 @@ final class BehaviorDirector {
                     progress.hand, hit);
             actionGateway.markVanillaGameModeAction(body);
             boolean placed = body.serverLevel().getBlockState(progress.blockPosition).is(progress.placementBlock);
-            int remaining = count(body, progress.placementItem);
-            if (!result.consumesAction() || !placed || remaining >= progress.itemBaseline) {
-                logger.warn("companion_block_place_no_effect companion={} result={} placed={} remaining={} baseline={} target={}",
-                        entry.companionId, result, placed, remaining, progress.itemBaseline,
-                        progress.blockPosition);
-                pauseSafely(entry, body, "BLOCK_PLACE_NO_EFFECT");
+            if (!placed) {
+                logger.warn("companion_effect_uncertain companion={} capability=PlaceBlock result={} "
+                                + "inventoryRemaining={} inventoryBaseline={} target={}",
+                        entry.companionId, result, count(body, progress.placementItem),
+                        progress.itemBaseline, progress.blockPosition);
+                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                 return;
             }
         } else if (progress.blockPosition != null) {
+            var beforeBlock = body.serverLevel().getBlockState(progress.blockPosition);
+            int beforeInventory = inventoryDigest(body);
+            MenuEffectSnapshot beforeMenu = menuEffectSnapshot(body.containerMenu);
             BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(progress.blockPosition),
                     progress.face, progress.blockPosition, false);
             var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
                     progress.hand, hit);
             actionGateway.markVanillaGameModeAction(body);
-            if (!result.consumesAction()) {
-                pauseSafely(entry, body, "INTERACTION_REJECTED");
+            boolean observed = !body.serverLevel().getBlockState(progress.blockPosition).equals(beforeBlock)
+                    || inventoryDigest(body) != beforeInventory
+                    || menuEffectChanged(beforeMenu, body.containerMenu);
+            if (!observed) {
+                logger.warn("companion_effect_uncertain companion={} capability=InteractBlock result={} target={}",
+                        entry.companionId, result, progress.blockPosition);
+                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                 return;
             }
         } else {
@@ -810,10 +819,22 @@ final class BehaviorDirector {
                     return;
                 }
             } else {
+                int beforeEntity = entityEffectDigest(target);
+                int beforeInventory = inventoryDigest(body);
+                MenuEffectSnapshot beforeMenu = menuEffectSnapshot(body.containerMenu);
+                UUID beforeVehicle = body.getVehicle() == null ? null : body.getVehicle().getUUID();
                 var result = body.interactOn(target, progress.hand);
                 actionGateway.markVanillaEntityInteraction(body);
-                if (!result.consumesAction()) {
-                    pauseSafely(entry, body, "INTERACTION_REJECTED");
+                Entity afterTarget = body.serverLevel().getEntity(progress.entityId);
+                UUID afterVehicle = body.getVehicle() == null ? null : body.getVehicle().getUUID();
+                boolean observed = afterTarget == null || entityEffectDigest(afterTarget) != beforeEntity
+                        || inventoryDigest(body) != beforeInventory
+                        || menuEffectChanged(beforeMenu, body.containerMenu)
+                        || !Objects.equals(beforeVehicle, afterVehicle);
+                if (!observed) {
+                    logger.warn("companion_effect_uncertain companion={} capability=InteractEntity result={} target={}",
+                            entry.companionId, result, progress.entityId);
+                    pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                     return;
                 }
             }
@@ -856,13 +877,25 @@ final class BehaviorDirector {
                 return;
             }
         } else {
-            int before = menuDigest(session.menu());
+            session.menu().broadcastChanges();
+            MenuEffectSnapshot before = menuEffectSnapshot(session.menu());
+            MenuMutationTracker mutations = new MenuMutationTracker();
+            session.menu().addSlotListener(mutations);
             ClickType clickType = action.equals("QUICK_MOVE") ? ClickType.QUICK_MOVE : ClickType.PICKUP;
             int button = action.equals("CLICK") ? progress.parameters.button() : 0;
-            session.menu().clicked(progress.parameters.slot(), button, clickType, body);
+            try {
+                session.menu().clicked(progress.parameters.slot(), button, clickType, body);
+                session.menu().broadcastChanges();
+            } finally {
+                session.menu().removeSlotListener(mutations);
+            }
             actionGateway.markVanillaMenuAction(body);
-            if (menuDigest(session.menu()) == before) {
-                pauseSafely(entry, body, "MENU_ACTION_NO_EFFECT");
+            if (!mutations.changed && !menuEffectChanged(before, session.menu())) {
+                logger.warn("companion_effect_uncertain companion={} capability=MenuAction action={} slot={} "
+                                + "containerId={} stateId={}",
+                        entry.companionId, action, progress.parameters.slot(),
+                        session.menu().containerId, session.menu().getStateId());
+                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                 return;
             }
         }
@@ -887,6 +920,63 @@ final class BehaviorDirector {
         hash = 31 * hash + carried.getCount();
         hash = 31 * hash + carried.getComponents().hashCode();
         return hash;
+    }
+
+    private static int inventoryDigest(CompanionPlayer body) {
+        int hash = 1;
+        for (int index = 0; index < body.getInventory().getContainerSize(); index++) {
+            ItemStack stack = body.getInventory().getItem(index);
+            hash = 31 * hash + stack.getItem().hashCode();
+            hash = 31 * hash + stack.getCount();
+            hash = 31 * hash + stack.getComponents().hashCode();
+        }
+        return hash;
+    }
+
+    private static int entityEffectDigest(Entity entity) {
+        int hash = Objects.hash(
+                entity.getType(), entity.isAlive(), entity.position(), entity.getDeltaMovement(),
+                entity.getXRot(), entity.getYRot(), entity.getPose(), entity.getAirSupply(),
+                entity.getRemainingFireTicks(), entity.onGround(), entity.isNoGravity(),
+                entity.isInvulnerable(), entity.getCustomName());
+        if (entity instanceof LivingEntity living) {
+            hash = 31 * hash + Float.hashCode(living.getHealth());
+            hash = 31 * hash + Float.hashCode(living.getAbsorptionAmount());
+        }
+        Entity vehicle = entity.getVehicle();
+        hash = 31 * hash + (vehicle == null ? 0 : vehicle.getUUID().hashCode());
+        for (Entity passenger : entity.getPassengers()) {
+            hash = 31 * hash + passenger.getUUID().hashCode();
+        }
+        return hash;
+    }
+
+    private static MenuEffectSnapshot menuEffectSnapshot(
+            net.minecraft.world.inventory.AbstractContainerMenu menu) {
+        return new MenuEffectSnapshot(menu, menu.getStateId(), menuDigest(menu));
+    }
+
+    private static boolean menuEffectChanged(
+            MenuEffectSnapshot before, net.minecraft.world.inventory.AbstractContainerMenu after) {
+        return before.menu != after || before.stateId != after.getStateId()
+                || before.digest != menuDigest(after);
+    }
+
+    private record MenuEffectSnapshot(
+            net.minecraft.world.inventory.AbstractContainerMenu menu, int stateId, int digest) { }
+
+    private static final class MenuMutationTracker implements net.minecraft.world.inventory.ContainerListener {
+        private boolean changed;
+
+        @Override
+        public void slotChanged(net.minecraft.world.inventory.AbstractContainerMenu menu, int slot, ItemStack stack) {
+            changed = true;
+        }
+
+        @Override
+        public void dataChanged(net.minecraft.world.inventory.AbstractContainerMenu menu, int property, int value) {
+            changed = true;
+        }
     }
 
     private void tickCollection(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {

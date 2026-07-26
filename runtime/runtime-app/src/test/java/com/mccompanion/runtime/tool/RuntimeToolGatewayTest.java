@@ -679,6 +679,24 @@ class RuntimeToolGatewayTest {
                 assertEquals("TOOL_BLOCKED", blocked.code());
                 assertEquals("BLOCKED", blocked.observation().path("state").asText());
 
+                var uncertainTask = tasks.create("c-uncertain", TaskType.TRAVEL, "uncertain", Json.object());
+                uncertainTask = tasks.transition(uncertainTask.taskId(), uncertainTask.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                uncertainTask = tasks.transition(uncertainTask.taskId(), uncertainTask.revision(), TaskState.PAUSED,
+                        "BehaviorBlocked", Json.object().put("code", "UNCERTAIN_EFFECT")
+                                .set("snapshot", Json.object().put("failureCode", "UNCERTAIN_EFFECT")));
+                ToolCall uncertainCall = new ToolCall("navigate-uncertain", "movement.navigate", Json.object());
+                ToolResult uncertainAccepted = new ToolResult(uncertainCall.callId(), uncertainCall.name(), true,
+                        "COMMAND_DISPATCHED", Json.object().put("taskId", uncertainTask.taskId()), false);
+                ToolResult uncertain = gateway.awaitTerminal(
+                        new ToolContext("hermes", "session-uncertain", "c-uncertain"),
+                        uncertainCall, uncertainAccepted, Duration.ofSeconds(2), ignored -> { });
+                assertFalse(uncertain.success());
+                assertTrue(uncertain.terminal());
+                assertEquals("UNCERTAIN_EFFECT", uncertain.code());
+                assertEquals("UNCERTAIN_EFFECT", uncertain.observation()
+                        .path("fabricObservation").path("code").asText());
+
                 for (TaskState immediate : List.of(TaskState.PAUSED, TaskState.RECONCILIATION_REQUIRED)) {
                     String id = immediate.name().toLowerCase(java.util.Locale.ROOT);
                     var waitingTask = tasks.create("c-" + id, TaskType.TRAVEL, id, Json.object());

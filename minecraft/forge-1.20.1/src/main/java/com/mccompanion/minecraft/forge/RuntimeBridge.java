@@ -132,6 +132,9 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("travel", true)
                 .put("bounded_world_snapshot", true)
                 .put("inventory_observation", true)
+                .put("registry_query", true)
+                .put("recipe_query", true)
+                .put("primitive_observation_query", true)
                 .put("runtime_safe_idle", true);
         ObjectNode hello = JSON.createObjectNode()
                 .put("protocol", PROTOCOL)
@@ -205,6 +208,21 @@ final class RuntimeBridge implements AutoCloseable {
                 publishStatusOnServerThread();
                 result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
             }
+            case "QUERY_REGISTRY" -> {
+                sendQueryResult(commandId, companionId, arguments,
+                        RegistryObservationService.registry(server, arguments));
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
+            case "QUERY_RECIPE" -> {
+                sendQueryResult(commandId, companionId, arguments,
+                        RegistryObservationService.recipes(server, arguments));
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
+            case "QUERY_OBSERVATION" -> {
+                sendObservationResult(commandId, companionId, arguments,
+                        PrimitiveObservationService.inspect(registry, companionId, arguments));
+                result = new CompanionRegistry.RuntimeResult(true, "OK", null, 0, "STATUS");
+            }
             default -> result =
                     new CompanionRegistry.RuntimeResult(false, "UNKNOWN_COMMAND", null, 0, "FAILED");
         }
@@ -224,6 +242,36 @@ final class RuntimeBridge implements AutoCloseable {
                     result.state().toUpperCase(Locale.ROOT));
         }
         publishStatusOnServerThread();
+    }
+
+    private void sendQueryResult(
+            String commandId,
+            String companionId,
+            JsonNode arguments,
+            RegistryObservationService.Result result) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("queryId", arguments.path("queryId").asText())
+                .put("commandId", commandId)
+                .put("companionId", companionId)
+                .put("success", result.success())
+                .put("code", result.code());
+        payload.set("observation", result.observation());
+        sendEnvelope("registry_result", payload);
+    }
+
+    private void sendObservationResult(
+            String commandId,
+            String companionId,
+            JsonNode arguments,
+            PrimitiveObservationService.Result result) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("queryId", arguments.path("queryId").asText())
+                .put("commandId", commandId)
+                .put("companionId", companionId)
+                .put("success", result.success())
+                .put("code", result.code());
+        payload.set("observation", result.observation());
+        sendEnvelope("observation_result", payload);
     }
 
     private void sendCommandAccepted(String commandId, CompanionRegistry.RuntimeResult result) {
@@ -318,9 +366,9 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("freeSlots", snapshot.freeInventorySlots())
                     .putObject("counts");
             snapshot.inventory().forEach(counts::put);
-            status.putObject("capabilities")
-                    .put("follow", true)
-                    .put("travel", true);
+            // Connected Tool availability is negotiated by the hello capability flags. The status
+            // protocol field is a map of structured CapabilityDescriptor values, not booleans.
+            status.putObject("capabilities");
             if (activeBehavior) {
                 status.put("behaviorId", snapshot.behaviorId());
                 status.put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT));

@@ -284,6 +284,12 @@ public final class CompanionRegistry {
         return java.util.List.copyOf(snapshots);
     }
 
+    /** Returns only the live authenticated Runtime body; callers must remain on the server thread. */
+    public CompanionPlayer runtimeBody(String companionId) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        return entry == null ? null : liveBodies.get(entry.companionId);
+    }
+
     public RuntimeResult runtimeAcquireLease(
             String companionId,
             String proposedLeaseId,

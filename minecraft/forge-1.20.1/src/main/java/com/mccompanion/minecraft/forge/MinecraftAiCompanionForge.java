@@ -33,8 +33,7 @@ public final class MinecraftAiCompanionForge {
             "PLAYER_TRAVEL_ONLY",
             List.of("status", "capabilities", "help", "create", "spawn", "despawn", "remove",
                     "follow", "come", "goto", "stop", "pause", "resume", "runtime"),
-            List.of("registry_query", "recipe_query", "primitive_observation_query",
-                    "primitive_tools", "menu_tools", "owner_activity_handoff", "player_text_gateway"),
+            List.of("primitive_tools", "menu_tools", "owner_activity_handoff", "player_text_gateway"),
             List.of());
     private static volatile MinecraftServer activeServer;
     private static volatile CompanionRegistry registry;

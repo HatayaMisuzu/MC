@@ -112,6 +112,19 @@ tasks.register('runtimeFabricE2E') {
     }
 }
 
+tasks.register('runtimeForgeE2E') {
+    group = 'verification'
+    description = 'Runs authenticated Runtime control against a real Forge 1.20.1 GameTest server.'
+    dependsOn ':runtime:runtime-app:installDist'
+    doLast {
+        exec {
+            environment 'MCAC_TEST_JAVA_HOME', System.getProperty('java.home')
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/runtime-forge-e2e.ps1').absolutePath
+        }
+    }
+}
+
 tasks.register('unknownModGenericE2E') {
     group = 'verification'
     description = 'Runs the Fabric external-client unknown-Mod Registry/recipe/observation/menu primitive chain (liveModel=false).'

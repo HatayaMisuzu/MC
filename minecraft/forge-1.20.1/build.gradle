@@ -41,6 +41,8 @@ legacyForge {
             type = "gameTestServer"
             gameDirectory = project.file('build/gametest')
             systemProperty 'forge.enabledGameTestNamespaces', "${project.mod_id},minecraft"
+            systemProperty 'mccompanion.runtime.e2e',
+                    "${project.findProperty('mccompanionRuntimeE2E') ?: 'false'}"
         }
     }
 
@@ -128,3 +130,15 @@ publishing {
 }
 
 apply from: rootProject.file('../gradle/launch-test.gradle')
+
+tasks.named('runGameTestServer').configure {
+    doFirst {
+        if (!project.hasProperty('mccompanionRuntimeE2E')) {
+            delete file('build/gametest')
+        }
+        file('build/gametest').mkdirs()
+        file('build/gametest/server.properties').setText(
+                'online-mode=false\nlevel-name=world\nspawn-protection=0\n', 'UTF-8')
+        file('build/gametest/eula.txt').setText('eula=true\n', 'UTF-8')
+    }
+}

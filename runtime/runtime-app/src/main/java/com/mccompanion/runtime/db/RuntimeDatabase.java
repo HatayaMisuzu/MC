@@ -25,7 +25,7 @@ public final class RuntimeDatabase implements AutoCloseable {
             "memory_fact", "memory_suggestion", "memory_fact_history", "memory_settings",
             "episode_capsule", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
-            "brain_completion_claim",
+            "brain_completion_claim", "proactive_message_admission",
             "task_graph_execution", "skill_version", "skill_trial_lease",
             "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
@@ -838,6 +838,25 @@ public final class RuntimeDatabase implements AutoCloseable {
                 CREATE INDEX skill_trial_lease_scope_idx
                 ON skill_trial_lease(profile_id,companion_id,brain_session_id,status,updated_at)
                 """);
+        List<String> proactiveMessageAdmission = List.of(
+                """
+                CREATE TABLE proactive_message_admission (
+                  admission_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  evidence_call_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  message_sha256 TEXT NOT NULL,
+                  initiative_mode TEXT NOT NULL,
+                  conversation_event_id TEXT,
+                  created_at INTEGER NOT NULL,
+                  UNIQUE(brain_session_id,evidence_call_id,event_type)
+                )
+                """,
+                """
+                CREATE INDEX proactive_message_admission_scope_idx
+                ON proactive_message_admission(companion_id,created_at DESC)
+                """);
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -866,6 +885,8 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings),
                 new Migration(26, "link external Brain completion claims to final observations", brainCompletionClaim),
                 new Migration(27, "persist Memory settings and user-visible history", memoryManagement),
-                new Migration(28, "persist bounded one-time generated Skill trial leases", skillTrialLease));
+                new Migration(28, "persist bounded one-time generated Skill trial leases", skillTrialLease),
+                new Migration(29, "rate-limit and deduplicate evidence-bound proactive messages",
+                        proactiveMessageAdmission));
     }
 }

@@ -274,6 +274,66 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void immediateInstructionPausesActiveToolAndDeliversPauseBeforeNewMessage() throws Exception {
+        CountDownLatch awaiting = new CountDownLatch(1);
+        CountDownLatch paused = new CountDownLatch(1);
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("task_graph.execute", "1.0", "execute",
+                        Json.object(), "LOW", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(5), false));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "ACCEPTED",
+                        Json.object().put("state", "ACCEPTED"), false);
+            }
+            @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                                      Duration timeout,
+                                                      java.util.function.Consumer<ToolResult> progress) {
+                awaiting.countDown();
+                try {
+                    if (!paused.await(2, TimeUnit.SECONDS)) throw new AssertionError("pause was blocked");
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(failure);
+                }
+                return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
+                        Json.object().put("state", "PAUSED"), true);
+            }
+            @Override public boolean pause(ToolContext context, String callId, String reason) {
+                paused.countDown();
+                return true;
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            if (turns.getAndIncrement() == 0) {
+                return BrainTurnResult.tools(List.of(
+                        new ToolCall("long-goal", "task_graph.execute", Json.object())));
+            }
+            assertEquals("先跟我走", request.userMessage());
+            assertEquals(1, request.toolResults().size());
+            assertEquals("PAUSED", request.toolResults().getFirst().observation().path("state").asText());
+            return BrainTurnResult.finalResponse("我已暂停原任务，现在跟你走。");
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            CompletableFuture<BrainCoordinatorResult> original = CompletableFuture.supplyAsync(() ->
+                    coordinator.continueTurn("hermes-1", "c1", "执行长期目标", context()));
+            assertTrue(awaiting.await(1, TimeUnit.SECONDS));
+            long started = System.nanoTime();
+            assertTrue(coordinator.pauseActiveForUserInstruction(
+                    "hermes-1", "c1", "OWNER_IMMEDIATE_INSTRUCTION"));
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0);
+            assertEquals("BRAIN_TURN_PAUSED_FOR_USER_INSTRUCTION",
+                    original.get(2, TimeUnit.SECONDS).code());
+
+            BrainCoordinatorResult immediate = coordinator.continueTurn(
+                    "hermes-1", "c1", "先跟我走", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, immediate.kind());
+            assertEquals(2, turns.get(), "the interrupted old turn must not continue on its own");
+        }
+    }
+
+    @Test
     void companionSessionsRunConcurrentlyAndRemainIsolated() throws Exception {
         CountDownLatch bothEntered = new CountDownLatch(2);
         var sessionByCompanion = new ConcurrentHashMap<String, String>();

@@ -13,11 +13,19 @@ public final class IncomingMessageClassifier {
         String value = text == null ? "" : text.strip();
         var intent = controls.parse(value);
         if (intent.isPresent() && intent.get().type() == TaskType.STOP) {
-            return new IncomingMessageResolution(IncomingMessageKind.CONTROL, null, value);
+            return new IncomingMessageResolution(IncomingMessageKind.CONTROL,
+                    intent.get().arguments().path("action").asText("cancel"), value);
+        }
+        if (intent.isPresent() && java.util.Set.of(TaskType.FOLLOW, TaskType.RETURN, TaskType.TRAVEL)
+                .contains(intent.get().type())) {
+            return new IncomingMessageResolution(IncomingMessageKind.IMMEDIATE_INSTRUCTION, null, value);
         }
         String compact = value.replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
-        if (compact.contains("改成") || compact.contains("不要了") || compact.contains("算了")
-                || compact.contains("回来陪我") || compact.contains("换成")) {
+        boolean hypothetical = compact.startsWith("如果") || compact.startsWith("假如")
+                || compact.startsWith("要是") || compact.startsWith("比如");
+        if (!hypothetical && (compact.startsWith("改成") || compact.startsWith("换成")
+                || compact.startsWith("算了") || compact.startsWith("别管这个")
+                || compact.contains("不要了") || compact.contains("回来陪我"))) {
             return new IncomingMessageResolution(IncomingMessageKind.GOAL_MODIFICATION, null, value);
         }
         if (waiting != null) {

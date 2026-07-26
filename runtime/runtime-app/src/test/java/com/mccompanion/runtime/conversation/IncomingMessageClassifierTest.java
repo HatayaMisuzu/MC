@@ -25,4 +25,13 @@ class IncomingMessageClassifierTest {
                 classifier.classify("算了，不要铁了，回来陪我", waiting).kind());
         assertEquals(IncomingMessageKind.CONTROL, classifier.classify("暂停", waiting).kind());
     }
+
+    @Test void explicitImmediateInstructionIsDistinctButHypotheticalSpeechIsOnlyConversation() {
+        assertEquals(IncomingMessageKind.IMMEDIATE_INSTRUCTION,
+                classifier.classify("先跟我走", null).kind());
+        assertEquals(IncomingMessageKind.NEW_REQUEST_OR_CONVERSATION,
+                classifier.classify("假如我说算了，你会怎么办？", null).kind());
+        assertEquals(IncomingMessageKind.NEW_REQUEST_OR_CONVERSATION,
+                classifier.classify("刚才那个笑话挺好", null).kind());
+    }
 }

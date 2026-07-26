@@ -24,6 +24,11 @@ public final class CompositeToolGateway implements ToolGateway, AutoCloseable {
     @Override public void cancel(ToolContext context, String callId, String reason) {
         delegates.forEach(value -> value.cancel(context, callId, reason));
     }
+    @Override public boolean pause(ToolContext context, String callId, String reason) {
+        boolean accepted = false;
+        for (ToolGateway delegate : delegates) accepted |= delegate.pause(context, callId, reason);
+        return accepted;
+    }
     private java.util.Optional<ToolGateway> delegate(ToolContext context, ToolCall call) {
         return delegates.stream().filter(value -> value.definitions(context).stream()
                 .anyMatch(definition -> definition.name().equals(call.name()))).findFirst();

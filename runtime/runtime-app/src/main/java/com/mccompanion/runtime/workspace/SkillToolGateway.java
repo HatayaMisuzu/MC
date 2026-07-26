@@ -200,6 +200,16 @@ public final class SkillToolGateway implements ToolGateway {
         }
     }
 
+    @Override
+    public boolean pause(ToolContext context, String callId, String reason) {
+        ActiveSkillExecution execution = activeExecutions.get(executionKey(context, callId));
+        if (taskGraphRuntime == null || execution == null) return false;
+        ToolResult paused = taskGraphRuntime.pause(context,
+                new ToolCall("interrupt-pause-" + callId, "task_graph.pause",
+                        Json.object().put("executionId", callId)), callId);
+        return paused.success();
+    }
+
     private ToolResult list(ToolContext context, ToolCall call) throws IOException, SQLException {
         rejectUnexpected(call.arguments(), Set.of());
         ObjectNode observation = Json.object();

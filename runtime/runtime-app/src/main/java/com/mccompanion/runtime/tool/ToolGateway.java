@@ -20,4 +20,10 @@ public interface ToolGateway {
         return Optional.empty();
     }
     default void cancel(ToolContext context, String callId, String reason) { }
+    /**
+     * Requests a safe pause of an in-flight call. Returns true only when this gateway owns the
+     * call and accepted the pause request. This is deterministic interruption plumbing, not a
+     * decision about whether user text should interrupt work.
+     */
+    default boolean pause(ToolContext context, String callId, String reason) { return false; }
 }

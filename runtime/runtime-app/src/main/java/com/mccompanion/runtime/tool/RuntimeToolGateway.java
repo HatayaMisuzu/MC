@@ -461,6 +461,23 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         }
     }
 
+    @Override public boolean pause(ToolContext context, String callId, String reason) {
+        boolean accepted = false;
+        if (taskGraphRuntime != null) {
+            ToolResult graph = taskGraphRuntime.pause(context,
+                    new ToolCall("interrupt-pause-" + callId, "task_graph.pause",
+                            Json.object().put("executionId", callId)), callId);
+            accepted = graph.success() && !graph.code().equals("TASK_GRAPH_NOT_RUNNING");
+        }
+        if (activeTasks.containsKey(key(context, callId))) {
+            CommandReply paused = commands.execute(
+                    "brain-pause-" + context.brainSessionId() + '-' + callId,
+                    context.companionId(), stop("pause"));
+            accepted |= paused.accepted();
+        }
+        return accepted;
+    }
+
     private static String key(ToolContext context, String callId) {
         return context.brainSessionId() + ':' + callId;
     }

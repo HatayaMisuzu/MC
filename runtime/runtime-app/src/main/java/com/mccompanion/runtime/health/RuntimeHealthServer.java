@@ -1038,16 +1038,32 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
                     return;
                 }
+                if (incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION) {
+                    externalBrain.pauseActiveForUserInstruction(controllerId, companionId,
+                            "OWNER_IMMEDIATE_INSTRUCTION");
+                }
                 if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                        && incoming.kind() == IncomingMessageKind.CONTROL) {
+                        && incoming.kind() == IncomingMessageKind.CONTROL
+                        && "cancel".equals(incoming.optionId())) {
                     conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
                     externalBrain.cancel(controllerId, companionId, "OWNER_CANCELLED");
                     sendJson(exchange, 200, Json.object().put("accepted", true).put("code", "BRAIN_CANCELLED"));
                     return;
                 }
-                if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                        && incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                    conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                if (incoming.kind() == IncomingMessageKind.CONTROL
+                        && "pause".equals(incoming.optionId())) {
+                    boolean paused = externalBrain.pauseActiveForUserInstruction(
+                            controllerId, companionId, "OWNER_PAUSED");
+                    sendJson(exchange, 200, Json.object().put("accepted", true)
+                            .put("code", paused ? "BRAIN_TOOL_PAUSE_REQUESTED" : "NO_ACTIVE_TOOL"));
+                    return;
+                }
+                if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                    if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null) {
+                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                        waiting = java.util.Optional.empty();
+                    }
+                    externalBrain.cancel(controllerId, companionId, "OWNER_MODIFIED_GOAL");
                 }
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
                     conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),

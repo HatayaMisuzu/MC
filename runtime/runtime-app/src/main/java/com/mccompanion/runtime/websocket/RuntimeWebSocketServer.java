@@ -355,8 +355,13 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         visible.availableNames(), memories.preferenceContext(companionId, 24),
                         memories.latestCapsuleContext(companionId), 5);
                 if (externalBrain != null) {
+                    if (incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION) {
+                        externalBrain.pauseActiveForUserInstruction(
+                                "runtime-primary", companionId, "OWNER_IMMEDIATE_INSTRUCTION");
+                    }
                     if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                            && incoming.kind() == IncomingMessageKind.CONTROL) {
+                            && incoming.kind() == IncomingMessageKind.CONTROL
+                            && "cancel".equals(incoming.optionId())) {
                         conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
                         externalBrain.cancel("runtime-primary", companionId, "OWNER_CANCELLED");
                         reply.put("accepted", true).put("source", "external-brain")
@@ -367,9 +372,24 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
                         return;
                     }
-                    if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                            && incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                    if (incoming.kind() == IncomingMessageKind.CONTROL
+                            && "pause".equals(incoming.optionId())) {
+                        boolean paused = externalBrain.pauseActiveForUserInstruction(
+                                "runtime-primary", companionId, "OWNER_PAUSED");
+                        reply.put("accepted", true).put("source", "external-brain")
+                                .put("code", paused ? "BRAIN_TOOL_PAUSE_REQUESTED" : "NO_ACTIVE_TOOL")
+                                .put("reply", paused ? "Paused." : "Nothing is currently running.");
+                        ObjectNode brainMessage = envelope(session, "player_reply");
+                        brainMessage.set("payload", reply);
+                        if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
+                        return;
+                    }
+                    if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                        if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null) {
+                            conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                            waiting = java.util.Optional.empty();
+                        }
+                        externalBrain.cancel("runtime-primary", companionId, "OWNER_MODIFIED_GOAL");
                     }
                     var brainResult = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                             && incoming.kind() == IncomingMessageKind.WAITING_ANSWER

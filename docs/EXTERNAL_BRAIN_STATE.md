@@ -282,8 +282,30 @@ override the current matrix.
 - The authenticated `/brain/settings` management route and HTML Terminal provide view/change
   controls. Changing either mode does not rebuild Tool definitions and cannot alter permissions,
   safety, budgets, or Memory policy.
-- Proactive-event significance, deduplication, and rate limiting are not implemented by this slice,
-  so section 5.3 remains incomplete.
+- `conversation.propose_proactive` lets the external Brain author one short message and select one
+  supported event class, but Runtime admits it only when `evidenceCallId` names a terminal Tool
+  observation from the exact Brain session. Blocked-task notices require a blocked/paused/failed/
+  reconciliation state, safety alerts require successful `safety.inspect`, and milestones require
+  successful `task.inspect` state evidence.
+- Migration 29 atomically deduplicates `Brain session + evidence call + event type`, retains the
+  admitted message hash and linked conversation event, prunes old/beyond-capacity admission rows,
+  and routes accepted speech through the existing durable offline outbox.
+- `QUIET` permits blocked/safety events only and applies a five-minute interval; `NORMAL` uses one
+  minute; `ACTIVE` uses fifteen seconds. A mode change still cannot alter Tool authority, safety,
+  execution budgets, Memory rules, or the evidence requirement.
+
+### Immediate instruction interruption
+
+- Runtime conservatively distinguishes exact pause/cancel controls and explicit immediate movement
+  instructions from ordinary conversation. Hypothetical or joke wording remains conversation and
+  does not become a task.
+- An explicit immediate instruction can request a safe pause of the currently awaited Tool without
+  waiting for the Companion turn lock. Runtime does not decide the follow-up strategy: it retains
+  the real terminal `PAUSED` observation and supplies it together with the new owner instruction to
+  the same external Brain.
+- The interrupted old turn stops before it can silently issue another Tool call. Goal modification
+  and cancellation invalidate the prior external-Brain session so the old goal cannot resume in
+  the background. Ordinary chat does not invoke either boundary.
 
 Example response extension:
 

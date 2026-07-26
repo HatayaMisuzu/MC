@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 20:34 +08:00
+Updated: 2026-07-26 20:50 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `4676193b6f10c923fcb3bf4898b17614577c38a7`
+- Latest committed source SHA: `817f1fa31df70b764542eed586e17bcb94e54ace`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -276,12 +276,27 @@ Passed on the frozen SHA:
   and a Revoke control without exposing the stored trial document or host
   paths. Repository, Gateway, Runtime HTTP, Web tests and the complete root
   `check` pass on implementation commit `4676193`.
+- Completed section 5.3's local proactive-message policy. The external Brain
+  authors the message and event class; Runtime requires exact same-session
+  terminal Tool evidence, enforces meaningful blocked/safety/milestone shapes,
+  atomically deduplicates the evidence event, and applies QUIET/NORMAL/ACTIVE
+  intervals of five minutes/one minute/fifteen seconds. QUIET suppresses
+  ordinary milestones. Migration 29 persists only the admission audit and hash;
+  accepted content uses the existing bounded durable conversation outbox.
+- Added the section 5.2 immediate-instruction interruption core. Exact immediate
+  movement instructions can safely pause the currently awaited Tool without
+  waiting for the old turn lock. The external Brain receives the real PAUSED
+  observation with the new instruction and remains the sole follow-up
+  decision-maker; the old turn cannot silently continue. Explicit goal
+  modification/cancellation invalidates the old Brain session, ordinary chat
+  does not interrupt work, and hypothetical/joke language is not promoted to
+  an instruction. Focused concurrency/classifier tests and root `check` pass on
+  implementation commit `817f1fa`.
 
 ## Remaining work
 
-- Complete stage-2 instruction/interruption semantics, proactive initiative
-  admission/rate/deduplication without moving high-level planning authority
-  into MCAC.
+- Complete stage-2 owner same-target handoff and full instruction/interruption
+  ingress scenarios without moving high-level planning authority into MCAC.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

@@ -306,22 +306,103 @@ tasks.register('stageTerminal') {
         def stdout=new ByteArrayOutputStream()
         exec { commandLine 'git','rev-parse','HEAD'; standardOutput=stdout }
         def sourceCommit=stdout.toString('UTF-8').trim()
+        def timestampOutput=new ByteArrayOutputStream()
+        exec { commandLine 'git','show','-s','--format=%cI',sourceCommit; standardOutput=timestampOutput }
+        def sourceTimestamp=java.time.OffsetDateTime.parse(timestampOutput.toString('UTF-8').trim()).toInstant().toString()
         def payload=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt','release-manifest.json','sbom.spdx.json' }
                 .files.findAll { it.isFile() }.sort { relative(it) }
         def manifest=[schemaVersion:1,product:'Minecraft AI Companion',version:project.version.toString(),
                 buildType:'RC_CANDIDATE',sourceCommit:sourceCommit,
                 files:payload.collect{f->[path:relative(f),size:f.length(),sha256:sha256(f)]}]
         file("${root}/release-manifest.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson(manifest))+'\n','UTF-8')
-        def packages=payload.findAll{f->f.name.endsWith('.jar')}.withIndex().collect{f,index->[
-                SPDXID:"SPDXRef-Package-${index+1}",name:f.name,versionInfo:project.version.toString(),
-                downloadLocation:'NOASSERTION',filesAnalyzed:false,licenseConcluded:'NOASSERTION',
-                licenseDeclared:'NOASSERTION',copyrightText:'NOASSERTION',packageFileName:relative(f),
-                checksums:[[algorithm:'SHA256',checksumValue:sha256(f)]]
-        ]}
+        def licenseByCoordinate=[
+                'org.java-websocket:Java-WebSocket':'Apache-2.0',
+                'com.fasterxml.jackson.core:jackson-annotations':'Apache-2.0',
+                'com.fasterxml.jackson.core:jackson-core':'Apache-2.0',
+                'com.fasterxml.jackson.core:jackson-databind':'Apache-2.0',
+                'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml':'Apache-2.0',
+                'com.fasterxml.jackson.datatype:jackson-datatype-jsr310':'Apache-2.0',
+                'org.jsoup:jsoup':'MIT',
+                'org.slf4j:slf4j-api':'MIT',
+                'org.slf4j:slf4j-simple':'MIT',
+                'org.yaml:snakeyaml':'Apache-2.0',
+                'org.xerial:sqlite-jdbc':'Apache-2.0'
+        ]
+        def inspectJar={f->
+            def path=relative(f)
+            def jar=new java.util.jar.JarFile(f)
+            try {
+                def propertyEntries=jar.entries().findAll {
+                    !it.directory && it.name ==~ /META-INF\/maven\/[^\/]+\/[^\/]+\/pom\.properties/
+                }.toList()
+                if(propertyEntries.size()>1) throw new GradleException("Ambiguous Maven identity in ${path}")
+                if(propertyEntries.size()==1) {
+                    def properties=new Properties()
+                    jar.getInputStream(propertyEntries[0]).withCloseable { properties.load(it) }
+                    def groupId=properties.getProperty('groupId')
+                    def artifactId=properties.getProperty('artifactId')
+                    def dependencyVersion=properties.getProperty('version')
+                    def coordinate="${groupId}:${artifactId}"
+                    def declaredLicense=licenseByCoordinate[coordinate]
+                    if(!groupId||!artifactId||!dependencyVersion||!declaredLicense) {
+                        throw new GradleException("Incomplete Maven SBOM metadata for ${path}: ${coordinate}:${dependencyVersion}")
+                    }
+                    def repositoryPath=groupId.replace('.','/')
+                    return [name:artifactId,version:dependencyVersion,license:declaredLicense,
+                            download:"https://repo1.maven.org/maven2/${repositoryPath}/${artifactId}/${dependencyVersion}/${artifactId}-${dependencyVersion}.jar",
+                            supplier:"Organization: ${groupId}",
+                            purl:"pkg:maven/${groupId}/${artifactId}@${dependencyVersion}"]
+                }
+                def jarManifest=jar.manifest?.mainAttributes
+                def implementationVersion=jarManifest?.getValue('Implementation-Version')
+                def bundleVersion=jarManifest?.getValue('Bundle-Version')
+                if(f.name ==~ /picocli-[0-9].*\.jar/) {
+                    def dependencyVersion=implementationVersion ?: bundleVersion
+                    return [name:'picocli',version:dependencyVersion,license:'Apache-2.0',
+                            download:"https://repo1.maven.org/maven2/info/picocli/picocli/${dependencyVersion}/picocli-${dependencyVersion}.jar",
+                            supplier:'Organization: info.picocli',
+                            purl:"pkg:maven/info.picocli/picocli@${dependencyVersion}"]
+                }
+                if(path=='runtime/lib/jrt-fs.jar') {
+                    def dependencyVersion=implementationVersion
+                    if(!dependencyVersion) throw new GradleException('jrt-fs.jar has no Implementation-Version')
+                    return [name:'OpenJDK jrt-fs',version:dependencyVersion,
+                            license:'GPL-2.0-with-classpath-exception',download:'NOASSERTION',
+                            supplier:'Organization: Eclipse Adoptium',
+                            purl:"pkg:generic/openjdk-jrt-fs@${dependencyVersion}"]
+                }
+                if(f.name.endsWith("-${project.version}.jar")) {
+                    return [name:f.name[0..<-4],version:project.version.toString(),
+                            license:'LicenseRef-MCAC-Evaluation',download:'NOASSERTION',
+                            supplier:'Organization: HatayaMisuzu/MC',
+                            purl:"pkg:github/HatayaMisuzu/MC@${sourceCommit}"]
+                }
+                throw new GradleException("Unable to identify packaged JAR for SBOM: ${path}")
+            } finally {
+                jar.close()
+            }
+        }
+        def packages=payload.findAll{f->f.name.endsWith('.jar')}.withIndex().collect{f,index->
+            def identity=inspectJar(f)
+            [
+                SPDXID:"SPDXRef-Package-${index+1}",name:identity.name,versionInfo:identity.version,
+                downloadLocation:identity.download,filesAnalyzed:false,licenseConcluded:'NOASSERTION',
+                licenseDeclared:identity.license,copyrightText:'NOASSERTION',supplier:identity.supplier,
+                packageFileName:relative(f),primaryPackagePurpose:'LIBRARY',
+                checksums:[[algorithm:'SHA256',checksumValue:sha256(f)]],
+                externalRefs:[[referenceCategory:'PACKAGE-MANAGER',referenceType:'purl',
+                               referenceLocator:identity.purl]]
+            ]
+        }
         def sbom=[spdxVersion:'SPDX-2.3',dataLicense:'CC0-1.0',SPDXID:'SPDXRef-DOCUMENT',
                 name:"mcac-${project.version}",documentNamespace:"https://github.com/HatayaMisuzu/MC/spdx/${sourceCommit}",
-                creationInfo:[created:java.time.Instant.now().toString(),creators:['Organization: HatayaMisuzu/MC']],
-                packages:packages,documentDescribes:packages.collect{it.SPDXID}]
+                creationInfo:[created:sourceTimestamp,creators:['Organization: HatayaMisuzu/MC']],
+                packages:packages,documentDescribes:packages.collect{it.SPDXID},
+                extractedLicensingInfo:[[
+                    licenseId:'LicenseRef-MCAC-Evaluation',
+                    extractedText:file('LICENSE').getText('UTF-8'),
+                    name:'MCAC evaluation license'
+                ]]]
         file("${root}/sbom.spdx.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson(sbom))+'\n','UTF-8')
         def files=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt' }.files.findAll { it.isFile() }.sort { it.absolutePath }
         file("${root}/SHA256SUMS.txt").withWriter('UTF-8'){w->files.each{f->w.write("${sha256(f)}  ${relative(f)}\n")}}

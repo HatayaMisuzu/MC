@@ -70,7 +70,8 @@ All three latest `main` workflows completed successfully on the frozen SHA:
   `e2626b2724669f8021df47fa68d42a8255d6a3bbc034b2307e9da4b5586336b4`
 - Confirmed audit defect: all 27 staged JAR packages currently use product
   version `0.3.0`; dependency versions and licenses are not represented
-  accurately. This is a stage-1 SBOM repair item, not a PASS.
+  accurately. This describes the frozen baseline artifact; the stage-1
+  generator repair below does not rewrite that historical evidence.
 - A fresh release ZIP will be created only after the remaining baseline package
   tasks; no stale pre-clean ZIP is counted as this branch's baseline artifact.
 
@@ -159,11 +160,19 @@ Passed on the frozen SHA:
   never forwarded.
 - Added unit, simulated DNS-rebinding, redirect, and real loopback-socket
   Provider integration coverage for the Search boundary.
+- Repaired SBOM identity generation to read embedded Maven coordinates and
+  versions or signed JAR Manifest versions. MCAC, Maven, and OpenJDK components
+  now carry distinct versions, declared licenses, supplier, purl, available
+  download source, and exact hashes.
+- Made SBOM creation time deterministic from the source commit and strengthened
+  package verification to require exact JAR-set coverage, source-SHA binding,
+  real versions/licenses/purls, known dependency versions, and rejection of
+  product-version overwrite. A rebuilt 27-package release passes the new gate.
 
 ## Remaining work
 
 - Execute stage-1 audits and repairs without weakening current guarantees.
-- Continue stage-1 SBOM, bootstrap-ticket, supply-chain, and generic-effect
+- Continue stage-1 bootstrap-ticket, supply-chain, and generic-effect
   verification audits.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.

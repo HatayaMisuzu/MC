@@ -361,6 +361,14 @@ Passed on the frozen SHA:
   behavior lifecycle evidence. Forge GameTest verifies two live gold-ore
   candidates and ordering. Authenticated Runtime/Forge E2E, root `check`, Web
   tests and all Loader builds pass.
+- Stage 3 primitive-breadth slice `da0b8ad` closes the remaining direct Forge
+  evidence gaps for exact vanilla block placement and item consumption,
+  snowball use/projectile creation, UUID-bound cow interaction and entity
+  attack, plus a two-block connected vein with verified world and inventory
+  deltas. These checks run inside the established three-test layout to avoid
+  GameTest structure overlap. Forge 3/3 GameTests, authenticated Runtime/Forge
+  E2E, root `check`, and all Loader builds pass. This is real Forge server
+  automation, not Live Hermes or human-play evidence.
 
 ## Remaining work
 

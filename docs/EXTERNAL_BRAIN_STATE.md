@@ -149,6 +149,33 @@ override the current matrix.
 - Final cleanup reports zero Brain sessions, database connections, queue depth, and active workers.
   No chat, identifiers, Tool arguments, observations, paths, secrets, or raw logs enter the report.
 
+## One-time generated Skill trials
+
+- The external Brain may request a 60-to-900-second, single-use lease for one
+  quarantined Skill draft only after the current Task Graph validator accepts
+  the exact stored document.
+- Runtime snapshots the exact Profile, Companion, controller, Brain session,
+  Skill hash, declared permissions, referenced Tools, resource limits and
+  absolute expiry. Execution requires the same full scope and consumes the
+  lease before starting, so a retry cannot repeat the trial.
+- Trial policy permits only current LOW-risk Tools and the bounded
+  `READ_WORLD`, `MEMORY`, and `CONTROL_TASK` permission set. It applies tighter
+  graph, loop, retry, concurrency, Tool-call, wall-time, serialized-state and
+  Evidence ceilings than ordinary approved Skills. Generated Skills cannot
+  call any `skill.*` lifecycle or execution Tool.
+- The trial runs through the ordinary persistent Task Graph Runtime with
+  `GENERATED_SKILL_TRIAL` provenance and stores bounded terminal evidence. It
+  does not create a review record, version, approval, or permanent capability;
+  permanent use still requires explicit local-user promotion approval.
+- Authenticated local management can revoke an available or running lease.
+  Running revocation cancels only the lease-bound execution. Startup converts
+  crash-left RUNNING trials to `REVOKED` with
+  `SKILL_TRIAL_INTERRUPTED` evidence; they are never silently resumed or
+  re-enabled.
+- Migration 28 stores the durable lease. The Skills page exposes scoped lease
+  status, expiry, Tools, permissions, limits and evidence, but omits the
+  document and every host path.
+
 ## Brain persistence and restart slice
 
 - Schema migrations 8 and 9 persist external Brain sessions, each bounded tool call result,

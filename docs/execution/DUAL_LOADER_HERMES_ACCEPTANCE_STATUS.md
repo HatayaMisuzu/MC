@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 18:59 +08:00
+Updated: 2026-07-26 20:34 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `b3877654ebaaaf808c73c11279d09edf32fec5b0`
+- Latest committed source SHA: `4676193b6f10c923fcb3bf4898b17614577c38a7`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -259,12 +259,29 @@ Passed on the frozen SHA:
   The stored fact has `USER_EXPLICIT_BRAIN_CAPTURE` provenance. Tests cover
   successful save, mismatched/cross-Companion evidence, paused automatic save,
   and same-Companion isolation across separate Profile/world databases.
+- Completed section 5.7's local one-time generated-Skill trial boundary.
+  `skill.request_trial` grants one exact Profile/Companion/controller/Brain-session
+  lease for 60 to 900 seconds only after the quarantined draft passes current
+  Task Graph validation. Trial graphs are restricted to explicit low-risk
+  permissions, current LOW-risk Tools, strict graph/resource ceilings, one use,
+  a fresh content hash, and the ordinary persistent Task Graph Runtime.
+- Migration 28 persists lease scope, expiry, consumed state, execution binding,
+  policy snapshot and bounded terminal evidence without creating an approved
+  Skill version. Trial Skills cannot call any `skill.*` Tool. A local
+  authenticated user can revoke an available or running trial; running
+  revocation immediately cancels only its bound execution. Restart-left
+  RUNNING leases become visibly `REVOKED` with
+  `SKILL_TRIAL_INTERRUPTED` evidence and cannot resume or be reused.
+- The existing Skills page now shows scoped trial metadata, limits, evidence
+  and a Revoke control without exposing the stored trial document or host
+  paths. Repository, Gateway, Runtime HTTP, Web tests and the complete root
+  `check` pass on implementation commit `4676193`.
 
 ## Remaining work
 
 - Complete stage-2 instruction/interruption semantics, proactive initiative
-  admission/rate/deduplication, and one-time Skill trial leases without moving
-  high-level planning authority into MCAC.
+  admission/rate/deduplication without moving high-level planning authority
+  into MCAC.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

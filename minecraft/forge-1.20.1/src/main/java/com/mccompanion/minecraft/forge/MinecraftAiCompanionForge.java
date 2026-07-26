@@ -25,7 +25,7 @@ public final class MinecraftAiCompanionForge {
             "forge",
             "47.4.10",
             17,
-            "OFFLINE_LOCAL_CONTROL",
+            "RUNTIME_OPTIONAL_LOCAL_CONTROL",
             false,
             "SERVER_PLAYER_BODY",
             "FOLLOW_GOTO_PAUSE_RESUME_STOP",
@@ -33,10 +33,12 @@ public final class MinecraftAiCompanionForge {
             "PLAYER_TRAVEL_ONLY",
             List.of("status", "capabilities", "help", "create", "spawn", "despawn", "remove",
                     "follow", "come", "goto", "stop", "pause", "resume", "runtime"),
-            List.of("runtime_control_lease"),
+            List.of("registry_query", "recipe_query", "primitive_observation_query",
+                    "primitive_tools", "menu_tools", "owner_activity_handoff", "player_text_gateway"),
             List.of());
     private static volatile MinecraftServer activeServer;
     private static volatile CompanionRegistry registry;
+    private static volatile RuntimeBridge runtimeBridge;
 
     public MinecraftAiCompanionForge() {
         MinecraftForge.EVENT_BUS.addListener(this::onRegisterCommands);
@@ -56,6 +58,7 @@ public final class MinecraftAiCompanionForge {
         CompanionRegistry next = new CompanionRegistry(activeServer, LOGGER);
         registry = next;
         next.start();
+        runtimeBridge = RuntimeBridge.start(activeServer, next, LOGGER);
     }
 
     private void onServerTick(TickEvent.ServerTickEvent event) {
@@ -69,6 +72,11 @@ public final class MinecraftAiCompanionForge {
     }
 
     private void onServerStopping(ServerStoppingEvent event) {
+        RuntimeBridge bridge = runtimeBridge;
+        runtimeBridge = null;
+        if (bridge != null) {
+            bridge.close();
+        }
         CompanionRegistry current = registryFor(event.getServer());
         if (current != null) {
             current.shutdown();

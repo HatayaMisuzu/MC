@@ -45,6 +45,30 @@ public final class CompanionLifecycleForgeGameTests {
                 "login did not exercise fake connection packet disposal");
         helper.assertTrue(body.fakeConnection().retainedPacketCount() == 0,
                 "fake connection retained a packet during login");
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst()
+                .orElseThrow();
+        long expiresAt = System.currentTimeMillis() + 60_000L;
+        CompanionRegistry.RuntimeResult acquired =
+                registry.runtimeAcquireLease(companionId, "forge-gametest-lease", 1L, expiresAt);
+        helper.assertTrue(acquired.success(), "runtime lease acquisition failed: " + acquired.code());
+        CompanionRegistry.RuntimeResult runtimeStarted = registry.runtimeStart(
+                companionId, "forge-gametest-lease", 1L, "forge-behavior-1", "travel",
+                body.getX() + 4.0D, body.getY(), body.getZ());
+        helper.assertTrue(runtimeStarted.success(), "runtime start failed: " + runtimeStarted.code());
+        helper.assertTrue(!registry.runtimeAcquireLease(
+                        companionId, "stale-lease", 1L, System.currentTimeMillis() + 60_000L).success(),
+                "stale epoch replaced an active Runtime lease");
+        helper.assertTrue(registry.runtimePause(companionId, "forge-gametest-lease", 1L).success(),
+                "runtime pause failed");
+        helper.assertTrue(registry.runtimeResume(companionId, "forge-gametest-lease", 1L).success(),
+                "runtime resume failed");
+        helper.assertTrue(registry.runtimeCancel(companionId, "forge-gametest-lease", 1L).success(),
+                "runtime cancel failed");
+        helper.assertTrue(registry.runtimeReleaseLease(companionId, "forge-gametest-lease", 1L).success(),
+                "runtime lease release failed");
 
         Vec3 before = body.position();
         CompanionRegistry.Result moving = registry.goTo(owner, before.x + 4.0D, before.y, before.z);

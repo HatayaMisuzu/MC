@@ -19,8 +19,12 @@ public final class CompanionRegistry {
     private final Logger logger;
     private final CompanionSavedData savedData;
     private final Map<UUID, CompanionPlayer> liveBodies = new HashMap<>();
+    private final Map<UUID, RuntimeControl> runtimeControls = new HashMap<>();
     private final BehaviorDirector behaviorDirector;
     private final CompanionDeathController deathController;
+    private boolean runtimeConnected;
+    private long runtimeCommandCount;
+    private String runtimeLastPublishedBehaviorId;
 
     public CompanionRegistry(MinecraftServer server, Logger logger) {
         this.server = Objects.requireNonNull(server, "server");
@@ -43,6 +47,7 @@ public final class CompanionRegistry {
     }
 
     public void shutdown() {
+        runtimeDisconnected();
         for (CompanionPlayer body : new ArrayList<>(liveBodies.values())) {
             body.stopWalking();
         }
@@ -120,6 +125,7 @@ public final class CompanionRegistry {
             stopAndRemove(body);
         }
         behaviorDirector.forget(entry.companionId);
+        runtimeControls.remove(entry.companionId);
         logger.info("companion_removed owner={} companion={}", owner.getUUID(), entry.companionId);
         return Result.success("Removed companion " + entry.profileName + ". Existing vanilla player-data is retained for recovery.");
     }
@@ -230,7 +236,224 @@ public final class CompanionRegistry {
 
     public String globalStatus() {
         return "records=" + savedData.entries().size() + " liveBodies=" + liveBodies.size()
-                + " runtime=OFFLINE localControl=AVAILABLE";
+                + " runtime=" + (runtimeConnected ? "ONLINE" : "OFFLINE") + " localControl=AVAILABLE";
+    }
+
+    public java.util.List<RuntimeSnapshot> runtimeSnapshots(boolean connected) {
+        java.util.List<RuntimeSnapshot> snapshots = new ArrayList<>();
+        for (CompanionEntry entry : savedData.entries()) {
+            CompanionPlayer body = liveBodies.get(entry.companionId);
+            RuntimeControl control = runtimeControls.get(entry.companionId);
+            java.util.Map<String, Integer> inventory = new java.util.TreeMap<>();
+            int freeSlots = 0;
+            if (body != null) {
+                for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+                    var stack = body.getInventory().getItem(slot);
+                    if (stack.isEmpty()) {
+                        freeSlots++;
+                    } else {
+                        inventory.merge(net.minecraft.core.registries.BuiltInRegistries.ITEM
+                                .getKey(stack.getItem()).toString(), stack.getCount(), Integer::sum);
+                    }
+                }
+            }
+            snapshots.add(new RuntimeSnapshot(
+                    entry.companionId.toString(),
+                    entry.ownerId.toString(),
+                    entry.profileName,
+                    body == null ? "minecraft:overworld" : body.serverLevel().dimension().location().toString(),
+                    body == null ? 0.0D : body.getX(),
+                    body == null ? 0.0D : body.getY(),
+                    body == null ? 0.0D : body.getZ(),
+                    body == null ? "SLEEPING" : "SPAWNED",
+                    control == null ? null : control.behaviorId,
+                    behaviorState(entry),
+                    control == null || control.behaviorId == null ? 0L : control.behaviorRevision,
+                    control == null ? 0L : control.epoch,
+                    connected,
+                    body == null ? 0.0F : body.getHealth(),
+                    body == null ? 0.0F : body.getMaxHealth(),
+                    body == null ? 0 : body.getFoodData().getFoodLevel(),
+                    body == null ? 0 : body.getAirSupply(),
+                    body != null && body.isOnFire(),
+                    body != null && body.isInLava(),
+                    freeSlots,
+                    java.util.Map.copyOf(inventory),
+                    behaviorDirector.evidenceSummary(entry.companionId)));
+        }
+        return java.util.List.copyOf(snapshots);
+    }
+
+    public RuntimeResult runtimeAcquireLease(
+            String companionId,
+            String proposedLeaseId,
+            long proposedEpoch,
+            long expiresAt) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        if (entry == null) return RuntimeResult.failure("COMPANION_NOT_FOUND");
+        if (proposedLeaseId == null || proposedLeaseId.isBlank()
+                || proposedEpoch <= 0 || expiresAt <= System.currentTimeMillis()) {
+            return RuntimeResult.failure("INVALID_LEASE");
+        }
+        RuntimeControl previous = runtimeControls.get(entry.companionId);
+        if (previous != null && proposedEpoch <= previous.epoch) {
+            return RuntimeResult.failure("STALE_EPOCH");
+        }
+        RuntimeControl control = new RuntimeControl(proposedLeaseId, proposedEpoch, expiresAt);
+        runtimeControls.put(entry.companionId, control);
+        return RuntimeResult.success(null, control.behaviorRevision, "IDLE");
+    }
+
+    public RuntimeResult runtimeRenewLease(String companionId, String leaseId, long epoch, long expiresAt) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
+        if (!validLease(control, leaseId, epoch)) return RuntimeResult.failure("STALE_EPOCH");
+        if (expiresAt <= System.currentTimeMillis()) return RuntimeResult.failure("LEASE_EXPIRED");
+        control.expiresAt = Math.max(control.expiresAt, expiresAt);
+        return RuntimeResult.success(control.behaviorId, control.behaviorRevision, behaviorState(entry));
+    }
+
+    public RuntimeResult runtimeStart(
+            String companionId,
+            String leaseId,
+            long epoch,
+            String behaviorId,
+            String behaviorType,
+            Double x,
+            Double y,
+            Double z) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
+        RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
+        if (leaseFailure != null) return leaseFailure;
+        CompanionPlayer body = liveBodies.get(entry.companionId);
+        if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
+        if (behaviorId == null || behaviorId.isBlank()) return RuntimeResult.failure("INVALID_BEHAVIOR_ID");
+        String normalized = behaviorType == null ? "" : behaviorType.toLowerCase(Locale.ROOT);
+        if (normalized.equals("follow")) {
+            entry.mode = CompanionEntry.Mode.FOLLOW;
+            entry.resumeMode = CompanionEntry.Mode.FOLLOW;
+            entry.hasTarget = false;
+        } else if (normalized.equals("goto") || normalized.equals("travel")) {
+            if (x == null || y == null || z == null
+                    || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
+                return RuntimeResult.failure("INVALID_TARGET");
+            }
+            entry.mode = CompanionEntry.Mode.GOTO;
+            entry.resumeMode = CompanionEntry.Mode.GOTO;
+            entry.hasTarget = true;
+            entry.targetX = x;
+            entry.targetY = y;
+            entry.targetZ = z;
+        } else if (normalized.equals("return")) {
+            ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+            if (owner == null) return RuntimeResult.failure("OWNER_OFFLINE");
+            if (owner.serverLevel() != body.serverLevel()) return RuntimeResult.failure("WORLD_CHANGED");
+            entry.mode = CompanionEntry.Mode.GOTO;
+            entry.resumeMode = CompanionEntry.Mode.GOTO;
+            entry.hasTarget = true;
+            entry.targetX = owner.getX();
+            entry.targetY = owner.getY();
+            entry.targetZ = owner.getZ();
+        } else {
+            return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
+        }
+        control.behaviorId = behaviorId;
+        control.behaviorRevision++;
+        savedData.changed();
+        behaviorDirector.start(entry, body);
+        return RuntimeResult.success(behaviorId, control.behaviorRevision, "RUNNING");
+    }
+
+    public RuntimeResult runtimePause(String companionId, String leaseId, long epoch) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
+        RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
+        if (leaseFailure != null) return leaseFailure;
+        CompanionPlayer body = liveBodies.get(entry.companionId);
+        if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
+        if (entry.mode != CompanionEntry.Mode.PAUSED) {
+            entry.resumeMode = entry.mode;
+            entry.mode = CompanionEntry.Mode.PAUSED;
+            behaviorDirector.stop(entry, body, false, "RUNTIME_PAUSE");
+            control.behaviorRevision++;
+            savedData.changed();
+        }
+        return RuntimeResult.success(control.behaviorId, control.behaviorRevision, "PAUSED");
+    }
+
+    public RuntimeResult runtimeResume(String companionId, String leaseId, long epoch) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
+        RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
+        if (leaseFailure != null) return leaseFailure;
+        CompanionPlayer body = liveBodies.get(entry.companionId);
+        if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
+        if (entry.mode != CompanionEntry.Mode.PAUSED) return RuntimeResult.failure("NOT_PAUSED");
+        entry.mode = entry.resumeMode == CompanionEntry.Mode.PAUSED ? CompanionEntry.Mode.IDLE : entry.resumeMode;
+        control.behaviorRevision++;
+        savedData.changed();
+        if (entry.mode != CompanionEntry.Mode.IDLE) behaviorDirector.start(entry, body);
+        return RuntimeResult.success(control.behaviorId, control.behaviorRevision, behaviorState(entry));
+    }
+
+    public RuntimeResult runtimeCancel(String companionId, String leaseId, long epoch) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
+        RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
+        if (leaseFailure != null) return leaseFailure;
+        CompanionPlayer body = liveBodies.get(entry.companionId);
+        if (body != null) behaviorDirector.stop(entry, body, false, "RUNTIME_CANCEL");
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        entry.hasTarget = false;
+        control.behaviorRevision++;
+        String behaviorId = control.behaviorId;
+        control.behaviorId = null;
+        savedData.changed();
+        return RuntimeResult.success(behaviorId, control.behaviorRevision, "CANCELLED");
+    }
+
+    public RuntimeResult runtimeReleaseLease(String companionId, String leaseId, long epoch) {
+        RuntimeResult result = runtimeCancel(companionId, leaseId, epoch);
+        CompanionEntry entry = entryByCompanion(companionId);
+        if (result.success && entry != null) runtimeControls.remove(entry.companionId);
+        return result;
+    }
+
+    public void runtimeDisconnected() {
+        for (Map.Entry<UUID, RuntimeControl> value : new ArrayList<>(runtimeControls.entrySet())) {
+            CompanionEntry entry = entryByCompanion(value.getKey().toString());
+            CompanionPlayer body = entry == null ? null : liveBodies.get(entry.companionId);
+            if (entry != null && body != null && entry.mode != CompanionEntry.Mode.IDLE
+                    && entry.mode != CompanionEntry.Mode.PAUSED) {
+                entry.resumeMode = entry.mode;
+                entry.mode = CompanionEntry.Mode.PAUSED;
+                behaviorDirector.stop(entry, body, false, "RUNTIME_OFFLINE");
+                savedData.changed();
+            }
+        }
+        runtimeControls.clear();
+    }
+
+    public void recordRuntimeCommand() {
+        runtimeCommandCount++;
+    }
+
+    public long runtimeCommandCount() {
+        return runtimeCommandCount;
+    }
+
+    public void recordRuntimeLifecyclePublished(String behaviorId) {
+        runtimeLastPublishedBehaviorId = behaviorId;
+    }
+
+    public String runtimeLastPublishedBehaviorId() {
+        return runtimeLastPublishedBehaviorId;
+    }
+
+    public void setRuntimeConnected(boolean connected) {
+        runtimeConnected = connected;
     }
 
     /** Package-scoped integration seam used by the headless GameTest module. */
@@ -269,6 +492,32 @@ public final class CompanionRegistry {
                 body.connection.resetPosition();
             }
         }
+    }
+
+    private CompanionEntry entryByCompanion(String companionId) {
+        if (companionId == null) return null;
+        for (CompanionEntry entry : savedData.entries()) {
+            if (entry.companionId.toString().equals(companionId)) return entry;
+        }
+        return null;
+    }
+
+    private static RuntimeResult checkLease(RuntimeControl control, String leaseId, long epoch) {
+        if (!validLease(control, leaseId, epoch)) return RuntimeResult.failure("STALE_EPOCH");
+        if (control.expiresAt <= System.currentTimeMillis()) return RuntimeResult.failure("LEASE_EXPIRED");
+        return null;
+    }
+
+    private static boolean validLease(RuntimeControl control, String leaseId, long epoch) {
+        return control != null && control.epoch == epoch && control.leaseId.equals(leaseId);
+    }
+
+    private static String behaviorState(CompanionEntry entry) {
+        return switch (entry.mode) {
+            case IDLE -> "IDLE";
+            case FOLLOW, GOTO -> "RUNNING";
+            case PAUSED -> "PAUSED";
+        };
     }
 
     private boolean spawnBody(CompanionEntry entry, ServerPlayer spawnBeside) {
@@ -365,6 +614,38 @@ public final class CompanionRegistry {
 
         Component component() {
             return Component.literal(success ? message : code + ": " + message);
+        }
+    }
+
+    public record RuntimeSnapshot(
+            String companionId, String ownerId, String displayName, String dimension,
+            double x, double y, double z, String bodyState, String behaviorId,
+            String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
+            float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
+            int freeInventorySlots, java.util.Map<String, Integer> inventory, String evidenceSummary) {
+    }
+
+    public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {
+        static RuntimeResult success(String behaviorId, long revision, String state) {
+            return new RuntimeResult(true, "OK", behaviorId, revision, state);
+        }
+
+        static RuntimeResult failure(String code) {
+            return new RuntimeResult(false, code, null, 0, "FAILED");
+        }
+    }
+
+    private static final class RuntimeControl {
+        private final String leaseId;
+        private final long epoch;
+        private long expiresAt;
+        private String behaviorId;
+        private long behaviorRevision;
+
+        private RuntimeControl(String leaseId, long epoch, long expiresAt) {
+            this.leaseId = leaseId;
+            this.epoch = epoch;
+            this.expiresAt = expiresAt;
         }
     }
 

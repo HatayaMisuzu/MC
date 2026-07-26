@@ -74,6 +74,10 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/brain"));
       else if ("GET".equals(method) && "/api/brain/audit".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/brain/audit", "companionId"));
+      else if ("GET".equals(method) && "/api/brain/settings".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/brain/settings", "companionId"));
+      else if ("POST".equals(method) && "/api/brain/settings".equals(path))
+        send(exchange, 200, updateBrainSettings(body(exchange)));
       else if ("GET".equals(method) && "/api/memories".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/memories", "companionId", "kind", "query"));
       else if ("POST".equals(method) && "/api/memories/review".equals(path))
@@ -357,6 +361,18 @@ final class WebTerminalApi {
         .put("action", required(request, "action"))
         .put("suggestionId", required(request, "suggestionId"));
     if (request.hasNonNull("reason")) bounded.put("reason", required(request, "reason"));
+    return new RuntimeControlClient().manage(
+        root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
+  }
+
+  private JsonNode updateBrainSettings(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String companionId = required(request, "companionId");
+    String path = "/brain/settings?companionId=" + java.net.URLEncoder.encode(
+        companionId, StandardCharsets.UTF_8);
+    ObjectNode bounded = JSON.createObjectNode()
+        .put("initiativeMode", required(request, "initiativeMode"))
+        .put("personalityMode", required(request, "personalityMode"));
     return new RuntimeControlClient().manage(
         root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
   }

@@ -216,6 +216,19 @@ override the current matrix.
 - Local adapter, malformed-schema, persistence/versioning, scope-isolation, audit, and Web tests
   pass. Live Hermes semantic authorship and human UX remain pending.
 
+### Local behavior-mode constraints
+
+- Migration 25 stores local-user-owned initiative (`QUIET`, `NORMAL`, `ACTIVE`) and personality
+  (`COMPANION`, `IMMERSIVE_ROLEPLAY`) settings per Companion. Defaults are `NORMAL` and
+  `COMPANION`.
+- The settings are injected into bounded Brain context. A Brain-authored semantic snapshot must
+  match them; mismatch is rejected as `BRAIN_SEMANTIC_STATE_POLICY_MISMATCH`.
+- The authenticated `/brain/settings` management route and HTML Terminal provide view/change
+  controls. Changing either mode does not rebuild Tool definitions and cannot alter permissions,
+  safety, budgets, or Memory policy.
+- Proactive-event significance, deduplication, and rate limiting are not implemented by this slice,
+  so section 5.3 remains incomplete.
+
 Example response extension:
 
 ```json

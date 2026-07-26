@@ -163,6 +163,12 @@ export interface BrainSessionAudit {
     permissionPreset: 'READ_ONLY' | 'ASK_FOR_EFFECTS' | 'BOUNDED_AUTONOMY'
     playerExplicitlyAway: boolean; latestRealWorldObservationAt: string; staleAssumptions: string[]
   }
+  export interface BrainBehaviorSettings {
+    companionId: string; initiativeMode: 'QUIET' | 'NORMAL' | 'ACTIVE'
+    personalityMode: 'COMPANION' | 'IMMERSIVE_ROLEPLAY'; revision: number
+    updatedBy: string; updatedAt: string; changesToolPermissions: false
+    changesSafetyPolicy: false; changesBudgets: false; changesMemoryPolicy: false
+  }
 export interface MemoryFact {
   memoryId: string; kind: string; key: string; value: unknown; verified: boolean
   confidence: number; source: string; expiresAt?: string; createdAt: string; updatedAt: string

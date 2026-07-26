@@ -898,6 +898,40 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private void brain(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;
+            if (exchange.getRequestURI().getPath().equals("/brain/settings")) {
+                String companionId = queryParameter(exchange, "companionId");
+                if (companionId == null || companionId.isBlank()) {
+                    sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED")); return;
+                }
+                try {
+                    companions.get(companionId)
+                            .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
+                    if ("GET".equals(exchange.getRequestMethod())) {
+                        sendJson(exchange, 200, brainAudit.behaviorSettings(companionId).toJson());
+                        return;
+                    }
+                    if ("POST".equals(exchange.getRequestMethod())) {
+                        JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                        if (request == null) return;
+                        var initiative = com.mccompanion.runtime.brain.BrainSemanticState.InitiativeMode.valueOf(
+                                requiredText(request, "initiativeMode", 16));
+                        var personality = com.mccompanion.runtime.brain.BrainSemanticState.PersonalityMode.valueOf(
+                                requiredText(request, "personalityMode", 32));
+                        sendJson(exchange, 200, brainAudit.updateBehaviorSettings(companionId,
+                                initiative, personality, "LOCAL_MANAGEMENT_USER").toJson());
+                        return;
+                    }
+                    exchange.getResponseHeaders().set("Allow", "GET, POST");
+                    sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
+                } catch (IllegalArgumentException failure) {
+                    sendJson(exchange, 400, Json.object().put("code", "INVALID_BRAIN_SETTINGS")
+                            .put("message", failure.getMessage()));
+                } catch (java.sql.SQLException failure) {
+                    log.error("Unable to manage Brain behavior settings", failure);
+                    sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+                }
+                return;
+            }
             if (exchange.getRequestURI().getPath().equals("/brain/audit")) {
                 if (!"GET".equals(exchange.getRequestMethod())) { exchange.sendResponseHeaders(405, -1); return; }
                 String companionId = queryParameter(exchange, "companionId");

@@ -90,11 +90,14 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
                                                        String userMessage, AgentContext context) {
         requireController(controllerId);
+        BrainBehaviorSettings behaviorSettings = audit == null
+                ? BrainBehaviorSettings.defaults(companionId) : audit.behaviorSettings(companionId);
+        AgentContext baseContext = context.withBrainBehaviorSettings(behaviorSettings.toJson());
         BrainSession session = sessions.get(companionId);
         List<ToolResult> recovered = List.of();
         if (session == null) {
             ToolContext provisional = new ToolContext(controllerId, "opening", companionId);
-            BrainSessionRequest opening = new BrainSessionRequest(controllerId, companionId, context,
+            BrainSessionRequest opening = new BrainSessionRequest(controllerId, companionId, baseContext,
                     tools.definitions(provisional));
             BrainSession interrupted = audit != null && adapter.supportsResume()
                     ? audit.interrupted(controllerId, companionId).orElse(null) : null;
@@ -121,8 +124,8 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 semanticStates.put(companionId, restoredState);
             }
         }
-        AgentContext turnContext = restoredState == null ? context
-                : context.withBrainSemanticState(restoredState.toJson());
+        AgentContext turnContext = restoredState == null ? baseContext
+                : baseContext.withBrainSemanticState(restoredState.toJson());
         List<ToolResult> observations = new ArrayList<>(recovered);
         List<ToolResult> pending = recovered;
         String message = userMessage;
@@ -132,8 +135,9 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             BrainTurnResult result = adapter.continueTurn(new BrainTurnRequest(session.sessionId(), message,
                     turnContext, submitted, remaining));
             if (result.semanticState() != null) {
+                requireBehaviorSettings(result.semanticState(), behaviorSettings);
                 semanticStates.put(companionId, result.semanticState());
-                turnContext = context.withBrainSemanticState(result.semanticState().toJson());
+                turnContext = baseContext.withBrainSemanticState(result.semanticState().toJson());
                 if (audit != null) {
                     audit.semanticState(session.sessionId(), controllerId, companionId, result.semanticState());
                 }
@@ -246,12 +250,28 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
 
     public String activeControllerId() { return activeControllerId; }
     public BrainHealth health() { return adapter.health(); }
+    public BrainBehaviorSettings behaviorSettings(String companionId) {
+        return audit == null ? BrainBehaviorSettings.defaults(companionId) : audit.behaviorSettings(companionId);
+    }
+    public BrainBehaviorSettings updateBehaviorSettings(String companionId,
+                                                        BrainSemanticState.InitiativeMode initiativeMode,
+                                                        BrainSemanticState.PersonalityMode personalityMode) {
+        if (audit == null) throw new IllegalStateException("BRAIN_BEHAVIOR_SETTINGS_PERSISTENCE_DISABLED");
+        return audit.updateBehaviorSettings(companionId, initiativeMode, personalityMode, "LOCAL_MANAGEMENT_USER");
+    }
 
     private synchronized void requireController(String controllerId) {
         if (controllerId == null || controllerId.isBlank()) throw new IllegalArgumentException("controllerId is required");
         if (activeControllerId == null) activeControllerId = controllerId.strip();
         else if (!activeControllerId.equals(controllerId.strip())) {
             throw new IllegalStateException("BRAIN_CONTROLLER_ALREADY_ACTIVE");
+        }
+    }
+
+    private static void requireBehaviorSettings(BrainSemanticState state, BrainBehaviorSettings settings) {
+        if (state.initiativeMode() != settings.initiativeMode()
+                || state.personalityMode() != settings.personalityMode()) {
+            throw new IllegalArgumentException("BRAIN_SEMANTIC_STATE_POLICY_MISMATCH");
         }
     }
 

@@ -28,6 +28,9 @@ vi.mock('../hooks/useResource', () => ({
           playerExplicitlyAway: false, latestRealWorldObservationAt: '2026-07-15T00:00:00Z',
           staleAssumptions: ['old chest count'] },
         toolCalls: [{ callId: 't1', toolName: 'search.query', success: true, code: 'OK', terminal: true, observation: { sources: 1 } }] }],
+      { companionId: 'c1', initiativeMode: 'NORMAL', personalityMode: 'COMPANION', revision: 1,
+        updatedBy: 'LOCAL_MANAGEMENT_USER', updatedAt: '2026-07-15T00:00:00Z',
+        changesToolPermissions: false, changesSafetyPolicy: false, changesBudgets: false, changesMemoryPolicy: false },
       { companionId: 'c1', byKind: { PREFERENCE: [{ memoryId: 'm1', kind: 'PREFERENCE', key: 'reply_style', value: 'concise', verified: false, confidence: 0.7, source: 'INFERENCE', createdAt: '', updatedAt: '' }] },
         suggestions: [{ suggestionId: 'ms1', companionId: 'c1', kind: 'WORLD', key: 'landmark:moon', value: { dimension: 'examplemod:moon' }, confidence: 0.5, status: 'QUARANTINED', source: 'EPISODE_CAPSULE', brainSessionId: 'b1', capsuleId: 'episode-1', conflictsWithVerified: true, expiresAt: '', createdAt: '', updatedAt: '' }],
         episodeCapsules: [{ episodeId: 'episode-1', companionId: 'c1', brainSessionId: 'b1', startedAt: '2026-07-15T00:00:00Z', endedAt: '2026-07-15T00:01:00Z', taskSummaries: [], verifiedWorldChanges: [], verifiedInventoryChanges: [], verifiedLocations: [], askUserDecisions: [], userConfirmedChoices: [], failureCategories: [], evidenceRefs: [{ callId: 't1' }], sourceSha: 'abc1234', createdAt: '2026-07-15T00:01:00Z' }] },
@@ -49,6 +52,10 @@ describe('BrainPage', () => {
     expect(screen.getByText('episode-1')).toBeVisible()
     expect(screen.getByText('Inspect the base')).toBeVisible()
     expect(screen.getByText(/old chest count/)).toBeVisible()
+    fireEvent.change(screen.getByLabelText('Initiative'), { target: { value: 'QUIET' } })
+    expect(post).toHaveBeenCalledWith('/api/brain/settings', {
+      instanceId: 'instance-1', companionId: 'c1', initiativeMode: 'QUIET', personalityMode: 'COMPANION',
+    })
     const input = screen.getByPlaceholderText(/Ask a question/)
     fireEvent.change(input, { target: { value: 'Check the Fabric docs' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))

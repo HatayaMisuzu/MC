@@ -23,7 +23,7 @@ public final class RuntimeDatabase implements AutoCloseable {
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
             "memory_fact", "memory_suggestion", "episode_capsule", "conversation_event", "waiting_question",
-            "brain_session", "brain_tool_call", "brain_semantic_state",
+            "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
             "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
 
@@ -750,6 +750,17 @@ public final class RuntimeDatabase implements AutoCloseable {
                 """,
                 "CREATE INDEX brain_semantic_state_scope_idx ON brain_semantic_state(" +
                         "controller_id,companion_id,authored_at)");
+        List<String> brainBehaviorSettings = List.of(
+                """
+                CREATE TABLE brain_behavior_settings (
+                  companion_id TEXT PRIMARY KEY,
+                  initiative_mode TEXT NOT NULL,
+                  personality_mode TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  updated_by TEXT NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """);
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -774,6 +785,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(21, "persist isolated search source sessions", searchSessionLifecycle),
                 new Migration(22, "audit local review of memory suggestions", memorySuggestionReview),
                 new Migration(23, "persist deterministic episode capsules and candidate provenance", episodeCapsules),
-                new Migration(24, "persist external Brain-authored semantic state", brainSemanticState));
+                new Migration(24, "persist external Brain-authored semantic state", brainSemanticState),
+                new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings));
     }
 }

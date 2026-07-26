@@ -224,6 +224,12 @@ Passed on the frozen SHA:
   and a Brain-page readout. Adapter, malformed-state, persistence/revision,
   cross-scope rejection, focused Runtime, Web test, and production Web build
   evidence pass locally. This is not Live Hermes or human evidence.
+- Added migration 25 for local per-Companion initiative/personality settings,
+  defaulting to `NORMAL`/`COMPANION`. Runtime injects the constraint into
+  bounded Brain context and rejects a conflicting Brain-authored snapshot.
+  Authenticated management and HTML controls can change both modes without
+  changing Tool definitions, permissions, safety, budgets, or Memory policy.
+  Proactive-message admission/rate/dedupe remains unfinished.
 
 ## Remaining work
 

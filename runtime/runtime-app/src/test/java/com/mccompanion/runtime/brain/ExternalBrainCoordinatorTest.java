@@ -302,6 +302,54 @@ class ExternalBrainCoordinatorTest {
         }
     }
 
+    @Test
+    void localBehaviorSettingsReachBrainWithoutChangingAvailableTools() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-settings-context.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            RecordingGateway gateway = new RecordingGateway();
+            List<String> modes = new ArrayList<>();
+            List<List<String>> toolNames = new ArrayList<>();
+            ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+                modes.add(request.context().brainBehaviorSettings().path("initiativeMode").asText());
+                toolNames.add(gateway.definitions(new ToolContext("controller", request.sessionId(), "c1"))
+                        .stream().map(ToolDefinition::name).toList());
+                return BrainTurnResult.finalResponse("acknowledged");
+            });
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, gateway, 4, audit)) {
+                coordinator.continueTurn("controller", "c1", "hello", context());
+                coordinator.updateBehaviorSettings("c1", BrainSemanticState.InitiativeMode.ACTIVE,
+                        BrainSemanticState.PersonalityMode.IMMERSIVE_ROLEPLAY);
+                coordinator.continueTurn("controller", "c1", "continue", context());
+            }
+            assertEquals(List.of("NORMAL", "ACTIVE"), modes);
+            assertEquals(toolNames.getFirst(), toolNames.getLast());
+        }
+    }
+
+    @Test
+    void brainCannotOverrideLocalInitiativeOrPersonalitySetting() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-settings-policy.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            audit.updateBehaviorSettings("c1", BrainSemanticState.InitiativeMode.QUIET,
+                    BrainSemanticState.PersonalityMode.COMPANION, "LOCAL_MANAGEMENT_USER");
+            ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse("override")
+                    .withSemanticState(new BrainSemanticState("", "", "", "", "", false,
+                            BrainSemanticState.InitiativeMode.ACTIVE,
+                            BrainSemanticState.PersonalityMode.COMPANION,
+                            BrainSemanticState.PermissionPreset.ASK_FOR_EFFECTS,
+                            false, null, List.of())));
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, new RecordingGateway(), 4, audit)) {
+                IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> coordinator.continueTurn("controller", "c1", "hello", context()));
+                assertEquals("BRAIN_SEMANTIC_STATE_POLICY_MISMATCH", failure.getMessage());
+            }
+        }
+    }
+
     private static AgentContext context() {
         return AgentContext.empty("c1", List.of("NavigateTo", "FollowOwner"));
     }

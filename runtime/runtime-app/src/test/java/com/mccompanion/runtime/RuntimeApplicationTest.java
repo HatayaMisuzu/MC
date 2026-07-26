@@ -699,6 +699,26 @@ class RuntimeApplicationTest {
                 Thread.sleep(20);
             }
 
+            URI settingsUri = new URI("http://127.0.0.1:" + config.server.managementPort
+                    + "/brain/settings?companionId=brain-companion");
+            HttpResponse<String> defaultSettings = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(settingsUri).header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, defaultSettings.statusCode(), defaultSettings.body());
+            assertEquals("NORMAL", Json.parse(defaultSettings.body()).path("initiativeMode").asText());
+            assertEquals("COMPANION", Json.parse(defaultSettings.body()).path("personalityMode").asText());
+            HttpResponse<String> updatedSettings = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(settingsUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"initiativeMode":"QUIET","personalityMode":"IMMERSIVE_ROLEPLAY"}
+                                    """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, updatedSettings.statusCode(), updatedSettings.body());
+            assertEquals("QUIET", Json.parse(updatedSettings.body()).path("initiativeMode").asText());
+            assertEquals("IMMERSIVE_ROLEPLAY",
+                    Json.parse(updatedSettings.body()).path("personalityMode").asText());
+            assertFalse(Json.parse(updatedSettings.body()).path("changesToolPermissions").asBoolean());
+
             String requestBody = """
                     {"controllerId":"runtime-primary","companionId":"brain-companion",
                      "text":"What do you see?"}

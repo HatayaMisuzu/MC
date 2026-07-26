@@ -101,6 +101,29 @@ class BrainAuditRepositoryTest {
         }
     }
 
+    @Test
+    void behaviorSettingsDefaultToNormalCompanionAndRemainCompanionScoped() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-behavior-settings.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            BrainBehaviorSettings defaults = audit.behaviorSettings("c1");
+            assertEquals(BrainSemanticState.InitiativeMode.NORMAL, defaults.initiativeMode());
+            assertEquals(BrainSemanticState.PersonalityMode.COMPANION, defaults.personalityMode());
+            assertEquals(0, defaults.revision());
+
+            BrainBehaviorSettings updated = audit.updateBehaviorSettings("c1",
+                    BrainSemanticState.InitiativeMode.QUIET,
+                    BrainSemanticState.PersonalityMode.IMMERSIVE_ROLEPLAY, "LOCAL_MANAGEMENT_USER");
+            assertEquals(1, updated.revision());
+            assertEquals(BrainSemanticState.InitiativeMode.QUIET, audit.behaviorSettings("c1").initiativeMode());
+            assertEquals(BrainSemanticState.InitiativeMode.NORMAL, audit.behaviorSettings("c2").initiativeMode());
+            assertFalse(updated.toJson().path("changesToolPermissions").asBoolean());
+            assertFalse(updated.toJson().path("changesSafetyPolicy").asBoolean());
+            assertFalse(updated.toJson().path("changesBudgets").asBoolean());
+            assertFalse(updated.toJson().path("changesMemoryPolicy").asBoolean());
+        }
+    }
+
     private static BrainSemanticState semantic(String task, List<String> stale) {
         return new BrainSemanticState("Current conversation", "", task, "", "", false,
                 BrainSemanticState.InitiativeMode.NORMAL, BrainSemanticState.PersonalityMode.COMPANION,

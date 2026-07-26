@@ -235,6 +235,50 @@ public final class BrainAuditRepository {
         } catch (SQLException failure) { throw persistence(failure); }
     }
 
+    public BrainBehaviorSettings behaviorSettings(String companionId) {
+        if (companionId == null || companionId.isBlank() || companionId.length() > 256) {
+            throw new IllegalArgumentException("companionId is required and bounded");
+        }
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT initiative_mode,personality_mode,revision,updated_by,updated_at
+                FROM brain_behavior_settings WHERE companion_id=?
+                """)) {
+            statement.setString(1, companionId.strip());
+            try (var row = statement.executeQuery()) {
+                if (!row.next()) return BrainBehaviorSettings.defaults(companionId);
+                return new BrainBehaviorSettings(companionId,
+                        BrainSemanticState.InitiativeMode.valueOf(row.getString("initiative_mode")),
+                        BrainSemanticState.PersonalityMode.valueOf(row.getString("personality_mode")),
+                        row.getLong("revision"), row.getString("updated_by"),
+                        Instant.ofEpochMilli(row.getLong("updated_at")));
+            }
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
+    public BrainBehaviorSettings updateBehaviorSettings(String companionId,
+                                                        BrainSemanticState.InitiativeMode initiativeMode,
+                                                        BrainSemanticState.PersonalityMode personalityMode,
+                                                        String updatedBy) {
+        BrainBehaviorSettings requested = new BrainBehaviorSettings(companionId, initiativeMode,
+                personalityMode, 0, updatedBy, null);
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO brain_behavior_settings(companion_id,initiative_mode,personality_mode,revision,updated_by,updated_at)
+                VALUES(?,?,?,1,?,?)
+                ON CONFLICT(companion_id) DO UPDATE SET initiative_mode=excluded.initiative_mode,
+                personality_mode=excluded.personality_mode,revision=brain_behavior_settings.revision+1,
+                updated_by=excluded.updated_by,updated_at=excluded.updated_at
+                """)) {
+            long now = clock.millis();
+            statement.setString(1, requested.companionId());
+            statement.setString(2, requested.initiativeMode().name());
+            statement.setString(3, requested.personalityMode().name());
+            statement.setString(4, requested.updatedBy().isBlank() ? "LOCAL_MANAGEMENT_USER" : requested.updatedBy());
+            statement.setLong(5, now);
+            statement.executeUpdate();
+            return behaviorSettings(companionId);
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
     public int toolCount(String sessionId) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
                 "SELECT COUNT(*) FROM brain_tool_call WHERE session_id=?")) {

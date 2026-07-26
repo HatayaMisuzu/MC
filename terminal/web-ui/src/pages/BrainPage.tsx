@@ -7,7 +7,7 @@ import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTerminal } from '../context/TerminalContext'
 import { useResource } from '../hooks/useResource'
-import type { BrainSessionAudit, BrainStatus, CompanionSnapshot, MemorySnapshot } from '../types'
+import type { BrainBehaviorSettings, BrainSessionAudit, BrainStatus, CompanionSnapshot, MemorySnapshot } from '../types'
 
 export function BrainPage() {
   const { selected, selectedId, requestPlan } = useTerminal()
@@ -26,12 +26,22 @@ export function BrainPage() {
   const audit = useResource<BrainSessionAudit[]>(() => selectedId && companionId
     ? api<BrainSessionAudit[]>(`/api/brain/audit?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
     : Promise.resolve([]), [selectedId, companionId])
+  const settings = useResource<BrainBehaviorSettings>(() => selectedId && companionId
+    ? api<BrainBehaviorSettings>(`/api/brain/settings?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
+    : Promise.resolve({ companionId: '', initiativeMode: 'NORMAL', personalityMode: 'COMPANION',
+      revision: 0, updatedBy: 'DEFAULT', updatedAt: '', changesToolPermissions: false,
+      changesSafetyPolicy: false, changesBudgets: false, changesMemoryPolicy: false }), [selectedId, companionId])
   const memories = useResource<MemorySnapshot>(() => selectedId && companionId
     ? api<MemorySnapshot>(`/api/memories?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
     : Promise.resolve({ companionId: '', byKind: {} }), [selectedId, companionId])
-  const refresh = () => { void status.refresh(); void audit.refresh(); void memories.refresh(); void companions.refresh() }
+  const refresh = () => { void status.refresh(); void audit.refresh(); void settings.refresh(); void memories.refresh(); void companions.refresh() }
   const reconnectState = audit.data?.[0]?.state ?? 'IDLE'
   const semantic = audit.data?.find((session) => session.semanticState)?.semanticState
+  const updateSettings = async (initiativeMode: BrainBehaviorSettings['initiativeMode'],
+                                personalityMode: BrainBehaviorSettings['personalityMode']) => {
+    await post('/api/brain/settings', { instanceId: selectedId, companionId, initiativeMode, personalityMode })
+    await settings.refresh()
+  }
   const reviewSuggestion = async (suggestionId: string, action: 'approve_suggestion' | 'reject_suggestion') => {
     setReviewing(suggestionId)
     setReviewError('')
@@ -67,6 +77,16 @@ export function BrainPage() {
       <StatusBadge value={status.data?.health.status ?? 'WAITING'} />
       <span>{status.data?.health.adapter || 'No adapter'} · controller {status.data?.activeControllerId || 'none'}</span>
       <span>Reconnect <StatusBadge value={reconnectState} /></span>
+      <label className="field"><span>Initiative</span><select value={settings.data?.initiativeMode ?? 'NORMAL'}
+        onChange={(event) => void updateSettings(event.target.value as BrainBehaviorSettings['initiativeMode'],
+          settings.data?.personalityMode ?? 'COMPANION')}>
+        <option value="QUIET">Quiet</option><option value="NORMAL">Normal</option><option value="ACTIVE">Active</option>
+      </select></label>
+      <label className="field"><span>Personality</span><select value={settings.data?.personalityMode ?? 'COMPANION'}
+        onChange={(event) => void updateSettings(settings.data?.initiativeMode ?? 'NORMAL',
+          event.target.value as BrainBehaviorSettings['personalityMode'])}>
+        <option value="COMPANION">Companion</option><option value="IMMERSIVE_ROLEPLAY">Immersive roleplay</option>
+      </select></label>
     </section>
     {!companionId ? <EmptyState title="No connected companion">Connect a Fabric companion before starting a Brain turn.</EmptyState> : <>
       <section className="companion-chat"><h2>Chat / think / search / act</h2><p>Actions occur only when the external Brain explicitly calls an AVAILABLE_NOW MCAC tool.</p>

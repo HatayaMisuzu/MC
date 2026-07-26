@@ -335,7 +335,16 @@ Passed on the frozen SHA:
   GameTest caught and fixed a main-inventory-to-hotbar handoff gap and verifies
   each executor through live ServerPlayer/container/entity state. The formal
   Runtime/Forge E2E, root `check`, and all Loader builds pass. Multi-block vein,
-  crafting, smelting, combat and retreat breadth remain open.
+  crafting and smelting breadth remain open.
+- Stage 3 safety/combat slice `8b2b1ef` adds bounded Forge owner defense and
+  exact-UUID danger retreat. The real Forge GameTest verifies a hostile death
+  through the vanilla ServerPlayer attack path and a retreat driven by ordinary
+  player input to at least three blocks of displacement and six blocks of
+  clearance. The Runtime/Forge E2E caught and fixed a premature GameTest cleanup
+  race and now waits through lease/start/pause/resume/cancel before cleanup.
+  Forge GameTest, authenticated Runtime/Forge E2E, root `check`, Web tests and
+  all Loader builds pass. This remains GameTest/automation evidence, not Live
+  Hermes or human play.
 
 ## Remaining work
 

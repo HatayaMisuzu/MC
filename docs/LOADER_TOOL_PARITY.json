@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "ac50c74c72bb6722d6c3e06dcc838a4bf67c6715",
-  "generatedAt": "2026-07-26T22:19:17+08:00",
+  "sourceCommit": "8b2b1ef15343c8311cb01f80a892ed3bf24cd15c",
+  "generatedAt": "2026-07-26T22:45:00+08:00",
   "statusValues": ["PASS", "PARTIAL", "NOT_IMPLEMENTED", "NOT_RUN"],
   "loaders": {
     "fabric-1.21.1": {"java":21,"bridge":"PASS","automatedEvidence":"PASS","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"},
@@ -32,8 +32,8 @@
     {"name":"menu.close","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both invalidate the exact process-local menu capability on close."},
     {"name":"item.smelt","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
     {"name":"item.use","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":"Forge implementation uses ServerPlayerGameMode; projectile/consumable GameTest evidence remains pending."},
-    {"name":"combat.defend_owner","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"safety.retreat","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
+    {"name":"combat.defend_owner","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge uses the same bounded hostile-selection and vanilla ServerPlayer attack contract; its GameTest verifies a real hostile death."},
+    {"name":"safety.retreat","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge explicit retreat is UUID-bound and its GameTest verifies ordinary player travel, at least three blocks of displacement and six blocks of threat clearance."},
     {"name":"inventory.withdraw","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge moves exact quantities one item at a time through validated menu clicks."},
     {"name":"inventory.deposit","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge moves exact quantities one item at a time through validated menu clicks."},
     {"name":"inventory.transfer","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both directions reuse the same Forge storage executors and Runtime schema."},

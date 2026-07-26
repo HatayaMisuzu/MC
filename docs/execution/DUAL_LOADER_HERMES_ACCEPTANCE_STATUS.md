@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `ba9a8dc0047e3d6582bcc47b7f3d2204e0e0f8e3`
+- Latest committed source SHA: `bdff211a12942ded17973bd732f3958555c6b47a`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`

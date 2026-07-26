@@ -150,10 +150,15 @@ export interface BrainToolAudit {
   callId: string; toolName: string; success: boolean; code: string; terminal: boolean
   observation?: Record<string, unknown>
 }
-export interface BrainSessionAudit {
+  export interface BrainSessionAudit {
     sessionId: string; controllerId: string; provider: string; state: string; lastCode: string
     createdAt: string; updatedAt: string; toolCalls: BrainToolAudit[]
     semanticState?: BrainSemanticState; semanticStateRevision?: number; semanticStateAuthoredAt?: string
+    completionClaims?: BrainCompletionClaimAudit[]
+  }
+  export interface BrainCompletionClaimAudit {
+    sequence: number; certainty: 'VERIFIED' | 'UNVERIFIED' | 'NOT_APPLICABLE'
+    claim: string; observationCallId: string; taskId: string; explanation: string; createdAt: string
   }
   export interface BrainSemanticState {
     schemaVersion: number; conversationContext: string; immediateInstruction: string

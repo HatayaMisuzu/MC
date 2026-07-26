@@ -5,7 +5,8 @@ import com.mccompanion.runtime.tool.ToolCall;
 import java.util.List;
 
 public record BrainTurnResult(Kind kind, String response, List<ToolCall> toolCalls, String reason,
-                              BrainQuestion question, BrainSemanticState semanticState) {
+                              BrainQuestion question, BrainSemanticState semanticState,
+                              BrainCompletionClaim completionClaim) {
     public enum Kind { FINAL_RESPONSE, TOOL_CALLS, ASK_USER, WAIT, CANCEL }
 
     public BrainTurnResult {
@@ -20,30 +21,37 @@ public record BrainTurnResult(Kind kind, String response, List<ToolCall> toolCal
         }
         if (kind == Kind.ASK_USER && question == null) throw new IllegalArgumentException("ASK_USER requires question");
         if (kind != Kind.ASK_USER && question != null) throw new IllegalArgumentException("only ASK_USER may contain question");
+        if (kind != Kind.FINAL_RESPONSE && completionClaim != null) {
+            throw new IllegalArgumentException("only FINAL_RESPONSE may contain completionClaim");
+        }
     }
 
     public BrainTurnResult(Kind kind, String response, List<ToolCall> toolCalls, String reason) {
-        this(kind, response, toolCalls, reason, null, null);
+        this(kind, response, toolCalls, reason, null, null, null);
     }
 
     public BrainTurnResult(Kind kind, String response, List<ToolCall> toolCalls, String reason,
                            BrainQuestion question) {
-        this(kind, response, toolCalls, reason, question, null);
+        this(kind, response, toolCalls, reason, question, null, null);
     }
 
     public static BrainTurnResult finalResponse(String response) {
-        return new BrainTurnResult(Kind.FINAL_RESPONSE, response, List.of(), "", null, null);
+        return new BrainTurnResult(Kind.FINAL_RESPONSE, response, List.of(), "", null, null, null);
     }
 
     public static BrainTurnResult tools(List<ToolCall> calls) {
-        return new BrainTurnResult(Kind.TOOL_CALLS, "", calls, "", null, null);
+        return new BrainTurnResult(Kind.TOOL_CALLS, "", calls, "", null, null, null);
     }
 
     public static BrainTurnResult askUser(BrainQuestion question) {
-        return new BrainTurnResult(Kind.ASK_USER, question.prompt(), List.of(), question.reason(), question, null);
+        return new BrainTurnResult(Kind.ASK_USER, question.prompt(), List.of(), question.reason(), question, null, null);
     }
 
     public BrainTurnResult withSemanticState(BrainSemanticState state) {
-        return new BrainTurnResult(kind, response, toolCalls, reason, question, state);
+        return new BrainTurnResult(kind, response, toolCalls, reason, question, state, completionClaim);
+    }
+
+    public BrainTurnResult withCompletionClaim(BrainCompletionClaim claim) {
+        return new BrainTurnResult(kind, response, toolCalls, reason, question, semanticState, claim);
     }
 }

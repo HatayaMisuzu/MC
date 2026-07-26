@@ -106,8 +106,15 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
                     question.path("taskId").asText(null));
             return BrainTurnResult.askUser(structured).withSemanticState(semanticState);
         }
+        BrainCompletionClaim completionClaim = null;
+        if (kind == BrainTurnResult.Kind.FINAL_RESPONSE) {
+            if (!response.has("completionClaim")) {
+                throw new IllegalStateException("HERMES_COMPLETION_CLAIM_REQUIRED");
+            }
+            completionClaim = BrainCompletionClaim.parse(response.path("completionClaim"));
+        }
         return new BrainTurnResult(kind, response.path("response").asText(""), List.of(),
-                response.path("reason").asText(""), null, semanticState);
+                response.path("reason").asText(""), null, semanticState, completionClaim);
     }
 
     @Override public void cancel(String sessionId, String reason) {

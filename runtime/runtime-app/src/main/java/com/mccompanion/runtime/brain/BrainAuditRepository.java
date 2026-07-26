@@ -279,6 +279,47 @@ public final class BrainAuditRepository {
         } catch (SQLException failure) { throw persistence(failure); }
     }
 
+    public CompletionClaimSnapshot completionClaim(String sessionId, BrainCompletionClaim claim) {
+        if (claim == null) throw new IllegalArgumentException("completion claim is required");
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                long sequence;
+                try (PreparedStatement next = connection.prepareStatement("""
+                        SELECT COALESCE(MAX(claim_sequence),0)+1 FROM brain_completion_claim WHERE session_id=?
+                        """)) {
+                    next.setString(1, sessionId);
+                    try (var row = next.executeQuery()) {
+                        if (!row.next()) throw new SQLException("claim sequence is unavailable");
+                        sequence = row.getLong(1);
+                    }
+                }
+                long createdAt = clock.millis();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO brain_completion_claim(session_id,claim_sequence,certainty,claim_text,
+                        observation_call_id,task_id,explanation,created_at) VALUES(?,?,?,?,?,?,?,?)
+                        """)) {
+                    statement.setString(1, sessionId);
+                    statement.setLong(2, sequence);
+                    statement.setString(3, claim.certainty().name());
+                    statement.setString(4, claim.claim());
+                    if (claim.observationCallId().isBlank()) statement.setNull(5, java.sql.Types.VARCHAR);
+                    else statement.setString(5, claim.observationCallId());
+                    if (claim.taskId().isBlank()) statement.setNull(6, java.sql.Types.VARCHAR);
+                    else statement.setString(6, claim.taskId());
+                    statement.setString(7, claim.explanation());
+                    statement.setLong(8, createdAt);
+                    statement.executeUpdate();
+                }
+                connection.commit();
+                return new CompletionClaimSnapshot(sessionId, sequence, claim, Instant.ofEpochMilli(createdAt));
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            }
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
     public int toolCount(String sessionId) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
                 "SELECT COUNT(*) FROM brain_tool_call WHERE session_id=?")) {
@@ -305,6 +346,25 @@ public final class BrainAuditRepository {
                         session.set("semanticState", semantic.state().toJson());
                         session.put("semanticStateRevision", semantic.revision())
                                 .put("semanticStateAuthoredAt", semantic.authoredAt().toString());
+                    }
+                    var claims = session.putArray("completionClaims");
+                    try (PreparedStatement claimRows = connection.prepareStatement("""
+                            SELECT claim_sequence,certainty,claim_text,observation_call_id,task_id,explanation,created_at
+                            FROM brain_completion_claim WHERE session_id=? ORDER BY claim_sequence DESC LIMIT 50
+                            """)) {
+                        claimRows.setString(1, rows.getString("session_id"));
+                        try (var claimResult = claimRows.executeQuery()) {
+                            while (claimResult.next()) {
+                                claims.addObject().put("sequence", claimResult.getLong("claim_sequence"))
+                                        .put("certainty", claimResult.getString("certainty"))
+                                        .put("claim", claimResult.getString("claim_text"))
+                                        .put("observationCallId", nullToEmpty(claimResult.getString("observation_call_id")))
+                                        .put("taskId", nullToEmpty(claimResult.getString("task_id")))
+                                        .put("explanation", claimResult.getString("explanation"))
+                                        .put("createdAt", Instant.ofEpochMilli(
+                                                claimResult.getLong("created_at")).toString());
+                            }
+                        }
                     }
                     var tools = session.putArray("toolCalls");
                     try (PreparedStatement calls = connection.prepareStatement("""
@@ -359,7 +419,11 @@ public final class BrainAuditRepository {
         return text.isBlank() ? null : text;
     }
 
+    private static String nullToEmpty(String value) { return value == null ? "" : value; }
+
     public record AuditedToolCall(ToolCall call, ToolResult result) { }
     public record SemanticStateSnapshot(String sessionId, String controllerId, String companionId,
                                         BrainSemanticState state, long revision, Instant authoredAt) { }
+    public record CompletionClaimSnapshot(String sessionId, long sequence,
+                                          BrainCompletionClaim claim, Instant createdAt) { }
 }

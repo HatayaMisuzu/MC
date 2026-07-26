@@ -24,6 +24,7 @@ public final class RuntimeDatabase implements AutoCloseable {
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
             "memory_fact", "memory_suggestion", "episode_capsule", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
+            "brain_completion_claim",
             "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
 
@@ -761,6 +762,23 @@ public final class RuntimeDatabase implements AutoCloseable {
                   updated_at INTEGER NOT NULL
                 )
                 """);
+        List<String> brainCompletionClaim = List.of(
+                """
+                CREATE TABLE brain_completion_claim (
+                  session_id TEXT NOT NULL REFERENCES brain_session(session_id) ON DELETE CASCADE,
+                  claim_sequence INTEGER NOT NULL,
+                  certainty TEXT NOT NULL,
+                  claim_text TEXT NOT NULL,
+                  observation_call_id TEXT,
+                  task_id TEXT,
+                  explanation TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(session_id,claim_sequence),
+                  FOREIGN KEY(session_id,observation_call_id)
+                    REFERENCES brain_tool_call(session_id,call_id)
+                )
+                """,
+                "CREATE INDEX brain_completion_claim_task_idx ON brain_completion_claim(task_id,created_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -786,6 +804,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(22, "audit local review of memory suggestions", memorySuggestionReview),
                 new Migration(23, "persist deterministic episode capsules and candidate provenance", episodeCapsules),
                 new Migration(24, "persist external Brain-authored semantic state", brainSemanticState),
-                new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings));
+                new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings),
+                new Migration(26, "link external Brain completion claims to final observations", brainCompletionClaim));
     }
 }

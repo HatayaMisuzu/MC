@@ -82,7 +82,11 @@ class ExternalBrainAdapterTest {
                         "toolCalls":[{"callId":"observe_1","name":"world.observe","arguments":{}}]}
                         """);
             } else if (path.endsWith("/turns")) {
-                respond(exchange, 200, "{\"kind\":\"FINAL_RESPONSE\",\"response\":\"状态正常。\"}");
+                respond(exchange, 200, """
+                        {"kind":"FINAL_RESPONSE","response":"状态正常。",
+                        "completionClaim":{"claim":"Current state was observed","certainty":"VERIFIED",
+                        "observationCallId":"observe_1","taskId":"","explanation":""}}
+                        """);
             } else {
                 respond(exchange, 200, "{}");
             }
@@ -91,6 +95,7 @@ class ExternalBrainAdapterTest {
             BrainCoordinatorResult result = coordinator.continueTurn("hermes-controller", "c1", "看看状态", context());
             assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
             assertEquals(1, result.toolResults().size());
+            assertEquals("observe_1", result.toolResults().getFirst().callId());
         }
         assertEquals(List.of("/sessions", "/sessions/hermes_session_1/turns",
                 "/sessions/hermes_session_1/turns", "/sessions/hermes_session_1/cancel"), paths);
@@ -172,6 +177,24 @@ class ExternalBrainAdapterTest {
                     () -> adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
                             "test", context(), List.of(), 4)));
             assertTrue(failure.getMessage().startsWith("BRAIN_INVALID_SEMANTIC_STATE"));
+        }
+    }
+
+    @Test
+    void hermesRequiresStructuredCompletionClaimForEveryFinalResponse() throws Exception {
+        try (TestServer server = new TestServer(exchange -> {
+            if (exchange.getRequestURI().getPath().equals("/sessions")) {
+                respond(exchange, 200, "{\"sessionId\":\"hermes_claim_1\"}");
+            } else {
+                respond(exchange, 200, "{\"kind\":\"FINAL_RESPONSE\",\"response\":\"done\"}");
+            }
+        }); HermesBrainAdapter adapter = new HermesBrainAdapter(
+                server.baseUrl(), "fixture-token", Duration.ofSeconds(5))) {
+            BrainSession session = adapter.openSession(sessionRequest());
+            IllegalStateException failure = assertThrows(IllegalStateException.class,
+                    () -> adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                            "test", context(), List.of(), 4)));
+            assertEquals("HERMES_COMPLETION_CLAIM_REQUIRED", failure.getMessage());
         }
     }
 

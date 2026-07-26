@@ -350,6 +350,54 @@ class ExternalBrainCoordinatorTest {
         }
     }
 
+    @Test
+    void verifiedCompletionClaimLinksToTheBrainSelectedFinalObservation() throws Exception {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> turns.getAndIncrement() == 0
+                ? BrainTurnResult.tools(List.of(new ToolCall("final-observe-1", "world.observe", Json.object())))
+                : BrainTurnResult.finalResponse("The check is complete.").withCompletionClaim(
+                        new BrainCompletionClaim("Base state checked", BrainCompletionClaim.Certainty.VERIFIED,
+                                "final-observe-1", "task-1", "")));
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("completion-claim.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, new RecordingGateway(), 4, audit)) {
+                BrainCoordinatorResult result = coordinator.continueTurn(
+                        "controller", "c1", "check the base", context());
+                assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+                var inspected = audit.inspect("c1", 10).path(0).path("completionClaims").path(0);
+                assertEquals("VERIFIED", inspected.path("certainty").asText());
+                assertEquals("final-observe-1", inspected.path("observationCallId").asText());
+                assertEquals("task-1", inspected.path("taskId").asText());
+            }
+        }
+    }
+
+    @Test
+    void missingObservationCannotSupportVerifiedClaimButExplicitUnverifiedGapIsAllowed() throws Exception {
+        ReplayBrainAdapter invalid = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse("done")
+                .withCompletionClaim(new BrainCompletionClaim("Done", BrainCompletionClaim.Certainty.VERIFIED,
+                        "missing-observation", "task-1", "")));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                invalid, new RecordingGateway(), 4)) {
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> coordinator.continueTurn("controller", "c1", "finish", context()));
+            assertEquals("BRAIN_FINAL_OBSERVATION_NOT_FOUND", failure.getMessage());
+        }
+
+        ReplayBrainAdapter honest = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse(
+                "I could not verify the result.").withCompletionClaim(new BrainCompletionClaim(
+                "Result unavailable", BrainCompletionClaim.Certainty.UNVERIFIED,
+                "", "task-1", "Companion is offline")));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                honest, new RecordingGateway(), 4)) {
+            BrainCoordinatorResult result = coordinator.continueTurn(
+                    "controller", "c1", "finish", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+        }
+    }
+
     private static AgentContext context() {
         return AgentContext.empty("c1", List.of("NavigateTo", "FollowOwner"));
     }

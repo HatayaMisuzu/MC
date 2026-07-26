@@ -253,6 +253,23 @@ Example response extension:
 }
 ```
 
+## Final-observation completion claims
+
+- Every Hermes `FINAL_RESPONSE` must include a bounded `completionClaim`. Ordinary conversation
+  uses `NOT_APPLICABLE`; a task result uses either `VERIFIED` or `UNVERIFIED`.
+- Hermes chooses the final observation Tool. For `VERIFIED`, it must cite that Tool call ID.
+  Runtime accepts only a successful terminal world/inventory/safety/task/block/item/entity/menu
+  observation from the same Brain session and rejects missing, failed, nonterminal, or unrelated
+  calls.
+- `UNVERIFIED` cannot cite an observation and must explain why verification was unavailable.
+  This permits an honest response but does not create verified evidence.
+- Migration 26 stores the claim, certainty, optional task ID, explanation, and foreign-key link to
+  the exact audited Tool call. `/brain/audit` and the Brain page show what was checked immediately
+  before the external Brain claimed completion.
+- Runtime does not select the observation, run a task-specific acceptance script, or rewrite the
+  Brain's natural-language answer. Local Replay tests are protocol/evidence tests, not proof of
+  Live Hermes judgment.
+
 ## Deposit to storage slice
 
 - Added `inventory.deposit` / `DepositToStorage` only when the connected Fabric body

@@ -230,6 +230,12 @@ Passed on the frozen SHA:
   Authenticated management and HTML controls can change both modes without
   changing Tool definitions, permissions, safety, budgets, or Memory policy.
   Proactive-message admission/rate/dedupe remains unfinished.
+- Added the section 5.4 structured completion-claim boundary. Hermes final
+  responses must declare verified, unverified, or non-task status. Verified
+  claims cite the exact same-session terminal observation chosen by Hermes;
+  Runtime validates and migration 26 links it to audit without inventing an
+  acceptance script. Honest unverified claims require an explanation and no
+  observation citation. Audit and HTML UI expose the relationship.
 
 ## Remaining work
 

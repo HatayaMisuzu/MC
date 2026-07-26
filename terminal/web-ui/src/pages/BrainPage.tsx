@@ -101,6 +101,16 @@ export function BrainPage() {
             <StatusBadge value={tool.success ? 'PASS' : 'FAILED'} /><span>{tool.code}</span><p>{JSON.stringify(tool.observation ?? {})}</p></div>) :
           [<div className="event-row" key={session.sessionId}><time>{new Date(session.updatedAt).toLocaleTimeString()}</time><strong>{session.provider}</strong><StatusBadge value={session.state} /><span>{session.lastCode}</span></div>])}</div>
       </section>
+      <section className="main-panel"><header className="panel-header"><h2>Completion claims and final observations</h2>
+        <span>Brain claim · Runtime-validated evidence link</span></header>
+        <div className="event-rows">{(audit.data ?? []).flatMap((session) => (session.completionClaims ?? []).map((claim) =>
+          <div className="event-row" key={`${session.sessionId}-claim-${claim.sequence}`}>
+            <time>{new Date(claim.createdAt).toLocaleTimeString()}</time><strong>{claim.claim}</strong>
+            <StatusBadge value={claim.certainty} />
+            <span>{claim.observationCallId ? `final observation ${claim.observationCallId}` : 'no verified observation'}</span>
+            <p>{claim.taskId ? `task ${claim.taskId}` : 'no task'}{claim.explanation ? ` · ${claim.explanation}` : ''}</p>
+          </div>))}</div>
+      </section>
       <section className="main-panel"><header className="panel-header"><h2>Bounded context</h2>
         <span>aggregate budgets only</span></header>
         <p>Total {status.data?.contextBudget?.totalChars ?? 0} chars · world {status.data?.contextBudget?.worldChars ?? 0} · conversation {status.data?.contextBudget?.conversationChars ?? 0} · task {status.data?.contextBudget?.taskChars ?? 0} · approved Memory {status.data?.contextBudget?.approvedMemoryChars ?? 0} · Capsule {status.data?.contextBudget?.episodeCapsuleChars ?? 0}</p>

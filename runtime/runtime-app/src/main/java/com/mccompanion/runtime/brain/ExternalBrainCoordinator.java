@@ -149,6 +149,11 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             message = "";
             pending = List.of();
             if (result.kind() != BrainTurnResult.Kind.TOOL_CALLS) {
+                if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE
+                        && result.completionClaim() != null) {
+                    validateCompletionClaim(toolContext, result.completionClaim(), observations);
+                    if (audit != null) audit.completionClaim(session.sessionId(), result.completionClaim());
+                }
                 if (audit != null) audit.state(session.sessionId(), "ACTIVE",
                         result.kind() == BrainTurnResult.Kind.CANCEL ? "BRAIN_CANCELLED" : result.kind().name());
                 WaitingQuestion question = null;
@@ -273,6 +278,37 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 || state.personalityMode() != settings.personalityMode()) {
             throw new IllegalArgumentException("BRAIN_SEMANTIC_STATE_POLICY_MISMATCH");
         }
+    }
+
+    private void validateCompletionClaim(ToolContext context, BrainCompletionClaim claim,
+                                         List<ToolResult> turnObservations) {
+        if (claim.certainty() != BrainCompletionClaim.Certainty.VERIFIED) return;
+        ToolResult observation = turnObservations.stream()
+                .filter(value -> value.callId().equals(claim.observationCallId()))
+                .findFirst().orElse(null);
+        if (observation == null && audit != null) {
+            observation = audit.tool(context.brainSessionId(), claim.observationCallId())
+                    .map(BrainAuditRepository.AuditedToolCall::result).orElse(null);
+        }
+        if (observation == null) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_NOT_FOUND");
+        }
+        if (!observation.terminal() || !observation.success()) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_NOT_VERIFIED");
+        }
+        String toolName = observation.toolName();
+        if (!isRealObservationTool(toolName)) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_TOOL_INVALID");
+        }
+    }
+
+    private static boolean isRealObservationTool(String name) {
+        if (name == null) return false;
+        return name.equals("world.observe") || name.equals("world.query") || name.equals("world.scan")
+                || name.equals("inventory.inspect") || name.equals("safety.inspect")
+                || name.equals("task.inspect") || name.equals("block.inspect")
+                || name.equals("item.inspect") || name.equals("entity.inspect")
+                || name.equals("menu.inspect");
     }
 
     @Override public void close() {

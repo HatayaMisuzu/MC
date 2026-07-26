@@ -27,6 +27,8 @@ vi.mock('../hooks/useResource', () => ({
           initiativeMode: 'NORMAL', personalityMode: 'COMPANION', permissionPreset: 'ASK_FOR_EFFECTS',
           playerExplicitlyAway: false, latestRealWorldObservationAt: '2026-07-15T00:00:00Z',
           staleAssumptions: ['old chest count'] },
+        completionClaims: [{ sequence: 1, certainty: 'VERIFIED', claim: 'Base state checked',
+          observationCallId: 't1', taskId: 'task-1', explanation: '', createdAt: '2026-07-15T00:00:01Z' }],
         toolCalls: [{ callId: 't1', toolName: 'search.query', success: true, code: 'OK', terminal: true, observation: { sources: 1 } }] }],
       { companionId: 'c1', initiativeMode: 'NORMAL', personalityMode: 'COMPANION', revision: 1,
         updatedBy: 'LOCAL_MANAGEMENT_USER', updatedAt: '2026-07-15T00:00:00Z',
@@ -52,6 +54,8 @@ describe('BrainPage', () => {
     expect(screen.getByText('episode-1')).toBeVisible()
     expect(screen.getByText('Inspect the base')).toBeVisible()
     expect(screen.getByText(/old chest count/)).toBeVisible()
+    expect(screen.getByText('Base state checked')).toBeVisible()
+    expect(screen.getByText(/final observation t1/)).toBeVisible()
     fireEvent.change(screen.getByLabelText('Initiative'), { target: { value: 'QUIET' } })
     expect(post).toHaveBeenCalledWith('/api/brain/settings', {
       instanceId: 'instance-1', companionId: 'c1', initiativeMode: 'QUIET', personalityMode: 'COMPANION',

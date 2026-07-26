@@ -698,6 +698,54 @@ public final class CompanionLifecycleForgeGameTests {
                                 System.currentTimeMillis() + 300_000L)
                         .success(),
                 "craft/smelt lease acquisition failed");
+        BlockPos scanNear = helper.absolutePos(new BlockPos(2, 1, 1));
+        BlockPos scanFar = helper.absolutePos(new BlockPos(3, 1, 1));
+        helper.getLevel().setBlockAndUpdate(scanNear, Blocks.GOLD_ORE.defaultBlockState());
+        helper.getLevel().setBlockAndUpdate(scanFar, Blocks.GOLD_ORE.defaultBlockState());
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-craft-smelt-lease",
+                                1L,
+                                "forge-scan",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "ExploreArea",
+                                        "minecraft:gold_ore",
+                                        3,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "world scan failed to start");
+        for (int tick = 0; tick < 5; tick++) registry.tick();
+        CompanionRegistry.BehaviorObservation scanObservation =
+                registry.runtimeSnapshots(false).stream()
+                        .filter(snapshot -> snapshot.companionId().equals(companionId))
+                        .map(CompanionRegistry.RuntimeSnapshot::behaviorObservation)
+                        .findFirst()
+                        .orElseThrow();
+        helper.assertTrue(
+                scanObservation.failureCode().equals("SCAN_COMPLETE")
+                        && scanObservation.candidates().size() >= 2,
+                "world scan did not return the live gold-ore candidates");
+        helper.assertTrue(
+                scanObservation.candidates().get(0).distanceSquared()
+                        <= scanObservation.candidates().get(1).distanceSquared(),
+                "world scan candidates were not distance-ranked");
         helper.assertTrue(body.addItem(new ItemStack(Items.OAK_LOG)), "craft input fixture add failed");
         helper.assertTrue(body.addItem(new ItemStack(Items.RAW_IRON)), "smelt input fixture add failed");
         helper.assertTrue(body.addItem(new ItemStack(Items.COAL)), "smelt fuel fixture add failed");

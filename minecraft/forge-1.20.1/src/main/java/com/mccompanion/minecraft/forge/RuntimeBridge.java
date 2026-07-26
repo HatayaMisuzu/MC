@@ -143,6 +143,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("recipe_query", true)
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
+                .put("NavigateTo", true)
+                .put("ExploreArea", true)
                 .put("LookAt", true)
                 .put("InteractBlock", true)
                 .put("InteractEntity", true)
@@ -546,6 +548,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("positionY", snapshot.y())
                 .put("positionZ", snapshot.z())
                 .put("evidence", snapshot.evidenceSummary());
+        appendBehaviorObservation(evidence, snapshot.behaviorObservation());
         if (failureCode != null) evidence.put("failureCode", failureCode);
         ObjectNode payload = JSON.createObjectNode()
                 .put("eventId", UUID.randomUUID().toString())
@@ -564,6 +567,24 @@ final class RuntimeBridge implements AutoCloseable {
         payload.set("snapshot", evidence);
         sendEnvelope("behavior_event", payload);
         registry.recordRuntimeLifecyclePublished(snapshot.behaviorId());
+    }
+
+    private static void appendBehaviorObservation(
+            ObjectNode evidence,
+            CompanionRegistry.BehaviorObservation observation) {
+        if (observation == null) return;
+        evidence.put("failureCode", observation.failureCode())
+                .put("item", observation.itemId())
+                .put("requested", observation.requested())
+                .put("available", observation.available());
+        ArrayNode candidates = evidence.putArray("candidates");
+        observation.candidates().forEach(candidate -> candidates.addObject()
+                .put("block", candidate.block())
+                .put("dimension", candidate.dimension())
+                .put("x", candidate.x())
+                .put("y", candidate.y())
+                .put("z", candidate.z())
+                .put("distanceSquared", candidate.distanceSquared()));
     }
 
     private static String failureCode(String evidence) {

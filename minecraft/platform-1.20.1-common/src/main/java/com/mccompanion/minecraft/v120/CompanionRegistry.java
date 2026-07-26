@@ -281,7 +281,8 @@ public final class CompanionRegistry {
                     body != null && body.isInLava(),
                     freeSlots,
                     java.util.Map.copyOf(inventory),
-                    behaviorDirector.evidenceSummary(entry.companionId)));
+                    behaviorDirector.evidenceSummary(entry.companionId),
+                    behaviorDirector.behaviorObservation(entry.companionId)));
         }
         return java.util.List.copyOf(snapshots);
     }
@@ -383,7 +384,8 @@ public final class CompanionRegistry {
                             "DefendOwner",
                             "RetreatFromDanger",
                             "CraftItem",
-                            "SmeltItem")
+                            "SmeltItem",
+                            "ExploreArea")
                     .contains(skill.capability())) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }
@@ -665,7 +667,32 @@ public final class CompanionRegistry {
             double x, double y, double z, String bodyState, String behaviorId,
             String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
             float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
-            int freeInventorySlots, java.util.Map<String, Integer> inventory, String evidenceSummary) {
+            int freeInventorySlots, java.util.Map<String, Integer> inventory, String evidenceSummary,
+            BehaviorObservation behaviorObservation) {
+    }
+
+    public record BehaviorObservation(
+            String failureCode,
+            String itemId,
+            int requested,
+            int available,
+            java.util.List<ScanCandidate> candidates) {
+        public BehaviorObservation {
+            candidates = candidates == null ? java.util.List.of() : java.util.List.copyOf(candidates);
+        }
+
+        public BehaviorObservation(String failureCode, String itemId, int requested, int available) {
+            this(failureCode, itemId, requested, available, java.util.List.of());
+        }
+    }
+
+    public record ScanCandidate(
+            String block,
+            String dimension,
+            int x,
+            int y,
+            int z,
+            double distanceSquared) {
     }
 
     public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {

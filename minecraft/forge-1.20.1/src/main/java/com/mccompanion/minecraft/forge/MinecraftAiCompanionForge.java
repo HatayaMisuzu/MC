@@ -42,7 +42,8 @@ public final class MinecraftAiCompanionForge {
                     "interact_entity", "menu_action", "use_item", "drop_item", "attack_entity",
                     "place_block", "resource_collect", "resource_mine", "storage_transfer",
                     "inventory_deliver", "eat_and_recover", "defend_owner", "retreat",
-                    "composite_crafting", "composite_smelting"),
+                    "composite_crafting", "composite_smelting", "movement_step",
+                    "world_scan"),
             List.of(),
             List.of());
     private static volatile MinecraftServer activeServer;

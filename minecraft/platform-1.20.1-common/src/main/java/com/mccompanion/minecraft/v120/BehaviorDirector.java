@@ -32,6 +32,7 @@ import net.minecraft.world.item.crafting.ShapedRecipe;
 import net.minecraft.world.item.crafting.SmeltingRecipe;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.AbstractFurnaceBlock;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 import net.minecraft.world.phys.BlockHitResult;
@@ -56,6 +57,7 @@ final class BehaviorDirector {
     private final ReflexController reflexController = new ReflexController();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, PrimitiveProgress> primitives = new HashMap<>();
+    private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
         this.server = server;
@@ -69,6 +71,7 @@ final class BehaviorDirector {
     }
 
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
+        observations.remove(entry.companionId);
         primitives.put(entry.companionId, new PrimitiveProgress(parameters, server.getTickCount()));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
@@ -95,12 +98,17 @@ final class BehaviorDirector {
     void forget(UUID companionId) {
         navigation.remove(companionId);
         primitives.remove(companionId);
+        observations.remove(companionId);
         MenuSessionTracker.invalidate(companionId);
         actionGateway.discard(companionId);
     }
 
     String evidenceSummary(UUID companionId) {
         return actionGateway.evidenceSummary(companionId);
+    }
+
+    CompanionRegistry.BehaviorObservation behaviorObservation(UUID companionId) {
+        return observations.get(companionId);
     }
 
     void tick(CompanionEntry entry, CompanionPlayer body) {
@@ -210,7 +218,8 @@ final class BehaviorDirector {
                         "DefendOwner",
                         "RetreatFromDanger",
                         "CraftItem",
-                        "SmeltItem")
+                        "SmeltItem",
+                        "ExploreArea")
                 .contains(capability)) {
             String composite = tickComposite(entry, body, progress);
             if ("WAIT".equals(composite)) return;
@@ -258,6 +267,7 @@ final class BehaviorDirector {
             case "RetreatFromDanger" -> tickRetreat(body, progress);
             case "CraftItem" -> tickCraft(body, progress);
             case "SmeltItem" -> tickSmelt(body, progress);
+            case "ExploreArea" -> tickExplore(entry, body, progress);
             default -> "CAPABILITY_UNAVAILABLE";
         };
     }
@@ -578,6 +588,69 @@ final class BehaviorDirector {
                 (float) Math.toDegrees(Math.atan2(-away.x, away.z)),
                 body.horizontalCollision);
         return "WAIT";
+    }
+
+    private String tickExplore(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            PrimitiveProgress progress) {
+        if (!progress.initialized) {
+            if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+            ResourceLocation id = ResourceLocation.tryParse(progress.parameters.itemId());
+            if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) return "BLOCK_UNKNOWN";
+            int radius = progress.parameters.quantity();
+            if (radius < 1 || radius > 16) return "SCAN_RADIUS_INVALID";
+            BlockPos center = progress.parameters.hasBlockTarget()
+                    ? new BlockPos(
+                            progress.parameters.x(),
+                            progress.parameters.y(),
+                            progress.parameters.z())
+                    : body.blockPosition();
+            if (body.distanceToSqr(Vec3.atCenterOf(center)) > 32.0D * 32.0D) {
+                return "SCAN_ORIGIN_OUT_OF_RANGE";
+            }
+            progress.scanBlock = BuiltInRegistries.BLOCK.get(id);
+            progress.station = center;
+            progress.scanRadius = radius;
+            progress.verticalRadius = Math.min(radius, 8);
+            progress.initialized = true;
+        }
+        if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+        int diameter = progress.scanRadius * 2 + 1;
+        int height = progress.verticalRadius * 2 + 1;
+        int total = diameter * diameter * height;
+        int budget = 256;
+        while (budget-- > 0 && progress.scanIndex < total) {
+            int value = progress.scanIndex++;
+            int yOffset = value % height - progress.verticalRadius;
+            value /= height;
+            int zOffset = value % diameter - progress.scanRadius;
+            int xOffset = value / diameter - progress.scanRadius;
+            BlockPos position = progress.station.offset(xOffset, yOffset, zOffset);
+            if (!body.serverLevel().hasChunkAt(position)) continue;
+            if (body.serverLevel().getBlockState(position).is(progress.scanBlock)
+                    && progress.candidates.size() < 64) {
+                progress.candidates.add(new CompanionRegistry.ScanCandidate(
+                        BuiltInRegistries.BLOCK.getKey(progress.scanBlock).toString(),
+                        progress.parameters.dimension(),
+                        position.getX(),
+                        position.getY(),
+                        position.getZ(),
+                        position.distSqr(progress.station)));
+            }
+        }
+        if (progress.scanIndex < total) return "WAIT";
+        progress.candidates.sort(
+                java.util.Comparator.comparingDouble(CompanionRegistry.ScanCandidate::distanceSquared));
+        observations.put(
+                entry.companionId,
+                new CompanionRegistry.BehaviorObservation(
+                        "SCAN_COMPLETE",
+                        progress.parameters.itemId(),
+                        total,
+                        progress.candidates.size(),
+                        progress.candidates));
+        return null;
     }
 
     private String tickCraft(CompanionPlayer body, PrimitiveProgress progress) {
@@ -1317,6 +1390,12 @@ final class BehaviorDirector {
         private BlockPos station;
         private int inputCount;
         private boolean setup;
+        private Block scanBlock;
+        private int scanRadius;
+        private int verticalRadius;
+        private int scanIndex;
+        private final java.util.List<CompanionRegistry.ScanCandidate> candidates =
+                new java.util.ArrayList<>();
 
         private PrimitiveProgress(SkillParameters parameters, int startedTick) {
             this.parameters = parameters;

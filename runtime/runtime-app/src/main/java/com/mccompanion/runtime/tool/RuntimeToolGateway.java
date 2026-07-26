@@ -478,6 +478,65 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         return accepted;
     }
 
+    @Override public boolean conflictsWithOwnerActivity(
+            ToolContext context, String callId, JsonNode activity) {
+        if (tasks == null || activity == null || !activity.isObject()) return false;
+        String prefix = context.brainSessionId() + ':';
+        for (var entry : activeTasks.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) continue;
+            try {
+                TaskRecord task = tasks.get(entry.getValue()).orElse(null);
+                if (task != null && task.companionId().equals(context.companionId())
+                        && activityMatchesPayload(task.payload(), activity)) {
+                    return true;
+                }
+            } catch (java.sql.SQLException ignored) {
+                // Fail closed: an unverified target match must not preempt a task.
+            }
+        }
+        return false;
+    }
+
+    static boolean activityMatchesPayload(JsonNode payload, JsonNode activity) {
+        if (!Set.of("BLOCK_USE", "BLOCK_BREAK").contains(activity.path("activityType").asText())) {
+            return false;
+        }
+        JsonNode activityPosition = activity.path("position");
+        if (!validPosition(activityPosition)) return false;
+        return containsPosition(payload, activityPosition, 0);
+    }
+
+    private static boolean containsPosition(JsonNode value, JsonNode expected, int depth) {
+        if (value == null || depth > 6) return false;
+        if (validPosition(value) && samePosition(value, expected)) return true;
+        if (value.isObject()) {
+            var fields = value.fields();
+            while (fields.hasNext()) {
+                if (containsPosition(fields.next().getValue(), expected, depth + 1)) return true;
+            }
+        } else if (value.isArray()) {
+            for (JsonNode child : value) {
+                if (containsPosition(child, expected, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean validPosition(JsonNode value) {
+        return value != null && value.isObject()
+                && value.path("dimension").isTextual()
+                && value.path("x").canConvertToInt()
+                && value.path("y").canConvertToInt()
+                && value.path("z").canConvertToInt();
+    }
+
+    private static boolean samePosition(JsonNode left, JsonNode right) {
+        return left.path("dimension").asText().equals(right.path("dimension").asText())
+                && left.path("x").asInt() == right.path("x").asInt()
+                && left.path("y").asInt() == right.path("y").asInt()
+                && left.path("z").asInt() == right.path("z").asInt();
+    }
+
     private static String key(ToolContext context, String callId) {
         return context.brainSessionId() + ':' + callId;
     }

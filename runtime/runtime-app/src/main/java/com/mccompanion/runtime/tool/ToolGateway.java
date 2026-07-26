@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -26,4 +27,8 @@ public interface ToolGateway {
      * decision about whether user text should interrupt work.
      */
     default boolean pause(ToolContext context, String callId, String reason) { return false; }
+    /** Returns true only when a verified owner activity targets this call's active exact target. */
+    default boolean conflictsWithOwnerActivity(ToolContext context, String callId, JsonNode activity) {
+        return false;
+    }
 }

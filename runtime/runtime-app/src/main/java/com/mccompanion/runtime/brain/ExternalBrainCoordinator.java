@@ -280,6 +280,21 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         return accepted;
     }
 
+    public boolean yieldToOwnerActivity(String controllerId, String companionId,
+                                        com.fasterxml.jackson.databind.JsonNode activity) {
+        requireController(controllerId);
+        ActiveTool active = activeTools.get(companionId);
+        if (active == null || !tools.conflictsWithOwnerActivity(
+                active.context(), active.call().callId(), activity)) {
+            return false;
+        }
+        String reason = "OWNER_SAME_TARGET_ACTIVITY";
+        pendingInterruptions.put(companionId, reason);
+        boolean accepted = tools.pause(active.context(), active.call().callId(), reason);
+        if (!accepted) pendingInterruptions.remove(companionId, reason);
+        return accepted;
+    }
+
     public void releaseController(String controllerId) {
         requireController(controllerId);
         List<BrainSession> cancelledSessions = List.copyOf(sessions.values());

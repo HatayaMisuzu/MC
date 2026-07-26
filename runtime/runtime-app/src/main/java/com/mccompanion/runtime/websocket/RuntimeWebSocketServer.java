@@ -267,6 +267,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 }
             }
             case "player_request" -> handlePlayerRequest(session, payload);
+            case "owner_activity" -> handleOwnerActivity(session, payload);
             case "conversation_delivery_ack" -> acknowledgeConversationDelivery(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }
             default -> sendError(session.peer(), session, "UNKNOWN_MESSAGE_TYPE", "Unsupported message type");
@@ -279,6 +280,47 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         RuntimeSession owner = sessions.forCompanion(companionId).orElse(null);
         if (owner != session) throw new IllegalArgumentException("conversation ack does not belong to this session");
         conversations.acknowledgeGameDelivery(companionId, eventId);
+    }
+
+    private void handleOwnerActivity(RuntimeSession session, JsonNode payload) {
+        String companionId = required(payload, "companionId");
+        String ownerId = required(payload, "ownerId");
+        String activityType = required(payload, "activityType");
+        if (!java.util.Set.of("BLOCK_USE", "BLOCK_BREAK").contains(activityType)) {
+            throw new IllegalArgumentException("owner activity type is invalid");
+        }
+        JsonNode position = payload.path("position");
+        if (!position.isObject() || !position.path("dimension").isTextual()
+                || !position.path("x").canConvertToInt() || !position.path("y").canConvertToInt()
+                || !position.path("z").canConvertToInt()) {
+            throw new IllegalArgumentException("owner activity position is invalid");
+        }
+        ObjectNode bounded = Json.object().put("activityType", activityType);
+        bounded.set("position", Json.object()
+                .put("dimension", position.path("dimension").asText())
+                .put("x", position.path("x").asInt())
+                .put("y", position.path("y").asInt())
+                .put("z", position.path("z").asInt()));
+        planningExecutor.execute(() -> {
+            try {
+                var companion = companions.get(companionId).orElse(null);
+                if (companion == null || !session.companionIds().contains(companionId)
+                        || !ownerId.equals(companion.ownerId()) || externalBrain == null) {
+                    return;
+                }
+                if (externalBrain.yieldToOwnerActivity(
+                        "runtime-primary", companionId, bounded)) {
+                    conversations.hear(companionId, null, "CONTROL",
+                            "Owner took over the same world target.",
+                            Json.object().put("channel", "CONNECTED_BODY")
+                                    .put("reason", "OWNER_SAME_TARGET_ACTIVITY")
+                                    .set("activity", bounded));
+                }
+            } catch (Exception failure) {
+                log.warn("Owner activity handoff stopped safely: "
+                        + failure.getClass().getSimpleName());
+            }
+        });
     }
 
     private void handlePlayerRequest(RuntimeSession session, JsonNode payload) {

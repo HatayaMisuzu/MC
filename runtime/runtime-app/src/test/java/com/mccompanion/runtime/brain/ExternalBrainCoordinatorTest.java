@@ -274,7 +274,7 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
-    void immediateInstructionPausesActiveToolAndDeliversPauseBeforeNewMessage() throws Exception {
+    void verifiedInterruptionPausesActiveToolAndDeliversPauseBeforeNewMessage() throws Exception {
         CountDownLatch awaiting = new CountDownLatch(1);
         CountDownLatch paused = new CountDownLatch(1);
         ToolGateway gateway = new ToolGateway() {
@@ -303,6 +303,10 @@ class ExternalBrainCoordinatorTest {
                 paused.countDown();
                 return true;
             }
+            @Override public boolean conflictsWithOwnerActivity(
+                    ToolContext context, String callId, com.fasterxml.jackson.databind.JsonNode activity) {
+                return activity.path("position").path("x").asInt() == 4;
+            }
         };
         AtomicInteger turns = new AtomicInteger();
         ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
@@ -320,8 +324,10 @@ class ExternalBrainCoordinatorTest {
                     coordinator.continueTurn("hermes-1", "c1", "执行长期目标", context()));
             assertTrue(awaiting.await(1, TimeUnit.SECONDS));
             long started = System.nanoTime();
-            assertTrue(coordinator.pauseActiveForUserInstruction(
-                    "hermes-1", "c1", "OWNER_IMMEDIATE_INSTRUCTION"));
+            assertFalse(coordinator.yieldToOwnerActivity("hermes-1", "c1",
+                    Json.object().set("position", Json.object().put("x", 5))));
+            assertTrue(coordinator.yieldToOwnerActivity("hermes-1", "c1",
+                    Json.object().set("position", Json.object().put("x", 4))));
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0);
             assertEquals("BRAIN_TURN_PAUSED_FOR_USER_INSTRUCTION",
                     original.get(2, TimeUnit.SECONDS).code());

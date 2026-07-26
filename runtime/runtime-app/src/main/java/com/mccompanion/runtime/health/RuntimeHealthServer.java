@@ -51,12 +51,21 @@ import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Loopback-only authenticated management endpoint used to prove Runtime identity and readiness. */
 public final class RuntimeHealthServer implements AutoCloseable {
+    static final int MANAGEMENT_THREADS = 16;
+    static final int MANAGEMENT_QUEUE_CAPACITY = 64;
+    static final int PLANNING_THREADS = 2;
+    static final int PLANNING_QUEUE_CAPACITY = 16;
+    static final int SYNCHRONOUS_MCP_LIMIT = 8;
+    static final int STREAMING_MCP_LIMIT = 4;
     private final RuntimeConfig config;
     private final String pairingToken;
     private final SessionRegistry sessions;
@@ -84,6 +93,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;
     private final ExecutorService planningExecutor;
+    private final Semaphore synchronousMcpPermits = new Semaphore(SYNCHRONOUS_MCP_LIMIT, true);
+    private final Semaphore streamingMcpPermits = new Semaphore(STREAMING_MCP_LIMIT, true);
 
     public RuntimeHealthServer(
             RuntimeConfig config,
@@ -165,17 +176,20 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/skills", this::skillManagement);
         server.createContext("/mcp", this::mcp);
         server.createContext("/search/sessions", this::searchSessions);
-        executor = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-runtime-management");
-            thread.setDaemon(true);
-            return thread;
-        });
-        planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-runtime-planning");
-            thread.setDaemon(true);
-            return thread;
-        });
+        executor = boundedPool(MANAGEMENT_THREADS, MANAGEMENT_QUEUE_CAPACITY,
+                "mc-companion-runtime-management");
+        planningExecutor = boundedPool(PLANNING_THREADS, PLANNING_QUEUE_CAPACITY,
+                "mc-companion-runtime-planning");
         server.setExecutor(executor);
+    }
+
+    static ExecutorService boundedPool(int threads, int queueCapacity, String name) {
+        return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(queueCapacity, true), runnable -> {
+                    Thread thread = new Thread(runnable, name);
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private void searchSessions(HttpExchange exchange) throws IOException {
@@ -377,11 +391,21 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ToolCall call = new ToolCall(callId, name, arguments);
         ToolResult replayed = acquireMcpCall(call);
         if (replayed != null) return mcpToolResult(replayed);
-        ToolResult accepted = toolGateway.execute(context, call);
-        ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
-                context, call, accepted, Duration.ofSeconds(30), ignored -> { });
-        completeMcpCall(call, terminal);
-        return mcpToolResult(terminal);
+        if (!synchronousMcpPermits.tryAcquire()) {
+            ToolResult rejected = ToolResult.rejected(call, "RUNTIME_BUSY",
+                    "synchronous MCP execution capacity is saturated");
+            completeMcpCall(call, rejected);
+            return mcpToolResult(rejected);
+        }
+        try {
+            ToolResult accepted = toolGateway.execute(context, call);
+            ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
+                    context, call, accepted, Duration.ofSeconds(30), ignored -> { });
+            completeMcpCall(call, terminal);
+            return mcpToolResult(terminal);
+        } finally {
+            synchronousMcpPermits.release();
+        }
     }
 
     private void mcpToolCallSse(HttpExchange exchange, JsonNode params, JsonNode requestId)
@@ -393,6 +417,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ToolCall call = new ToolCall(mcpCallId(exchange, context, requestId), name, arguments);
         JsonNode progressToken = params.path("_meta").get("progressToken");
         ToolResult replayed = acquireMcpCall(call);
+        boolean permit = replayed != null || streamingMcpPermits.tryAcquire();
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-cache");
         exchange.sendResponseHeaders(200, 0);
@@ -400,6 +425,14 @@ public final class RuntimeHealthServer implements AutoCloseable {
             if (replayed != null) {
                 writeDurableSse(exchange, output, call,
                         mcpResult(requestId, mcpToolResult(replayed)), true);
+                return;
+            }
+            if (!permit) {
+                ToolResult rejected = ToolResult.rejected(call, "RUNTIME_BUSY",
+                        "streaming MCP execution capacity is saturated");
+                completeMcpCall(call, rejected);
+                writeDurableSse(exchange, output, call,
+                        mcpResult(requestId, mcpToolResult(rejected)), true);
                 return;
             }
             try {
@@ -433,6 +466,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
             toolGateway.cancel(context, call.callId(), "MCP_EVENT_PERSISTENCE_FAILED");
             quarantineMcpCall(call);
             log.error("MCP SSE event persistence failed closed", persistenceFailure.getCause());
+        } finally {
+            if (replayed == null && permit) streamingMcpPermits.release();
         }
     }
 
@@ -637,7 +672,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
             });
         } catch (RejectedExecutionException rejected) {
             try (exchange) {
-                sendJson(exchange, 503, Json.object().put("code", "RUNTIME_STOPPING"));
+                sendJson(exchange, 503, Json.object().put("code",
+                        planningExecutor.isShutdown() ? "RUNTIME_STOPPING" : "RUNTIME_BUSY"));
             }
         }
     }
@@ -1287,7 +1323,18 @@ public final class RuntimeHealthServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
-        planningExecutor.shutdownNow();
-        executor.shutdownNow();
+        shutdown(planningExecutor);
+        shutdown(executor);
+    }
+
+    private static void shutdown(ExecutorService service) {
+        service.shutdownNow();
+        try {
+            if (!service.awaitTermination(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Runtime management executor did not terminate");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

@@ -127,6 +127,12 @@ Passed on the frozen SHA:
   retrying admission instead of fabricating failure or silently losing work.
 - Added saturation and cross-Companion capacity tests; the complete Runtime test
   suite passes after the change.
+- Replaced the two-thread shared management bottleneck with fair bounded
+  management and planning pools. Synchronous MCP and streaming MCP have
+  separate 8/4 concurrency limits that reserve control capacity for health and
+  cancellation; saturation returns `RUNTIME_BUSY`.
+- Added bounded-pool rejection/termination coverage and reran the Runtime HTTP
+  integration, including health availability during a blocked Brain request.
 
 ## Remaining work
 

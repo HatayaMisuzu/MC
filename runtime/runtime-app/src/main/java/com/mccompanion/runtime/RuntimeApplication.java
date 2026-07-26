@@ -225,7 +225,7 @@ public final class RuntimeApplication implements AutoCloseable {
                             companionId -> activeSessionRegistry.forCompanion(companionId)
                                     .map(value -> value.handshake()).orElse(null)),
                     registryTools,
-                    new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
+                    new MemoryToolGateway(memories, conversationRepository), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains, searchSessions), skillTools));
             toolGatewayReference.set(toolGateway);
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,

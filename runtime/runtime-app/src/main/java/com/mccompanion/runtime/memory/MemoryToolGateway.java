@@ -3,6 +3,7 @@ package com.mccompanion.runtime.memory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.conversation.ConversationRepository;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolDefinition;
@@ -16,10 +17,15 @@ import java.util.Set;
 /** Read-only typed memory access plus quarantined suggestions from an external Brain. */
 public final class MemoryToolGateway implements ToolGateway {
     private final MemoryRepository memories;
-    public MemoryToolGateway(MemoryRepository memories) { this.memories = java.util.Objects.requireNonNull(memories); }
+    private final ConversationRepository conversations;
+    public MemoryToolGateway(MemoryRepository memories) { this(memories, null); }
+    public MemoryToolGateway(MemoryRepository memories, ConversationRepository conversations) {
+        this.memories = java.util.Objects.requireNonNull(memories);
+        this.conversations = conversations;
+    }
 
     @Override public List<ToolDefinition> definitions(ToolContext context) {
-        return List.of(definition("world.locate_known_container",
+        var definitions = new java.util.ArrayList<>(List.of(definition("world.locate_known_container",
                         "List only body-verified known containers, with dimension compatibility", containerSchema()),
                 definition("memory.list", "List one typed memory category with provenance", listSchema()),
                 definition("memory.search", "Search bounded memory keys and values", searchSchema()),
@@ -28,7 +34,11 @@ public final class MemoryToolGateway implements ToolGateway {
                         suggestionSchema()),
                 definition("memory.suggest_preference",
                         "Compatibility wrapper that quarantines an unverified preference suggestion",
-                        preferenceSchema()));
+                        preferenceSchema())));
+        if (conversations != null) definitions.add(definition("memory.remember_explicit_preference",
+                "Save a stable low-risk preference only when evidenceText exactly matches the latest owner message",
+                explicitPreferenceSchema()));
+        return List.copyOf(definitions);
     }
 
     @Override public ToolResult execute(ToolContext context, ToolCall call) {
@@ -40,6 +50,7 @@ public final class MemoryToolGateway implements ToolGateway {
                 case "memory.episode_capsules" -> capsules(context, call);
                 case "memory.suggest" -> suggest(context, call, false);
                 case "memory.suggest_preference" -> suggest(context, call, true);
+                case "memory.remember_explicit_preference" -> rememberExplicitPreference(context, call);
                 default -> ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Memory tool is unavailable");
             };
         } catch (IllegalArgumentException failure) {
@@ -126,6 +137,46 @@ public final class MemoryToolGateway implements ToolGateway {
                 Json.MAPPER.valueToTree(suggestion), true);
     }
 
+    private ToolResult rememberExplicitPreference(ToolContext context, ToolCall call)
+            throws java.sql.SQLException {
+        if (conversations == null) {
+            return ToolResult.rejected(call, "TOOL_UNAVAILABLE",
+                    "Explicit-preference evidence is unavailable");
+        }
+        rejectUnexpected(call.arguments(), Set.of("key", "value", "evidenceText"));
+        String key = text(call.arguments(), "key", 1, 128);
+        if (!key.matches("[a-z0-9][a-z0-9_.:-]{0,127}")) {
+            throw new IllegalArgumentException("key must be a stable lower-case preference identifier");
+        }
+        JsonNode value = call.arguments().path("value");
+        if (value.isMissingNode() || Json.write(value).length() > 1_024) {
+            throw new IllegalArgumentException("value is required and bounded to 1024 characters");
+        }
+        String evidenceText = text(call.arguments(), "evidenceText", 1, 4_096);
+        rejectSensitive(key + ' ' + Json.write(value) + ' ' + evidenceText);
+        if (!memories.settings(context.companionId()).autoSaveEnabled()) {
+            return ToolResult.rejected(call, "MEMORY_AUTO_SAVE_DISABLED",
+                    "The local user paused automatic Memory");
+        }
+        var evidence = conversations.latestUserMessage(context.companionId()).orElse(null);
+        if (evidence == null || !evidence.content().equals(evidenceText)) {
+            return ToolResult.rejected(call, "MEMORY_EVIDENCE_MISMATCH",
+                    "evidenceText must exactly match the latest owner message in Companion scope");
+        }
+        java.time.Instant now = java.time.Instant.now();
+        if (evidence.createdAt().isBefore(now.minus(java.time.Duration.ofMinutes(5)))
+                || evidence.createdAt().isAfter(now.plus(java.time.Duration.ofMinutes(1)))) {
+            return ToolResult.rejected(call, "MEMORY_EVIDENCE_STALE",
+                    "the latest owner message is outside the bounded current-turn evidence window");
+        }
+        MemoryFact fact = memories.remember(context.companionId(), MemoryKind.PREFERENCE, key,
+                value, true, 1.0, null, "USER_EXPLICIT_BRAIN_CAPTURE");
+        ObjectNode observation = Json.MAPPER.valueToTree(fact);
+        observation.put("evidenceEventId", evidence.eventId()).put("evidenceBound", true);
+        return new ToolResult(call.callId(), call.name(), true, "MEMORY_PREFERENCE_SAVED",
+                observation, true);
+    }
+
     private static ToolResult ok(ToolCall call, JsonNode value) {
         return new ToolResult(call.callId(), call.name(), true, "OK", value, true);
     }
@@ -137,6 +188,9 @@ public final class MemoryToolGateway implements ToolGateway {
         if (name.equals("memory.search")) schema.putArray("required").add("query");
         if (name.equals("memory.suggest")) schema.putArray("required").add("kind").add("key").add("value");
         if (name.equals("memory.suggest_preference")) schema.putArray("required").add("key").add("value");
+        if (name.equals("memory.remember_explicit_preference")) {
+            schema.putArray("required").add("key").add("value").add("evidenceText");
+        }
         return new ToolDefinition(name, "1.0", description, schema, "LOW", "MEMORY",
                 Duration.ofSeconds(5), name.equals("memory.list") || name.equals("memory.search")
                 || name.equals("memory.episode_capsules"));
@@ -178,6 +232,14 @@ public final class MemoryToolGateway implements ToolGateway {
         ObjectNode p = preferenceSchema();
         p.putObject("kind").put("type", "string").putArray("enum")
                 .add("EPISODIC").add("WORLD").add("PREFERENCE");
+        return p;
+    }
+    private static ObjectNode explicitPreferenceSchema() {
+        ObjectNode p = Json.object();
+        p.putObject("key").put("type", "string").put("minLength", 1).put("maxLength", 128)
+                .put("pattern", "^[a-z0-9][a-z0-9_.:-]{0,127}$");
+        p.putObject("value");
+        p.putObject("evidenceText").put("type", "string").put("minLength", 1).put("maxLength", 4_096);
         return p;
     }
     private static MemoryKind kind(String value) {

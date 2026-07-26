@@ -1,6 +1,7 @@
 package com.mccompanion.runtime.memory;
 
 import com.mccompanion.runtime.db.RuntimeDatabase;
+import com.mccompanion.runtime.conversation.ConversationRepository;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
@@ -104,6 +105,53 @@ class MemoryToolGatewayTest {
                             .put("key", "secret").put("value", "C:\\Users\\Player\\token.txt")));
             assertFalse(result.success());
             assertEquals("INVALID_TOOL_ARGUMENTS", result.code());
+        }
+    }
+
+    @Test
+    void explicitPreferenceRequiresExactLatestUserEvidenceAndHonorsAutomaticSaveSetting() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("explicit-preference.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            ConversationRepository conversations = new ConversationRepository(database);
+            MemoryToolGateway gateway = new MemoryToolGateway(repository, conversations);
+            ToolContext context = new ToolContext("controller", "brain-session", "c1");
+            assertTrue(gateway.definitions(context).stream()
+                    .anyMatch(value -> value.name().equals("memory.remember_explicit_preference")));
+
+            String ownerMessage = "Please keep replies concise from now on.";
+            conversations.append("c1", null, null, "USER", "MESSAGE", ownerMessage,
+                    Json.object().put("channel", "GAME"));
+            conversations.append("c2", null, null, "USER", "MESSAGE", "I prefer detailed replies.",
+                    Json.object().put("channel", "GAME"));
+            ToolCall save = new ToolCall("explicit-1", "memory.remember_explicit_preference",
+                    Json.object().put("key", "communication.reply_style").put("value", "concise")
+                            .put("evidenceText", ownerMessage));
+            var saved = gateway.execute(context, save);
+            assertTrue(saved.success(), saved.observation().toString());
+            assertEquals("MEMORY_PREFERENCE_SAVED", saved.code());
+            assertTrue(saved.observation().path("evidenceBound").asBoolean());
+            assertEquals("USER_EXPLICIT_BRAIN_CAPTURE",
+                    repository.relevant("c1", MemoryKind.PREFERENCE, 10).getFirst().source());
+            assertTrue(repository.relevant("c2", MemoryKind.PREFERENCE, 10).isEmpty());
+
+            var mismatched = gateway.execute(context, new ToolCall(
+                    "explicit-2", "memory.remember_explicit_preference",
+                    Json.object().put("key", "communication.reply_style").put("value", "verbose")
+                            .put("evidenceText", "I prefer detailed replies.")));
+            assertFalse(mismatched.success());
+            assertEquals("MEMORY_EVIDENCE_MISMATCH", mismatched.code());
+
+            repository.setAutoSave("c1", false, "LOCAL_MANAGEMENT_USER");
+            conversations.append("c1", null, null, "USER", "MESSAGE", "Avoid risky fights.",
+                    Json.object().put("channel", "GAME"));
+            var disabled = gateway.execute(context, new ToolCall(
+                    "explicit-3", "memory.remember_explicit_preference",
+                    Json.object().put("key", "gameplay.risk").put("value", "low")
+                            .put("evidenceText", "Avoid risky fights.")));
+            assertFalse(disabled.success());
+            assertEquals("MEMORY_AUTO_SAVE_DISABLED", disabled.code());
+            assertEquals(1, repository.relevant("c1", MemoryKind.PREFERENCE, 10).size());
         }
     }
 

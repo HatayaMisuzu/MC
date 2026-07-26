@@ -141,6 +141,24 @@ class MemoryRepositoryTest {
     }
 
     @Test
+    void separateRuntimeProfileDatabasesIsolateTheSameCompanionAndWorldKeys() throws Exception {
+        try (RuntimeDatabase profileA = new RuntimeDatabase(temporary.resolve("profile-a/companion.db"));
+             RuntimeDatabase profileB = new RuntimeDatabase(temporary.resolve("profile-b/companion.db"))) {
+            profileA.initialize();
+            profileB.initialize();
+            MemoryRepository firstWorld = new MemoryRepository(profileA);
+            MemoryRepository secondWorld = new MemoryRepository(profileB);
+            firstWorld.remember("same-companion", MemoryKind.WORLD, "landmark:base",
+                    Json.object().put("world", "profile-a"), true, 1.0, null, "BODY_OBSERVATION");
+            firstWorld.setAutoSave("same-companion", false, "LOCAL_MANAGEMENT_USER");
+
+            assertEquals(1, firstWorld.relevant("same-companion", MemoryKind.WORLD, 10).size());
+            assertTrue(secondWorld.relevant("same-companion", MemoryKind.WORLD, 10).isEmpty());
+            assertTrue(secondWorld.settings("same-companion").autoSaveEnabled());
+        }
+    }
+
+    @Test
     void quarantinedSuggestionsNeverAppearAsMemoryFacts() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("suggestions.db"))) {
             database.initialize();

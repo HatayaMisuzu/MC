@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 20:50 +08:00
+Updated: 2026-07-26 21:02 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -10,9 +10,9 @@ only completion matrix.
 
 ## Current checkpoint
 
-- Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
+- Current stage: `3 — FORGE_FULL_RUNTIME_BRIDGE`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `817f1fa31df70b764542eed586e17bcb94e54ace`
+- Latest committed source SHA: `a06d5207540030cd7925a83b5e7d2aae83625f8f`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -20,6 +20,7 @@ only completion matrix.
 - Human playtest evidence: `NOT_RUN`
 - Stage 0 result: `PASS`
 - Stage 1 result: `PASS`
+- Stage 2 result: `PASS`
 
 ## Frozen environment
 
@@ -292,12 +293,20 @@ Passed on the frozen SHA:
   does not interrupt work, and hypothetical/joke language is not promoted to
   an instruction. Focused concurrency/classifier tests and root `check` pass on
   implementation commit `817f1fa`.
+- Completed Stage 2's same-target owner handoff. Fabric reports real owner
+  block-use/break activity over the authenticated Runtime session. Runtime
+  pauses only when the exact dimension and XYZ occur in the active direct or
+  Task-Graph child Tool payload; nearby targets do not preempt. The handoff
+  enters conversation context for the external Brain rather than creating an
+  internal plan. Exact-target/coordinator tests, root `check`, all Loader
+  builds and the complete three-Loader GameTest gate pass on `a06d520`.
+- Stage 2 is locally `PASS`. Replay, unit, integration and GameTest evidence do
+  not establish Live-Hermes judgment or human interaction quality.
 
 ## Remaining work
 
-- Complete stage-2 owner same-target handoff and full instruction/interruption
-  ingress scenarios without moving high-level planning authority into MCAC.
-- Complete stages 2–6 before requesting any Live-Hermes or human action.
+- Complete stages 3–6 before requesting any Live-Hermes or human action,
+  starting with the Forge 1.20.1 Full Runtime Bridge.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.
 

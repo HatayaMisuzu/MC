@@ -306,6 +306,11 @@ override the current matrix.
 - The interrupted old turn stops before it can silently issue another Tool call. Goal modification
   and cancellation invalidate the prior external-Brain session so the old goal cannot resume in
   the background. Ordinary chat does not invoke either boundary.
+- The Fabric connected body also emits bounded `owner_activity` for real owner block-use and
+  block-break callbacks. Runtime verifies session/owner/Companion scope and compares the exact
+  dimension and XYZ against the payload of the currently active direct or Task-Graph child Tool.
+  Only an exact collision requests pause; nearby or unrelated activity does nothing. The accepted
+  handoff is recorded as owner control context for the next external-Brain turn.
 
 Example response extension:
 

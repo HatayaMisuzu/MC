@@ -177,11 +177,26 @@ Passed on the frozen SHA:
   one-use URL and no session, CSRF, or reopen secret.
 - Added binding, expiry, capacity, replay, cross-site, internal-reopen, no-store,
   and state-redaction tests while preserving the existing second-launch flow.
+- Replaced all Web `latest` declarations with the exact versions already
+  resolved by the lockfile, moved Vite/build plugins out of production
+  dependencies, and pinned Fabric Loom from `1.17-SNAPSHOT` to `1.17.17`.
+- Pinned every GitHub Action invocation to an official resolved 40-character
+  commit and added a local check that rejects mutable npm, Gradle, or Action
+  declarations.
+- Added weekly Dependabot coverage for all Gradle roots, npm and Actions, plus a
+  least-privilege dependency-review/Java+TypeScript CodeQL workflow. It is
+  configured but remains remotely unverified on this branch.
+- Repaired one high-severity transitive development dependency reported by the
+  real npm audit; a clean `npm ci`, full audit (`0 vulnerabilities`), all Web
+  tests, Web build, and fixed Loom build pass.
+- Extended the release SBOM and verifier from 27 JAR entries to 31 components:
+  the exact four production npm bundle components now carry real versions,
+  licenses, purls, source tarballs, and lockfile SHA-512 checksums.
 
 ## Remaining work
 
 - Execute stage-1 audits and repairs without weakening current guarantees.
-- Continue stage-1 supply-chain and generic-effect verification audits.
+- Continue the stage-1 generic-effect verification audit.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

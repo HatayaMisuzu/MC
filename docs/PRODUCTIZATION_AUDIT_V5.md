@@ -50,3 +50,11 @@ planning fixture could still receive its first request before its loopback liste
 cold PowerShell start. Both planning and Hermes replay fixtures now use bounded process-and-port
 readiness checks instead of a fixed startup sleep; the original failure point and a second complete
 Runtime/Fabric execution passed without relaxing Runtime fallback or Provider validation.
+The subsequent full parallel Fabric suite exposed that the menu fixture's two-block target could
+cross its empty-structure cell boundary and fail the real visibility precondition. The chest now
+stays one block inside its owning cell; all opaque-token, vanilla click, quick-move, inventory,
+close, and invalidation assertions remain unchanged.
+That repeated suite also exposed a shared-world fixture leak: the lifecycle death/recovery case
+correctly created one vanilla diamond drop but left it available to later batches. The test now
+asserts the exact drop and quantity, then discards its own verified entity before the independent
+delivery case can pick it up.

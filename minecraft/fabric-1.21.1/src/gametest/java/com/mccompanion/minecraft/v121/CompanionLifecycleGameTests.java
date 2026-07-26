@@ -220,7 +220,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "MenuOperator").success(), "menu test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "menu test created no live body");
-        BlockPos target = body.blockPosition().offset(2, 0, 0);
+        // Keep the menu fixture inside this empty GameTest cell. Offset two can cross the
+        // parallel structure boundary and make an otherwise real chest interaction occluded.
+        BlockPos target = body.blockPosition().offset(1, 0, 0);
         body.serverLevel().setBlockAndUpdate(target, Blocks.CHEST.defaultBlockState());
         helper.assertTrue(body.serverLevel().getBlockEntity(target) instanceof Container,
                 "menu test chest has no container");
@@ -1456,6 +1458,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         "replacement fake connection retained packets");
                 helper.assertTrue(reloaded.getInventory().contains(new ItemStack(Items.DIAMOND)),
                         "inventory did not persist across sleep/wake");
+                Vec3 deathDropOrigin = reloaded.position();
                 helper.assertTrue(reloaded.hurt(reloaded.damageSources().genericKill(), Float.MAX_VALUE),
                         "vanilla damage path did not accept lethal damage");
                 helper.runAfterDelay(4, () -> {
@@ -1468,6 +1471,16 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                             "body UUID changed during death recovery");
                     helper.assertTrue(!recovered.getInventory().contains(new ItemStack(Items.DIAMOND)),
                             "death recovery duplicated the dropped inventory item");
+                    var diamondDrops = recovered.serverLevel().getEntitiesOfClass(ItemEntity.class,
+                            new AABB(deathDropOrigin, deathDropOrigin).inflate(4.0D),
+                            item -> item.getItem().is(Items.DIAMOND));
+                    helper.assertValueEqual(diamondDrops.size(), 1,
+                            "death recovery did not leave exactly one vanilla diamond drop");
+                    helper.assertValueEqual(diamondDrops.getFirst().getItem().getCount(), 1,
+                            "death recovery changed the dropped diamond quantity");
+                    // This shared GameTest server runs later batches in the same world. Remove this
+                    // fixture-owned drop after verifying it so another real player body cannot pick it up.
+                    diamondDrops.getFirst().discard();
 
                     if (Boolean.getBoolean("mccompanion.runtime.e2e")) {
                         BlockPos shortageChestPos = recovered.blockPosition().offset(1, 0, 0);

@@ -26,6 +26,12 @@ The v5.2 final gate additionally replaced fixed replay-provider startup sleeps w
 process-and-loopback-listener readiness checks for both planning and Hermes fixtures; two consecutive
 full Runtime/Fabric executions covered the cold-start failure point without changing Runtime fallback
 or Provider validation.
+The menu GameTest fixture also keeps its real chest one block inside the owning parallel test cell,
+preventing cross-cell visibility interference while preserving all token, vanilla click, quick-move,
+inventory-delta, close, and invalidation assertions.
+The lifecycle GameTest now verifies the exact vanilla diamond death drop and then removes that
+fixture-owned entity before later batches run, preventing real pickup behavior from contaminating
+the independent delivery inventory-delta assertion.
 
 External follow-up: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`, `HUMAN_PLAYTEST_PENDING`.
 Forge/NeoForge full Runtime Bridge and rows whose remaining gap is production-scale breadth are

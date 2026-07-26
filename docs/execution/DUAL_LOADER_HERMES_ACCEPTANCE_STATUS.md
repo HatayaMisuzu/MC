@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 22:06 +08:00
+Updated: 2026-07-26 22:19 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `3 — FORGE_FULL_RUNTIME_BRIDGE`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `3d2f5ee6c7782a7bcce6e0379d8d876fe197b857`
+- Latest committed source SHA: `ac50c74c72bb6722d6c3e06dcc838a4bf67c6715`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -329,6 +329,13 @@ Passed on the frozen SHA:
   and now also sends an authenticated player request and owner activity. Root
   `check` and all three Loader builds pass. This remains automated/GameTest
   evidence, not Live Hermes or human play.
+- Stage 3 resource/inventory slice `ac50c74` adds bounded item collection,
+  hardness/tool-aware block breaking and drop pickup, exact menu-based
+  deposit/withdraw, owner delivery, and food use/recovery. The real Forge
+  GameTest caught and fixed a main-inventory-to-hotbar handoff gap and verifies
+  each executor through live ServerPlayer/container/entity state. The formal
+  Runtime/Forge E2E, root `check`, and all Loader builds pass. Multi-block vein,
+  crafting, smelting, combat and retreat breadth remain open.
 
 ## Remaining work
 

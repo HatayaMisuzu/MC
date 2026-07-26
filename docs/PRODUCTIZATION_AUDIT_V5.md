@@ -61,3 +61,7 @@ delivery case can pick it up.
 The final Windows artifact download audit found that `SHA256SUMS.txt` was present inside the verified
 release ZIP but absent as a standalone uploaded integrity record. The workflow now uploads it beside
 the ZIP, sidecar, Manifest, and SBOM as required by the final-seal contract.
+The restarted full suite exposed a narrow observation-window race in Skill revocation isolation: an
+unaffected three-second persisted wait had only one additional second to be scheduled and observed.
+Five isolated runs confirmed the cancellation boundary; the test now uses a bounded eight-second
+observation window while retaining the exact natural-success and cross-workspace assertions.

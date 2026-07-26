@@ -231,8 +231,10 @@ class SkillToolGatewayTest {
                         Duration.ofSeconds(2), ignored -> { }).observation().path("state").asText());
                 assertEquals("WAITING", executions.get(otherExecution.callId()).orElseThrow().state(),
                         "revocation crossed the companion workspace boundary");
+                // The persisted wait itself is three seconds. Keep a bounded scheduling margin for
+                // the full parallel suite while still requiring this unaffected execution to succeed.
                 assertTrue(gateway.awaitTerminal(otherContext, otherExecution, otherAccepted,
-                        Duration.ofSeconds(4), ignored -> { }).success());
+                        Duration.ofSeconds(8), ignored -> { }).success());
 
                 String secondGraph = firstGraph.replace("revocable_wait_v1", "revocable_wait_v2");
                 gateway.execute(context, new ToolCall("save-v2", "skill.save_draft", Json.object()

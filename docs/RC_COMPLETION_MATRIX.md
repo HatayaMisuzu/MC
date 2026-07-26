@@ -35,6 +35,9 @@ the independent delivery inventory-delta assertion.
 The Windows RC artifact upload includes the release `SHA256SUMS.txt` alongside the ZIP, sidecar,
 Manifest, and SBOM, so the downloaded artifact exposes every v5.2 integrity record without requiring
 the reviewer to extract the release ZIP first.
+The Skill revocation isolation test retains its three-second persisted wait and exact cross-workspace
+cancellation assertions while allowing a bounded eight-second observation window under the full
+parallel suite, avoiding a one-second scheduler-margin race without changing Runtime timeouts.
 
 External follow-up: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`, `HUMAN_PLAYTEST_PENDING`.
 Forge/NeoForge full Runtime Bridge and rows whose remaining gap is production-scale breadth are

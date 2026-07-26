@@ -32,9 +32,14 @@ class WebTerminalServerTest {
           HttpResponse.BodyHandlers.ofString());
       assertEquals(401, anonymous.statusCode());
 
-      var bootstrap = client.send(HttpRequest.newBuilder(server.bootstrapUri()).GET().build(),
+      URI bootstrapTicket = server.bootstrapUri();
+      var bootstrap = client.send(HttpRequest.newBuilder(bootstrapTicket).GET().build(),
           HttpResponse.BodyHandlers.ofString());
       assertEquals(303, bootstrap.statusCode());
+      assertEquals("no-store", bootstrap.headers().firstValue("cache-control").orElseThrow());
+      var replay = client.send(HttpRequest.newBuilder(bootstrapTicket).GET().build(),
+          HttpResponse.BodyHandlers.ofString());
+      assertEquals(410, replay.statusCode());
       String cookie = bootstrap.headers().firstValue("set-cookie").orElseThrow().split(";", 2)[0];
       URI location = URI.create(bootstrap.headers().firstValue("location").orElseThrow());
       String csrf = location.getFragment().substring("csrf=".length());
@@ -86,6 +91,47 @@ class WebTerminalServerTest {
       assertEquals(200, page.statusCode());
       assertTrue(page.headers().firstValue("content-security-policy").orElseThrow()
           .contains("frame-ancestors 'none'"));
+
+      URI reopen = URI.create(origin + "/internal/reopen");
+      var deniedReopen = client.send(HttpRequest.newBuilder(reopen)
+              .header("X-MCAC-Reopen-Secret", "wrong").POST(HttpRequest.BodyPublishers.noBody()).build(),
+          HttpResponse.BodyHandlers.ofString());
+      assertEquals(401, deniedReopen.statusCode());
+      var reopened = client.send(HttpRequest.newBuilder(reopen)
+              .header("X-MCAC-Reopen-Secret", server.reopenSecret())
+              .POST(HttpRequest.BodyPublishers.noBody()).build(),
+          HttpResponse.BodyHandlers.ofString());
+      assertEquals(200, reopened.statusCode());
+      assertEquals("no-store", reopened.headers().firstValue("cache-control").orElseThrow());
+      URI reopenedTicket = URI.create(new com.fasterxml.jackson.databind.ObjectMapper()
+          .readTree(reopened.body()).path("bootstrapUrl").asText());
+      assertEquals(303, client.send(HttpRequest.newBuilder(reopenedTicket).GET().build(),
+          HttpResponse.BodyHandlers.ofString()).statusCode());
     }
+  }
+
+  @Test
+  void optionalStatePublishesOnlyAShortLivedOneUseUrlAndNoSessionSecrets() throws Exception {
+    Path web = temporary.resolve("state-web");
+    Files.createDirectories(web);
+    Files.writeString(web.resolve("index.html"), "<!doctype html><title>MCAC</title>");
+    Path state = temporary.resolve("terminal-state.json");
+    ControlTerminalMain root = new ControlTerminalMain();
+    HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
+    try (WebTerminalServer server = new WebTerminalServer(root, web, 0, false, state)) {
+      server.start();
+      String raw = Files.readString(state);
+      var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
+      assertFalse(raw.contains("MCAC_SESSION"));
+      assertFalse(raw.contains("csrf"));
+      assertFalse(raw.contains("reopenSecret"));
+      assertEquals(ProcessHandle.current().pid(), json.path("ownerPid").asLong());
+      URI ticket = URI.create(json.path("bootstrapUrl").asText());
+      assertEquals(303, client.send(HttpRequest.newBuilder(ticket).GET().build(),
+          HttpResponse.BodyHandlers.ofString()).statusCode());
+      assertEquals(410, client.send(HttpRequest.newBuilder(ticket).GET().build(),
+          HttpResponse.BodyHandlers.ofString()).statusCode());
+    }
+    assertFalse(Files.exists(state));
   }
 }

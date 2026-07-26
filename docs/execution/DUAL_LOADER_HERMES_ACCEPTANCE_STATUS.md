@@ -168,12 +168,20 @@ Passed on the frozen SHA:
   package verification to require exact JAR-set coverage, source-SHA binding,
   real versions/licenses/purls, known dependency versions, and rejection of
   product-version overwrite. A rebuilt 27-package release passes the new gate.
+- Replaced the process-lifetime reusable browser bootstrap URL with hash-only
+  256-bit tickets bound to the server instance and owner PID, limited to 32,
+  expiring after 30 seconds, and deleted on every consume attempt.
+- Removed reusable bootstrap URLs from ordinary console/current-instance state.
+  Double-click reuse now authenticates an internal loopback request and receives
+  a fresh one-use ticket; optional test state contains only a short-lived
+  one-use URL and no session, CSRF, or reopen secret.
+- Added binding, expiry, capacity, replay, cross-site, internal-reopen, no-store,
+  and state-redaction tests while preserving the existing second-launch flow.
 
 ## Remaining work
 
 - Execute stage-1 audits and repairs without weakening current guarantees.
-- Continue stage-1 bootstrap-ticket, supply-chain, and generic-effect
-  verification audits.
+- Continue stage-1 supply-chain and generic-effect verification audits.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

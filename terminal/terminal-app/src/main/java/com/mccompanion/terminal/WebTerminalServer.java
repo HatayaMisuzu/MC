@@ -40,7 +40,9 @@ final class WebTerminalServer implements AutoCloseable {
   private final CountDownLatch stopped = new CountDownLatch(1);
   private final String sessionToken = token();
   private final String csrfToken = token();
-  private final String bootstrapTicket = token();
+  private final String serverInstanceId = UUID.randomUUID().toString();
+  private final String reopenSecret = token();
+  private final BootstrapTicketStore bootstrapTickets = new BootstrapTicketStore();
   private final Map<String, Instant> windows = new ConcurrentHashMap<>();
   private volatile String shutdownPlan;
   private volatile boolean closed;
@@ -58,6 +60,7 @@ final class WebTerminalServer implements AutoCloseable {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", requestedPort), 32);
     api = new WebTerminalApi(root, operations);
     server.createContext("/open/", this::bootstrap);
+    server.createContext("/internal/reopen", this::reopen);
     server.createContext("/api/events", this::events);
     server.createContext("/api/logs/stream", this::logEvents);
     server.createContext("/api/window/", this::window);
@@ -72,7 +75,11 @@ final class WebTerminalServer implements AutoCloseable {
   }
 
   URI bootstrapUri() {
-    return URI.create("http://127.0.0.1:" + port() + "/open/" + bootstrapTicket);
+    return URI.create(
+        "http://127.0.0.1:"
+            + port()
+            + "/open/"
+            + bootstrapTickets.issue(bootstrapBinding()));
   }
 
   void start() throws IOException {
@@ -89,9 +96,22 @@ final class WebTerminalServer implements AutoCloseable {
   private void bootstrap(HttpExchange exchange) throws IOException {
     try {
       securityHeaders(exchange);
-      if (!"GET".equals(exchange.getRequestMethod())
-          || !exchange.getRequestURI().getPath().equals("/open/" + bootstrapTicket)) {
+      exchange.getResponseHeaders().set("Cache-Control", "no-store");
+      String path = exchange.getRequestURI().getPath();
+      if (!"GET".equals(exchange.getRequestMethod()) || !path.startsWith("/open/")) {
         exchange.sendResponseHeaders(404, -1);
+        return;
+      }
+      if (!hostValid(exchange)
+          || "cross-site"
+              .equalsIgnoreCase(exchange.getRequestHeaders().getFirst("Sec-Fetch-Site"))) {
+        exchange.sendResponseHeaders(403, -1);
+        return;
+      }
+      String ticket = path.substring("/open/".length());
+      if (bootstrapTickets.consume(ticket, bootstrapBinding())
+          != BootstrapTicketStore.Result.CONSUMED) {
+        exchange.sendResponseHeaders(410, -1);
         return;
       }
       exchange
@@ -105,6 +125,33 @@ final class WebTerminalServer implements AutoCloseable {
           .getResponseHeaders()
           .set("Location", "http://127.0.0.1:" + port() + "/#csrf=" + csrfToken);
       exchange.sendResponseHeaders(303, -1);
+    } finally {
+      exchange.close();
+    }
+  }
+
+  private void reopen(HttpExchange exchange) throws IOException {
+    try {
+      securityHeaders(exchange);
+      exchange.getResponseHeaders().set("Cache-Control", "no-store");
+      if (!"POST".equals(exchange.getRequestMethod()) || !hostValid(exchange)) {
+        exchange.sendResponseHeaders(404, -1);
+        return;
+      }
+      if ("cross-site"
+          .equalsIgnoreCase(exchange.getRequestHeaders().getFirst("Sec-Fetch-Site"))) {
+        exchange.sendResponseHeaders(403, -1);
+        return;
+      }
+      if (!constantTime(
+          reopenSecret, exchange.getRequestHeaders().getFirst("X-MCAC-Reopen-Secret"))) {
+        exchange.sendResponseHeaders(401, -1);
+        return;
+      }
+      WebTerminalApi.send(
+          exchange,
+          200,
+          JSON.createObjectNode().put("bootstrapUrl", bootstrapUri().toString()));
     } finally {
       exchange.close();
     }
@@ -381,6 +428,8 @@ final class WebTerminalServer implements AutoCloseable {
         JSON.createObjectNode()
             .put("bind", "127.0.0.1")
             .put("port", port())
+            .put("ownerPid", ProcessHandle.current().pid())
+            .put("serverInstanceId", serverInstanceId)
             .put("bootstrapUrl", bootstrapUri().toString())
             .put("startedAt", Instant.now().toString());
     JSON.writerWithDefaultPrettyPrinter().writeValue(target.toFile(), state);
@@ -400,6 +449,18 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     new ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", uri.toString()).start();
+  }
+
+  String reopenSecret() {
+    return reopenSecret;
+  }
+
+  String serverInstanceId() {
+    return serverInstanceId;
+  }
+
+  private String bootstrapBinding() {
+    return serverInstanceId + ":" + ProcessHandle.current().pid();
   }
 
   private static String contentType(Path file) {

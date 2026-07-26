@@ -58,3 +58,6 @@ That repeated suite also exposed a shared-world fixture leak: the lifecycle deat
 correctly created one vanilla diamond drop but left it available to later batches. The test now
 asserts the exact drop and quantity, then discards its own verified entity before the independent
 delivery case can pick it up.
+The final Windows artifact download audit found that `SHA256SUMS.txt` was present inside the verified
+release ZIP but absent as a standalone uploaded integrity record. The workflow now uploads it beside
+the ZIP, sidecar, Manifest, and SBOM as required by the final-seal contract.

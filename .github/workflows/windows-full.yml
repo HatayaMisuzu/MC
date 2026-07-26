@@ -70,6 +70,7 @@ jobs:
             build/distributions/mcac-release.zip.sha256
             build/distributions/mcac-release/release-manifest.json
             build/distributions/mcac-release/sbom.spdx.json
+            build/distributions/mcac-release/SHA256SUMS.txt
       - name: Upload safe reports and launch logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

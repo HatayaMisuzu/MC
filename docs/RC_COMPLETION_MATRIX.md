@@ -32,6 +32,9 @@ inventory-delta, close, and invalidation assertions.
 The lifecycle GameTest now verifies the exact vanilla diamond death drop and then removes that
 fixture-owned entity before later batches run, preventing real pickup behavior from contaminating
 the independent delivery inventory-delta assertion.
+The Windows RC artifact upload includes the release `SHA256SUMS.txt` alongside the ZIP, sidecar,
+Manifest, and SBOM, so the downloaded artifact exposes every v5.2 integrity record without requiring
+the reviewer to extract the release ZIP first.
 
 External follow-up: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`, `HUMAN_PLAYTEST_PENDING`.
 Forge/NeoForge full Runtime Bridge and rows whose remaining gap is production-scale breadth are

@@ -25,7 +25,7 @@ class RuntimeDatabaseTest {
         try (RuntimeDatabase database = new RuntimeDatabase(path)) {
             database.initialize();
             database.initialize();
-            assertEquals(27, database.currentVersion());
+            assertEquals(28, database.currentVersion());
             assertEquals("wal", database.journalMode().toLowerCase());
             Set<String> tables = new HashSet<>();
             try (var connection = database.open(); Statement statement = connection.createStatement();
@@ -38,7 +38,8 @@ class RuntimeDatabaseTest {
                     "memory_fact", "memory_fact_history", "memory_settings", "memory_suggestion", "episode_capsule",
                     "brain_session", "brain_tool_call",
                     "brain_semantic_state", "brain_behavior_settings", "brain_completion_claim",
-                    "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
+                    "task_graph_execution", "skill_version", "skill_trial_lease",
+                    "mcp_request", "mcp_session", "mcp_event",
                     "search_session",
                     "schema_migration")));
         }

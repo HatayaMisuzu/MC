@@ -26,7 +26,8 @@ public final class RuntimeDatabase implements AutoCloseable {
             "episode_capsule", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
             "brain_completion_claim",
-            "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
+            "task_graph_execution", "skill_version", "skill_trial_lease",
+            "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
 
     private final Path path;
@@ -808,6 +809,35 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX memory_fact_history_scope_idx ON memory_fact_history(companion_id,changed_at)");
+        List<String> skillTrialLease = List.of(
+                """
+                CREATE TABLE skill_trial_lease (
+                  lease_id TEXT PRIMARY KEY,
+                  profile_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  controller_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  skill_id TEXT NOT NULL,
+                  format TEXT NOT NULL,
+                  document TEXT NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  tools_json TEXT NOT NULL,
+                  permissions_json TEXT NOT NULL,
+                  limits_json TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  remaining_uses INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  execution_id TEXT,
+                  evidence_json TEXT NOT NULL,
+                  revoked_by TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                """
+                CREATE INDEX skill_trial_lease_scope_idx
+                ON skill_trial_lease(profile_id,companion_id,brain_session_id,status,updated_at)
+                """);
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -835,6 +865,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(24, "persist external Brain-authored semantic state", brainSemanticState),
                 new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings),
                 new Migration(26, "link external Brain completion claims to final observations", brainCompletionClaim),
-                new Migration(27, "persist Memory settings and user-visible history", memoryManagement));
+                new Migration(27, "persist Memory settings and user-visible history", memoryManagement),
+                new Migration(28, "persist bounded one-time generated Skill trial leases", skillTrialLease));
     }
 }

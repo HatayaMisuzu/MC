@@ -411,6 +411,7 @@ final class WebTerminalApi {
         .put("action", required(request, "action"))
         .put("companionId", required(request, "companionId"));
     if (request.hasNonNull("requestId")) bounded.put("requestId", required(request, "requestId"));
+    if (request.hasNonNull("leaseId")) bounded.put("leaseId", required(request, "leaseId"));
     if (request.hasNonNull("skillId")) bounded.put("skillId", required(request, "skillId"));
     if (request.hasNonNull("format")) bounded.put("format", required(request, "format"));
     if (request.hasNonNull("version")) bounded.put("version", requiredPositiveLong(request, "version"));

@@ -56,6 +56,18 @@ export function SkillsPage() {
     }
   }
 
+  const revokeTrial = async (leaseId: string) => {
+    setError('')
+    try {
+      await post('/api/skills/manage', {
+        instanceId: selectedId, companionId, action: 'revoke_trial', leaseId,
+      })
+      await skills.refresh()
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Skill trial revocation failed')
+    }
+  }
+
   return <div className="page">
     <PageHeader title="Generated Skills" description="External Brains may draft and validate declarative Task Graph Skills. Only this authenticated local-user surface can promote, reject, disable, or roll back them."
       actions={<ActionButton icon={<RefreshCw size={15} />} onClick={() => { void companions.refresh(); void skills.refresh() }}>Refresh</ActionButton>} />
@@ -98,6 +110,18 @@ export function SkillsPage() {
               onClick={() => void manage(version, 'rollback')}>Rollback</ActionButton>
           </div>
         </article>)}</div>
+        <h2>One-time trial leases</h2>
+        <p>Trial-only access is single-use, exact-session scoped, low-risk, time bounded, and never enables a Skill permanently.</p>
+        <div className="event-rows">{(skills.data?.trials ?? []).map((trial) =>
+          <article className="event-row skill-review-card" key={trial.leaseId}>
+            <time>{new Date(trial.expiresAt).toLocaleString()}</time><strong>{trial.skillId}</strong>
+            <StatusBadge value={trial.status} />
+            <span>{trial.remainingUses} uses · {trial.tools.join(', ') || 'no Tool calls'}</span>
+            <p>Permissions: {JSON.stringify(trial.permissions)} · limits: {JSON.stringify(trial.limits)}</p>
+            <p>Execution: {trial.executionId || 'not started'} · evidence: {JSON.stringify(trial.evidence)}</p>
+            <ActionButton tone="danger" disabled={!['AVAILABLE', 'RUNNING'].includes(trial.status)}
+              onClick={() => void revokeTrial(trial.leaseId)}>Revoke trial now</ActionButton>
+          </article>)}</div>
       </>}
   </div>
 }

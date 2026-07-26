@@ -890,6 +890,11 @@ public final class RuntimeHealthServer implements AutoCloseable {
                                     required(request, "skillId"), required(request, "format"),
                                     requiredPositiveLong(request, "version"));
                         }
+                        case "revoke_trial" -> {
+                            if (skillTools == null) throw new IllegalArgumentException("Skill workspace is unavailable");
+                            yield skillTools.revokeTrialForLocalUser(
+                                    companionId, required(request, "leaseId"));
+                        }
                         default -> throw new IllegalArgumentException("skill action is invalid");
                     };
                     sendJson(exchange, 200, Json.MAPPER.valueToTree(result));

@@ -212,6 +212,7 @@ public final class RuntimeApplication implements AutoCloseable {
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
                     "database parent").resolve("agent-workspace");
             SkillRepository skillRepository = new SkillRepository(database);
+            int interruptedSkillTrials = skillRepository.recoverInterruptedTrials();
             AgentWorkspace agentWorkspace = new AgentWorkspace(workspaceRoot, config.server.profileId);
             SkillToolGateway skillTools = new SkillToolGateway(
                     agentWorkspace,
@@ -248,7 +249,7 @@ public final class RuntimeApplication implements AutoCloseable {
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
                     || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0
                     || interruptedMcpRequests > 0 || expiredMcpSessions > 0 || prunedMcpEvents > 0
-                    || expiredSearchSessions > 0 || expiredMemories > 0) {
+                    || expiredSearchSessions > 0 || expiredMemories > 0 || interruptedSkillTrials > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
@@ -258,7 +259,8 @@ public final class RuntimeApplication implements AutoCloseable {
                         + ", expiredMcpSessions=" + expiredMcpSessions
                         + ", prunedMcpEvents=" + prunedMcpEvents
                         + ", expiredSearchSessions=" + expiredSearchSessions
-                        + ", expiredMemories=" + expiredMemories);
+                        + ", expiredMemories=" + expiredMemories
+                        + ", interruptedSkillTrials=" + interruptedSkillTrials);
             }
 
             webSocket = new RuntimeWebSocketServer(

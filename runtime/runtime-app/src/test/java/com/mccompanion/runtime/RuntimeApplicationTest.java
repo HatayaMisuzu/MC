@@ -181,6 +181,31 @@ class RuntimeApplicationTest {
             assertEquals(3, Json.parse(restored.body()).path("version").asInt());
             assertEquals("version: one",
                     workspace.read("companion-1", "skills/local_draft/draft.yaml").content());
+
+            var trial = repository.requestTrial(config.server.profileId, "companion-1",
+                    "controller", "brain-session", "managed_trial", "yaml", document,
+                    Digests.sha256(document), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.createArrayNode(),
+                    Json.object().put("maxWallTimeSeconds", 30), Duration.ofSeconds(120));
+            HttpResponse<String> trialSnapshot = http.send(HttpRequest.newBuilder(new URI(
+                            endpoint + "?companionId=companion-1"))
+                    .header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            JsonNode visibleTrial = Json.parse(trialSnapshot.body()).path("trials").path(0);
+            assertEquals(trial.leaseId(), visibleTrial.path("leaseId").asText());
+            assertFalse(visibleTrial.has("document"), "management snapshots must not expose trial source");
+
+            HttpResponse<String> revoked = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
+                            .put("action", "revoke_trial").put("companionId", "companion-1")
+                            .put("leaseId", trial.leaseId()))))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, revoked.statusCode(), revoked.body());
+            assertEquals("REVOKED", Json.parse(revoked.body()).path("status").asText());
+            assertEquals("LOCAL_MANAGEMENT_USER",
+                    Json.parse(revoked.body()).path("revokedBy").asText());
         }
     }
 

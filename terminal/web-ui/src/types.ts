@@ -221,6 +221,11 @@ export interface WorkspaceDraft {
 }
 export interface SkillSnapshot {
   companionId: string; builtins: BuiltinSkill[]; drafts: WorkspaceDraft[]; versions: SkillVersion[]
+  trials?: Array<{ leaseId: string; profileId: string; companionId: string; controllerId: string
+    brainSessionId: string; skillId: string; format: string; sha256: string; tools: string[]
+    permissions: string[]; limits: Record<string, number>; status: string; remainingUses: number
+    expiresAt: string; executionId?: string; evidence: Record<string, unknown>; revokedBy?: string
+    createdAt: string; updatedAt: string }>
 }
 
 export interface OperationPlan {

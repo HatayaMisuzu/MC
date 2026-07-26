@@ -7,6 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -55,6 +59,62 @@ class SkillRepositoryTest {
                     "profile", "c1", "safe_skill", 1, "controller", "not approved"));
             assertThrows(IllegalArgumentException.class, () -> repository.rollback(
                     "profile", "c2", "safe_skill", 1, "controller", "cross companion"));
+        }
+    }
+
+    @Test
+    void trialLeaseIsSingleUseExactScopeExpiringAndLocallyRevocable() throws Exception {
+        Instant now = Instant.parse("2026-07-26T00:00:00Z");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("trial.db"))) {
+            database.initialize();
+            SkillRepository repository = new SkillRepository(database, Clock.fixed(now, ZoneOffset.UTC));
+            String document = "bounded trial";
+            var lease = repository.requestTrial("profile", "c1", "controller", "brain-1",
+                    "safe_trial", "yaml", document, Digests.sha256(document),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.object().put("maxWallTimeSeconds", 30), Duration.ofSeconds(60));
+            assertEquals("AVAILABLE", lease.status());
+            assertEquals(1, lease.remainingUses());
+            assertThrows(IllegalStateException.class, () -> repository.requestTrial(
+                    "profile", "c1", "controller", "brain-1", "other_trial", "yaml",
+                    document, Digests.sha256(document), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.createArrayNode(), Json.object().put("maxWallTimeSeconds", 30),
+                    Duration.ofSeconds(60)));
+            assertThrows(IllegalArgumentException.class, () -> repository.claimTrial(
+                    lease.leaseId(), "profile", "c2", "controller", "brain-1", "execution-wrong"));
+
+            var running = repository.claimTrial(lease.leaseId(), "profile", "c1",
+                    "controller", "brain-1", "execution-1");
+            assertEquals("RUNNING", running.status());
+            assertEquals(0, running.remainingUses());
+            assertEquals(1, repository.recoverInterruptedTrials());
+            var interrupted = repository.trial(lease.leaseId()).orElseThrow();
+            assertEquals("REVOKED", interrupted.status());
+            assertEquals("RUNTIME_RESTART", interrupted.revokedBy());
+            assertEquals("SKILL_TRIAL_INTERRUPTED", interrupted.evidence().path("code").asText());
+            assertThrows(IllegalStateException.class, () -> repository.claimTrial(
+                    lease.leaseId(), "profile", "c1", "controller", "brain-1", "execution-2"));
+            var consumed = repository.finishTrial(lease.leaseId(), "execution-1",
+                    Json.object().put("success", true).put("code", "OK"));
+            assertEquals("REVOKED", consumed.status());
+            assertEquals("SKILL_TRIAL_INTERRUPTED", consumed.evidence().path("code").asText());
+
+            var revocable = repository.requestTrial("profile", "c1", "controller", "brain-1",
+                    "revoke_trial", "yaml", document, Digests.sha256(document),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.object().put("maxWallTimeSeconds", 30), Duration.ofSeconds(60));
+            assertEquals("REVOKED", repository.revokeTrial(
+                    "profile", "c1", revocable.leaseId(), "LOCAL_MANAGEMENT_USER").status());
+
+            SkillRepository later = new SkillRepository(
+                    database, Clock.fixed(now.plusSeconds(61), ZoneOffset.UTC));
+            var expiring = later.requestTrial("profile", "c1", "controller", "brain-1",
+                    "expired_trial", "yaml", document, Digests.sha256(document),
+                    Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(),
+                    Json.object().put("maxWallTimeSeconds", 30), Duration.ofSeconds(60));
+            SkillRepository afterExpiry = new SkillRepository(
+                    database, Clock.fixed(now.plusSeconds(122), ZoneOffset.UTC));
+            assertEquals("EXPIRED", afterExpiry.trial(expiring.leaseId()).orElseThrow().status());
         }
     }
 

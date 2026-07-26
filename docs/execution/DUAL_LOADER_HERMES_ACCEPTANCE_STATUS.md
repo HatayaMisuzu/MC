@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 21:02 +08:00
+Updated: 2026-07-26 22:06 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `3 — FORGE_FULL_RUNTIME_BRIDGE`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `a06d5207540030cd7925a83b5e7d2aae83625f8f`
+- Latest committed source SHA: `3d2f5ee6c7782a7bcce6e0379d8d876fe197b857`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -40,12 +40,12 @@ only completion matrix.
 
 - Fabric 1.21.1: current audited RC full Runtime path; Live Brain and human
   verification remain pending.
-- Forge 1.20.1: its first connected Runtime slice now performs the authenticated
-  protocol handshake, publishes bounded body/vitals/inventory status, enforces
-  epoch-bound control leases, executes follow/travel/return, emits lifecycle
-  events, delivers outbound conversation events, and enters safe pause on
-  disconnect. Registry/recipe/primitive/menu/player-text/owner-handoff parity
-  remains explicitly unavailable, so this is not yet a Full Runtime Bridge.
+- Forge 1.20.1: the connected Runtime bridge now performs authenticated control,
+  live Registry/recipe/body/menu observations, eight bounded primitive actions,
+  opaque exact-menu sessions, player-text ingress, owner block-activity handoff,
+  lifecycle publication and safe disconnect pause. Composite execution,
+  recovery breadth, global navigation, installer/Doctor acceptance and external
+  verification remain incomplete, so this is not yet a Full Runtime Bridge.
 - NeoForge 1.21.1: `LOCAL_ONLY`; it is outside the new Full Bridge target.
 - The current release staging includes artifacts for all three targets. Loader
   installation selection and final public support wording require later
@@ -321,6 +321,14 @@ Passed on the frozen SHA:
   The gate passes after correcting the structured status capability shape and
   waiting for Runtime body registration; direct and Gradle-driven runs both
   pass. Root `check` and all three Loader builds also pass.
+- Stage 3 primitive/ingress slice `3d2f5ee` adds Forge player text and owner
+  block-use/break handoff, plus bounded `LookAt`, block/entity interaction,
+  attack, placement, use, drop, and opaque-session menu actions through vanilla
+  ServerPlayer paths. Real Forge GameTest verifies look, drop, live chest
+  inspect/quick-move/close and token invalidation. `runtimeForgeE2E` again passes
+  and now also sends an authenticated player request and owner activity. Root
+  `check` and all three Loader builds pass. This remains automated/GameTest
+  evidence, not Live Hermes or human play.
 
 ## Remaining work
 

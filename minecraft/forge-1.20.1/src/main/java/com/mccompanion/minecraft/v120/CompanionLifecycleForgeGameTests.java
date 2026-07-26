@@ -12,7 +12,9 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
+import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -558,6 +560,134 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.getFoodData().getFoodLevel() > 10,
                 "eat-and-recover did not restore food");
+        helper.assertTrue(body.addItem(new ItemStack(Items.IRON_SWORD)), "defense weapon fixture add failed");
+        for (int slot = 0; slot < 9; slot++) {
+            if (body.getInventory().getItem(slot).is(Items.IRON_SWORD)) {
+                body.getInventory().selected = slot;
+                break;
+            }
+        }
+        Zombie threat = EntityType.ZOMBIE.create(body.serverLevel());
+        helper.assertTrue(threat != null, "defense fixture entity creation failed");
+        threat.moveTo(body.getX() + 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        threat.setHealth(1.0F);
+        threat.setTarget(owner);
+        body.serverLevel().addFreshEntity(threat);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-defend-owner",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "DefendOwner",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "defend-owner failed to start");
+        for (int tick = 0; tick < 20; tick++) registry.tick();
+        helper.assertTrue(!threat.isAlive(), "defend-owner did not defeat the bounded hostile");
+        BlockPos retreatOrigin = body.blockPosition();
+        for (int x = -2; x <= 10; x++) {
+            for (int z = -2; z <= 2; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        retreatOrigin.offset(x, -1, z),
+                        Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(
+                        retreatOrigin.offset(x, 0, z),
+                        Blocks.AIR.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(
+                        retreatOrigin.offset(x, 1, z),
+                        Blocks.AIR.defaultBlockState());
+            }
+        }
+        Zombie retreatThreat = EntityType.ZOMBIE.create(body.serverLevel());
+        helper.assertTrue(retreatThreat != null, "retreat fixture entity creation failed");
+        retreatThreat.moveTo(body.getX() - 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        retreatThreat.setNoAi(true);
+        body.serverLevel().addFreshEntity(retreatThreat);
+        Vec3 retreatStart = body.position();
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-retreat",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "RetreatFromDanger",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        retreatThreat.getUUID().toString(),
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "retreat-from-danger failed to start");
+        helper.runAfterDelay(
+                240,
+                () -> continueAfterRetreat(
+                        helper,
+                        registry,
+                        owner,
+                        ownerConnection,
+                        body,
+                        companionId,
+                        retreatStart,
+                        retreatThreat));
+    }
+
+    private static void continueAfterRetreat(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            FakeConnection ownerConnection,
+            CompanionPlayer body,
+            String companionId,
+            Vec3 retreatStart,
+            Zombie retreatThreat) {
+        helper.assertTrue(
+                body.position().distanceToSqr(retreatStart) >= 9.0D,
+                "retreat did not move the body at least three blocks: start="
+                        + retreatStart
+                        + " end="
+                        + body.position()
+                        + " threat="
+                        + retreatThreat.position()
+                        + " status="
+                        + registry.runtimeSnapshots(true));
+        helper.assertTrue(
+                body.distanceToSqr(retreatThreat) >= 36.0D,
+                "retreat did not establish a six-block safety margin");
         helper.assertTrue(
                 registry.runtimeReleaseLease(companionId, "forge-primitive-lease", 2L).success(),
                 "primitive lease release failed");
@@ -566,10 +696,18 @@ public final class CompanionLifecycleForgeGameTests {
         body.setDeltaMovement(Vec3.ZERO);
         body.fallDistance = 0.0F;
         if (Boolean.getBoolean("mccompanion.runtime.e2e")) {
+            long runtimeCommandBaseline = registry.runtimeCommandCount();
             LOGGER.info("forge_runtime_e2e_ready companion={}", companionId);
             helper.succeedWhen(() -> {
-                helper.assertTrue(registry.runtimeCommandCount() >= 5,
-                        "waiting for Runtime lease/follow/pause/resume/cancel commands");
+                CompanionRegistry.RuntimeSnapshot runtimeSnapshot = registry.runtimeSnapshots(true).stream()
+                        .filter(snapshot -> snapshot.companionId().equals(companionId))
+                        .findFirst()
+                        .orElseThrow();
+                helper.assertTrue(
+                        registry.runtimeCommandCount() >= runtimeCommandBaseline + 6
+                                && runtimeSnapshot.behaviorId() == null
+                                && runtimeSnapshot.behaviorState().equals("IDLE"),
+                        "waiting for Runtime start/pause/resume/cancel lifecycle");
                 CompanionCommands.TextRequestResult playerRequest =
                         MinecraftAiCompanionForge.integrationSubmitPlayerText(
                                 owner,

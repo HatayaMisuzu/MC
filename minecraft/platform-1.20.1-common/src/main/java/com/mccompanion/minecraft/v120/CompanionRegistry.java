@@ -379,7 +379,9 @@ public final class CompanionRegistry {
                             "WithdrawFromStorage",
                             "DepositToStorage",
                             "DeliverItem",
-                            "EatAndRecover")
+                            "EatAndRecover",
+                            "DefendOwner",
+                            "RetreatFromDanger")
                     .contains(skill.capability())) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }

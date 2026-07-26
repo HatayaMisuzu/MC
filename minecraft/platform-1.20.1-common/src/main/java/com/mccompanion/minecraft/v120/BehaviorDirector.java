@@ -15,6 +15,7 @@ import net.minecraft.world.Container;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
@@ -193,7 +194,9 @@ final class BehaviorDirector {
                         "WithdrawFromStorage",
                         "DepositToStorage",
                         "DeliverItem",
-                        "EatAndRecover")
+                        "EatAndRecover",
+                        "DefendOwner",
+                        "RetreatFromDanger")
                 .contains(capability)) {
             String composite = tickComposite(entry, body, progress);
             if ("WAIT".equals(composite)) return;
@@ -237,6 +240,8 @@ final class BehaviorDirector {
             case "DepositToStorage" -> tickStorage(body, progress, false);
             case "DeliverItem" -> tickDeliver(entry, body, progress);
             case "EatAndRecover" -> tickEat(body, progress);
+            case "DefendOwner" -> tickDefend(entry, body, progress);
+            case "RetreatFromDanger" -> tickRetreat(body, progress);
             default -> "CAPABILITY_UNAVAILABLE";
         };
     }
@@ -487,6 +492,76 @@ final class BehaviorDirector {
             return null;
         }
         return body.isUsingItem() ? "WAIT" : "FOOD_NO_EFFECT";
+    }
+
+    private String tickDefend(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            PrimitiveProgress progress) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (owner == null) return "OWNER_OFFLINE";
+        if (owner.serverLevel() != body.serverLevel()) return "WORLD_CHANGED";
+        Entity target = progress.entityId == null ? null : body.serverLevel().getEntity(progress.entityId);
+        if (target == null && !progress.initialized) {
+            progress.initialized = true;
+            target = body.serverLevel().getEntities(
+                            body,
+                            owner.getBoundingBox().inflate(8.0D),
+                            entity -> entity instanceof LivingEntity
+                                    && entity instanceof Enemy
+                                    && entity.isAlive())
+                    .stream()
+                    .min(java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(owner)))
+                    .orElse(null);
+            if (target == null) return null;
+            progress.entityId = target.getUUID();
+        }
+        if (!(target instanceof LivingEntity living) || !living.isAlive()) return null;
+        if (target.distanceToSqr(owner) > 100.0D) return null;
+        if (body.distanceToSqr(target) > 9.0D) {
+            Vec3 delta = target.position().subtract(body.position());
+            actionGateway.applyMoveInput(
+                    body,
+                    (float) Math.toDegrees(Math.atan2(-delta.x, delta.z)),
+                    delta.y > 0.6D || body.horizontalCollision);
+            return "WAIT";
+        }
+        actionGateway.stopInput(body);
+        if (body.getAttackStrengthScale(0.0F) < 0.9F) return "WAIT";
+        float health = living.getHealth();
+        body.attack(living);
+        actionGateway.markVanillaAttack(body);
+        return !living.isAlive() || living.getHealth() < health ? "WAIT" : "ENTITY_ATTACK_NO_EFFECT";
+    }
+
+    private String tickRetreat(CompanionPlayer body, PrimitiveProgress progress) {
+        if (!progress.initialized) {
+            UUID threatId;
+            try {
+                threatId = UUID.fromString(progress.parameters.targetId());
+            } catch (IllegalArgumentException invalid) {
+                return "ENTITY_ID_INVALID";
+            }
+            Entity threat = body.serverLevel().getEntity(threatId);
+            if (threat == null || !threat.isAlive() || threat == body) return "ENTITY_NOT_FOUND";
+            if (body.distanceToSqr(threat) > 16.0D * 16.0D) return "ENTITY_OUT_OF_RANGE";
+            if (!body.hasLineOfSight(threat)) return "ENTITY_NOT_VISIBLE";
+            progress.initialized = true;
+            progress.entityId = threatId;
+            progress.startPosition = body.position();
+        }
+        Entity threat = body.serverLevel().getEntity(progress.entityId);
+        double displacement = body.position().distanceToSqr(progress.startPosition);
+        boolean clear = threat == null || !threat.isAlive() || threat.distanceToSqr(body) >= 36.0D;
+        if (clear && displacement >= 9.0D) return null;
+        if (threat == null) return "WAIT";
+        Vec3 away = body.position().subtract(threat.position());
+        if (away.lengthSqr() < 0.01D) away = new Vec3(1.0D, 0.0D, 0.0D);
+        actionGateway.applyMoveInput(
+                body,
+                (float) Math.toDegrees(Math.atan2(-away.x, away.z)),
+                body.horizontalCollision);
+        return "WAIT";
     }
 
     private String lookAt(CompanionPlayer body, SkillParameters parameters) {
@@ -846,6 +921,8 @@ final class BehaviorDirector {
         private int target;
         private int actions;
         private float destroyProgress;
+        private UUID entityId;
+        private Vec3 startPosition;
 
         private PrimitiveProgress(SkillParameters parameters, int startedTick) {
             this.parameters = parameters;

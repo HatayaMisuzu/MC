@@ -74,6 +74,8 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         for (var result : request.toolResults()) results.add(BoundedBrainContextAssembler.bounded(
                 Json.MAPPER.valueToTree(result), 8_192, Json.object(), "toolResult"));
         JsonNode response = post("sessions/" + request.sessionId() + "/turns", body);
+        BrainSemanticState semanticState = response.has("semanticState")
+                ? BrainSemanticState.parse(response.path("semanticState")) : null;
         BrainTurnResult.Kind kind;
         try { kind = BrainTurnResult.Kind.valueOf(required(response, "kind")); }
         catch (IllegalArgumentException failure) { throw new IllegalStateException("HERMES_INVALID_RESULT_KIND", failure); }
@@ -86,7 +88,7 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
             for (JsonNode call : calls) {
                 values.add(new ToolCall(required(call, "callId"), required(call, "name"), call.path("arguments")));
             }
-            return BrainTurnResult.tools(values);
+            return BrainTurnResult.tools(values).withSemanticState(semanticState);
         }
         if (kind == BrainTurnResult.Kind.ASK_USER) {
             JsonNode question = response.path("question");
@@ -102,10 +104,10 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
             BrainQuestion structured = new BrainQuestion(required(question, "prompt"), required(question, "reason"),
                     values, question.path("freeTextAllowed").asBoolean(false), question.path("context"),
                     question.path("taskId").asText(null));
-            return BrainTurnResult.askUser(structured);
+            return BrainTurnResult.askUser(structured).withSemanticState(semanticState);
         }
         return new BrainTurnResult(kind, response.path("response").asText(""), List.of(),
-                response.path("reason").asText(""));
+                response.path("reason").asText(""), null, semanticState);
     }
 
     @Override public void cancel(String sessionId, String reason) {

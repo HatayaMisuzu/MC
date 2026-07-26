@@ -5,7 +5,7 @@ import com.mccompanion.runtime.tool.ToolCall;
 import java.util.List;
 
 public record BrainTurnResult(Kind kind, String response, List<ToolCall> toolCalls, String reason,
-                              BrainQuestion question) {
+                              BrainQuestion question, BrainSemanticState semanticState) {
     public enum Kind { FINAL_RESPONSE, TOOL_CALLS, ASK_USER, WAIT, CANCEL }
 
     public BrainTurnResult {
@@ -23,18 +23,27 @@ public record BrainTurnResult(Kind kind, String response, List<ToolCall> toolCal
     }
 
     public BrainTurnResult(Kind kind, String response, List<ToolCall> toolCalls, String reason) {
-        this(kind, response, toolCalls, reason, null);
+        this(kind, response, toolCalls, reason, null, null);
+    }
+
+    public BrainTurnResult(Kind kind, String response, List<ToolCall> toolCalls, String reason,
+                           BrainQuestion question) {
+        this(kind, response, toolCalls, reason, question, null);
     }
 
     public static BrainTurnResult finalResponse(String response) {
-        return new BrainTurnResult(Kind.FINAL_RESPONSE, response, List.of(), "", null);
+        return new BrainTurnResult(Kind.FINAL_RESPONSE, response, List.of(), "", null, null);
     }
 
     public static BrainTurnResult tools(List<ToolCall> calls) {
-        return new BrainTurnResult(Kind.TOOL_CALLS, "", calls, "", null);
+        return new BrainTurnResult(Kind.TOOL_CALLS, "", calls, "", null, null);
     }
 
     public static BrainTurnResult askUser(BrainQuestion question) {
-        return new BrainTurnResult(Kind.ASK_USER, question.prompt(), List.of(), question.reason(), question);
+        return new BrainTurnResult(Kind.ASK_USER, question.prompt(), List.of(), question.reason(), question, null);
+    }
+
+    public BrainTurnResult withSemanticState(BrainSemanticState state) {
+        return new BrainTurnResult(kind, response, toolCalls, reason, question, state);
     }
 }

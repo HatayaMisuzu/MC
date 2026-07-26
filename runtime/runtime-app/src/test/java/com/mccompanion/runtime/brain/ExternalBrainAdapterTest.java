@@ -62,16 +62,24 @@ class ExternalBrainAdapterTest {
     @Test
     void hermesAdapterAndCoordinatorUseBoundedBridgeProtocol() throws Exception {
         List<String> paths = new CopyOnWriteArrayList<>();
+        List<String> requests = new CopyOnWriteArrayList<>();
         AtomicInteger turns = new AtomicInteger();
         try (TestServer server = new TestServer(exchange -> {
             paths.add(exchange.getRequestURI().getPath());
+            requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
             String path = exchange.getRequestURI().getPath();
             if (path.equals("/sessions")) {
                 respond(exchange, 200, "{\"sessionId\":\"hermes_session_1\"}");
             } else if (path.endsWith("/turns") && turns.getAndIncrement() == 0) {
                 respond(exchange, 200, """
-                        {"kind":"TOOL_CALLS","toolCalls":[{"callId":"observe_1",
-                        "name":"world.observe","arguments":{}}]}
+                        {"kind":"TOOL_CALLS","semanticState":{"schemaVersion":1,
+                        "conversationContext":"Owner asked for current status",
+                        "immediateInstruction":"Observe current state","currentTask":"Inspect the world",
+                        "longTermGoal":"","pauseReason":"","userTakeover":false,
+                        "initiativeMode":"NORMAL","personalityMode":"COMPANION",
+                        "permissionPreset":"ASK_FOR_EFFECTS","playerExplicitlyAway":false,
+                        "latestRealWorldObservationAt":"","staleAssumptions":["prior health"]},
+                        "toolCalls":[{"callId":"observe_1","name":"world.observe","arguments":{}}]}
                         """);
             } else if (path.endsWith("/turns")) {
                 respond(exchange, 200, "{\"kind\":\"FINAL_RESPONSE\",\"response\":\"状态正常。\"}");
@@ -86,6 +94,9 @@ class ExternalBrainAdapterTest {
         }
         assertEquals(List.of("/sessions", "/sessions/hermes_session_1/turns",
                 "/sessions/hermes_session_1/turns", "/sessions/hermes_session_1/cancel"), paths);
+        JsonNodeView secondTurn = new JsonNodeView(requests.get(2));
+        assertEquals("Inspect the world", secondTurn.json.path("context")
+                .path("brainSemanticState").path("currentTask").asText());
     }
 
     @Test
@@ -136,6 +147,31 @@ class ExternalBrainAdapterTest {
                     "Bring 16", context(), List.of(), 4));
             assertEquals(BrainTurnResult.Kind.ASK_USER, result.kind());
             assertEquals(2, result.question().options().size());
+        }
+    }
+
+    @Test
+    void hermesRejectsMalformedOrUnknownSemanticStateInsteadOfGuessing() throws Exception {
+        try (TestServer server = new TestServer(exchange -> {
+            if (exchange.getRequestURI().getPath().equals("/sessions")) {
+                respond(exchange, 200, "{\"sessionId\":\"hermes_semantic_1\"}");
+            } else {
+                respond(exchange, 200, """
+                        {"kind":"FINAL_RESPONSE","response":"done","semanticState":{
+                        "schemaVersion":1,"conversationContext":"","immediateInstruction":"",
+                        "currentTask":"","longTermGoal":"","pauseReason":"","userTakeover":false,
+                        "initiativeMode":"UNBOUNDED","personalityMode":"COMPANION",
+                        "permissionPreset":"ASK_FOR_EFFECTS","playerExplicitlyAway":false,
+                        "latestRealWorldObservationAt":"","staleAssumptions":[]}}
+                        """);
+            }
+        }); HermesBrainAdapter adapter = new HermesBrainAdapter(
+                server.baseUrl(), "fixture-token", Duration.ofSeconds(5))) {
+            BrainSession session = adapter.openSession(sessionRequest());
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                            "test", context(), List.of(), 4)));
+            assertTrue(failure.getMessage().startsWith("BRAIN_INVALID_SEMANTIC_STATE"));
         }
     }
 

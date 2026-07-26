@@ -141,8 +141,9 @@ export interface WaitingQuestion {
 export interface BrainStatus {
   activeControllerId: string
   health: { status: string; adapter: string; detail: string; checkedAt: string }
-  contextBudget?: { totalChars: number; worldChars: number; conversationChars: number
-    taskChars: number; approvedMemoryChars: number; episodeCapsuleChars: number
+    contextBudget?: { totalChars: number; worldChars: number; conversationChars: number
+      taskChars: number; approvedMemoryChars: number; episodeCapsuleChars: number
+      brainSemanticStateChars?: number
     fullGraphIncluded: boolean; fullToolLogIncluded: boolean; fullSearchPageIncluded: boolean }
 }
 export interface BrainToolAudit {
@@ -150,9 +151,18 @@ export interface BrainToolAudit {
   observation?: Record<string, unknown>
 }
 export interface BrainSessionAudit {
-  sessionId: string; controllerId: string; provider: string; state: string; lastCode: string
-  createdAt: string; updatedAt: string; toolCalls: BrainToolAudit[]
-}
+    sessionId: string; controllerId: string; provider: string; state: string; lastCode: string
+    createdAt: string; updatedAt: string; toolCalls: BrainToolAudit[]
+    semanticState?: BrainSemanticState; semanticStateRevision?: number; semanticStateAuthoredAt?: string
+  }
+  export interface BrainSemanticState {
+    schemaVersion: number; conversationContext: string; immediateInstruction: string
+    currentTask: string; longTermGoal: string; pauseReason: string; userTakeover: boolean
+    initiativeMode: 'QUIET' | 'NORMAL' | 'ACTIVE'
+    personalityMode: 'COMPANION' | 'IMMERSIVE_ROLEPLAY'
+    permissionPreset: 'READ_ONLY' | 'ASK_FOR_EFFECTS' | 'BOUNDED_AUTONOMY'
+    playerExplicitlyAway: boolean; latestRealWorldObservationAt: string; staleAssumptions: string[]
+  }
 export interface MemoryFact {
   memoryId: string; kind: string; key: string; value: unknown; verified: boolean
   confidence: number; source: string; expiresAt?: string; createdAt: string; updatedAt: string

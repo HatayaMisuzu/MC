@@ -196,6 +196,50 @@ override the current matrix.
   -> deliver -> FINAL_RESPONSE`; vanilla container/player/companion deltas prove conservation.
   This remains Replay evidence and is not a Live provider or human-playtest claim.
 
+## External Brain semantic-state slice
+
+- `mcac-brain/1` turn responses may carry a `semanticState` extension authored by Hermes.
+  Runtime never derives a replacement state. It strictly rejects unknown fields, invalid enum
+  values, oversized text/list values, and future or malformed real-observation timestamps.
+- The version-1 snapshot contains current conversation context, immediate instruction, current
+  task, long-term goal, pause reason, user-takeover state, initiative mode, personality mode,
+  descriptive permission preset, explicit player-away state, latest real-world observation time,
+  and stale assumptions requiring revalidation.
+- `permissionPreset` is descriptive Brain state only. It cannot grant a Tool permission or bypass
+  the authoritative Tool Gateway policy.
+- Migration 24 stores the full validated snapshot and monotonic revision under the exact
+  controller, Brain session, and Companion scope. A resumed session receives its own persisted
+  snapshot; cancellation or controller release clears the in-memory projection.
+- Within a multi-call turn, the next Hermes request receives the newly authored snapshot in the
+  bounded context. The authenticated `/brain/audit` response and External Brain page expose the
+  latest snapshot and revision without exposing hidden reasoning.
+- Local adapter, malformed-schema, persistence/versioning, scope-isolation, audit, and Web tests
+  pass. Live Hermes semantic authorship and human UX remain pending.
+
+Example response extension:
+
+```json
+{
+  "kind": "FINAL_RESPONSE",
+  "response": "I checked the base.",
+  "semanticState": {
+    "schemaVersion": 1,
+    "conversationContext": "Owner asked for base status",
+    "immediateInstruction": "",
+    "currentTask": "",
+    "longTermGoal": "Keep base supplies ready",
+    "pauseReason": "",
+    "userTakeover": false,
+    "initiativeMode": "NORMAL",
+    "personalityMode": "COMPANION",
+    "permissionPreset": "ASK_FOR_EFFECTS",
+    "playerExplicitlyAway": false,
+    "latestRealWorldObservationAt": "2026-07-26T06:00:00Z",
+    "staleAssumptions": []
+  }
+}
+```
+
 ## Deposit to storage slice
 
 - Added `inventory.deposit` / `DepositToStorage` only when the connected Fabric body

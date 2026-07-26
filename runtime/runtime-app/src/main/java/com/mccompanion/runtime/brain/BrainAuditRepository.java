@@ -165,6 +165,76 @@ public final class BrainAuditRepository {
         } catch (SQLException failure) { throw persistence(failure); }
     }
 
+    public SemanticStateSnapshot semanticState(String sessionId) {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT controller_id,companion_id,state_json,revision,authored_at
+                FROM brain_semantic_state WHERE session_id=?
+                """)) {
+            statement.setString(1, sessionId);
+            try (var row = statement.executeQuery()) {
+                if (!row.next()) return null;
+                BrainSemanticState state = BrainSemanticState.parse(Json.parse(row.getString("state_json")));
+                return new SemanticStateSnapshot(sessionId, row.getString("controller_id"),
+                        row.getString("companion_id"), state, row.getLong("revision"),
+                        Instant.ofEpochMilli(row.getLong("authored_at")));
+            }
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
+    public SemanticStateSnapshot semanticState(String sessionId, String controllerId, String companionId,
+                                               BrainSemanticState state) {
+        if (state == null) throw new IllegalArgumentException("semantic state is required");
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement scope = connection.prepareStatement("""
+                        SELECT controller_id,companion_id FROM brain_session WHERE session_id=?
+                        """)) {
+                    scope.setString(1, sessionId);
+                    try (var row = scope.executeQuery()) {
+                        if (!row.next() || !controllerId.equals(row.getString("controller_id"))
+                                || !companionId.equals(row.getString("companion_id"))) {
+                            throw new IllegalArgumentException("BRAIN_SEMANTIC_STATE_SCOPE_MISMATCH");
+                        }
+                    }
+                }
+                long authoredAt = clock.millis();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO brain_semantic_state(session_id,controller_id,companion_id,state_json,revision,authored_at)
+                        VALUES(?,?,?,?,1,?)
+                        ON CONFLICT(session_id) DO UPDATE SET state_json=excluded.state_json,
+                        revision=brain_semantic_state.revision+1,authored_at=excluded.authored_at
+                        WHERE brain_semantic_state.controller_id=excluded.controller_id
+                        AND brain_semantic_state.companion_id=excluded.companion_id
+                        """)) {
+                    statement.setString(1, sessionId);
+                    statement.setString(2, controllerId);
+                    statement.setString(3, companionId);
+                    statement.setString(4, Json.write(state.toJson()));
+                    statement.setLong(5, authoredAt);
+                    if (statement.executeUpdate() != 1) {
+                        throw new IllegalArgumentException("BRAIN_SEMANTIC_STATE_SCOPE_MISMATCH");
+                    }
+                }
+                long revision;
+                try (PreparedStatement read = connection.prepareStatement(
+                        "SELECT revision FROM brain_semantic_state WHERE session_id=?")) {
+                    read.setString(1, sessionId);
+                    try (var row = read.executeQuery()) {
+                        if (!row.next()) throw new SQLException("semantic state write was not visible");
+                        revision = row.getLong(1);
+                    }
+                }
+                connection.commit();
+                return new SemanticStateSnapshot(sessionId, controllerId, companionId, state, revision,
+                        Instant.ofEpochMilli(authoredAt));
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            }
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
     public int toolCount(String sessionId) throws SQLException {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
                 "SELECT COUNT(*) FROM brain_tool_call WHERE session_id=?")) {
@@ -186,6 +256,12 @@ public final class BrainAuditRepository {
                             .put("state", rows.getString("state")).put("lastCode", rows.getString("last_code"))
                             .put("createdAt", java.time.Instant.ofEpochMilli(rows.getLong("created_at")).toString())
                             .put("updatedAt", java.time.Instant.ofEpochMilli(rows.getLong("updated_at")).toString());
+                    SemanticStateSnapshot semantic = semanticState(rows.getString("session_id"));
+                    if (semantic != null) {
+                        session.set("semanticState", semantic.state().toJson());
+                        session.put("semanticStateRevision", semantic.revision())
+                                .put("semanticStateAuthoredAt", semantic.authoredAt().toString());
+                    }
                     var tools = session.putArray("toolCalls");
                     try (PreparedStatement calls = connection.prepareStatement("""
                             SELECT * FROM brain_tool_call WHERE session_id=? ORDER BY created_at LIMIT 100
@@ -240,4 +316,6 @@ public final class BrainAuditRepository {
     }
 
     public record AuditedToolCall(ToolCall call, ToolResult result) { }
+    public record SemanticStateSnapshot(String sessionId, String controllerId, String companionId,
+                                        BrainSemanticState state, long revision, Instant authoredAt) { }
 }

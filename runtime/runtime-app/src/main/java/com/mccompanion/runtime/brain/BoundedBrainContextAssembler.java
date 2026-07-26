@@ -17,6 +17,7 @@ public final class BoundedBrainContextAssembler {
     private static final int TASK_CHARS = 8_000;
     private static final int MEMORY_CHARS = 6_000;
     private static final int CAPSULE_CHARS = 6_000;
+    private static final int SEMANTIC_STATE_CHARS = 12_000;
 
     private BoundedBrainContextAssembler() { }
 
@@ -24,6 +25,7 @@ public final class BoundedBrainContextAssembler {
         return Json.object().put("totalChars", DEFAULT_TOTAL_CHARS).put("worldChars", WORLD_CHARS)
                 .put("conversationChars", CONVERSATION_CHARS).put("taskChars", TASK_CHARS)
                 .put("approvedMemoryChars", MEMORY_CHARS).put("episodeCapsuleChars", CAPSULE_CHARS)
+                .put("brainSemanticStateChars", SEMANTIC_STATE_CHARS)
                 .put("fullGraphIncluded", false).put("fullToolLogIncluded", false)
                 .put("fullSearchPageIncluded", false);
     }
@@ -36,6 +38,8 @@ public final class BoundedBrainContextAssembler {
         value.set("activeTask", bounded(context.activeTask(), TASK_CHARS, stats, "activeTask"));
         value.set("preferences", bounded(context.preferences(), MEMORY_CHARS, stats, "approvedMemory"));
         value.set("episodeCapsule", bounded(context.episodeCapsule(), CAPSULE_CHARS, stats, "episodeCapsule"));
+        value.set("brainSemanticState", bounded(context.brainSemanticState(), SEMANTIC_STATE_CHARS,
+                stats, "brainSemanticState"));
         value.set("recentConversation", boundedStrings(context.recentConversation(), 16,
                 CONVERSATION_CHARS, stats, "recentConversation"));
         value.set("knownLandmarks", boundedStrings(context.knownLandmarks(), 64, 4_000, stats, "knownLandmarks"));

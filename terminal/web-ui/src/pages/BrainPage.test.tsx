@@ -20,7 +20,14 @@ vi.mock('../hooks/useResource', () => ({
         contextBudget: { totalChars: 40000, worldChars: 12000, conversationChars: 10000, taskChars: 8000,
           approvedMemoryChars: 6000, episodeCapsuleChars: 6000, fullGraphIncluded: false,
           fullToolLogIncluded: false, fullSearchPageIncluded: false } },
-      [{ sessionId: 's1', controllerId: 'runtime-primary', provider: 'replay', state: 'ACTIVE', lastCode: 'FINAL_RESPONSE', createdAt: '2026-07-15T00:00:00Z', updatedAt: '2026-07-15T00:00:01Z', toolCalls: [{ callId: 't1', toolName: 'search.query', success: true, code: 'OK', terminal: true, observation: { sources: 1 } }] }],
+      [{ sessionId: 's1', controllerId: 'runtime-primary', provider: 'replay', state: 'ACTIVE', lastCode: 'FINAL_RESPONSE', createdAt: '2026-07-15T00:00:00Z', updatedAt: '2026-07-15T00:00:01Z',
+        semanticStateRevision: 2, semanticStateAuthoredAt: '2026-07-15T00:00:01Z',
+        semanticState: { schemaVersion: 1, conversationContext: 'Owner requested status', immediateInstruction: 'Observe',
+          currentTask: 'Inspect the base', longTermGoal: 'Keep supplies ready', pauseReason: '', userTakeover: false,
+          initiativeMode: 'NORMAL', personalityMode: 'COMPANION', permissionPreset: 'ASK_FOR_EFFECTS',
+          playerExplicitlyAway: false, latestRealWorldObservationAt: '2026-07-15T00:00:00Z',
+          staleAssumptions: ['old chest count'] },
+        toolCalls: [{ callId: 't1', toolName: 'search.query', success: true, code: 'OK', terminal: true, observation: { sources: 1 } }] }],
       { companionId: 'c1', byKind: { PREFERENCE: [{ memoryId: 'm1', kind: 'PREFERENCE', key: 'reply_style', value: 'concise', verified: false, confidence: 0.7, source: 'INFERENCE', createdAt: '', updatedAt: '' }] },
         suggestions: [{ suggestionId: 'ms1', companionId: 'c1', kind: 'WORLD', key: 'landmark:moon', value: { dimension: 'examplemod:moon' }, confidence: 0.5, status: 'QUARANTINED', source: 'EPISODE_CAPSULE', brainSessionId: 'b1', capsuleId: 'episode-1', conflictsWithVerified: true, expiresAt: '', createdAt: '', updatedAt: '' }],
         episodeCapsules: [{ episodeId: 'episode-1', companionId: 'c1', brainSessionId: 'b1', startedAt: '2026-07-15T00:00:00Z', endedAt: '2026-07-15T00:01:00Z', taskSummaries: [], verifiedWorldChanges: [], verifiedInventoryChanges: [], verifiedLocations: [], askUserDecisions: [], userConfirmedChoices: [], failureCategories: [], evidenceRefs: [{ callId: 't1' }], sourceSha: 'abc1234', createdAt: '2026-07-15T00:01:00Z' }] },
@@ -40,6 +47,8 @@ describe('BrainPage', () => {
     expect(screen.getByText('CONFLICT')).toBeVisible()
     expect(screen.getByText(/Total 40000 chars/)).toBeVisible()
     expect(screen.getByText('episode-1')).toBeVisible()
+    expect(screen.getByText('Inspect the base')).toBeVisible()
+    expect(screen.getByText(/old chest count/)).toBeVisible()
     const input = screen.getByPlaceholderText(/Ask a question/)
     fireEvent.change(input, { target: { value: 'Check the Fabric docs' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))

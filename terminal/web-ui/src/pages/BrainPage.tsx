@@ -31,6 +31,7 @@ export function BrainPage() {
     : Promise.resolve({ companionId: '', byKind: {} }), [selectedId, companionId])
   const refresh = () => { void status.refresh(); void audit.refresh(); void memories.refresh(); void companions.refresh() }
   const reconnectState = audit.data?.[0]?.state ?? 'IDLE'
+  const semantic = audit.data?.find((session) => session.semanticState)?.semanticState
   const reviewSuggestion = async (suggestionId: string, action: 'approve_suggestion' | 'reject_suggestion') => {
     setReviewing(suggestionId)
     setReviewError('')
@@ -84,6 +85,19 @@ export function BrainPage() {
         <span>aggregate budgets only</span></header>
         <p>Total {status.data?.contextBudget?.totalChars ?? 0} chars · world {status.data?.contextBudget?.worldChars ?? 0} · conversation {status.data?.contextBudget?.conversationChars ?? 0} · task {status.data?.contextBudget?.taskChars ?? 0} · approved Memory {status.data?.contextBudget?.approvedMemoryChars ?? 0} · Capsule {status.data?.contextBudget?.episodeCapsuleChars ?? 0}</p>
         <p>Full Graph, Tool logs, Search pages, prompts and secrets are not shown or injected here.</p>
+      </section>
+      <section className="main-panel"><header className="panel-header"><h2>Brain-authored semantic state</h2>
+        <span>{semantic ? 'validated session snapshot' : 'not declared by this Brain session'}</span></header>
+        {semantic ? <div className="event-rows">
+          <div className="event-row"><time>Current</time><strong>{semantic.currentTask || 'No active task declared'}</strong>
+            <StatusBadge value={semantic.initiativeMode} /><span>{semantic.personalityMode} · {semantic.permissionPreset}</span>
+            <p>{semantic.immediateInstruction || 'No immediate instruction'}{semantic.longTermGoal ? ` · Goal: ${semantic.longTermGoal}` : ''}</p></div>
+          <div className="event-row"><time>Control</time><strong>{semantic.userTakeover ? 'User takeover' : 'Brain active'}</strong>
+            <StatusBadge value={semantic.playerExplicitlyAway ? 'PLAYER_AWAY' : 'PLAYER_PRESENT'} />
+            <span>{semantic.latestRealWorldObservationAt || 'No real-world observation declared'}</span>
+            <p>{semantic.pauseReason || 'No pause reason'} · stale assumptions: {semantic.staleAssumptions.length
+              ? semantic.staleAssumptions.join(', ') : 'none'}</p></div>
+        </div> : <p>The external Brain has not authored a semantic snapshot. Runtime does not infer one.</p>}
       </section>
       <section className="main-panel"><header className="panel-header"><h2>Typed memory</h2><span>provenance and verification shown</span></header>
         <div className="event-rows">{Object.entries(memories.data?.byKind ?? {}).flatMap(([kind, facts]) => facts.map((fact) =>

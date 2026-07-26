@@ -78,6 +78,35 @@ class BrainAuditRepositoryTest {
         }
     }
 
+    @Test
+    void semanticStateIsSessionScopedVersionedAndVisibleInAudit() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-semantic.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            BrainSession session = new BrainSession("semantic-session-1", "hermes", "c1", Instant.now());
+            audit.opened(session, "hermes");
+            BrainSemanticState initial = semantic("Mine safely", List.of("chest contents"));
+            var first = audit.semanticState(session.sessionId(), "hermes", "c1", initial);
+            var second = audit.semanticState(session.sessionId(), "hermes", "c1",
+                    semantic("Return to owner", List.of()));
+
+            assertEquals(1, first.revision());
+            assertEquals(2, second.revision());
+            assertEquals("Return to owner", audit.semanticState(session.sessionId()).state().currentTask());
+            assertThrows(IllegalArgumentException.class, () ->
+                    audit.semanticState(session.sessionId(), "other-controller", "c1", initial));
+            var inspected = audit.inspect("c1", 10).path(0);
+            assertEquals(2, inspected.path("semanticStateRevision").asLong());
+            assertEquals("Return to owner", inspected.path("semanticState").path("currentTask").asText());
+        }
+    }
+
+    private static BrainSemanticState semantic(String task, List<String> stale) {
+        return new BrainSemanticState("Current conversation", "", task, "", "", false,
+                BrainSemanticState.InitiativeMode.NORMAL, BrainSemanticState.PersonalityMode.COMPANION,
+                BrainSemanticState.PermissionPreset.ASK_FOR_EFFECTS, false, null, stale);
+    }
+
     private static final class ObserveGateway implements ToolGateway {
         @Override public List<ToolDefinition> definitions(ToolContext context) {
             return List.of(new ToolDefinition("world.observe", "1.0", "observe", Json.object(),

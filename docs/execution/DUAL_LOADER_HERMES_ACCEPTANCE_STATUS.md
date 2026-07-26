@@ -216,11 +216,21 @@ Passed on the frozen SHA:
   NeoForge 1/1), and `runtimeFabricE2E` passed its authenticated deterministic
   external-client, ASK_USER, restart, crash-import/no-replay, generic Registry,
   menu and transfer chains. This remains local deterministic/Replay evidence.
+- Began stage 2 with the external-Brain semantic-state slice. Hermes may author
+  a strict version-1 snapshot covering every section 5.1 field; Runtime only
+  validates, session-scopes, versions, persists, restores, and presents it.
+  The descriptive permission preset cannot alter Tool Gateway authority.
+- Added migration 24, same-turn projection, authenticated audit visibility,
+  and a Brain-page readout. Adapter, malformed-state, persistence/revision,
+  cross-scope rejection, focused Runtime, Web test, and production Web build
+  evidence pass locally. This is not Live Hermes or human evidence.
 
 ## Remaining work
 
-- Execute stage-2 behavior semantics and user-experience work without moving
-  high-level planning authority into MCAC.
+- Complete stage-2 instruction/interruption semantics, initiative controls,
+  final-observation linkage, full Memory UI, personality invariance, and
+  one-time Skill trial leases without moving high-level planning authority
+  into MCAC.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

@@ -27,6 +27,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     private final Map<String, BrainSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Object> companionLocks = new ConcurrentHashMap<>();
     private final Map<String, ActiveTool> activeTools = new ConcurrentHashMap<>();
+    private final Map<String, BrainSemanticState> semanticStates = new ConcurrentHashMap<>();
     private volatile String activeControllerId;
 
     public ExternalBrainCoordinator(ExternalBrainAdapter adapter, ToolGateway tools, int maxToolCallsPerTurn) {
@@ -112,6 +113,16 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
 
         ToolContext toolContext = new ToolContext(controllerId, session.sessionId(), companionId);
+        BrainSemanticState restoredState = semanticStates.get(companionId);
+        if (restoredState == null && audit != null) {
+            BrainAuditRepository.SemanticStateSnapshot persisted = audit.semanticState(session.sessionId());
+            if (persisted != null) {
+                restoredState = persisted.state();
+                semanticStates.put(companionId, restoredState);
+            }
+        }
+        AgentContext turnContext = restoredState == null ? context
+                : context.withBrainSemanticState(restoredState.toJson());
         List<ToolResult> observations = new ArrayList<>(recovered);
         List<ToolResult> pending = recovered;
         String message = userMessage;
@@ -119,7 +130,14 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         while (true) {
             List<ToolResult> submitted = pending;
             BrainTurnResult result = adapter.continueTurn(new BrainTurnRequest(session.sessionId(), message,
-                    context, submitted, remaining));
+                    turnContext, submitted, remaining));
+            if (result.semanticState() != null) {
+                semanticStates.put(companionId, result.semanticState());
+                turnContext = context.withBrainSemanticState(result.semanticState().toJson());
+                if (audit != null) {
+                    audit.semanticState(session.sessionId(), controllerId, companionId, result.semanticState());
+                }
+            }
             if (audit != null) {
                 String submittedSessionId = session.sessionId();
                 submitted.forEach(value -> audit.delivered(submittedSessionId, value.callId()));
@@ -206,6 +224,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     public void cancel(String controllerId, String companionId, String reason) {
         requireController(controllerId);
         BrainSession session = sessions.remove(companionId);
+        semanticStates.remove(companionId);
         ActiveTool active = activeTools.get(companionId);
         if (active != null) tools.cancel(active.context(), active.call().callId(), reason);
         if (session != null) {
@@ -218,6 +237,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         requireController(controllerId);
         List<BrainSession> cancelledSessions = List.copyOf(sessions.values());
         sessions.clear();
+        semanticStates.clear();
         activeTools.values().forEach(active -> tools.cancel(active.context(), active.call().callId(),
                 "CONTROLLER_RELEASED"));
         for (BrainSession session : cancelledSessions) adapter.cancel(session.sessionId(), "CONTROLLER_RELEASED");

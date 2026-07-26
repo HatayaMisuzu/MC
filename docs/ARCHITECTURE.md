@@ -28,7 +28,8 @@ Task Graph Runtime = deterministic orchestration
 External Brain = reasoning and planning
 ```
 
-MCAC can validate and execute a Brain-authored graph, enforce limits and permissions, dispatch
+MCAC can validate and execute a Brain-authored graph, validate and persist a bounded
+Brain-authored semantic-state snapshot, enforce limits and permissions, dispatch
 primitive Minecraft actions, pause/cancel/retry/checkpoint, reconcile after restart, and return
 verified observations. It cannot invent an open-ended goal, choose a high-level strategy, maintain
 a competing personality/plan, or modify production source.

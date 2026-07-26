@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 13:54 +08:00
+Updated: 2026-07-26 14:08 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -10,15 +10,16 @@ only completion matrix.
 
 ## Current checkpoint
 
-- Current stage: `1 — AUDIT_HARDENING`
+- Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `84b34fc4c5f5d04d12edd369117ebc5e4ebe8afb`
+- Latest committed source SHA: `fa17df780f2721af8a60fde8408608371aae318b`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
 - Live Hermes evidence: `NOT_RUN`
 - Human playtest evidence: `NOT_RUN`
 - Stage 0 result: `PASS`
+- Stage 1 result: `PASS`
 
 ## Frozen environment
 
@@ -210,12 +211,16 @@ Passed on the frozen SHA:
 - After the slice, the complete repository `check` and all three Loader builds
   pass; Web remains nine files/thirteen tests and dependency, documentation,
   forbidden-API, independence, and secret gates remain green.
+- Closed stage 1 on committed source `fa17df780f2721af8a60fde8408608371aae318b`.
+  The top-level three-Loader `gameTest` gate passed (Fabric 26/26, Forge 1/1,
+  NeoForge 1/1), and `runtimeFabricE2E` passed its authenticated deterministic
+  external-client, ASK_USER, restart, crash-import/no-replay, generic Registry,
+  menu and transfer chains. This remains local deterministic/Replay evidence.
 
 ## Remaining work
 
-- Execute stage-1 audits and repairs without weakening current guarantees.
-- Continue the remaining stage-1 repository/security audit after the stable
-  generic-effect vertical slice.
+- Execute stage-2 behavior semantics and user-experience work without moving
+  high-level planning authority into MCAC.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

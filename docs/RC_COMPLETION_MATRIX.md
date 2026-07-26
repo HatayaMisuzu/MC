@@ -1,6 +1,6 @@
 # RC completion matrix
 
-Updated: 2026-07-22
+Updated: 2026-07-26
 Audited implementation baseline: `1a3fab4`
 Overall status: `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`
 
@@ -22,6 +22,10 @@ five repeated targeted lifecycle-ordering runs, and repeated Runtime/Fabric E2E 
 The deterministic external-client E2E also waits for its declared connected-body Tool set through
 authenticated MCP `tools/list` before Graph submission, removing a registration/capability-publication
 race without weakening `TOOL_UNAVAILABLE` validation.
+The v5.2 final gate additionally replaced fixed replay-provider startup sleeps with bounded
+process-and-loopback-listener readiness checks for both planning and Hermes fixtures; two consecutive
+full Runtime/Fabric executions covered the cold-start failure point without changing Runtime fallback
+or Provider validation.
 
 External follow-up: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`, `HUMAN_PLAYTEST_PENDING`.
 Forge/NeoForge full Runtime Bridge and rows whose remaining gap is production-scale breadth are

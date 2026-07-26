@@ -78,6 +78,31 @@ function Start-TestProcess([string]$file, [string]$arguments, [string]$workingDi
     return $process
 }
 
+function Wait-TestTcpListener(
+    [Diagnostics.Process]$process,
+    [int]$port,
+    [string]$label
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $process.Refresh()
+        if ($process.HasExited) {
+            throw "$label exited before its loopback listener was ready ($($process.ExitCode))."
+        }
+        $client = [Net.Sockets.TcpClient]::new()
+        try {
+            $connect = $client.ConnectAsync([Net.IPAddress]::Loopback, $port)
+            if ($connect.Wait(250) -and $client.Connected) { return }
+        } catch {
+            # A refused connection means the child process has not completed listener startup yet.
+        } finally {
+            $client.Dispose()
+        }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "$label did not open its loopback listener on port $port in time."
+}
+
 function Invoke-CrashWindowHelper(
     [string]$java,
     [string]$runtimeClasspath,
@@ -1426,8 +1451,7 @@ try {
     $provider = Start-TestProcess 'powershell.exe' $providerArgs $root $true
     $providerOut = $provider.StandardOutput.ReadToEndAsync()
     $providerErr = $provider.StandardError.ReadToEndAsync()
-    Start-Sleep -Milliseconds 500
-    if ($provider.HasExited) { throw "Replay provider exited before planning ($($provider.ExitCode))." }
+    Wait-TestTcpListener $provider 18767 'Replay provider'
 
     Write-Output '[runtime-e2e] exercising in-flight owner goal modification'
     $probePlan = Invoke-AgentRequest $pairingToken $companionId 'Start the modification probe target'
@@ -1460,8 +1484,7 @@ try {
     $brainProvider = Start-TestProcess 'powershell.exe' $brainArgs $root $true
     $brainProviderOut = $brainProvider.StandardOutput.ReadToEndAsync()
     $brainProviderErr = $brainProvider.StandardError.ReadToEndAsync()
-    Start-Sleep -Milliseconds 500
-    if ($brainProvider.HasExited) { throw "Hermes replay exited before the Brain turn ($($brainProvider.ExitCode))." }
+    Wait-TestTcpListener $brainProvider 18768 'Hermes replay'
 
     $brainQuestion = Invoke-ExternalBrainRequest $pairingToken $companionId 'Bring me 16 iron ingots from that chest.'
     if (-not $brainQuestion.accepted -or $brainQuestion.result.kind -ne 'ASK_USER' -or

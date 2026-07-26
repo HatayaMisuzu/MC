@@ -45,4 +45,8 @@ previously failing boundary assertion passed five repeated non-cached targeted r
 Runtime/Fabric runs also exposed a harness race between companion registration and asynchronous
 connected-body capability publication; the external client now waits, with a fixed bound, for its
 declared Tool set through authenticated MCP `tools/list` before submitting the Graph. Runtime Tool
-availability validation remains unchanged and strict.
+availability validation remains unchanged and strict. The v5.2 final gate found that the deterministic
+planning fixture could still receive its first request before its loopback listener was ready on a
+cold PowerShell start. Both planning and Hermes replay fixtures now use bounded process-and-port
+readiness checks instead of a fixed startup sleep; the original failure point and a second complete
+Runtime/Fabric execution passed without relaxing Runtime fallback or Provider validation.

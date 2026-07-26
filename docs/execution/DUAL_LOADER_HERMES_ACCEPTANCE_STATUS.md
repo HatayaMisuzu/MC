@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 14:08 +08:00
+Updated: 2026-07-26 18:53 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `51b9a9580159452a6ce494d571e7899bb7f61c8a`
+- Latest committed source SHA: `1f56e6e011f6e6527fe3376427ecdbaf9a684f87`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -236,13 +236,28 @@ Passed on the frozen SHA:
   Runtime validates and migration 26 links it to audit without inventing an
   acceptance script. Honest unverified claims require an explanation and no
   observation citation. Audit and HTML UI expose the relationship.
+- Added migration 27 and authenticated local Memory management: view,
+  search/filter, edit, delete, per-category clear, automatic body-observation
+  save/pause, source/update/scope display, retained prior versions, and an
+  aggregate-only safe export. Central storage rejects common credentials and
+  explicit chat/Prompt/Search-body sources; support bundles still exclude the
+  Runtime database and a sentinel test proves Memory body content is absent.
+- Kept Episode Capsules, quarantined candidates, and formal Memory visually and
+  durably separate. Cross-Companion automatic-save isolation, edit/delete
+  history, sensitive-value rejection, Runtime HTTP actions, HTML dispatch, Web
+  production build, and the complete repository check pass.
+- Fixed two Task Graph worker handoff races found by the full regression run:
+  awaiting an already persisted pause no longer times out and cancels it while
+  admission cleanup finishes, and a durable ASK_USER question is not exposed
+  until the prior worker has released admission. The complete Task Graph class
+  and root `check` pass after the repair.
 
 ## Remaining work
 
-- Complete stage-2 instruction/interruption semantics, initiative controls,
-  final-observation linkage, full Memory UI, personality invariance, and
-  one-time Skill trial leases without moving high-level planning authority
-  into MCAC.
+- Complete stage-2 instruction/interruption semantics, proactive initiative
+  admission/rate/deduplication, automatic saving of explicitly stated stable
+  low-risk preferences, and one-time Skill trial leases without moving
+  high-level planning authority into MCAC.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.

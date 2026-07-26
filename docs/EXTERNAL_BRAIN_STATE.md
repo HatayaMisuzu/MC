@@ -56,7 +56,7 @@ override the current matrix.
   `memory_fact`; they cannot write verified World facts, enter normal memory search/context, or
   delete memory. The legacy preference Tool is a compatibility wrapper over the same quarantine.
 - Body observations remain the trusted source for verified container World memory;
-  user edits are stored with `USER` provenance and take precedence over inference.
+  user edits are stored with `USER_EDIT` provenance and take precedence over inference.
 - Read-only primitive Tools now split the connected-body status into bounded world, inventory,
   safety, task, and capability observations. Missing status is rejected rather than synthesized,
   and `safety.inspect` explicitly excludes hostile threat scanning from its current result.
@@ -75,6 +75,28 @@ override the current matrix.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,
   exposes verification provenance/time, marks same- versus cross-dimension candidates, and
   filters unverified inferences instead of presenting them as world facts.
+
+### Local Memory management controls
+
+- Migration 27 persists per-Companion automatic-save settings and prior fact versions. Editing,
+  deleting, clearing, inference replacement, and approved-candidate replacement retain the prior
+  value, provenance, verification state, expiry, local actor, and change kind in exact Companion
+  scope.
+- The authenticated Runtime and Terminal management path can update/delete one fact, clear one
+  category, enable or pause future body-observation saves, inspect the last 100 retained changes,
+  and export an aggregate-only safe summary. The export contains counts, source labels, settings,
+  and explicit negative privacy flags; it contains no fact values, chat, Prompt, or Search body.
+- The Brain page now provides view, search/filter, JSON edit, delete, category-clear confirmation,
+  automatic-save control, Profile/world and Companion scope, provenance/update time, version
+  history, and safe export. Episode Capsules and quarantined candidates remain separate panels.
+- Common key-shaped credentials, bearer tokens, credential fields, email addresses, and explicit
+  full-chat/full-Prompt/Search-body sources are rejected at the central Memory repository boundary.
+  Support bundles remain allow-listed and do not include the Runtime database; a regression test
+  places a Memory-body sentinel in that database and proves it is absent from every archive entry.
+- Local repository, authenticated HTTP, Terminal support-bundle, Vitest, production Web build, and
+  the complete repository check pass. Automatic persistence of a user-stated stable low-risk
+  preference remains unfinished; an external Brain suggestion is still quarantined for local
+  review, so section 5.5 is not yet declared complete.
 
 ## Episode capsule and reviewed episodic candidate slice
 

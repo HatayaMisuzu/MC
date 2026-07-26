@@ -14,14 +14,26 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.StackedContents;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.CraftingMenu;
+import net.minecraft.world.inventory.FurnaceMenu;
+import net.minecraft.world.inventory.RecipeBookMenu;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.CraftingRecipe;
+import net.minecraft.world.item.crafting.Ingredient;
+import net.minecraft.world.item.crafting.RecipeType;
+import net.minecraft.world.item.crafting.ShapedRecipe;
+import net.minecraft.world.item.crafting.SmeltingRecipe;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.block.AbstractFurnaceBlock;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
@@ -196,7 +208,9 @@ final class BehaviorDirector {
                         "DeliverItem",
                         "EatAndRecover",
                         "DefendOwner",
-                        "RetreatFromDanger")
+                        "RetreatFromDanger",
+                        "CraftItem",
+                        "SmeltItem")
                 .contains(capability)) {
             String composite = tickComposite(entry, body, progress);
             if ("WAIT".equals(composite)) return;
@@ -242,6 +256,8 @@ final class BehaviorDirector {
             case "EatAndRecover" -> tickEat(body, progress);
             case "DefendOwner" -> tickDefend(entry, body, progress);
             case "RetreatFromDanger" -> tickRetreat(body, progress);
+            case "CraftItem" -> tickCraft(body, progress);
+            case "SmeltItem" -> tickSmelt(body, progress);
             default -> "CAPABILITY_UNAVAILABLE";
         };
     }
@@ -564,6 +580,211 @@ final class BehaviorDirector {
         return "WAIT";
     }
 
+    private String tickCraft(CompanionPlayer body, PrimitiveProgress progress) {
+        if (!progress.initialized) {
+            Item output = resolveItem(progress.parameters.itemId());
+            if (output == null) return "ITEM_UNKNOWN";
+            int gridSize = progress.parameters.hasBlockTarget() ? 3 : 2;
+            CraftingSelection selection =
+                    selectCraftingRecipe(body, output, progress.parameters.quantity(), gridSize);
+            if (selection == null
+                    && gridSize == 2
+                    && selectCraftingRecipe(body, output, progress.parameters.quantity(), 3) != null) {
+                return "CRAFTING_TABLE_REQUIRED";
+            }
+            if (selection == null) return "RECIPE_UNAVAILABLE";
+            if (selection.availableItems < progress.parameters.quantity()
+                    && !progress.parameters.allowPartial()) {
+                return "MATERIALS_INSUFFICIENT";
+            }
+            int target = Math.min(progress.parameters.quantity(), selection.availableItems);
+            if (target < 1) return "MATERIALS_INSUFFICIENT";
+            if (progress.parameters.hasBlockTarget()) {
+                if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+                BlockPos station = new BlockPos(
+                        progress.parameters.x(),
+                        progress.parameters.y(),
+                        progress.parameters.z());
+                if (body.distanceToSqr(Vec3.atCenterOf(station)) > 25.0D) {
+                    return "CRAFTING_TABLE_OUT_OF_REACH";
+                }
+                if (!body.serverLevel().getBlockState(station).is(Blocks.CRAFTING_TABLE)) {
+                    return "CRAFTING_TABLE_MISSING";
+                }
+                BlockHitResult hit =
+                        new BlockHitResult(Vec3.atCenterOf(station), Direction.UP, station, false);
+                body.gameMode.useItemOn(
+                        body,
+                        body.serverLevel(),
+                        body.getMainHandItem(),
+                        InteractionHand.MAIN_HAND,
+                        hit);
+                actionGateway.markVanillaGameModeAction(body);
+                if (!(body.containerMenu instanceof CraftingMenu)) {
+                    return "CRAFTING_TABLE_OPEN_FAILED";
+                }
+                progress.station = station;
+            } else {
+                if (body.containerMenu != body.inventoryMenu) body.closeContainer();
+                if (!(body.containerMenu instanceof RecipeBookMenu<?>)) {
+                    return "CRAFTING_MENU_CLOSED";
+                }
+            }
+            progress.item = output;
+            progress.recipe = selection.recipe;
+            progress.target = target;
+            progress.baseline = countItem(body, output);
+            progress.initialized = true;
+        }
+        int produced = countItem(body, progress.item) - progress.baseline;
+        if (produced >= progress.target) {
+            returnCraftingInputs(body);
+            if (progress.station != null) body.closeContainer();
+            return null;
+        }
+        if (!(body.containerMenu instanceof RecipeBookMenu<?> menu)) {
+            return "CRAFTING_MENU_CLOSED";
+        }
+        if (progress.station != null) {
+            if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+            if (body.distanceToSqr(Vec3.atCenterOf(progress.station)) > 25.0D) {
+                return "CRAFTING_TABLE_OUT_OF_REACH";
+            }
+            if (!body.serverLevel().getBlockState(progress.station).is(Blocks.CRAFTING_TABLE)) {
+                return "CRAFTING_TABLE_MISSING";
+            }
+        }
+        ItemStack result = progress.recipe.getResultItem(body.serverLevel().registryAccess());
+        if (inventoryCapacity(body, result) < result.getCount()) return "INVENTORY_FULL";
+        if (!placeRecipeInputs(body, menu, progress.recipe)) {
+            return "CRAFTING_RECIPE_PLACEMENT_FAILED";
+        }
+        int resultSlot = menu.getResultSlotIndex();
+        ItemStack visibleResult = body.containerMenu.getSlot(resultSlot).getItem();
+        if (visibleResult.isEmpty() || !visibleResult.is(progress.item)) {
+            returnCraftingInputs(body);
+            return "CRAFTING_RECIPE_PLACEMENT_FAILED";
+        }
+        body.containerMenu.clicked(resultSlot, 0, ClickType.PICKUP, body);
+        ItemStack carried = body.containerMenu.getCarried();
+        if (carried.isEmpty() || !carried.is(progress.item)) {
+            returnCraftingInputs(body);
+            return "CRAFTING_RESULT_PICKUP_FAILED";
+        }
+        int targetSlot = findInventorySlotWithCapacity(body, carried);
+        if (targetSlot < 0) return "INVENTORY_FULL";
+        body.containerMenu.clicked(targetSlot, 0, ClickType.PICKUP, body);
+        if (!body.containerMenu.getCarried().isEmpty()) return "CRAFTING_RESULT_STORE_FAILED";
+        actionGateway.markVanillaMenuAction(body);
+        progress.actions++;
+        return "WAIT";
+    }
+
+    private String tickSmelt(CompanionPlayer body, PrimitiveProgress progress) {
+        if (!progress.initialized) {
+            Item output = resolveItem(progress.parameters.itemId());
+            if (output == null) return "ITEM_UNKNOWN";
+            if (!progress.parameters.hasBlockTarget()) return "FURNACE_TARGET_MISSING";
+            if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+            BlockPos station = new BlockPos(
+                    progress.parameters.x(),
+                    progress.parameters.y(),
+                    progress.parameters.z());
+            if (body.distanceToSqr(Vec3.atCenterOf(station)) > 25.0D) {
+                return "FURNACE_OUT_OF_REACH";
+            }
+            if (!body.serverLevel().getBlockState(station).is(Blocks.FURNACE)) {
+                return "FURNACE_MISSING";
+            }
+            SmeltingSelection selection = selectSmeltingRecipe(body, output);
+            if (selection == null) return "SMELTING_RECIPE_UNAVAILABLE";
+            int availableOutput = selection.availableInputs * selection.outputPerInput;
+            if (availableOutput < progress.parameters.quantity()
+                    && !progress.parameters.allowPartial()) {
+                return "MATERIALS_INSUFFICIENT";
+            }
+            int target = Math.min(progress.parameters.quantity(), availableOutput);
+            if (target < 1) return "MATERIALS_INSUFFICIENT";
+            if (inventoryCapacity(body, new ItemStack(output, target)) < target) {
+                return "INVENTORY_FULL";
+            }
+            BlockHitResult hit =
+                    new BlockHitResult(Vec3.atCenterOf(station), Direction.UP, station, false);
+            body.gameMode.useItemOn(
+                    body,
+                    body.serverLevel(),
+                    body.getMainHandItem(),
+                    InteractionHand.MAIN_HAND,
+                    hit);
+            actionGateway.markVanillaGameModeAction(body);
+            if (!(body.containerMenu instanceof FurnaceMenu)) return "FURNACE_OPEN_FAILED";
+            if (!body.containerMenu.getSlot(0).getItem().isEmpty()
+                    || !body.containerMenu.getSlot(1).getItem().isEmpty()
+                    || !body.containerMenu.getSlot(2).getItem().isEmpty()) {
+                body.closeContainer();
+                return "FURNACE_BUSY";
+            }
+            if (findFurnaceFuelSlot(body) < 0) {
+                body.closeContainer();
+                return "FUEL_MISSING";
+            }
+            progress.item = output;
+            progress.ingredient = selection.ingredient;
+            progress.target = target;
+            progress.inputCount =
+                    (target + selection.outputPerInput - 1) / selection.outputPerInput;
+            progress.baseline = countItem(body, output);
+            progress.station = station;
+            progress.initialized = true;
+        }
+        if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+        if (body.distanceToSqr(Vec3.atCenterOf(progress.station)) > 25.0D) {
+            return "FURNACE_OUT_OF_REACH";
+        }
+        if (!body.serverLevel().getBlockState(progress.station).is(Blocks.FURNACE)) {
+            return "FURNACE_MISSING";
+        }
+        if (!(body.containerMenu instanceof FurnaceMenu)) return "FURNACE_CLOSED";
+        if (!progress.setup) {
+            int source = findIngredientSlot(body, progress.ingredient);
+            if (source < 0) return "MATERIALS_INSUFFICIENT";
+            if (!moveExactToMenuSlot(body, source, 0, progress.inputCount)) {
+                return "FURNACE_INPUT_FAILED";
+            }
+            int fuel = findFurnaceFuelSlot(body);
+            if (fuel < 0) return "FUEL_MISSING";
+            body.containerMenu.clicked(fuel, 0, ClickType.PICKUP, body);
+            body.containerMenu.clicked(1, 0, ClickType.PICKUP, body);
+            if (!body.containerMenu.getCarried().isEmpty()) {
+                body.containerMenu.clicked(fuel, 0, ClickType.PICKUP, body);
+                return "FURNACE_FUEL_FAILED";
+            }
+            actionGateway.markVanillaMenuAction(body);
+            progress.setup = true;
+            return "WAIT";
+        }
+        ItemStack result = body.containerMenu.getSlot(2).getItem();
+        if (result.is(progress.item) && result.getCount() >= progress.target) {
+            body.containerMenu.clicked(2, 0, ClickType.QUICK_MOVE, body);
+            actionGateway.markVanillaMenuAction(body);
+            int produced = countItem(body, progress.item) - progress.baseline;
+            if (produced < progress.target) return "FURNACE_RESULT_PICKUP_FAILED";
+            returnFurnaceInputs(body);
+            body.closeContainer();
+            return null;
+        }
+        var state = body.serverLevel().getBlockState(progress.station);
+        boolean lit = state.hasProperty(AbstractFurnaceBlock.LIT)
+                && state.getValue(AbstractFurnaceBlock.LIT);
+        if (!lit
+                && body.containerMenu.getSlot(1).getItem().isEmpty()
+                && !body.containerMenu.getSlot(0).getItem().isEmpty()
+                && server.getTickCount() - progress.startedTick > 20) {
+            return "FUEL_MISSING";
+        }
+        return "WAIT";
+    }
+
     private String lookAt(CompanionPlayer body, SkillParameters parameters) {
         if (!parameters.hasBlockTarget()) return "BLOCK_TARGET_MISSING";
         if (!sameDimension(body, parameters)) return "WORLD_CHANGED";
@@ -860,6 +1081,173 @@ final class BehaviorDirector {
         return -1;
     }
 
+    private static CraftingSelection selectCraftingRecipe(
+            CompanionPlayer body, Item output, int quantity, int gridSize) {
+        CraftingSelection best = null;
+        StackedContents contents = new StackedContents();
+        body.getInventory().fillStackedContents(contents);
+        for (CraftingRecipe recipe
+                : body.serverLevel().getRecipeManager().getAllRecipesFor(RecipeType.CRAFTING)) {
+            ItemStack result = recipe.getResultItem(body.serverLevel().registryAccess());
+            if (!result.is(output) || !recipe.canCraftInDimensions(gridSize, gridSize)) continue;
+            int requestedCrafts = Math.max(1, (quantity + result.getCount() - 1) / result.getCount());
+            int craftable = contents.getBiggestCraftableStack(recipe, requestedCrafts, null);
+            CraftingSelection candidate =
+                    new CraftingSelection(recipe, craftable * result.getCount());
+            if (best == null || candidate.availableItems > best.availableItems) best = candidate;
+            if (candidate.availableItems >= quantity) return candidate;
+        }
+        return best;
+    }
+
+    private static SmeltingSelection selectSmeltingRecipe(CompanionPlayer body, Item output) {
+        SmeltingSelection best = null;
+        for (SmeltingRecipe recipe
+                : body.serverLevel().getRecipeManager().getAllRecipesFor(RecipeType.SMELTING)) {
+            ItemStack result = recipe.getResultItem(body.serverLevel().registryAccess());
+            if (!result.is(output) || recipe.getIngredients().isEmpty()) continue;
+            Ingredient ingredient = recipe.getIngredients().get(0);
+            int available = 0;
+            for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+                ItemStack stack = body.getInventory().getItem(slot);
+                if (ingredient.test(stack)) available += stack.getCount();
+            }
+            SmeltingSelection candidate =
+                    new SmeltingSelection(ingredient, available, result.getCount());
+            if (best == null || candidate.availableInputs > best.availableInputs) best = candidate;
+        }
+        return best;
+    }
+
+    private static int inventoryCapacity(CompanionPlayer body, ItemStack stack) {
+        int capacity = 0;
+        for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+            ItemStack existing = body.getInventory().getItem(slot);
+            if (existing.isEmpty()) {
+                capacity += stack.getMaxStackSize();
+            } else if (ItemStack.isSameItemSameTags(existing, stack)) {
+                capacity += Math.max(0, existing.getMaxStackSize() - existing.getCount());
+            }
+        }
+        return capacity;
+    }
+
+    private static int findInventorySlotWithCapacity(CompanionPlayer body, ItemStack stack) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container != body.getInventory() || !slot.mayPlace(stack)) continue;
+            ItemStack existing = slot.getItem();
+            if (existing.isEmpty()
+                    || ItemStack.isSameItemSameTags(existing, stack)
+                            && existing.getCount() + stack.getCount() <= slot.getMaxStackSize(existing)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean placeRecipeInputs(
+            CompanionPlayer body, RecipeBookMenu<?> menu, CraftingRecipe recipe) {
+        returnCraftingInputs(body);
+        int gridWidth = menu.getGridWidth();
+        int recipeWidth =
+                recipe instanceof ShapedRecipe shaped ? shaped.getWidth() : recipe.getIngredients().size();
+        int recipeHeight = recipe instanceof ShapedRecipe shaped ? shaped.getHeight() : 1;
+        if (recipeWidth > gridWidth || recipeHeight > menu.getGridHeight()) return false;
+        for (int ingredientIndex = 0;
+                ingredientIndex < recipe.getIngredients().size();
+                ingredientIndex++) {
+            Ingredient ingredient = recipe.getIngredients().get(ingredientIndex);
+            if (ingredient.isEmpty()) continue;
+            int row = recipe instanceof ShapedRecipe
+                    ? ingredientIndex / recipeWidth
+                    : ingredientIndex / gridWidth;
+            int column = recipe instanceof ShapedRecipe
+                    ? ingredientIndex % recipeWidth
+                    : ingredientIndex % gridWidth;
+            int target = menu.getResultSlotIndex() + 1 + row * gridWidth + column;
+            int source = findIngredientSlot(body, ingredient);
+            if (source < 0) {
+                returnCraftingInputs(body);
+                return false;
+            }
+            body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+            body.containerMenu.clicked(target, 1, ClickType.PICKUP, body);
+            body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+            if (!body.containerMenu.getCarried().isEmpty()) {
+                returnCraftingInputs(body);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void returnCraftingInputs(CompanionPlayer body) {
+        if (!(body.containerMenu instanceof RecipeBookMenu<?> menu)) return;
+        int end = menu.getResultSlotIndex() + 1 + menu.getGridWidth() * menu.getGridHeight();
+        for (int slot = menu.getResultSlotIndex() + 1; slot < end; slot++) {
+            if (!body.containerMenu.getSlot(slot).getItem().isEmpty()) {
+                body.containerMenu.clicked(slot, 0, ClickType.QUICK_MOVE, body);
+            }
+        }
+    }
+
+    private static int findIngredientSlot(CompanionPlayer body, Ingredient ingredient) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container == body.getInventory()
+                    && slot.mayPickup(body)
+                    && ingredient.test(slot.getItem())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static int findFurnaceFuelSlot(CompanionPlayer body) {
+        if (!(body.containerMenu instanceof FurnaceMenu)) return -1;
+        Slot target = body.containerMenu.getSlot(1);
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container == body.getInventory()
+                    && slot.mayPickup(body)
+                    && target.mayPlace(slot.getItem())
+                    && AbstractFurnaceBlockEntity.isFuel(slot.getItem())) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean moveExactToMenuSlot(
+            CompanionPlayer body, int source, int target, int quantity) {
+        if (quantity < 1
+                || !body.containerMenu.getSlot(target).getItem().isEmpty()
+                || body.containerMenu.getSlot(source).getItem().getCount() < quantity) {
+            return false;
+        }
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        for (int moved = 0; moved < quantity; moved++) {
+            body.containerMenu.clicked(target, 1, ClickType.PICKUP, body);
+        }
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        return body.containerMenu.getCarried().isEmpty()
+                && body.containerMenu.getSlot(target).getItem().getCount() == quantity;
+    }
+
+    private static void returnFurnaceInputs(CompanionPlayer body) {
+        if (!(body.containerMenu instanceof FurnaceMenu)) return;
+        for (int slot = 0; slot <= 2; slot++) {
+            if (!body.containerMenu.getSlot(slot).getItem().isEmpty()) {
+                body.containerMenu.clicked(slot, 0, ClickType.QUICK_MOVE, body);
+            }
+        }
+    }
+
+    private static int countItem(CompanionPlayer body, Item item) {
+        return body.getInventory().countItem(item);
+    }
+
     private static int inventoryDigest(CompanionPlayer body) {
         int hash = 1;
         for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
@@ -923,10 +1311,22 @@ final class BehaviorDirector {
         private float destroyProgress;
         private UUID entityId;
         private Vec3 startPosition;
+        private Item item;
+        private Ingredient ingredient;
+        private CraftingRecipe recipe;
+        private BlockPos station;
+        private int inputCount;
+        private boolean setup;
 
         private PrimitiveProgress(SkillParameters parameters, int startedTick) {
             this.parameters = parameters;
             this.startedTick = startedTick;
         }
+    }
+
+    private record CraftingSelection(CraftingRecipe recipe, int availableItems) {
+    }
+
+    private record SmeltingSelection(Ingredient ingredient, int availableInputs, int outputPerInput) {
     }
 }

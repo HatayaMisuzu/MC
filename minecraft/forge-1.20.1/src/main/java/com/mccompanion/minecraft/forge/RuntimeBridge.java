@@ -159,6 +159,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("EatAndRecover", true)
                 .put("DefendOwner", true)
                 .put("RetreatFromDanger", true)
+                .put("CraftItem", true)
+                .put("SmeltItem", true)
                 .put("player_text_gateway", true)
                 .put("owner_activity_handoff", true)
                 .put("runtime_safe_idle", true);

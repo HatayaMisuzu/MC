@@ -381,7 +381,9 @@ public final class CompanionRegistry {
                             "DeliverItem",
                             "EatAndRecover",
                             "DefendOwner",
-                            "RetreatFromDanger")
+                            "RetreatFromDanger",
+                            "CraftItem",
+                            "SmeltItem")
                     .contains(skill.capability())) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }

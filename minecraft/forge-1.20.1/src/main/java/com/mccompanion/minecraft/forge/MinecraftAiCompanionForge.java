@@ -41,8 +41,9 @@ public final class MinecraftAiCompanionForge {
                     "owner_activity_handoff", "player_text_gateway", "look_at", "interact_block",
                     "interact_entity", "menu_action", "use_item", "drop_item", "attack_entity",
                     "place_block", "resource_collect", "resource_mine", "storage_transfer",
-                    "inventory_deliver", "eat_and_recover", "defend_owner", "retreat"),
-            List.of("composite_crafting", "composite_smelting"),
+                    "inventory_deliver", "eat_and_recover", "defend_owner", "retreat",
+                    "composite_crafting", "composite_smelting"),
+            List.of(),
             List.of());
     private static volatile MinecraftServer activeServer;
     private static volatile CompanionRegistry registry;

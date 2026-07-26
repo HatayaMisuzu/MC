@@ -666,6 +666,182 @@ public final class CompanionLifecycleForgeGameTests {
                         retreatThreat));
     }
 
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = "bastion/mobs/empty",
+            timeoutTicks = 300000)
+    public static void craftAndSmeltThroughVanillaMenus(GameTestHelper helper) {
+        FakeConnection ownerConnection = new FakeConnection();
+        ServerPlayer owner = new ServerPlayer(
+                helper.getLevel().getServer(),
+                helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-craft-smelt-owner"));
+        Vec3 ownerSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(ownerSpawn.x, ownerSpawn.y, ownerSpawn.z, 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(ownerConnection, owner);
+        CompanionRegistry registry =
+                MinecraftAiCompanionForge.integrationRegistryFor(helper.getLevel().getServer());
+        helper.assertTrue(registry != null, "craft/smelt registry was not initialized");
+        helper.assertTrue(registry.create(owner, "ForgeCrafter").success(), "craft/smelt create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "craft/smelt body was not spawned");
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst()
+                .orElseThrow();
+        helper.assertTrue(
+                registry.runtimeAcquireLease(
+                                companionId,
+                                "forge-craft-smelt-lease",
+                                1L,
+                                System.currentTimeMillis() + 300_000L)
+                        .success(),
+                "craft/smelt lease acquisition failed");
+        helper.assertTrue(body.addItem(new ItemStack(Items.OAK_LOG)), "craft input fixture add failed");
+        helper.assertTrue(body.addItem(new ItemStack(Items.RAW_IRON)), "smelt input fixture add failed");
+        helper.assertTrue(body.addItem(new ItemStack(Items.COAL)), "smelt fuel fixture add failed");
+        int logsBefore = body.getInventory().countItem(Items.OAK_LOG);
+        int planksBefore = body.getInventory().countItem(Items.OAK_PLANKS);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-craft-smelt-lease",
+                                1L,
+                                "forge-craft",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "CraftItem",
+                                        "minecraft:oak_planks",
+                                        4,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "craft failed to start");
+        for (int tick = 0; tick < 5; tick++) registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.OAK_PLANKS) == planksBefore + 4,
+                "craft did not produce four planks through the vanilla inventory menu");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.OAK_LOG) == logsBefore - 1,
+                "craft did not consume one log through the vanilla recipe");
+        helper.assertTrue(
+                body.addItem(new ItemStack(Items.OAK_PLANKS, 8)),
+                "three-by-three craft input fixture add failed");
+        BlockPos craftingTable = helper.absolutePos(new BlockPos(2, 1, 2));
+        helper.getLevel().setBlockAndUpdate(craftingTable, Blocks.CRAFTING_TABLE.defaultBlockState());
+        int chestBefore = body.getInventory().countItem(Items.CHEST);
+        int tablePlanksBefore = body.getInventory().countItem(Items.OAK_PLANKS);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-craft-smelt-lease",
+                                1L,
+                                "forge-craft-table",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "CraftItem",
+                                        "minecraft:chest",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        craftingTable.getX(),
+                                        craftingTable.getY(),
+                                        craftingTable.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "three-by-three craft failed to start");
+        for (int tick = 0; tick < 5; tick++) registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.CHEST) == chestBefore + 1,
+                "three-by-three craft did not produce a chest");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.OAK_PLANKS) == tablePlanksBefore - 8,
+                "three-by-three craft did not consume eight planks");
+        BlockPos furnace = helper.absolutePos(new BlockPos(3, 1, 1));
+        helper.getLevel().setBlockAndUpdate(furnace, Blocks.FURNACE.defaultBlockState());
+        int rawIronBefore = body.getInventory().countItem(Items.RAW_IRON);
+        int ingotsBefore = body.getInventory().countItem(Items.IRON_INGOT);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-craft-smelt-lease",
+                                1L,
+                                "forge-smelt",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "SmeltItem",
+                                        "minecraft:iron_ingot",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        furnace.getX(),
+                                        furnace.getY(),
+                                        furnace.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "smelt failed to start");
+        registry.tick();
+        helper.runAfterDelay(260, () -> {
+            helper.assertTrue(
+                    body.getInventory().countItem(Items.IRON_INGOT) == ingotsBefore + 1,
+                    "smelt did not retrieve the real furnace result");
+            helper.assertTrue(
+                    body.getInventory().countItem(Items.RAW_IRON) == rawIronBefore - 1,
+                    "smelt did not consume the real furnace input");
+            helper.assertTrue(
+                    body.serverLevel().getBlockEntity(furnace) instanceof Container furnaceContainer
+                            && furnaceContainer.getItem(0).isEmpty()
+                            && furnaceContainer.getItem(2).isEmpty(),
+                    "smelt left input or result in the furnace");
+            helper.assertTrue(
+                    registry.runtimeReleaseLease(
+                                    companionId,
+                                    "forge-craft-smelt-lease",
+                                    1L)
+                            .success(),
+                    "craft/smelt lease release failed");
+            helper.assertTrue(registry.remove(owner).success(), "craft/smelt cleanup failed");
+            helper.getLevel().getServer().getPlayerList().remove(owner);
+            ownerConnection.disconnect(Component.literal("Forge craft/smelt GameTest complete"));
+            helper.succeed();
+        });
+    }
+
     private static void continueAfterRetreat(
             GameTestHelper helper,
             CompanionRegistry registry,

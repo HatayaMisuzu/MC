@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "059223bcf686d0aea257fde19d1ea597d4925007",
-  "generatedAt": "2026-07-26T21:13:00+08:00",
+  "sourceCommit": "040ee5179fb5ea2165edfbb459216b0fa272c58e",
+  "generatedAt": "2026-07-26T21:44:00+08:00",
   "statusValues": ["PASS", "PARTIAL", "NOT_IMPLEMENTED", "NOT_RUN"],
   "loaders": {
     "fabric-1.21.1": {"java":21,"bridge":"PASS","automatedEvidence":"PASS","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"},
     "forge-1.20.1": {"java":17,"bridge":"PARTIAL","automatedEvidence":"PARTIAL","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"}
   },
   "tools": [
-    {"name":"world.observe","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PARTIAL"},"knownDifference":"Forge snapshot currently omits visible-container observations."},
+    {"name":"world.observe","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge snapshot currently omits visible-container observations."},
     {"name":"task.pause","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
     {"name":"task.resume","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
     {"name":"task.cancel","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
@@ -41,12 +41,12 @@
     {"name":"inventory.deliver","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
     {"name":"inventory.drop","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
     {"name":"item.eat_and_recover","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"registry.search","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"registry.describe","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"recipe.query","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"block.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"item.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
-    {"name":"entity.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
+    {"name":"registry.search","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge 1.20.1 item metadata uses NBT rather than 1.21 data components."},
+    {"name":"registry.describe","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge 1.20.1 item metadata uses NBT rather than 1.21 data components."},
+    {"name":"recipe.query","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both use the live target-version RecipeManager."},
+    {"name":"block.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
+    {"name":"item.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge reports NBT_1_20_1 instead of component types."},
+    {"name":"entity.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
     {"name":"menu.inspect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null}
   ]
 }

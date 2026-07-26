@@ -313,6 +313,14 @@ Passed on the frozen SHA:
   release, ServerPlayer movement, sleep/wake inventory persistence and death
   recovery. Root `check` and all three Loader builds pass. The machine-readable
   per-Tool parity record is `docs/LOADER_TOOL_PARITY.json`.
+- Stage 3 query/E2E slice `040ee51` adds bounded live Forge Registry search and
+  description, live crafting/smelting recipe queries, and connected-body block,
+  item and entity observations. A new root `runtimeForgeE2E` gate launches a
+  real Runtime plus a real Forge GameTest server and verifies authenticated
+  handshake, body registration, lease/start, follow, pause, resume and cancel.
+  The gate passes after correcting the structured status capability shape and
+  waiting for Runtime body registration; direct and Gradle-driven runs both
+  pass. Root `check` and all three Loader builds also pass.
 
 ## Remaining work
 

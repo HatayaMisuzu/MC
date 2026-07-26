@@ -40,9 +40,12 @@ only completion matrix.
 
 - Fabric 1.21.1: current audited RC full Runtime path; Live Brain and human
   verification remain pending.
-- Forge 1.20.1: builds, loads, launches, and has one lifecycle GameTest, but its
-  current capability report is local companion control only. It is not a Full
-  Runtime Bridge at this checkpoint.
+- Forge 1.20.1: its first connected Runtime slice now performs the authenticated
+  protocol handshake, publishes bounded body/vitals/inventory status, enforces
+  epoch-bound control leases, executes follow/travel/return, emits lifecycle
+  events, delivers outbound conversation events, and enters safe pause on
+  disconnect. Registry/recipe/primitive/menu/player-text/owner-handoff parity
+  remains explicitly unavailable, so this is not yet a Full Runtime Bridge.
 - NeoForge 1.21.1: `LOCAL_ONLY`; it is outside the new Full Bridge target.
 - The current release staging includes artifacts for all three targets. Loader
   installation selection and final public support wording require later
@@ -302,6 +305,14 @@ Passed on the frozen SHA:
   builds and the complete three-Loader GameTest gate pass on `a06d520`.
 - Stage 2 is locally `PASS`. Replay, unit, integration and GameTest evidence do
   not establish Live-Hermes judgment or human interaction quality.
+- Started Stage 3 with Forge Runtime control commit `059223b`. A real Java 17
+  Forge 47.4.10 GameTest server first exposed a missing production JSON
+  dependency, then passed after Jackson 2.18.3 was embedded as Forge Jar-in-Jar
+  libraries and added to ModDev runtime classpaths. The GameTest now exercises
+  lease acquisition, stale-epoch rejection, travel, pause, resume, cancel,
+  release, ServerPlayer movement, sleep/wake inventory persistence and death
+  recovery. Root `check` and all three Loader builds pass. The machine-readable
+  per-Tool parity record is `docs/LOADER_TOOL_PARITY.json`.
 
 ## Remaining work
 

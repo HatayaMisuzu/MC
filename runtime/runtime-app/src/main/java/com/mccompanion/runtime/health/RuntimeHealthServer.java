@@ -45,6 +45,8 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
@@ -53,6 +55,8 @@ import java.time.Instant;
 import java.time.Duration;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -66,6 +70,11 @@ public final class RuntimeHealthServer implements AutoCloseable {
     static final int PLANNING_QUEUE_CAPACITY = 16;
     static final int SYNCHRONOUS_MCP_LIMIT = 8;
     static final int STREAMING_MCP_LIMIT = 4;
+    public static final int ORDINARY_JSON_LIMIT = 128 * 1024;
+    public static final int MCP_JSON_LIMIT = 1024 * 1024;
+    public static final int BRAIN_JSON_LIMIT = 16 * 1024;
+    static final int BODY_READ_LIMIT = 8;
+    static final Duration BODY_READ_TIMEOUT = Duration.ofSeconds(5);
     private final RuntimeConfig config;
     private final String pairingToken;
     private final SessionRegistry sessions;
@@ -95,6 +104,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final ExecutorService planningExecutor;
     private final Semaphore synchronousMcpPermits = new Semaphore(SYNCHRONOUS_MCP_LIMIT, true);
     private final Semaphore streamingMcpPermits = new Semaphore(STREAMING_MCP_LIMIT, true);
+    private final Semaphore bodyReadPermits = new Semaphore(BODY_READ_LIMIT, true);
+    private final ExecutorService bodyReadExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public RuntimeHealthServer(
             RuntimeConfig config,
@@ -234,13 +245,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
                 return;
             }
-            JsonNode request;
-            try {
-                request = Json.MAPPER.readTree(exchange.getRequestBody());
-            } catch (IOException | RuntimeException invalid) {
-                sendJson(exchange, 200, mcpError(null, -32700, "Parse error"));
-                return;
-            }
+            JsonNode request = readJsonOrRespond(exchange, MCP_JSON_LIMIT, true);
+            if (request == null) return;
             JsonNode id = request == null ? null : request.get("id");
             if (request == null || !request.isObject() || !"2.0".equals(request.path("jsonrpc").asText())
                     || !request.path("method").isTextual()) {
@@ -714,7 +720,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     sendJson(exchange, 200, body); return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                    if (request == null) return;
                     String action = request.path("action").asText("");
                     if (!action.isBlank()) {
                         String suggestionId = requiredText(request, "suggestionId", 256);
@@ -789,7 +796,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                    if (request == null) return;
                     ToolResult result = taskGraphRuntime.controlForManagement(companionId,
                             requiredText(request, "executionId", 256),
                             requiredText(request, "action", 32));
@@ -830,7 +838,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                    if (request == null) return;
                     String action = required(request, "action");
                     String companionId = required(request, "companionId");
                     Object result = switch (action) {
@@ -919,7 +928,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
-                JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                JsonNode request = readJsonOrRespond(exchange, BRAIN_JSON_LIMIT, false);
+                if (request == null) return;
                 String controllerId = required(request, "controllerId");
                 String companionId = required(request, "companionId");
                 String text = requiredText(request, "text", 4096);
@@ -1037,7 +1047,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
-                var request = Json.MAPPER.readTree(exchange.getRequestBody());
+                var request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                if (request == null) return;
                 String commandId = required(request, "commandId");
                 String companionId = required(request, "companionId");
                 String text = requiredText(request, "text", 4096);
@@ -1158,7 +1169,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
-                var request = Json.MAPPER.readTree(exchange.getRequestBody());
+                var request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                if (request == null) return;
                 String commandId = required(request, "commandId");
                 String companionId = required(request, "companionId");
                 TaskType type = TaskType.valueOf(required(request, "type"));
@@ -1269,6 +1281,127 @@ public final class RuntimeHealthServer implements AutoCloseable {
         return false;
     }
 
+    private JsonNode readJsonOrRespond(HttpExchange exchange, int maximumBytes, boolean jsonRpc)
+            throws IOException {
+        try {
+            return Json.MAPPER.readTree(readBoundedBody(exchange, maximumBytes));
+        } catch (BodyFailure failure) {
+            sendJson(exchange, failure.status(),
+                    Json.object().put("code", failure.code()).put("message", failure.getMessage())
+                            .put("maximumBytes", maximumBytes));
+            return null;
+        } catch (IOException | RuntimeException invalid) {
+            if (jsonRpc) sendJson(exchange, 200, mcpError(null, -32700, "Parse error"));
+            else sendJson(exchange, 400, Json.object().put("code", "INVALID_JSON"));
+            return null;
+        }
+    }
+
+    private byte[] readBoundedBody(HttpExchange exchange, int maximumBytes)
+            throws IOException, BodyFailure {
+        if (maximumBytes < 1) throw new IllegalArgumentException("maximumBytes must be positive");
+        String encoding = exchange.getRequestHeaders().getFirst("Content-Encoding");
+        if (encoding != null && !encoding.isBlank() && !encoding.equalsIgnoreCase("identity")) {
+            throw new BodyFailure(415, "UNSUPPORTED_CONTENT_ENCODING",
+                    "compressed request bodies are not accepted");
+        }
+        var lengths = exchange.getRequestHeaders().get("Content-Length");
+        var transferEncodings = exchange.getRequestHeaders().get("Transfer-Encoding");
+        if (lengths != null && !lengths.isEmpty()
+                && transferEncodings != null && !transferEncodings.isEmpty()) {
+            throw new BodyFailure(400, "AMBIGUOUS_BODY_LENGTH",
+                    "Content-Length and Transfer-Encoding cannot be combined");
+        }
+        Long declaredLength = null;
+        if (lengths != null && !lengths.isEmpty()) {
+            if (lengths.size() != 1 || lengths.get(0).contains(",")) {
+                throw new BodyFailure(400, "INVALID_CONTENT_LENGTH",
+                        "exactly one Content-Length is required");
+            }
+            try {
+                declaredLength = Long.parseLong(lengths.get(0));
+            } catch (NumberFormatException invalid) {
+                throw new BodyFailure(400, "INVALID_CONTENT_LENGTH",
+                        "Content-Length is not a non-negative integer");
+            }
+            if (declaredLength < 0) {
+                throw new BodyFailure(400, "INVALID_CONTENT_LENGTH",
+                        "Content-Length is not a non-negative integer");
+            }
+            if (declaredLength > maximumBytes) {
+                throw new BodyFailure(413, "PAYLOAD_TOO_LARGE",
+                        "request body exceeds the endpoint byte limit");
+            }
+        }
+        if (!bodyReadPermits.tryAcquire()) {
+            throw new BodyFailure(503, "BODY_READER_BUSY",
+                    "bounded request-body reader capacity is saturated");
+        }
+        Future<byte[]> pending = bodyReadExecutor.submit(
+                () -> readAtMost(exchange.getRequestBody(), maximumBytes));
+        try {
+            byte[] bytes = pending.get(BODY_READ_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (declaredLength != null && declaredLength != bytes.length) {
+                throw new BodyFailure(400, "CONTENT_LENGTH_MISMATCH",
+                        "Content-Length does not match the received body");
+            }
+            return bytes;
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            pending.cancel(true);
+            throw new BodyFailure(408, "REQUEST_BODY_TIMEOUT",
+                    "request body was not received within the bounded deadline");
+        } catch (java.util.concurrent.ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            if (cause instanceof BodyFailure bodyFailure) throw bodyFailure;
+            if (cause instanceof IOException ioFailure) throw ioFailure;
+            throw new IOException("request body read failed", cause);
+        } catch (InterruptedException interrupted) {
+            pending.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IOException("request body read interrupted", interrupted);
+        } finally {
+            bodyReadPermits.release();
+        }
+    }
+
+    private static byte[] readAtMost(InputStream input, int maximumBytes)
+            throws IOException, BodyFailure {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(maximumBytes, 8192));
+        byte[] buffer = new byte[8192];
+        int total = 0;
+        while (true) {
+            int read = input.read(buffer, 0, Math.min(buffer.length, maximumBytes + 1 - total));
+            if (read < 0) break;
+            if (read == 0) continue;
+            output.write(buffer, 0, read);
+            total += read;
+            if (total > maximumBytes) {
+                throw new BodyFailure(413, "PAYLOAD_TOO_LARGE",
+                        "request body exceeds the endpoint byte limit");
+            }
+        }
+        return output.toByteArray();
+    }
+
+    private static final class BodyFailure extends Exception {
+        private final int status;
+        private final String code;
+
+        private BodyFailure(int status, String code, String message) {
+            super(message);
+            this.status = status;
+            this.code = code;
+        }
+
+        private int status() {
+            return status;
+        }
+
+        private String code() {
+            return code;
+        }
+    }
+
     private static void sendJson(HttpExchange exchange, int status, com.fasterxml.jackson.databind.JsonNode body)
             throws IOException {
         byte[] bytes = Json.write(body).getBytes(StandardCharsets.UTF_8);
@@ -1325,6 +1458,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.stop(0);
         shutdown(planningExecutor);
         shutdown(executor);
+        shutdown(bodyReadExecutor);
     }
 
     private static void shutdown(ExecutorService service) {

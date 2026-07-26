@@ -141,6 +141,15 @@ Passed on the frozen SHA:
   managed operations for the same instance across Runtime/install categories.
 - Added lock timeout/recovery/different-Profile, same-instance serialization,
   and plan/operation expiry tests.
+- Added pre-parse Runtime request boundaries: 16 KiB for Brain, 128 KiB for
+  ordinary management, and 1 MiB for MCP, with eight bounded readers and a
+  five-second deadline. Compression, conflicting framing, bad lengths, and
+  actual chunked oversize are rejected before JSON parsing.
+- Applied the same boundary to every Terminal JSON route with 16-KiB control
+  and 1-MiB API limits.
+- Added Runtime declared/chunked oversize, compression, length mismatch, slow
+  cleanup and post-attack health coverage, plus authenticated Terminal
+  declared/chunked oversize and compression coverage.
 
 ## Remaining work
 

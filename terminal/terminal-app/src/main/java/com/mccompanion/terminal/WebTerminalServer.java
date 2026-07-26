@@ -1,5 +1,6 @@
 package com.mccompanion.terminal;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
@@ -207,7 +208,8 @@ final class WebTerminalServer implements AutoCloseable {
       exchange.close();
       return;
     }
-    var request = JSON.readTree(exchange.getRequestBody());
+    var request = jsonBody(exchange, TerminalRequestBodies.CONTROL_JSON_LIMIT);
+    if (request == null) return;
     String id = request.path("windowId").asText("").trim();
     if (id.isEmpty() || id.length() > 128) {
       WebTerminalApi.sendError(exchange, 400, "INVALID_WINDOW", "窗口标识无效");
@@ -254,7 +256,8 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     if (path.equals("/api/server/stop/execute")) {
-      var request = JSON.readTree(exchange.getRequestBody());
+      var request = jsonBody(exchange, TerminalRequestBodies.CONTROL_JSON_LIMIT);
+      if (request == null) return;
       String value = request.path("planId").asText();
       if (shutdownPlan == null
           || !constantTime(shutdownPlan, value)
@@ -277,6 +280,16 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     WebTerminalApi.sendError(exchange, 404, "NOT_FOUND", "控制路径不存在");
+  }
+
+  private JsonNode jsonBody(HttpExchange exchange, int maximumBytes) throws IOException {
+    try {
+      return TerminalRequestBodies.readJson(exchange, JSON, maximumBytes);
+    } catch (TerminalRequestBodies.Failure failure) {
+      WebTerminalApi.sendError(
+          exchange, failure.status(), failure.code(), failure.getMessage());
+      return null;
+    }
   }
 
   private void staticFile(HttpExchange exchange) throws IOException {

@@ -95,6 +95,8 @@ final class WebTerminalApi {
       else if ("GET".equals(method) && path.startsWith("/api/operations/"))
         send(exchange, 200, operation(path.substring("/api/operations/".length())));
       else sendError(exchange, 404, "NOT_FOUND", "API 路径不存在");
+    } catch (TerminalRequestBodies.Failure failure) {
+      sendError(exchange, failure.status(), failure.code(), failure.getMessage());
     } catch (IllegalArgumentException failure) {
       sendError(exchange, 400, "INVALID_REQUEST", failure.getMessage());
     } catch (IOException failure) {
@@ -855,11 +857,10 @@ final class WebTerminalApi {
     }
   }
 
-  private static JsonNode body(HttpExchange exchange) throws IOException {
-    byte[] bytes = exchange.getRequestBody().readNBytes(1_048_577);
-    if (bytes.length > 1_048_576) throw new IllegalArgumentException("请求体过大");
-    if (bytes.length == 0) return JSON.createObjectNode();
-    JsonNode value = JSON.readTree(bytes);
+  private static JsonNode body(HttpExchange exchange)
+      throws IOException, TerminalRequestBodies.Failure {
+    JsonNode value =
+        TerminalRequestBodies.readJson(exchange, JSON, TerminalRequestBodies.JSON_LIMIT);
     if (!value.isObject()) throw new IllegalArgumentException("请求必须是 JSON 对象");
     return value;
   }

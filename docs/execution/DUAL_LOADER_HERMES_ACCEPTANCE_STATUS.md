@@ -345,6 +345,15 @@ Passed on the frozen SHA:
   Forge GameTest, authenticated Runtime/Forge E2E, root `check`, Web tests and
   all Loader builds pass. This remains GameTest/automation evidence, not Live
   Hermes or human play.
+- Stage 3 crafting/smelting slice `9e222f5` removes the final advertised Forge
+  composite-capability gaps. It selects generic recipes from the live 1.20.1
+  RecipeManager, places ingredients through vanilla inventory/crafting-table
+  menus, and drives an empty reachable furnace through real input, fuel, cook
+  and result-pickup state. A second Forge GameTest verifies 2x2 planks, a 3x3
+  chest and raw-iron smelting with exact material/output deltas. Both required
+  Forge tests, authenticated Runtime/Forge E2E, root `check`, Web tests and all
+  Loader builds pass. Broader cancellation/restart/reconnect and global
+  navigation remain open before Forge Full Bridge.
 
 ## Remaining work
 

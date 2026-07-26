@@ -150,12 +150,20 @@ Passed on the frozen SHA:
 - Added Runtime declared/chunked oversize, compression, length mismatch, slow
   cleanup and post-attack health coverage, plus authenticated Terminal
   declared/chunked oversize and compression coverage.
+- Replaced preflight-only Search DNS checks with a pinned HTTP/TLS transport:
+  every socket connects only to the already validated address set while TLS
+  still verifies SNI and the original hostname.
+- Added complete IPv4/IPv6 non-public range rejection, mixed-answer rejection,
+  per-hop redirect validation, redirect-loop/cap handling, response framing
+  bounds, and fail-closed Provider redirect behavior so bearer credentials are
+  never forwarded.
+- Added unit, simulated DNS-rebinding, redirect, and real loopback-socket
+  Provider integration coverage for the Search boundary.
 
 ## Remaining work
 
 - Execute stage-1 audits and repairs without weakening current guarantees.
-- Continue stage-1 thread isolation, same-Profile startup, SBOM, body-limit,
-  SSRF, operation-retention, bootstrap-ticket, supply-chain, and generic-effect
+- Continue stage-1 SBOM, bootstrap-ticket, supply-chain, and generic-effect
   verification audits.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.

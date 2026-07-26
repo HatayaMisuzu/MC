@@ -8,8 +8,12 @@ import com.mccompanion.runtime.tool.ToolResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.net.InetAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -165,6 +169,83 @@ class SearchToolGatewayTest {
                 () -> SearchSecurity.requirePublicHttps("https://example.com/page", List.of("fabricmc.net")));
         assertThrows(IllegalArgumentException.class,
                 () -> HttpSearchProvider.requireProviderEndpoint("http://192.0.2.1/search"));
+    }
+
+    @Test
+    void securityRejectsEveryNonPublicAddressClassAndMixedDnsAnswers() throws Exception {
+        for (String address : List.of(
+                "0.0.0.1", "10.0.0.1", "100.64.0.1", "127.0.0.1", "169.254.1.1",
+                "172.16.0.1", "192.0.0.1", "192.0.2.1", "192.88.99.1", "192.168.1.1",
+                "198.18.0.1", "198.51.100.1", "203.0.113.1", "224.0.0.1", "240.0.0.1",
+                "::", "::1", "64:ff9b:1::1", "100::1", "2001::1", "2001:db8::1",
+                "2002::1", "3fff::1", "5f00::1", "fc00::1", "fe80::1", "ff02::1")) {
+            assertFalse(SearchSecurity.isPublic(InetAddress.getByName(address)), address);
+        }
+        assertTrue(SearchSecurity.isPublic(InetAddress.getByName("93.184.216.34")));
+        assertTrue(SearchSecurity.isPublic(InetAddress.getByName("2606:2800:220:1:248:1893:25c8:1946")));
+
+        SearchSecurity.Resolver mixed = host -> List.of(
+                InetAddress.getByName("93.184.216.34"), InetAddress.getByName("10.0.0.8"));
+        IllegalArgumentException rejected = assertThrows(IllegalArgumentException.class,
+                () -> SearchSecurity.resolvePublicHttps("https://docs.example/page", List.of(), mixed));
+        assertEquals("SEARCH_PRIVATE_ADDRESS_DENIED", rejected.getMessage());
+    }
+
+    @Test
+    void openPinsValidatedAnswersAndRevalidatesEveryRedirectHop() throws Exception {
+        Map<String, InetAddress> answers = Map.of(
+                "search.example", InetAddress.getByName("93.184.216.10"),
+                "a.example", InetAddress.getByName("93.184.216.11"),
+                "b.example", InetAddress.getByName("93.184.216.12"));
+        List<SearchSecurity.ResolvedTarget> connected = new ArrayList<>();
+        SearchHttpTransport transport = (target, method, headers, body, timeout, maximum) -> {
+            connected.add(target);
+            if (target.host().equals("a.example")) {
+                return new SearchHttpTransport.Response(302,
+                        Map.of("location", "https://b.example/final"), new byte[0]);
+            }
+            return new SearchHttpTransport.Response(200, Map.of("content-type", "text/plain"),
+                    "verified page".getBytes(StandardCharsets.UTF_8));
+        };
+        try (HttpSearchProvider provider = new HttpSearchProvider(
+                "https://search.example/api", "token", Duration.ofSeconds(2),
+                host -> List.of(answers.get(host)), transport)) {
+            SearchSource source = new SearchSource("s1", "Docs", "https://a.example/start",
+                    "a.example", "", null, Instant.now(), "", "UNVERIFIED", "text/plain");
+            SearchPage page = provider.open(source,
+                    new SearchQuery("safe query", List.of(), 3, null, "en", true, Duration.ofSeconds(2)));
+            assertEquals("UNTRUSTED_EXTERNAL_CONTENT\nverified page", page.content());
+            assertEquals(List.of("a.example", "b.example"),
+                    connected.stream().map(SearchSecurity.ResolvedTarget::host).toList());
+            assertEquals(List.of(answers.get("a.example")), connected.get(0).addresses());
+            assertEquals(List.of(answers.get("b.example")), connected.get(1).addresses());
+        }
+    }
+
+    @Test
+    void redirectDetectsDnsRebindingBeforeASecondConnection() throws Exception {
+        AtomicInteger targetResolutions = new AtomicInteger();
+        AtomicInteger connections = new AtomicInteger();
+        SearchSecurity.Resolver resolver = host -> {
+            if (host.equals("search.example")) return List.of(InetAddress.getByName("93.184.216.10"));
+            return targetResolutions.getAndIncrement() == 0
+                    ? List.of(InetAddress.getByName("93.184.216.11"))
+                    : List.of(InetAddress.getByName("10.0.0.8"));
+        };
+        SearchHttpTransport transport = (target, method, headers, body, timeout, maximum) -> {
+            connections.incrementAndGet();
+            return new SearchHttpTransport.Response(302, Map.of("location", "/next"), new byte[0]);
+        };
+        try (HttpSearchProvider provider = new HttpSearchProvider(
+                "https://search.example/api", "token", Duration.ofSeconds(2), resolver, transport)) {
+            SearchSource source = new SearchSource("s1", "Docs", "https://a.example/start",
+                    "a.example", "", null, Instant.now(), "", "UNVERIFIED", "text/plain");
+            IllegalArgumentException rejected = assertThrows(IllegalArgumentException.class,
+                    () -> provider.open(source,
+                            new SearchQuery("safe query", List.of(), 3, null, "en", true, Duration.ofSeconds(2))));
+            assertEquals("SEARCH_PRIVATE_ADDRESS_DENIED", rejected.getMessage());
+            assertEquals(1, connections.get());
+        }
     }
 
     @Test

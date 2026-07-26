@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
+import com.mccompanion.minecraft.v120.SkillParameters;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -24,6 +26,8 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -47,6 +51,9 @@ final class RuntimeBridge implements AutoCloseable {
     private final AtomicLong outgoingSequence = new AtomicLong();
     private final AtomicBoolean connecting = new AtomicBoolean();
     private final Map<String, String> observedBehaviorStates = new HashMap<>();
+    private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> playerRequestTimes = new ConcurrentHashMap<>();
+    private final Map<String, Long> ownerActivityTimes = new ConcurrentHashMap<>();
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -135,6 +142,17 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("registry_query", true)
                 .put("recipe_query", true)
                 .put("primitive_observation_query", true)
+                .put("primitive_lifecycle", true)
+                .put("LookAt", true)
+                .put("InteractBlock", true)
+                .put("InteractEntity", true)
+                .put("MenuAction", true)
+                .put("UseItem", true)
+                .put("DropItem", true)
+                .put("AttackEntity", true)
+                .put("PlaceBlock", true)
+                .put("player_text_gateway", true)
+                .put("owner_activity_handoff", true)
                 .put("runtime_safe_idle", true);
         ObjectNode hello = JSON.createObjectNode()
                 .put("protocol", PROTOCOL)
@@ -167,9 +185,87 @@ final class RuntimeBridge implements AutoCloseable {
             publishStatus();
         } else if (type.equals("command")) {
             server.execute(() -> processCommand(message.path("payload")));
+        } else if (type.equals("player_reply")) {
+            deliverPlayerReply(message.path("payload"));
         } else if (type.equals("conversation_event")) {
             deliverConversationEvent(message.path("payload"));
         }
+    }
+
+    CompanionCommands.TextRequestResult submitPlayerText(ServerPlayer owner, String text) {
+        if (socket == null || sessionId == null) {
+            return new CompanionCommands.TextRequestResult(
+                    false,
+                    "Runtime 未连接；复杂任务不会被静默猜测执行。");
+        }
+        long now = System.currentTimeMillis();
+        Long previous = playerRequestTimes.put(owner.getUUID(), now);
+        if (previous != null && now - previous < 1500) {
+            return new CompanionCommands.TextRequestResult(false, "请求过快，请稍等片刻。");
+        }
+        String companionId = companionIdFor(owner);
+        if (companionId == null) {
+            return new CompanionCommands.TextRequestResult(false, "你还没有可用的 Companion。");
+        }
+        String requestId = UUID.randomUUID().toString();
+        pendingPlayerRequests.put(requestId, owner.getUUID());
+        ObjectNode payload = JSON.createObjectNode()
+                .put("requestId", requestId)
+                .put("companionId", companionId)
+                .put("ownerId", owner.getUUID().toString())
+                .put("text", text);
+        sendEnvelope("player_request", payload);
+        return new CompanionCommands.TextRequestResult(
+                true,
+                "收到，我会结合当前世界状态理解这个目标。");
+    }
+
+    void submitOwnerBlockActivity(ServerPlayer owner, BlockPos position, String activityType) {
+        if (socket == null || sessionId == null || owner == null || position == null) return;
+        String companionId = companionIdFor(owner);
+        if (companionId == null) return;
+        String dimension = owner.serverLevel().dimension().location().toString();
+        String key = owner.getUUID() + ":" + activityType + ":" + dimension + ":"
+                + position.getX() + ":" + position.getY() + ":" + position.getZ();
+        long now = System.currentTimeMillis();
+        Long previous = ownerActivityTimes.put(key, now);
+        if (previous != null && now - previous < 250) return;
+        if (ownerActivityTimes.size() > 128) {
+            ownerActivityTimes.entrySet().removeIf(entry -> now - entry.getValue() > 10_000);
+        }
+        ObjectNode payload = JSON.createObjectNode()
+                .put("companionId", companionId)
+                .put("ownerId", owner.getUUID().toString())
+                .put("activityType", activityType);
+        payload.putObject("position")
+                .put("dimension", dimension)
+                .put("x", position.getX())
+                .put("y", position.getY())
+                .put("z", position.getZ());
+        sendEnvelope("owner_activity", payload);
+    }
+
+    private String companionIdFor(ServerPlayer owner) {
+        return registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private void deliverPlayerReply(JsonNode payload) {
+        String requestId = payload.path("requestId").asText("");
+        UUID ownerId = pendingPlayerRequests.remove(requestId);
+        if (ownerId == null) return;
+        String reply = payload.path("reply").asText("请求已处理。").strip();
+        if (reply.length() > 512) reply = reply.substring(0, 512);
+        String finalReply = reply;
+        server.execute(() -> {
+            ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
+            if (owner != null) {
+                owner.sendSystemMessage(Component.literal("[Companion] " + finalReply));
+            }
+        });
     }
 
     private void processCommand(JsonNode command) {
@@ -199,7 +295,8 @@ final class RuntimeBridge implements AutoCloseable {
                         arguments.path("behaviorType").asText(),
                         target.has("x") ? target.path("x").asDouble() : null,
                         target.has("y") ? target.path("y").asDouble() : null,
-                        target.has("z") ? target.path("z").asDouble() : null);
+                        target.has("z") ? target.path("z").asDouble() : null,
+                        skillParameters(arguments));
             }
             case "PAUSE_BEHAVIOR" -> result = registry.runtimePause(companionId, leaseId, epoch);
             case "RESUME_BEHAVIOR" -> result = registry.runtimeResume(companionId, leaseId, epoch);
@@ -272,6 +369,40 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("code", result.code());
         payload.set("observation", result.observation());
         sendEnvelope("observation_result", payload);
+    }
+
+    private static SkillParameters skillParameters(JsonNode arguments) {
+        if (!arguments.path("capability").isTextual()) return null;
+        JsonNode values = arguments.path("parameters");
+        String item = values.path("item").asText(values.path("itemId").asText(""));
+        JsonNode target = values.path("container").isObject()
+                ? values.path("container")
+                : values.path("station").isObject()
+                        ? values.path("station")
+                        : values.path("target");
+        try {
+            return new SkillParameters(
+                    arguments.path("capability").asText(),
+                    item,
+                    values.path("quantity").asInt(1),
+                    values.path("allowPartial").asBoolean(false),
+                    target.path("dimension").asText("minecraft:overworld"),
+                    target.path("x").canConvertToInt() ? target.path("x").asInt() : null,
+                    target.path("y").canConvertToInt() ? target.path("y").asInt() : null,
+                    target.path("z").canConvertToInt() ? target.path("z").asInt() : null,
+                    values.path("entityId").asText(""),
+                    values.path("face").asText("UP"),
+                    values.path("hand").asText("MAIN_HAND"),
+                    values.path("sessionToken").asText(""),
+                    values.path("slot").canConvertToInt() ? values.path("slot").asInt() : null,
+                    values.path("button").canConvertToInt() ? values.path("button").asInt() : null,
+                    values.path("action").asText(""),
+                    values.path("durationTicks").canConvertToInt()
+                            ? values.path("durationTicks").asInt()
+                            : null);
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
     }
 
     private void sendCommandAccepted(String commandId, CompanionRegistry.RuntimeResult result) {
@@ -570,6 +701,9 @@ final class RuntimeBridge implements AutoCloseable {
         if (current != null) current.sendClose(WebSocket.NORMAL_CLOSURE, "server stopping");
         registry.runtimeDisconnected();
         registry.setRuntimeConnected(false);
+        pendingPlayerRequests.clear();
+        playerRequestTimes.clear();
+        ownerActivityTimes.clear();
         executor.shutdownNow();
     }
 

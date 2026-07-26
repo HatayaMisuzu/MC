@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v120.CompanionPlayer;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
+import com.mccompanion.minecraft.v120.MenuSessionTracker;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.UUID;
@@ -35,8 +36,7 @@ public final class PrimitiveObservationService {
                 case "block.inspect" -> block(body, arguments.path("position"));
                 case "item.inspect" -> item(body, arguments.path("item").asText(""));
                 case "entity.inspect" -> entities(body, arguments);
-                case "menu.inspect" -> failure("MENU_NOT_OPEN",
-                        "Forge menu observation is not implemented in this bridge slice");
+                case "menu.inspect" -> menu(body);
                 default -> failure("OBSERVATION_TOOL_UNKNOWN", "Observation tool is unsupported");
             };
         } catch (RuntimeException invalid) {
@@ -163,6 +163,32 @@ public final class PrimitiveObservationService {
         if (exact != null) observation.put("entityId", exact.toString());
         ArrayNode entries = observation.putArray("entities");
         matches.stream().limit(limit).forEach(entity -> entries.add(entity(body, entity)));
+        return new Result(true, "OK", observation);
+    }
+
+    private static Result menu(CompanionPlayer body) {
+        MenuSessionTracker.Snapshot session = MenuSessionTracker.inspect(body);
+        if (session == null) return failure("MENU_NOT_OPEN", "Connected body has no open container menu");
+        ObjectNode observation = envelope(body, "MENU")
+                .put("sessionToken", session.token())
+                .put("containerId", session.containerId())
+                .put("expiresAt", session.expiresAtEpochMillis())
+                .put("menuType", session.menu().getClass().getSimpleName())
+                .put("slotCount", session.menu().slots.size());
+        ArrayNode slots = observation.putArray("slots");
+        for (int index = 0; index < session.menu().slots.size() && index < 128; index++) {
+            ItemStack stack = session.menu().slots.get(index).getItem();
+            ObjectNode slot = slots.addObject()
+                    .put("slot", index)
+                    .put("empty", stack.isEmpty())
+                    .put("mayPickup", session.menu().slots.get(index).mayPickup(body));
+            if (!stack.isEmpty()) {
+                slot.put("item", BuiltInRegistries.ITEM.getKey(stack.getItem()).toString())
+                        .put("count", stack.getCount())
+                        .put("maxStackSize", stack.getMaxStackSize());
+            }
+        }
+        observation.put("truncated", session.menu().slots.size() > 128);
         return new Result(true, "OK", observation);
     }
 

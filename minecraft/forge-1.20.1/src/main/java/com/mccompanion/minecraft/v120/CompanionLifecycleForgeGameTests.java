@@ -6,10 +6,12 @@ import com.mccompanion.minecraft.forge.RegistryObservationService;
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;
+import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.Container;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -121,7 +123,7 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(acquired.success(), "runtime lease acquisition failed: " + acquired.code());
         CompanionRegistry.RuntimeResult runtimeStarted = registry.runtimeStart(
                 companionId, "forge-gametest-lease", 1L, "forge-behavior-1", "travel",
-                body.getX() + 4.0D, body.getY(), body.getZ());
+                body.getX() + 4.0D, body.getY(), body.getZ(), null);
         helper.assertTrue(runtimeStarted.success(), "runtime start failed: " + runtimeStarted.code());
         helper.assertTrue(!registry.runtimeAcquireLease(
                         companionId, "stale-lease", 1L, System.currentTimeMillis() + 60_000L).success(),
@@ -134,11 +136,231 @@ public final class CompanionLifecycleForgeGameTests {
                 "runtime cancel failed");
         helper.assertTrue(registry.runtimeReleaseLease(companionId, "forge-gametest-lease", 1L).success(),
                 "runtime lease release failed");
+        helper.assertTrue(
+                registry.runtimeAcquireLease(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                System.currentTimeMillis() + 60_000L)
+                        .success(),
+                "primitive lease acquisition failed");
+        BlockPos lookTarget = body.blockPosition().offset(2, 1, 0);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-look-primitive",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "LookAt",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        lookTarget.getX(),
+                                        lookTarget.getY(),
+                                        lookTarget.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "look primitive failed to start");
+        registry.tick();
+        Vec3 expectedLook = Vec3.atCenterOf(lookTarget).subtract(body.getEyePosition()).normalize();
+        helper.assertTrue(
+                expectedLook.dot(body.getViewVector(1.0F)) >= 0.995D,
+                "look primitive did not rotate the real ServerPlayer body");
+        helper.assertTrue(
+                registry.runtimeSnapshots(true).stream()
+                        .filter(snapshot -> snapshot.companionId().equals(companionId))
+                        .findFirst()
+                        .orElseThrow()
+                        .evidenceSummary()
+                        .contains("VANILLA_ENTITY_LOOK"),
+                "look primitive evidence did not record the vanilla rotation path");
+        helper.assertTrue(body.addItem(new ItemStack(Items.STONE, 2)), "primitive item add failed");
+        int stoneBefore = body.getInventory().countItem(Items.STONE);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-drop-primitive",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "DropItem",
+                                        "minecraft:stone",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "drop primitive failed to start");
+        registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.STONE) == stoneBefore - 1,
+                "drop primitive did not use the real ServerPlayer drop path");
+        BlockPos chestPosition = body.blockPosition().offset(1, 0, 0);
+        body.serverLevel().setBlockAndUpdate(chestPosition, Blocks.CHEST.defaultBlockState());
+        helper.assertTrue(
+                body.serverLevel().getBlockEntity(chestPosition) instanceof Container,
+                "menu fixture chest did not create a live container");
+        Container chest = (Container) body.serverLevel().getBlockEntity(chestPosition);
+        chest.setItem(0, new ItemStack(Items.IRON_INGOT, 3));
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-open-menu",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "InteractBlock",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        chestPosition.getX(),
+                                        chestPosition.getY(),
+                                        chestPosition.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "menu-opening primitive failed to start");
+        registry.tick();
+        helper.assertTrue(body.containerMenu != body.inventoryMenu, "chest menu did not open");
+        var menuObservation = PrimitiveObservationService.inspect(
+                registry,
+                companionId,
+                JSON.createObjectNode().put("tool", "menu.inspect"));
+        helper.assertTrue(menuObservation.success(), "menu observation failed: " + menuObservation.code());
+        String menuToken = menuObservation.observation().path("sessionToken").asText();
+        helper.assertTrue(
+                menuToken.matches("[A-Za-z0-9_-]{32}"),
+                "menu observation did not return a bounded opaque session token");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-menu-quick-move",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "MenuAction",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        menuToken,
+                                        0,
+                                        null,
+                                        "QUICK_MOVE",
+                                        null))
+                        .success(),
+                "menu quick-move primitive failed to start");
+        registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.IRON_INGOT) == 3,
+                "menu quick-move did not transfer the live chest stack");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-menu-close",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "MenuAction",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        menuToken,
+                                        null,
+                                        null,
+                                        "CLOSE",
+                                        null))
+                        .success(),
+                "menu close primitive failed to start");
+        registry.tick();
+        helper.assertTrue(body.containerMenu == body.inventoryMenu, "menu close did not restore inventory menu");
+        helper.assertTrue(
+                !MenuSessionTracker.validate(body, menuToken).valid(),
+                "closed menu session token remained valid");
+        body.serverLevel().setBlockAndUpdate(chestPosition, Blocks.AIR.defaultBlockState());
+        helper.assertTrue(
+                registry.runtimeReleaseLease(companionId, "forge-primitive-lease", 2L).success(),
+                "primitive lease release failed");
+        // The primitive assertions above advance the packetless body directly. Reset only the
+        // test fixture's residual vanilla physics before the independent movement assertion.
+        body.setDeltaMovement(Vec3.ZERO);
+        body.fallDistance = 0.0F;
         if (Boolean.getBoolean("mccompanion.runtime.e2e")) {
             LOGGER.info("forge_runtime_e2e_ready companion={}", companionId);
             helper.succeedWhen(() -> {
                 helper.assertTrue(registry.runtimeCommandCount() >= 5,
                         "waiting for Runtime lease/follow/pause/resume/cancel commands");
+                CompanionCommands.TextRequestResult playerRequest =
+                        MinecraftAiCompanionForge.integrationSubmitPlayerText(
+                                owner,
+                                "report current status");
+                helper.assertTrue(
+                        playerRequest.accepted(),
+                        "authenticated player request was not accepted: " + playerRequest.message());
+                MinecraftAiCompanionForge.integrationSubmitOwnerBlockActivity(
+                        owner,
+                        owner.blockPosition(),
+                        "BLOCK_USE");
+                LOGGER.info("forge_runtime_e2e_player_and_owner_activity_sent companion={}", companionId);
                 helper.assertTrue(registry.remove(owner).success(), "Runtime E2E cleanup failed");
                 helper.getLevel().getServer().getPlayerList().remove(owner);
                 ownerConnection.disconnect(Component.literal("Forge Runtime E2E complete"));

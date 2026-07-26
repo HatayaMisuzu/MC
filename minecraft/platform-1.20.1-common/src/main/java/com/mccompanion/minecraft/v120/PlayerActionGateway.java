@@ -16,6 +16,7 @@ final class PlayerActionGateway {
 
     private final Map<UUID, InFlight> inFlight = new HashMap<>();
     private final Deque<ActionEvidence> completed = new ArrayDeque<>();
+    private final java.util.Map<UUID, String> actionPaths = new HashMap<>();
 
     void startBehavior(CompanionPlayer body, CompanionEntry.Mode mode, long tick) {
         completeBehavior(body, false, "SUPERSEDED", tick);
@@ -35,11 +36,37 @@ final class PlayerActionGateway {
         body.stopWalking();
     }
 
+    void lookAt(CompanionPlayer body, net.minecraft.world.phys.Vec3 target) {
+        body.lookAt(net.minecraft.commands.arguments.EntityAnchorArgument.Anchor.EYES, target);
+        actionPaths.put(body.getUUID(), "VANILLA_ENTITY_LOOK");
+    }
+
+    void markVanillaGameModeAction(CompanionPlayer body) {
+        actionPaths.put(body.getUUID(), "VANILLA_SERVER_PLAYER_GAME_MODE");
+    }
+
+    void markVanillaEntityInteraction(CompanionPlayer body) {
+        actionPaths.put(body.getUUID(), "VANILLA_SERVER_PLAYER_INTERACTION");
+    }
+
+    void markVanillaAttack(CompanionPlayer body) {
+        actionPaths.put(body.getUUID(), "VANILLA_SERVER_PLAYER_ATTACK");
+    }
+
+    void markVanillaMenuAction(CompanionPlayer body) {
+        actionPaths.put(body.getUUID(), "VANILLA_CONTAINER_MENU");
+    }
+
+    void markVanillaDrop(CompanionPlayer body) {
+        actionPaths.put(body.getUUID(), "VANILLA_SERVER_PLAYER_DROP");
+    }
+
     void completeBehavior(CompanionPlayer body, boolean success, String failureCode, long tick) {
         InFlight started = inFlight.remove(body.getUUID());
         if (started == null) {
             return;
         }
+        String actionPath = actionPaths.remove(body.getUUID());
         completed.addLast(new ActionEvidence(
                 started.actionId,
                 body.getUUID(),
@@ -52,7 +79,7 @@ final class PlayerActionGateway {
                 inventoryDigest(body),
                 success,
                 success ? "NONE" : failureCode,
-                "VANILLA_PLAYER_INPUT",
+                actionPath == null ? "VANILLA_PLAYER_INPUT" : actionPath,
                 false));
         while (completed.size() > MAX_COMPLETED_EVIDENCE) {
             completed.removeFirst();
@@ -61,6 +88,7 @@ final class PlayerActionGateway {
 
     void discard(UUID companionId) {
         inFlight.remove(companionId);
+        actionPaths.remove(companionId);
     }
 
     String evidenceSummary(UUID companionId) {

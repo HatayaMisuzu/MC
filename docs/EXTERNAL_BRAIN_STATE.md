@@ -93,10 +93,17 @@ override the current matrix.
   full-chat/full-Prompt/Search-body sources are rejected at the central Memory repository boundary.
   Support bundles remain allow-listed and do not include the Runtime database; a regression test
   places a Memory-body sentinel in that database and proves it is absent from every archive entry.
-- Local repository, authenticated HTTP, Terminal support-bundle, Vitest, production Web build, and
-  the complete repository check pass. Automatic persistence of a user-stated stable low-risk
-  preference remains unfinished; an external Brain suggestion is still quarantined for local
-  review, so section 5.5 is not yet declared complete.
+- `memory.remember_explicit_preference` is available to the external Brain only through the bounded
+  Gateway. The Brain remains the semantic author: it decides whether an owner statement is a stable
+  low-risk preference. Runtime saves only `PREFERENCE`, requires automatic save to be enabled, an
+  exact match to the latest same-Companion owner message inside a five-minute window, a bounded
+  lower-case key/value, and the central sensitive-content checks. The fact is stored as verified
+  owner speech with `USER_EXPLICIT_BRAIN_CAPTURE` provenance; a mismatch, stale/cross-Companion
+  quote, or paused setting is rejected.
+- Local repository, Tool Gateway, authenticated HTTP, Terminal support-bundle, Vitest, production
+  Web build, Profile/world and Companion isolation, and the complete repository check pass.
+  Section 5.5 is locally complete; Live Hermes must still show appropriate preference judgment and
+  a human must verify the interaction quality.
 
 ## Episode capsule and reviewed episodic candidate slice
 

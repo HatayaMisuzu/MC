@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 18:53 +08:00
+Updated: 2026-07-26 18:59 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `2 — BEHAVIOR_SEMANTICS_AND_UX`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `1f56e6e011f6e6527fe3376427ecdbaf9a684f87`
+- Latest committed source SHA: `b3877654ebaaaf808c73c11279d09edf32fec5b0`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -251,12 +251,19 @@ Passed on the frozen SHA:
   admission cleanup finishes, and a durable ASK_USER question is not exposed
   until the prior worker has released admission. The complete Task Graph class
   and root `check` pass after the repair.
+- Completed the local section 5.5 automatic low-risk preference boundary.
+  `memory.remember_explicit_preference` lets the external Brain author the
+  semantic judgment, while Runtime requires the latest same-Companion owner
+  message to match exactly within five minutes, automatic save to remain
+  enabled, a bounded preference-only payload, and sensitive-content rejection.
+  The stored fact has `USER_EXPLICIT_BRAIN_CAPTURE` provenance. Tests cover
+  successful save, mismatched/cross-Companion evidence, paused automatic save,
+  and same-Companion isolation across separate Profile/world databases.
 
 ## Remaining work
 
 - Complete stage-2 instruction/interruption semantics, proactive initiative
-  admission/rate/deduplication, automatic saving of explicitly stated stable
-  low-risk preferences, and one-time Skill trial leases without moving
+  admission/rate/deduplication, and one-time Skill trial leases without moving
   high-level planning authority into MCAC.
 - Complete stages 2–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.

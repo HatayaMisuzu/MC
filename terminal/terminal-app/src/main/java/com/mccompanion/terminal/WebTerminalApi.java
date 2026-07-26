@@ -82,6 +82,8 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/memories", "companionId", "kind", "query"));
       else if ("POST".equals(method) && "/api/memories/review".equals(path))
         send(exchange, 200, reviewMemorySuggestion(body(exchange)));
+      else if ("POST".equals(method) && "/api/memories/manage".equals(path))
+        send(exchange, 200, manageMemory(body(exchange)));
       else if ("GET".equals(method) && "/api/task-graphs".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/task-graphs", "companionId"));
       else if ("POST".equals(method) && "/api/task-graphs/control".equals(path))
@@ -361,6 +363,20 @@ final class WebTerminalApi {
         .put("action", required(request, "action"))
         .put("suggestionId", required(request, "suggestionId"));
     if (request.hasNonNull("reason")) bounded.put("reason", required(request, "reason"));
+    return new RuntimeControlClient().manage(
+        root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
+  }
+
+  private JsonNode manageMemory(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String companionId = required(request, "companionId");
+    String path = "/memories?companionId=" + java.net.URLEncoder.encode(
+        companionId, StandardCharsets.UTF_8);
+    ObjectNode bounded = JSON.createObjectNode().put("action", required(request, "action"));
+    if (request.hasNonNull("memoryId")) bounded.put("memoryId", required(request, "memoryId"));
+    if (request.hasNonNull("kind")) bounded.put("kind", required(request, "kind"));
+    if (request.has("value")) bounded.set("value", request.path("value"));
+    if (request.has("enabled")) bounded.put("enabled", request.path("enabled").asBoolean());
     return new RuntimeControlClient().manage(
         root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
   }

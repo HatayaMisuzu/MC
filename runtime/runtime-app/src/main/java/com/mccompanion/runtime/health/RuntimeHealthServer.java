@@ -715,6 +715,9 @@ public final class RuntimeHealthServer implements AutoCloseable {
                                     memories.suggestions(companionId, "QUARANTINED", 100)));
                             body.set("episodeCapsules", Json.MAPPER.valueToTree(
                                     memories.capsules().list(companionId, 20)));
+                            body.set("settings", Json.MAPPER.valueToTree(memories.settings(companionId)));
+                            body.set("history", Json.MAPPER.valueToTree(memories.history(companionId, 100)));
+                            body.set("safeSummary", memories.safeSummary(companionId));
                         }
                     }
                     sendJson(exchange, 200, body); return;
@@ -724,17 +727,37 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     if (request == null) return;
                     String action = request.path("action").asText("");
                     if (!action.isBlank()) {
-                        String suggestionId = requiredText(request, "suggestionId", 256);
                         Object result = switch (action) {
                             case "generate_episode_capsule" -> memories.capsules().generate(
                                     companionId, requiredText(request, "brainSessionId", 256),
                                     requiredText(request, "sourceSha", 64));
                             case "approve_suggestion" -> memories.approveSuggestion(
-                                    companionId, suggestionId, "LOCAL_MANAGEMENT_USER");
+                                    companionId, requiredText(request, "suggestionId", 256),
+                                    "LOCAL_MANAGEMENT_USER");
                             case "reject_suggestion" -> memories.rejectSuggestion(
-                                    companionId, suggestionId, "LOCAL_MANAGEMENT_USER",
+                                    companionId, requiredText(request, "suggestionId", 256),
+                                    "LOCAL_MANAGEMENT_USER",
                                     requiredText(request, "reason", 256));
-                            default -> throw new IllegalArgumentException("memory review action is invalid");
+                            case "update_memory" -> {
+                                JsonNode value = request.path("value");
+                                if (value.isMissingNode()) throw new IllegalArgumentException("value is required");
+                                yield memories.updateByUser(companionId,
+                                        requiredText(request, "memoryId", 256), value);
+                            }
+                            case "set_autosave" -> {
+                                if (!request.path("enabled").isBoolean()) {
+                                    throw new IllegalArgumentException("enabled boolean is required");
+                                }
+                                yield memories.setAutoSave(companionId,
+                                        request.path("enabled").asBoolean(), "LOCAL_MANAGEMENT_USER");
+                            }
+                            case "export_safe_summary" -> memories.safeSummary(companionId);
+                            case "delete_memory" -> Json.object().put("deleted", memories.delete(
+                                    companionId, requiredText(request, "memoryId", 256)));
+                            case "clear_kind" -> Json.object().put("deleted", memories.clear(companionId,
+                                    MemoryKind.valueOf(requiredText(request, "kind", 32)
+                                            .toUpperCase(java.util.Locale.ROOT))));
+                            default -> throw new IllegalArgumentException("memory management action is invalid");
                         };
                         sendJson(exchange, 200, Json.MAPPER.valueToTree(result)); return;
                     }

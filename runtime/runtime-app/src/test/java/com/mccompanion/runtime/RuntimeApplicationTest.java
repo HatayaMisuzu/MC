@@ -913,6 +913,33 @@ class RuntimeApplicationTest {
                     .header("Authorization", "Bearer " + token).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals("USER", Json.parse(listedMemory.body()).path("byKind").path("PREFERENCE")
                     .path(0).path("source").asText());
+            HttpResponse<String> disabledAutoSave = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(
+                                    "{\"action\":\"set_autosave\",\"enabled\":false}")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertFalse(Json.parse(disabledAutoSave.body()).path("autoSaveEnabled").asBoolean());
+            HttpResponse<String> editedMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"action":"update_memory","memoryId":"%s","value":"brief"}
+                                    """.formatted(memoryId))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals("USER_EDIT", Json.parse(editedMemory.body()).path("source").asText());
+            HttpResponse<String> safeMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(
+                                    "{\"action\":\"export_safe_summary\"}")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertFalse(Json.parse(safeMemory.body()).path("containsValues").asBoolean());
+            assertFalse(safeMemory.body().contains("brief"));
+            HttpResponse<String> historyMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals("EDITED", Json.parse(historyMemory.body()).path("history").path(0)
+                    .path("changeKind").asText());
             HttpResponse<String> deletedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(new URI(
                             memoryUri + "&memoryId=" + memoryId)).header("Authorization", "Bearer " + token)
                     .DELETE().build(), HttpResponse.BodyHandlers.ofString());

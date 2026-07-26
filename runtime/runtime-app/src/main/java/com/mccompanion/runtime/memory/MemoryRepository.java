@@ -14,12 +14,18 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /** Typed memory store. Inferences cannot overwrite verified facts. */
 public final class MemoryRepository {
     private static final int MAX_VALUE_CHARS = 16_384;
     private static final int MAX_QUARANTINED_SUGGESTIONS = 128;
     private static final Duration MAX_WORKING_TTL = Duration.ofHours(24);
+    private static final Pattern SENSITIVE_VALUE = Pattern.compile(
+            "(?is).*(sk-[a-z0-9_-]{12,}|bearer\\s+[a-z0-9._-]{12,}|"
+                    + "\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|cookie|"
+                    + "authorization|private[_-]?key)\"\\s*:|"
+                    + "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}).*");
     private final RuntimeDatabase database;
     private final Clock clock;
     private final EpisodeCapsuleRepository capsules;
@@ -47,6 +53,7 @@ public final class MemoryRepository {
         if (confidence < 0 || confidence > 1 || Double.isNaN(confidence)) throw new IllegalArgumentException("confidence must be 0..1");
         java.util.Objects.requireNonNull(kind, "kind");
         JsonNode boundedValue = value == null ? Json.object() : value;
+        rejectSensitive(kind, key, boundedValue, source);
         if (Json.write(boundedValue).length() > MAX_VALUE_CHARS) {
             throw new IllegalArgumentException("memory value exceeds 16384 characters");
         }
@@ -65,6 +72,7 @@ public final class MemoryRepository {
                     connection.commit();
                     return existing;
                 }
+                if (existing != null) appendHistory(connection, existing, "UPDATED", required(source), now);
                 String id = existing == null ? UUID.randomUUID().toString() : existing.memoryId();
                 try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO memory_fact(memory_id,companion_id,kind,fact_key,value_json,verified,confidence,source,expires_at,created_at,updated_at)
@@ -210,6 +218,8 @@ public final class MemoryRepository {
                 MemorySuggestion candidate = suggestion(connection, companionId, suggestionId);
                 requireReviewable(candidate, now);
                 MemoryFact existing = find(connection, companionId, candidate.kind(), candidate.key(), now);
+                if (existing != null) appendHistory(connection, existing, "SUGGESTION_APPROVED",
+                        required(reviewedBy), now);
                 String memoryId = existing == null ? UUID.randomUUID().toString() : existing.memoryId();
                 long createdAt = existing == null ? now : existing.createdAt().toEpochMilli();
                 try (PreparedStatement statement = connection.prepareStatement("""
@@ -342,19 +352,146 @@ public final class MemoryRepository {
                 .limit(Math.max(1, Math.min(limit, 100))).toList();
     }
 
+    public MemorySettings settings(String companionId) throws SQLException {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT auto_save_enabled,revision,updated_by,updated_at
+                FROM memory_settings WHERE companion_id=?
+                """)) {
+            statement.setString(1, required(companionId));
+            try (ResultSet result = statement.executeQuery()) {
+                if (!result.next()) return new MemorySettings(companionId, true, 0, "DEFAULT", null);
+                return new MemorySettings(companionId, result.getInt("auto_save_enabled") != 0,
+                        result.getLong("revision"), result.getString("updated_by"),
+                        Instant.ofEpochMilli(result.getLong("updated_at")));
+            }
+        }
+    }
+
+    public MemorySettings setAutoSave(String companionId, boolean enabled, String updatedBy) throws SQLException {
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO memory_settings(companion_id,auto_save_enabled,revision,updated_by,updated_at)
+                VALUES(?,?,1,?,?)
+                ON CONFLICT(companion_id) DO UPDATE SET auto_save_enabled=excluded.auto_save_enabled,
+                revision=memory_settings.revision+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at
+                """)) {
+            statement.setString(1, required(companionId));
+            statement.setInt(2, enabled ? 1 : 0);
+            statement.setString(3, required(updatedBy));
+            statement.setLong(4, clock.millis());
+            statement.executeUpdate();
+        }
+        return settings(companionId);
+    }
+
+    public MemoryFact updateByUser(String companionId, String memoryId, JsonNode value) throws SQLException {
+        JsonNode boundedValue = value == null ? Json.MAPPER.nullNode() : value;
+        if (Json.write(boundedValue).length() > MAX_VALUE_CHARS) {
+            throw new IllegalArgumentException("memory value exceeds 16384 characters");
+        }
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                MemoryFact existing = findById(connection, companionId, memoryId);
+                if (existing == null) throw new IllegalArgumentException("memory was not found in companion scope");
+                rejectSensitive(existing.kind(), existing.key(), boundedValue, "USER_EDIT");
+                appendHistory(connection, existing, "EDITED", "LOCAL_MANAGEMENT_USER", clock.millis());
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE memory_fact SET value_json=?,verified=1,confidence=1.0,
+                        source='USER_EDIT',updated_at=? WHERE companion_id=? AND memory_id=?
+                        """)) {
+                    statement.setString(1, Json.write(boundedValue));
+                    statement.setLong(2, clock.millis());
+                    statement.setString(3, required(companionId));
+                    statement.setString(4, required(memoryId));
+                    statement.executeUpdate();
+                }
+                MemoryFact updated = findById(connection, companionId, memoryId);
+                connection.commit();
+                return updated;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            }
+        }
+    }
+
+    public List<MemoryHistory> history(String companionId, int limit) throws SQLException {
+        int bounded = Math.max(1, Math.min(limit, 100));
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM memory_fact_history WHERE companion_id=?
+                ORDER BY changed_at DESC LIMIT ?
+                """)) {
+            statement.setString(1, required(companionId));
+            statement.setInt(2, bounded);
+            List<MemoryHistory> values = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) values.add(readHistory(result));
+            }
+            return List.copyOf(values);
+        }
+    }
+
+    public ObjectNode safeSummary(String companionId) throws SQLException {
+        ObjectNode summary = Json.object().put("companionId", companionId)
+                .put("containsValues", false).put("containsChat", false)
+                .put("containsPrompts", false).put("containsSearchBodies", false);
+        ObjectNode counts = summary.putObject("counts");
+        var sources = new java.util.TreeSet<String>();
+        for (MemoryKind kind : MemoryKind.values()) {
+            List<MemoryFact> facts = relevant(companionId, kind, 100);
+            counts.put(kind.name(), facts.size());
+            facts.forEach(fact -> sources.add(fact.source()));
+        }
+        summary.set("sources", Json.MAPPER.valueToTree(sources));
+        MemorySettings settings = settings(companionId);
+        summary.put("autoSaveEnabled", settings.autoSaveEnabled())
+                .put("settingsRevision", settings.revision())
+                .put("historyEntries", history(companionId, 100).size());
+        return summary;
+    }
+
     public boolean delete(String companionId, String memoryId) throws SQLException {
-        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
-                "DELETE FROM memory_fact WHERE companion_id=? AND memory_id=?")) {
-            statement.setString(1, required(companionId)); statement.setString(2, required(memoryId));
-            return statement.executeUpdate() == 1;
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                MemoryFact existing = findById(connection, companionId, memoryId);
+                if (existing == null) {
+                    connection.commit();
+                    return false;
+                }
+                appendHistory(connection, existing, "DELETED", "LOCAL_MANAGEMENT_USER", clock.millis());
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM memory_fact WHERE companion_id=? AND memory_id=?")) {
+                    statement.setString(1, required(companionId)); statement.setString(2, required(memoryId));
+                    boolean deleted = statement.executeUpdate() == 1;
+                    connection.commit();
+                    return deleted;
+                }
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            }
         }
     }
 
     public int clear(String companionId, MemoryKind kind) throws SQLException {
-        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
-                "DELETE FROM memory_fact WHERE companion_id=? AND kind=?")) {
-            statement.setString(1, required(companionId)); statement.setString(2, kind.name());
-            return statement.executeUpdate();
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                for (MemoryFact fact : findByKind(connection, companionId, kind)) {
+                    appendHistory(connection, fact, "CLEARED", "LOCAL_MANAGEMENT_USER", clock.millis());
+                }
+                try (PreparedStatement statement = connection.prepareStatement(
+                        "DELETE FROM memory_fact WHERE companion_id=? AND kind=?")) {
+                    statement.setString(1, required(companionId)); statement.setString(2, kind.name());
+                    int deleted = statement.executeUpdate();
+                    connection.commit();
+                    return deleted;
+                }
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            }
         }
     }
 
@@ -437,6 +574,7 @@ public final class MemoryRepository {
 
     /** Persists only body-verified visible container positions; item contents are never inferred or scanned. */
     public void rememberObservedContainers(String companionId, JsonNode status) throws SQLException {
+        if (!settings(companionId).autoSaveEnabled()) return;
         JsonNode observed = status == null ? null : status.path("observedContainers");
         if (observed == null || !observed.isArray()) return;
         for (JsonNode container : observed) {
@@ -489,6 +627,55 @@ public final class MemoryRepository {
         }
     }
 
+    private static MemoryFact findById(java.sql.Connection connection, String companionId, String memoryId)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM memory_fact WHERE companion_id=? AND memory_id=?")) {
+            statement.setString(1, required(companionId));
+            statement.setString(2, required(memoryId));
+            try (ResultSet result = statement.executeQuery()) { return result.next() ? read(result) : null; }
+        }
+    }
+
+    private static List<MemoryFact> findByKind(java.sql.Connection connection, String companionId,
+                                               MemoryKind kind) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM memory_fact WHERE companion_id=? AND kind=? LIMIT 1024")) {
+            statement.setString(1, required(companionId));
+            statement.setString(2, kind.name());
+            List<MemoryFact> values = new ArrayList<>();
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) values.add(read(result));
+            }
+            return values;
+        }
+    }
+
+    private static void appendHistory(java.sql.Connection connection, MemoryFact fact,
+                                      String changeKind, String changedBy, long changedAt) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                INSERT INTO memory_fact_history(history_id,memory_id,companion_id,kind,fact_key,value_json,
+                verified,confidence,source,expires_at,change_kind,changed_by,changed_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """)) {
+            statement.setString(1, UUID.randomUUID().toString());
+            statement.setString(2, fact.memoryId());
+            statement.setString(3, fact.companionId());
+            statement.setString(4, fact.kind().name());
+            statement.setString(5, fact.key());
+            statement.setString(6, Json.write(fact.value()));
+            statement.setInt(7, fact.verified() ? 1 : 0);
+            statement.setDouble(8, fact.confidence());
+            statement.setString(9, fact.source());
+            if (fact.expiresAt() == null) statement.setNull(10, java.sql.Types.BIGINT);
+            else statement.setLong(10, fact.expiresAt().toEpochMilli());
+            statement.setString(11, changeKind);
+            statement.setString(12, changedBy);
+            statement.setLong(13, changedAt);
+            statement.executeUpdate();
+        }
+    }
+
     private static MemoryFact read(ResultSet result) throws SQLException {
         long expires = result.getLong("expires_at");
         boolean noExpiry = result.wasNull();
@@ -514,6 +701,16 @@ public final class MemoryRepository {
                 result.getString("conflicting_memory_id"));
     }
 
+    private static MemoryHistory readHistory(ResultSet result) throws SQLException {
+        return new MemoryHistory(result.getString("history_id"), result.getString("memory_id"),
+                result.getString("companion_id"), MemoryKind.valueOf(result.getString("kind")),
+                result.getString("fact_key"), Json.parse(result.getString("value_json")),
+                result.getInt("verified") != 0, result.getDouble("confidence"),
+                result.getString("source"), nullableInstant(result, "expires_at"),
+                result.getString("change_kind"), result.getString("changed_by"),
+                Instant.ofEpochMilli(result.getLong("changed_at")));
+    }
+
     private static Instant nullableInstant(ResultSet result, String column) throws SQLException {
         long value = result.getLong(column);
         return result.wasNull() ? null : Instant.ofEpochMilli(value);
@@ -522,5 +719,17 @@ public final class MemoryRepository {
     private static String required(String value) {
         if (value == null || value.isBlank() || value.length() > 256) throw new IllegalArgumentException("memory identifier is invalid");
         return value.strip();
+    }
+
+    private static void rejectSensitive(MemoryKind kind, String key, JsonNode value, String source) {
+        String sourceName = required(source).toUpperCase(java.util.Locale.ROOT);
+        if (sourceName.contains("SEARCH_BODY") || sourceName.contains("FULL_CHAT")
+                || sourceName.contains("FULL_PROMPT")) {
+            throw new IllegalArgumentException("chat, prompt, and search bodies cannot be stored as Memory");
+        }
+        String candidate = required(key) + ' ' + Json.write(value);
+        if (SENSITIVE_VALUE.matcher(candidate).matches()) {
+            throw new IllegalArgumentException("sensitive values cannot be stored as Memory");
+        }
     }
 }

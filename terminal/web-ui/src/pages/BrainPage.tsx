@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { api, post } from '../api/client'
 import { ActionButton } from '../components/ActionButton'
 import { EmptyState } from '../components/EmptyState'
+import { MemoryManagementPanel } from '../components/MemoryManagementPanel'
 import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTerminal } from '../context/TerminalContext'
@@ -59,6 +60,13 @@ export function BrainPage() {
     } finally {
       setReviewing('')
     }
+  }
+  const manageMemory = async (action: string, extra: Record<string, unknown> = {}) => {
+    const result = await post<Record<string, unknown>>('/api/memories/manage', {
+      instanceId: selectedId, companionId, action, ...extra,
+    })
+    if (action !== 'export_safe_summary') await memories.refresh()
+    return result
   }
   if (!selected) return <EmptyState title="Select an instance">External Brain status belongs to a Runtime profile.</EmptyState>
   const send = () => {
@@ -129,11 +137,7 @@ export function BrainPage() {
               ? semantic.staleAssumptions.join(', ') : 'none'}</p></div>
         </div> : <p>The external Brain has not authored a semantic snapshot. Runtime does not infer one.</p>}
       </section>
-      <section className="main-panel"><header className="panel-header"><h2>Typed memory</h2><span>provenance and verification shown</span></header>
-        <div className="event-rows">{Object.entries(memories.data?.byKind ?? {}).flatMap(([kind, facts]) => facts.map((fact) =>
-          <div className="event-row" key={fact.memoryId}><time>{kind}</time><strong>{fact.key}</strong><StatusBadge value={fact.verified ? 'VERIFIED' : 'UNVERIFIED'} />
-            <span>{fact.source} · {fact.confidence.toFixed(2)}</span><p>{JSON.stringify(fact.value)}</p></div>))}</div>
-      </section>
+      <MemoryManagementPanel snapshot={memories.data ?? undefined} profileName={selected.name} onManage={manageMemory} />
       <section className="main-panel"><header className="panel-header"><h2>Quarantined memory suggestions</h2>
         <span>local user review required</span></header>
         <p>External Brain suggestions are untrusted and never enter verified Memory automatically.</p>

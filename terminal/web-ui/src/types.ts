@@ -168,7 +168,7 @@ export interface BrainToolAudit {
     permissionPreset: 'READ_ONLY' | 'ASK_FOR_EFFECTS' | 'BOUNDED_AUTONOMY'
     playerExplicitlyAway: boolean; latestRealWorldObservationAt: string; staleAssumptions: string[]
   }
-  export interface BrainBehaviorSettings {
+export interface BrainBehaviorSettings {
     companionId: string; initiativeMode: 'QUIET' | 'NORMAL' | 'ACTIVE'
     personalityMode: 'COMPANION' | 'IMMERSIVE_ROLEPLAY'; revision: number
     updatedBy: string; updatedAt: string; changesToolPermissions: false
@@ -193,6 +193,11 @@ export interface EpisodeCapsule {
 export interface MemorySnapshot {
   companionId: string; byKind: Record<string, MemoryFact[]>; suggestions?: MemorySuggestion[]
   episodeCapsules?: EpisodeCapsule[]
+  settings?: { companionId: string; autoSaveEnabled: boolean; revision: number; updatedBy: string; updatedAt?: string }
+  history?: Array<{ historyId: string; memoryId: string; companionId: string; kind: string; key: string
+    value: unknown; verified: boolean; confidence: number; source: string; expiresAt?: string
+    changeKind: string; changedBy: string; changedAt: string }>
+  safeSummary?: Record<string, unknown>
 }
 export interface TaskGraphExecution {
   executionId: string; companionId: string; graphId: string; graphVersion: string

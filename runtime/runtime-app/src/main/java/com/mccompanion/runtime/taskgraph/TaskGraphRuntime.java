@@ -194,10 +194,18 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     // The worker persists the terminal row before its separate lifecycle-feedback
                     // transaction and cleanup. Match the duplicate-start boundary: awaiters must not
                     // observe completion until appendOnce confirms the terminal feedback is durable.
-                    if (!active.containsKey(record.executionId()) && notifyTerminalLifecycle(record)) {
+                    // A PAUSED row is different: pause() persists its lifecycle feedback before
+                    // returning, while the worker may still be releasing its admission. Waiting for
+                    // that cleanup can consume the caller timeout and incorrectly cancel a safely
+                    // paused graph.
+                    if ((record.state().equals("PAUSED") || !active.containsKey(record.executionId()))
+                            && notifyTerminalLifecycle(record)) {
                         return terminal(call, record);
                     }
-                } else if (waitingReady(record)) {
+                } else if (waitingReady(record) && !active.containsKey(record.executionId())) {
+                    // ASK_USER is usable only after the worker that materialized the durable
+                    // question has released admission. Exposing it earlier lets an immediate
+                    // answer race that cleanup and be rejected as "already active".
                     return terminal(call, record);
                 }
                 Thread.sleep(25);

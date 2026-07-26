@@ -33,7 +33,12 @@ vi.mock('../hooks/useResource', () => ({
       { companionId: 'c1', initiativeMode: 'NORMAL', personalityMode: 'COMPANION', revision: 1,
         updatedBy: 'LOCAL_MANAGEMENT_USER', updatedAt: '2026-07-15T00:00:00Z',
         changesToolPermissions: false, changesSafetyPolicy: false, changesBudgets: false, changesMemoryPolicy: false },
-      { companionId: 'c1', byKind: { PREFERENCE: [{ memoryId: 'm1', kind: 'PREFERENCE', key: 'reply_style', value: 'concise', verified: false, confidence: 0.7, source: 'INFERENCE', createdAt: '', updatedAt: '' }] },
+      { companionId: 'c1', byKind: { PREFERENCE: [{ memoryId: 'm1', kind: 'PREFERENCE', key: 'reply_style', value: 'concise', verified: false, confidence: 0.7, source: 'INFERENCE', createdAt: '', updatedAt: '2026-07-15T00:00:00Z' }] },
+        settings: { companionId: 'c1', autoSaveEnabled: true, revision: 1, updatedBy: 'LOCAL_MANAGEMENT_USER', updatedAt: '2026-07-15T00:00:00Z' },
+        history: [{ historyId: 'h1', memoryId: 'm1', companionId: 'c1', kind: 'PREFERENCE', key: 'reply_style',
+          value: 'verbose', verified: true, confidence: 1, source: 'USER', changeKind: 'EDITED',
+          changedBy: 'LOCAL_MANAGEMENT_USER', changedAt: '2026-07-15T00:00:00Z' }],
+        safeSummary: { companionId: 'c1', containsValues: false, counts: { PREFERENCE: 1 } },
         suggestions: [{ suggestionId: 'ms1', companionId: 'c1', kind: 'WORLD', key: 'landmark:moon', value: { dimension: 'examplemod:moon' }, confidence: 0.5, status: 'QUARANTINED', source: 'EPISODE_CAPSULE', brainSessionId: 'b1', capsuleId: 'episode-1', conflictsWithVerified: true, expiresAt: '', createdAt: '', updatedAt: '' }],
         episodeCapsules: [{ episodeId: 'episode-1', companionId: 'c1', brainSessionId: 'b1', startedAt: '2026-07-15T00:00:00Z', endedAt: '2026-07-15T00:01:00Z', taskSummaries: [], verifiedWorldChanges: [], verifiedInventoryChanges: [], verifiedLocations: [], askUserDecisions: [], userConfirmedChoices: [], failureCategories: [], evidenceRefs: [{ callId: 't1' }], sourceSha: 'abc1234', createdAt: '2026-07-15T00:01:00Z' }] },
     ]
@@ -56,6 +61,8 @@ describe('BrainPage', () => {
     expect(screen.getByText(/old chest count/)).toBeVisible()
     expect(screen.getByText('Base state checked')).toBeVisible()
     expect(screen.getByText(/final observation t1/)).toBeVisible()
+    expect(screen.getByText('Memory management')).toBeVisible()
+    expect(screen.getByText('EDITED')).toBeVisible()
     fireEvent.change(screen.getByLabelText('Initiative'), { target: { value: 'QUIET' } })
     expect(post).toHaveBeenCalledWith('/api/brain/settings', {
       instanceId: 'instance-1', companionId: 'c1', initiativeMode: 'QUIET', personalityMode: 'COMPANION',
@@ -70,6 +77,14 @@ describe('BrainPage', () => {
     expect(post).toHaveBeenCalledWith('/api/memories/review', {
       instanceId: 'instance-1', companionId: 'c1', suggestionId: 'ms1',
       action: 'approve_suggestion',
+    })
+    fireEvent.change(screen.getByLabelText('Automatic observed-memory save'), { target: { value: 'false' } })
+    expect(post).toHaveBeenCalledWith('/api/memories/manage', {
+      instanceId: 'instance-1', companionId: 'c1', action: 'set_autosave', enabled: false,
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Export safe summary' }))
+    expect(post).toHaveBeenCalledWith('/api/memories/manage', {
+      instanceId: 'instance-1', companionId: 'c1', action: 'export_safe_summary',
     })
   })
 })

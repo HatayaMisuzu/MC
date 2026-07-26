@@ -22,7 +22,8 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "memory_suggestion", "episode_capsule", "conversation_event", "waiting_question",
+            "memory_fact", "memory_suggestion", "memory_fact_history", "memory_settings",
+            "episode_capsule", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
             "brain_completion_claim",
             "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
@@ -779,6 +780,34 @@ public final class RuntimeDatabase implements AutoCloseable {
                 )
                 """,
                 "CREATE INDEX brain_completion_claim_task_idx ON brain_completion_claim(task_id,created_at)");
+        List<String> memoryManagement = List.of(
+                """
+                CREATE TABLE memory_settings (
+                  companion_id TEXT PRIMARY KEY,
+                  auto_save_enabled INTEGER NOT NULL,
+                  revision INTEGER NOT NULL,
+                  updated_by TEXT NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE memory_fact_history (
+                  history_id TEXT PRIMARY KEY,
+                  memory_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  fact_key TEXT NOT NULL,
+                  value_json TEXT NOT NULL,
+                  verified INTEGER NOT NULL,
+                  confidence REAL NOT NULL,
+                  source TEXT NOT NULL,
+                  expires_at INTEGER,
+                  change_kind TEXT NOT NULL,
+                  changed_by TEXT NOT NULL,
+                  changed_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX memory_fact_history_scope_idx ON memory_fact_history(companion_id,changed_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -805,6 +834,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(23, "persist deterministic episode capsules and candidate provenance", episodeCapsules),
                 new Migration(24, "persist external Brain-authored semantic state", brainSemanticState),
                 new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings),
-                new Migration(26, "link external Brain completion claims to final observations", brainCompletionClaim));
+                new Migration(26, "link external Brain completion claims to final observations", brainCompletionClaim),
+                new Migration(27, "persist Memory settings and user-visible history", memoryManagement));
     }
 }

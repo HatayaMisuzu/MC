@@ -373,7 +373,13 @@ public final class CompanionRegistry {
                             "UseItem",
                             "DropItem",
                             "AttackEntity",
-                            "PlaceBlock")
+                            "PlaceBlock",
+                            "CollectResource",
+                            "MineResourceVein",
+                            "WithdrawFromStorage",
+                            "DepositToStorage",
+                            "DeliverItem",
+                            "EatAndRecover")
                     .contains(skill.capability())) {
                 return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
             }

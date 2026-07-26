@@ -40,9 +40,9 @@ public final class MinecraftAiCompanionForge {
                     "registry_query", "recipe_query", "primitive_observation_query",
                     "owner_activity_handoff", "player_text_gateway", "look_at", "interact_block",
                     "interact_entity", "menu_action", "use_item", "drop_item", "attack_entity",
-                    "place_block"),
-            List.of("composite_collection", "composite_mining", "composite_crafting",
-                    "composite_smelting", "storage_transfer", "defend_owner", "retreat"),
+                    "place_block", "resource_collect", "resource_mine", "storage_transfer",
+                    "inventory_deliver", "eat_and_recover"),
+            List.of("composite_crafting", "composite_smelting", "defend_owner", "retreat"),
             List.of());
     private static volatile MinecraftServer activeServer;
     private static volatile CompanionRegistry registry;

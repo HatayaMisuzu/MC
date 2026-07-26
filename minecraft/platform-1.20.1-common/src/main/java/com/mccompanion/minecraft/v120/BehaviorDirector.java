@@ -11,9 +11,12 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.Container;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.inventory.ClickType;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -178,12 +181,32 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
-        if (server.getTickCount() - progress.startedTick > 40) {
+        if (server.getTickCount() - progress.startedTick > 20 * 60) {
             pauseSafely(entry, body, "PRIMITIVE_TIMEOUT");
             return;
         }
         actionGateway.stopInput(body);
         String capability = progress.parameters.capability();
+        if (Set.of(
+                        "CollectResource",
+                        "MineResourceVein",
+                        "WithdrawFromStorage",
+                        "DepositToStorage",
+                        "DeliverItem",
+                        "EatAndRecover")
+                .contains(capability)) {
+            String composite = tickComposite(entry, body, progress);
+            if ("WAIT".equals(composite)) return;
+            if (composite != null) {
+                pauseSafely(entry, body, composite);
+                return;
+            }
+            stop(entry, body, true, "NONE");
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed();
+            return;
+        }
         String failure = switch (capability) {
             case "LookAt" -> lookAt(body, progress.parameters);
             case "InteractBlock", "PlaceBlock" -> interactBlock(body, progress.parameters);
@@ -201,6 +224,269 @@ final class BehaviorDirector {
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
         savedData.changed();
+    }
+
+    private String tickComposite(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            PrimitiveProgress progress) {
+        return switch (progress.parameters.capability()) {
+            case "CollectResource" -> tickCollect(body, progress);
+            case "MineResourceVein" -> tickMine(body, progress);
+            case "WithdrawFromStorage" -> tickStorage(body, progress, true);
+            case "DepositToStorage" -> tickStorage(body, progress, false);
+            case "DeliverItem" -> tickDeliver(entry, body, progress);
+            case "EatAndRecover" -> tickEat(body, progress);
+            default -> "CAPABILITY_UNAVAILABLE";
+        };
+    }
+
+    private String tickCollect(CompanionPlayer body, PrimitiveProgress progress) {
+        Item item = resolveItem(progress.parameters.itemId());
+        if (item == null) return "ITEM_UNKNOWN";
+        if (!progress.initialized) {
+            progress.initialized = true;
+            progress.baseline = body.getInventory().countItem(item);
+            int available = body.serverLevel().getEntitiesOfClass(
+                            ItemEntity.class,
+                            body.getBoundingBox().inflate(16.0D),
+                            entity -> entity.isAlive() && entity.getItem().is(item))
+                    .stream()
+                    .mapToInt(entity -> entity.getItem().getCount())
+                    .sum();
+            if (available < progress.parameters.quantity() && !progress.parameters.allowPartial()) {
+                return "RESOURCE_INSUFFICIENT";
+            }
+            progress.target = Math.min(available, progress.parameters.quantity());
+            if (progress.target < 1) return "RESOURCE_NOT_FOUND";
+        }
+        if (body.getInventory().countItem(item) - progress.baseline >= progress.target) return null;
+        ItemEntity target = body.serverLevel().getEntitiesOfClass(
+                        ItemEntity.class,
+                        body.getBoundingBox().inflate(16.0D),
+                        entity -> entity.isAlive() && entity.getItem().is(item))
+                .stream()
+                .min(java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(body)))
+                .orElse(null);
+        if (target == null) return "RESOURCE_DISAPPEARED";
+        if (target.distanceToSqr(body) <= 2.25D) {
+            int before = body.getInventory().countItem(item);
+            target.setNoPickUpDelay();
+            target.playerTouch(body);
+            return body.getInventory().countItem(item) > before ? "WAIT" : "INVENTORY_FULL";
+        }
+        Vec3 delta = target.position().subtract(body.position());
+        float yaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+        actionGateway.applyMoveInput(body, yaw, delta.y > 0.6D || body.horizontalCollision);
+        return "WAIT";
+    }
+
+    private String tickMine(CompanionPlayer body, PrimitiveProgress progress) {
+        ResourceLocation id = ResourceLocation.tryParse(progress.parameters.itemId());
+        if (id == null || !BuiltInRegistries.BLOCK.containsKey(id)) return "BLOCK_UNKNOWN";
+        if (!progress.parameters.hasBlockTarget()) return "BLOCK_TARGET_MISSING";
+        if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+        if (!progress.initialized) {
+            progress.initialized = true;
+            BlockPos origin = new BlockPos(
+                    progress.parameters.x(),
+                    progress.parameters.y(),
+                    progress.parameters.z());
+            java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+            java.util.HashSet<BlockPos> visited = new java.util.HashSet<>();
+            queue.add(origin);
+            while (!queue.isEmpty() && progress.blocks.size() < progress.parameters.quantity()) {
+                BlockPos current = queue.removeFirst();
+                if (!visited.add(current)
+                        || !body.serverLevel().hasChunkAt(current)
+                        || !body.serverLevel().getBlockState(current).is(BuiltInRegistries.BLOCK.get(id))) {
+                    continue;
+                }
+                progress.blocks.add(current.immutable());
+                for (Direction direction : Direction.values()) queue.addLast(current.relative(direction));
+            }
+            if (progress.blocks.size() < progress.parameters.quantity()
+                    && !progress.parameters.allowPartial()) {
+                return "RESOURCE_INSUFFICIENT";
+            }
+            if (progress.blocks.isEmpty()) return "BLOCK_NOT_FOUND";
+        }
+        if (progress.actions >= progress.blocks.size()) return null;
+        BlockPos target = progress.blocks.get(progress.actions);
+        if (body.distanceToSqr(Vec3.atCenterOf(target)) > 25.0D) return "BLOCK_OUT_OF_REACH";
+        if (!body.serverLevel().getBlockState(target).is(BuiltInRegistries.BLOCK.get(id))) {
+            return "BLOCK_CHANGED";
+        }
+        var state = body.serverLevel().getBlockState(target);
+        if (state.requiresCorrectToolForDrops() && !body.hasCorrectToolForDrops(state)) {
+            return "TOOL_INADEQUATE";
+        }
+        float increment = state.getDestroyProgress(body, body.serverLevel(), target);
+        if (!(increment > 0.0F) || !Float.isFinite(increment)) return "BLOCK_UNBREAKABLE";
+        var visible = body.serverLevel().clip(new ClipContext(
+                body.getEyePosition(),
+                Vec3.atCenterOf(target),
+                ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE,
+                body));
+        if (visible.getType() != HitResult.Type.BLOCK || !visible.getBlockPos().equals(target)) {
+            return "BLOCK_NOT_VISIBLE";
+        }
+        Vec3 delta = Vec3.atCenterOf(target).subtract(body.getEyePosition());
+        body.setYRot((float) Math.toDegrees(Math.atan2(-delta.x, delta.z)));
+        body.setXRot((float) -Math.toDegrees(Math.atan2(
+                delta.y,
+                Math.sqrt(delta.x * delta.x + delta.z * delta.z))));
+        body.swing(InteractionHand.MAIN_HAND);
+        progress.destroyProgress += increment;
+        if (progress.destroyProgress < 1.0F) return "WAIT";
+        if (!body.gameMode.destroyBlock(target)) return "BLOCK_BREAK_FAILED";
+        actionGateway.markVanillaGameModeAction(body);
+        body.serverLevel().getEntitiesOfClass(
+                        ItemEntity.class,
+                        new net.minecraft.world.phys.AABB(target).inflate(2.0D),
+                        entity -> entity.getAge() <= 2)
+                .forEach(entity -> {
+                    entity.setNoPickUpDelay();
+                    entity.playerTouch(body);
+                });
+        if (body.serverLevel().getBlockState(target).is(BuiltInRegistries.BLOCK.get(id))) {
+            return "UNCERTAIN_EFFECT";
+        }
+        progress.actions++;
+        progress.destroyProgress = 0.0F;
+        return progress.actions >= progress.blocks.size() ? null : "WAIT";
+    }
+
+    private String tickStorage(
+            CompanionPlayer body,
+            PrimitiveProgress progress,
+            boolean withdraw) {
+        Item item = resolveItem(progress.parameters.itemId());
+        if (item == null) return "ITEM_UNKNOWN";
+        if (!progress.parameters.hasBlockTarget()) return "CONTAINER_TARGET_MISSING";
+        if (!sameDimension(body, progress.parameters)) return "WORLD_CHANGED";
+        BlockPos position = new BlockPos(
+                progress.parameters.x(),
+                progress.parameters.y(),
+                progress.parameters.z());
+        if (body.distanceToSqr(Vec3.atCenterOf(position)) > 25.0D) {
+            return "CONTAINER_OUT_OF_REACH";
+        }
+        if (!(body.serverLevel().getBlockEntity(position) instanceof Container)) {
+            return "CONTAINER_MISSING";
+        }
+        if (!progress.initialized) {
+            BlockHitResult hit =
+                    new BlockHitResult(Vec3.atCenterOf(position), Direction.UP, position, false);
+            body.gameMode.useItemOn(
+                    body,
+                    body.serverLevel(),
+                    body.getMainHandItem(),
+                    InteractionHand.MAIN_HAND,
+                    hit);
+            actionGateway.markVanillaGameModeAction(body);
+            if (body.containerMenu == body.inventoryMenu) return "CONTAINER_OPEN_FAILED";
+            progress.initialized = true;
+            progress.baseline = withdraw
+                    ? body.getInventory().countItem(item)
+                    : countStorageMenu(body, item);
+            int available = withdraw
+                    ? countStorageMenu(body, item)
+                    : body.getInventory().countItem(item);
+            if (available < progress.parameters.quantity() && !progress.parameters.allowPartial()) {
+                body.closeContainer();
+                return "ITEM_INSUFFICIENT";
+            }
+            progress.target = Math.min(available, progress.parameters.quantity());
+            if (progress.target < 1) {
+                body.closeContainer();
+                return "ITEM_INSUFFICIENT";
+            }
+        }
+        int changed = withdraw
+                ? body.getInventory().countItem(item) - progress.baseline
+                : countStorageMenu(body, item) - progress.baseline;
+        if (changed >= progress.target) {
+            body.closeContainer();
+            return null;
+        }
+        int source = withdraw ? findStorageSlot(body, item) : findBodyItemSlot(body, item);
+        int target = withdraw ? findInventorySlot(body, item) : findStorageInsertSlot(body, item);
+        if (source < 0) return "ITEM_INSUFFICIENT";
+        if (target < 0) return withdraw ? "INVENTORY_FULL" : "CONTAINER_FULL";
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        body.containerMenu.clicked(target, 1, ClickType.PICKUP, body);
+        body.containerMenu.clicked(source, 0, ClickType.PICKUP, body);
+        actionGateway.markVanillaMenuAction(body);
+        return body.containerMenu.getCarried().isEmpty()
+                ? "WAIT"
+                : "CONTAINER_TRANSACTION_FAILED";
+    }
+
+    private String tickDeliver(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            PrimitiveProgress progress) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        if (owner == null) return "OWNER_OFFLINE";
+        if (owner.serverLevel() != body.serverLevel()) return "WORLD_CHANGED";
+        if (owner.distanceToSqr(body) > 16.0D) return "OWNER_OUT_OF_REACH";
+        Item item = resolveItem(progress.parameters.itemId());
+        if (item == null) return "ITEM_UNKNOWN";
+        if (!progress.initialized) {
+            progress.initialized = true;
+            progress.baseline = owner.getInventory().countItem(item);
+            int available = body.getInventory().countItem(item);
+            if (available < progress.parameters.quantity() && !progress.parameters.allowPartial()) {
+                return "ITEM_INSUFFICIENT";
+            }
+            progress.target = Math.min(available, progress.parameters.quantity());
+            if (progress.target < 1) return "ITEM_INSUFFICIENT";
+        }
+        if (owner.getInventory().countItem(item) - progress.baseline >= progress.target) return null;
+        if (!selectHotbarItem(body, item)) return "ITEM_INSUFFICIENT";
+        int before = owner.getInventory().countItem(item);
+        if (!body.drop(false)) return "DROP_FAILED";
+        actionGateway.markVanillaDrop(body);
+        body.serverLevel().getEntitiesOfClass(
+                        ItemEntity.class,
+                        body.getBoundingBox().inflate(3.0D),
+                        entity -> entity.getAge() <= 2 && entity.getItem().is(item))
+                .stream()
+                .min(java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(body)))
+                .ifPresent(entity -> {
+                    entity.setTarget(owner.getUUID());
+                    entity.setNoPickUpDelay();
+                    entity.playerTouch(owner);
+                });
+        return owner.getInventory().countItem(item) > before ? "WAIT" : "DELIVERY_FAILED";
+    }
+
+    private String tickEat(CompanionPlayer body, PrimitiveProgress progress) {
+        Item item = progress.parameters.itemId().isBlank()
+                ? firstFood(body)
+                : resolveItem(progress.parameters.itemId());
+        if (item == null || !item.isEdible()) return "FOOD_MISSING";
+        if (!progress.initialized) {
+            if (!selectHotbarItem(body, item)) return "FOOD_MISSING";
+            progress.initialized = true;
+            progress.baseline = body.getFoodData().getFoodLevel();
+            progress.itemBaseline = body.getInventory().countItem(item);
+            var result = body.gameMode.useItem(
+                    body,
+                    body.serverLevel(),
+                    body.getMainHandItem(),
+                    InteractionHand.MAIN_HAND);
+            actionGateway.markVanillaGameModeAction(body);
+            if (!result.consumesAction()) return "FOOD_USE_REJECTED";
+            return "WAIT";
+        }
+        if (body.getFoodData().getFoodLevel() > progress.baseline
+                || body.getInventory().countItem(item) < progress.itemBaseline) {
+            return null;
+        }
+        return body.isUsingItem() ? "WAIT" : "FOOD_NO_EFFECT";
     }
 
     private String lookAt(CompanionPlayer body, SkillParameters parameters) {
@@ -393,7 +679,110 @@ final class BehaviorDirector {
                 return true;
             }
         }
-        return false;
+        int sourceInventory = -1;
+        for (int slot = 9; slot < 36; slot++) {
+            if (body.getInventory().getItem(slot).is(item)) {
+                sourceInventory = slot;
+                break;
+            }
+        }
+        int targetHotbar = -1;
+        for (int slot = 0; slot < 9; slot++) {
+            if (body.getInventory().getItem(slot).isEmpty()) {
+                targetHotbar = slot;
+                break;
+            }
+        }
+        if (sourceInventory < 0
+                || targetHotbar < 0
+                || !body.inventoryMenu.getCarried().isEmpty()) {
+            return false;
+        }
+        body.inventoryMenu.clicked(sourceInventory, 0, ClickType.PICKUP, body);
+        body.inventoryMenu.clicked(36 + targetHotbar, 0, ClickType.PICKUP, body);
+        if (!body.inventoryMenu.getCarried().isEmpty()) {
+            body.inventoryMenu.clicked(sourceInventory, 0, ClickType.PICKUP, body);
+            return false;
+        }
+        body.getInventory().selected = targetHotbar;
+        return body.getMainHandItem().is(item);
+    }
+
+    private static Item resolveItem(String rawId) {
+        ResourceLocation id = ResourceLocation.tryParse(rawId);
+        return id == null || !BuiltInRegistries.ITEM.containsKey(id)
+                ? null
+                : BuiltInRegistries.ITEM.get(id);
+    }
+
+    private static Item firstFood(CompanionPlayer body) {
+        for (int slot = 0; slot < body.getInventory().getContainerSize(); slot++) {
+            Item item = body.getInventory().getItem(slot).getItem();
+            if (item.isEdible()) return item;
+        }
+        return null;
+    }
+
+    private static int countStorageMenu(CompanionPlayer body, Item item) {
+        int total = 0;
+        for (Slot slot : body.containerMenu.slots) {
+            if (slot.container != body.getInventory() && slot.getItem().is(item)) {
+                total += slot.getItem().getCount();
+            }
+        }
+        return total;
+    }
+
+    private static int findStorageSlot(CompanionPlayer body, Item item) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container != body.getInventory()
+                    && slot.mayPickup(body)
+                    && slot.getItem().is(item)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static int findInventorySlot(CompanionPlayer body, Item item) {
+        ItemStack single = new ItemStack(item);
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container != body.getInventory() || !slot.mayPlace(single)) continue;
+            ItemStack existing = slot.getItem();
+            if (existing.isEmpty()
+                    || existing.is(item) && existing.getCount() < slot.getMaxStackSize(existing)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static int findBodyItemSlot(CompanionPlayer body, Item item) {
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container == body.getInventory()
+                    && slot.mayPickup(body)
+                    && slot.getItem().is(item)) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private static int findStorageInsertSlot(CompanionPlayer body, Item item) {
+        ItemStack single = new ItemStack(item);
+        for (int index = 0; index < body.containerMenu.slots.size(); index++) {
+            Slot slot = body.containerMenu.slots.get(index);
+            if (slot.container == body.getInventory() || !slot.mayPlace(single)) continue;
+            ItemStack existing = slot.getItem();
+            if (existing.isEmpty()
+                    || existing.is(item) && existing.getCount() < slot.getMaxStackSize(existing)) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private static int inventoryDigest(CompanionPlayer body) {
@@ -447,6 +836,20 @@ final class BehaviorDirector {
         }
     }
 
-    private record PrimitiveProgress(SkillParameters parameters, int startedTick) {
+    private static final class PrimitiveProgress {
+        private final SkillParameters parameters;
+        private final int startedTick;
+        private final java.util.List<BlockPos> blocks = new java.util.ArrayList<>();
+        private boolean initialized;
+        private int baseline;
+        private int itemBaseline;
+        private int target;
+        private int actions;
+        private float destroyProgress;
+
+        private PrimitiveProgress(SkillParameters parameters, int startedTick) {
+            this.parameters = parameters;
+            this.startedTick = startedTick;
+        }
     }
 }

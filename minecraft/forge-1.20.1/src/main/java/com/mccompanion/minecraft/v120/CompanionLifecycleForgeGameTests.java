@@ -12,6 +12,7 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -336,7 +337,227 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 !MenuSessionTracker.validate(body, menuToken).valid(),
                 "closed menu session token remained valid");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-storage-deposit",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "DepositToStorage",
+                                        "minecraft:iron_ingot",
+                                        2,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        chestPosition.getX(),
+                                        chestPosition.getY(),
+                                        chestPosition.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "storage deposit failed to start");
+        for (int tick = 0; tick < 4; tick++) registry.tick();
+        helper.assertTrue(chest.getItem(0).getCount() == 2, "deposit did not move two exact items");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.IRON_INGOT) == 1,
+                "deposit inventory delta was incorrect");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-storage-withdraw",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "WithdrawFromStorage",
+                                        "minecraft:iron_ingot",
+                                        2,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        chestPosition.getX(),
+                                        chestPosition.getY(),
+                                        chestPosition.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "storage withdrawal failed to start");
+        for (int tick = 0; tick < 4; tick++) registry.tick();
+        helper.assertTrue(chest.getItem(0).isEmpty(), "withdraw did not remove exact chest items");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.IRON_INGOT) == 3,
+                "withdraw inventory delta was incorrect");
+        int ownerIronBefore = owner.getInventory().countItem(Items.IRON_INGOT);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-deliver",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "DeliverItem",
+                                        "minecraft:iron_ingot",
+                                        2,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "delivery failed to start");
+        for (int tick = 0; tick < 4; tick++) registry.tick();
+        helper.assertTrue(
+                owner.getInventory().countItem(Items.IRON_INGOT) == ownerIronBefore + 2,
+                "delivery did not use the real item pickup path");
         body.serverLevel().setBlockAndUpdate(chestPosition, Blocks.AIR.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(chestPosition, Blocks.DIRT.defaultBlockState());
+        int dirtBefore = body.getInventory().countItem(Items.DIRT);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-break-block",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "MineResourceVein",
+                                        "minecraft:dirt",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        chestPosition.getX(),
+                                        chestPosition.getY(),
+                                        chestPosition.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "bounded mining failed to start");
+        for (int tick = 0; tick < 40; tick++) registry.tick();
+        helper.assertTrue(
+                body.serverLevel().getBlockState(chestPosition).isAir(),
+                "bounded mining did not break the exact verified block");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.DIRT) > dirtBefore,
+                "bounded mining did not collect its vanilla drop");
+        int coalBefore = body.getInventory().countItem(Items.COAL);
+        ItemEntity coalDrop = new ItemEntity(
+                body.serverLevel(),
+                body.getX() + 1.0D,
+                body.getY(),
+                body.getZ(),
+                new ItemStack(Items.COAL, 2));
+        body.serverLevel().addFreshEntity(coalDrop);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-collect",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "CollectResource",
+                                        "minecraft:coal",
+                                        2,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "bounded collection failed to start");
+        for (int tick = 0; tick < 5; tick++) registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.COAL) == coalBefore + 2,
+                "bounded collection did not use ItemEntity pickup");
+        body.getFoodData().setFoodLevel(10);
+        helper.assertTrue(body.addItem(new ItemStack(Items.APPLE)), "food fixture add failed");
+        int applesBefore = body.getInventory().countItem(Items.APPLE);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-eat",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "EatAndRecover",
+                                        "minecraft:apple",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "eat-and-recover failed to start");
+        for (int tick = 0; tick < 40; tick++) registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.APPLE) == applesBefore - 1,
+                "eat-and-recover did not consume food through vanilla use");
+        helper.assertTrue(
+                body.getFoodData().getFoodLevel() > 10,
+                "eat-and-recover did not restore food");
         helper.assertTrue(
                 registry.runtimeReleaseLease(companionId, "forge-primitive-lease", 2L).success(),
                 "primitive lease release failed");

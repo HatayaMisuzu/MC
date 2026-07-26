@@ -133,6 +133,14 @@ Passed on the frozen SHA:
   cancellation; saturation returns `RUNTIME_BUSY`.
 - Added bounded-pool rejection/termination coverage and reran the Runtime HTTP
   integration, including health availability during a blocked Brain request.
+- Added same-Profile Runtime start/stop exclusion with a fair JVM lock, an OS
+  file lock, ten-second timeout, owner PID/operation metadata, and crash-safe
+  reacquisition. Different Profiles remain independent.
+- Bounded Terminal plans and operations (128/512), added a four-worker/64-entry
+  operation queue, retained terminal results for 30 minutes, and serialized all
+  managed operations for the same instance across Runtime/install categories.
+- Added lock timeout/recovery/different-Profile, same-instance serialization,
+  and plan/operation expiry tests.
 
 ## Remaining work
 

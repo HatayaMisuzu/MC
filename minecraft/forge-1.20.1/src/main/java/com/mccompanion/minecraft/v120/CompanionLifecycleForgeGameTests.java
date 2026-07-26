@@ -13,8 +13,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.animal.Cow;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Zombie;
+import net.minecraft.world.entity.projectile.Snowball;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
@@ -746,6 +748,15 @@ public final class CompanionLifecycleForgeGameTests {
                 scanObservation.candidates().get(0).distanceSquared()
                         <= scanObservation.candidates().get(1).distanceSquared(),
                 "world scan candidates were not distance-ranked");
+        if (!Boolean.getBoolean("mccompanion.runtime.e2e")) {
+            assertPlacementUseEntityAttackAndVein(
+                    helper,
+                    registry,
+                    body,
+                    companionId,
+                    "forge-craft-smelt-lease",
+                    1L);
+        }
         helper.assertTrue(body.addItem(new ItemStack(Items.OAK_LOG)), "craft input fixture add failed");
         helper.assertTrue(body.addItem(new ItemStack(Items.RAW_IRON)), "smelt input fixture add failed");
         helper.assertTrue(body.addItem(new ItemStack(Items.COAL)), "smelt fuel fixture add failed");
@@ -1000,6 +1011,231 @@ public final class CompanionLifecycleForgeGameTests {
         helper.getLevel().getServer().getPlayerList().remove(owner);
         ownerConnection.disconnect(Component.literal("Forge reconnect GameTest complete"));
         helper.succeed();
+    }
+
+    private static void assertPlacementUseEntityAttackAndVein(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            CompanionPlayer body,
+            String companionId,
+            String leaseId,
+            long epoch) {
+        BlockPos placementTarget = body.blockPosition().offset(1, 0, 0);
+        BlockPos placementSupport = placementTarget.below();
+        body.serverLevel().setBlockAndUpdate(placementSupport, Blocks.STONE.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(placementTarget, Blocks.AIR.defaultBlockState());
+        helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE)), "placement fixture add failed");
+        int cobblestoneBefore = body.getInventory().countItem(Items.COBBLESTONE);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                leaseId,
+                                epoch,
+                                "forge-place",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "PlaceBlock",
+                                        "minecraft:cobblestone",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        placementTarget.getX(),
+                                        placementTarget.getY(),
+                                        placementTarget.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "placement primitive failed to start");
+        registry.tick();
+        helper.assertTrue(
+                body.serverLevel().getBlockState(placementTarget).is(Blocks.COBBLESTONE),
+                "placement primitive did not create the exact live block");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.COBBLESTONE) == cobblestoneBefore - 1,
+                "placement primitive did not consume the vanilla item");
+
+        helper.assertTrue(body.addItem(new ItemStack(Items.SNOWBALL, 2)), "item-use fixture add failed");
+        int snowballsBefore = body.getInventory().countItem(Items.SNOWBALL);
+        int projectilesBefore = body.serverLevel()
+                .getEntitiesOfClass(Snowball.class, body.getBoundingBox().inflate(8.0D))
+                .size();
+        body.setXRot(-30.0F);
+        body.xRotO = -30.0F;
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                leaseId,
+                                epoch,
+                                "forge-use",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "UseItem",
+                                        "minecraft:snowball",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "item-use primitive failed to start");
+        registry.tick();
+        helper.assertTrue(
+                body.getInventory().countItem(Items.SNOWBALL) == snowballsBefore - 1,
+                "item-use primitive did not consume one snowball");
+        helper.assertTrue(
+                body.serverLevel()
+                                .getEntitiesOfClass(Snowball.class, body.getBoundingBox().inflate(8.0D))
+                                .size()
+                        > projectilesBefore,
+                "item-use primitive did not create a vanilla projectile");
+
+        Cow cow = EntityType.COW.create(body.serverLevel());
+        helper.assertTrue(cow != null, "entity-interaction fixture creation failed");
+        cow.moveTo(body.getX() + 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        body.serverLevel().addFreshEntity(cow);
+        helper.assertTrue(body.addItem(new ItemStack(Items.WHEAT)), "entity-interaction item add failed");
+        for (int slot = 0; slot < 9; slot++) {
+            if (body.getInventory().getItem(slot).is(Items.WHEAT)) {
+                body.getInventory().selected = slot;
+                break;
+            }
+        }
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                leaseId,
+                                epoch,
+                                "forge-interact-entity",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "InteractEntity",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        cow.getUUID().toString(),
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "entity-interaction primitive failed to start");
+        registry.tick();
+        helper.assertTrue(cow.isInLove(), "entity interaction did not invoke the vanilla cow interaction");
+        cow.discard();
+
+        Zombie attacked = EntityType.ZOMBIE.create(body.serverLevel());
+        helper.assertTrue(attacked != null, "attack fixture creation failed");
+        attacked.moveTo(body.getX() + 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        attacked.setHealth(0.1F);
+        body.serverLevel().addFreshEntity(attacked);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                leaseId,
+                                epoch,
+                                "forge-attack-entity",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "AttackEntity",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        attacked.getUUID().toString(),
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "attack primitive failed to start");
+        registry.tick();
+        helper.assertTrue(!attacked.isAlive(), "attack primitive did not damage the exact live target");
+
+        body.serverLevel().setBlockAndUpdate(placementTarget, Blocks.AIR.defaultBlockState());
+        BlockPos veinOrigin = body.blockPosition().offset(2, 0, 0);
+        BlockPos veinSecond = veinOrigin.above();
+        body.serverLevel().setBlockAndUpdate(veinOrigin.below(), Blocks.STONE.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(veinOrigin, Blocks.DIRT.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(veinSecond, Blocks.DIRT.defaultBlockState());
+        int dirtBefore = body.getInventory().countItem(Items.DIRT);
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                leaseId,
+                                epoch,
+                                "forge-mine-vein",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "MineResourceVein",
+                                        "minecraft:dirt",
+                                        2,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        veinOrigin.getX(),
+                                        veinOrigin.getY(),
+                                        veinOrigin.getZ(),
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        "",
+                                        null,
+                                        null,
+                                        "",
+                                        null))
+                        .success(),
+                "multi-block vein primitive failed to start");
+        for (int tick = 0; tick < 80; tick++) registry.tick();
+        helper.assertTrue(
+                body.serverLevel().getBlockState(veinOrigin).isAir()
+                        && body.serverLevel().getBlockState(veinSecond).isAir(),
+                "multi-block vein primitive did not break both connected blocks");
+        helper.assertTrue(
+                body.getInventory().countItem(Items.DIRT) >= dirtBefore + 2,
+                "multi-block vein primitive did not claim both vanilla drops");
+
     }
 
     private static void continueAfterRetreat(

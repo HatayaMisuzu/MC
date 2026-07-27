@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 15:25 +08:00
+Updated: 2026-07-27 15:50 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -10,9 +10,9 @@ only completion matrix.
 
 ## Current checkpoint
 
-- Current stage: `6 — AUTOMATION_AND_RELEASE_GATES`
+- Current stage: `6 — REMOTE_CI_CLOSURE`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `fbc6a3d15d0637f641ff7ac3ab71da548ab32ff4`
+- Latest committed source SHA: `0469a179111b2202242493e001ea45575e50a773`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -26,6 +26,8 @@ only completion matrix.
 - Stage 4 human-play result: `NOT_RUN`
 - Stage 5 automated result: `LOCALLY_VERIFIED`
 - Stage 5 Live-Hermes result: `NOT_RUN`
+- Stage 6 local result: `LOCALLY_VERIFIED`
+- Stage 6 remote-CI result: `NOT_RUN`
 
 ## Frozen environment
 
@@ -122,6 +124,8 @@ Passed on the frozen SHA:
   isolated unknown-namespace Mod fixture; this is not Live-Hermes,
   third-party-Mod, or human-play evidence.
 - Live Hermes and human play evidence are intentionally absent.
+- The user explicitly deferred Live Hermes and human play on 2026-07-27. They
+  remain pending labels and are not release evidence for this checkpoint.
 
 ## Completed work
 
@@ -469,13 +473,40 @@ Passed on the frozen SHA:
   `UNSUPPORTED_GENERIC_INTERACTION` result without mutating world, menu, or
   Memory state. Focused Runtime tests pass. These tests establish bounded
   mechanism and authority behavior, not Live-Hermes judgment.
+- Stage 6 gate-hardening slice `0469a17` gives Forge Runtime E2E and Forge
+  two-process restart recovery their own unconditional Minecraft-heavy CI
+  steps. The navigation fixtures now run Forge's four large cases in isolated
+  batches, wait for observed door opening before dynamic route invalidation,
+  and reserve collision clearance around observed entities. Fabric 31/31 and
+  Forge 4/4 real-server GameTests pass after the correction.
+- The complete local Stage 6 chain passes: `clean check`, all three Loader
+  builds and launches, Fabric 31/31, Forge 4/4 and NeoForge 1/1 GameTests,
+  authenticated Runtime/Fabric and Runtime/Forge E2E, both two-process restart
+  gates, crash/no-replay reconciliation, unknown-Mod generic E2E, Brain
+  reconnect, Capsule/candidate review, 105-turn long play, 200-turn soak,
+  Web unit/build and Chromium product E2E, multi-Profile isolation, disabled
+  Runtime launch, TUI/root/release/HTML entry points, package verification and
+  the clean-extraction install/update/rollback/two-uninstall Golden Path.
+- The local Web dependency audit reports zero vulnerabilities. The verified
+  `0.3.0` candidate at source `0469a179111b2202242493e001ea45575e50a773`
+  contains 401 payload files and 31 SBOM packages. ZIP SHA-256 is
+  `acd85f451f039268deb4c74b9a107ce1d1369cd8e0e89a5a51c97d24f78bf4b2`;
+  manifest SHA-256 is
+  `03b4bce034f887b5a20c03260b01191a28637e55c52802650ee482a8ebb6670f`;
+  SBOM SHA-256 is
+  `ca47c976886278aa5879b05d25f6e655676aec62a9fc223fe2bbe7fa8cfb61b2`.
+- GitHub Dependency Graph was enabled through the repository's official
+  vulnerability-alerts control and the SBOM endpoint now returns SPDX 2.3 with
+  276 packages. The prior dependency-review configuration blocker is ready for
+  same-SHA remote rerun.
 
 ## Remaining work
 
-- Complete stage 6 automation and release gates before requesting any
-  Live-Hermes or human action.
-- Discover the real Hermes entry point and credentials safely at stage 7.
-- Run real dual-loader Hermes and human acceptance before any final seal.
+- Push the Stage 6 closure and record same-SHA PR fast, Windows package,
+  Minecraft heavy, dependency-review and both CodeQL results.
+- Live Hermes discovery/verification and human play are user-deferred. Keep
+  `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING` and `HUMAN_PLAYTEST_PENDING`;
+  do not convert local automation into either form of evidence.
 
 ## User-action blockers
 

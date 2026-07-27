@@ -37,6 +37,8 @@ legacyForge {
             gameDirectory = project.file('build/launch-test/server')
             programArgument '--nogui'
             systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+            systemProperty 'mccompanion.persistence.probe',
+                    "${project.findProperty('mccompanionPersistenceProbe') ?: ''}"
         }
         gameTestServer {
             type = "gameTestServer"

@@ -166,6 +166,16 @@ tasks.register('persistenceRestartTest') {
     }
 }
 
+tasks.register('forgePersistenceRestartTest') {
+    group = 'verification'
+    doLast {
+        exec {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/forge-persistence-restart.ps1').absolutePath
+        }
+    }
+}
+
 tasks.register('forbiddenApiCheck') {
     group = 'verification'
     doLast {

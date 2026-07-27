@@ -3,6 +3,7 @@ package com.mccompanion.minecraft.forge;
 import com.mccompanion.minecraft.bootstrap.BootstrapCapabilityReport;
 import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
+import com.mccompanion.minecraft.v120.ForgePersistenceRestartProbe;
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
@@ -74,6 +75,7 @@ public final class MinecraftAiCompanionForge {
         CompanionRegistry next = new CompanionRegistry(activeServer, LOGGER);
         registry = next;
         next.start();
+        ForgePersistenceRestartProbe.begin(activeServer, next, LOGGER);
         runtimeBridge = RuntimeBridge.start(activeServer, next, LOGGER);
     }
 
@@ -84,6 +86,7 @@ public final class MinecraftAiCompanionForge {
         CompanionRegistry current = registryFor(event.getServer());
         if (current != null) {
             current.tick();
+            ForgePersistenceRestartProbe.tick(event.getServer(), current, LOGGER);
         }
     }
 

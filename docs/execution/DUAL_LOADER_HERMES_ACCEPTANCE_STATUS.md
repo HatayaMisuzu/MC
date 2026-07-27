@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `9b0ceed34ed918d18309939f47ebb9e0ed925735`
+- Latest committed source SHA: `08dd17c289b615c9224e6915608591a7272aa2fb`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -381,6 +381,17 @@ Passed on the frozen SHA:
   Runtime E2E gates, pure planner tests, root `check`, and all Loader builds pass.
   Door/stairs/swim/climb/entity obstruction, restart, user-takeover and combined
   task breadth remain open; no Live-Hermes or human evidence is claimed.
+- Stage 4 survival-traversal slice `08dd17c` adds vanilla door opening,
+  stairs/jumping, vertical swimming, ladder-facing ascent, live stationary-entity
+  avoidance, and mid-route pause/resume to both supported Loader paths. The
+  route validity check now evaluates the planned edge rather than treating
+  harmless body/waypoint drift as four immediate invalidations, and entity
+  avoidance excludes the Owner so externally requested follow targets remain
+  reachable. A lower-cost route unit case verifies deterministic cost selection.
+  Fabric 31/31 and Forge 3/3 real-server GameTests, root `check`, Web tests, and
+  all Loader builds pass. Vines, loaded-boundary execution, moving/invalid
+  targets, explicit mid-route cancellation, user takeover, Runtime process
+  restart, and combined task scenarios remain open.
 
 ## Remaining work
 

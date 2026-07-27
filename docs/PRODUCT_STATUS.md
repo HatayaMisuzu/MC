@@ -2,8 +2,8 @@
 
 Updated: 2026-07-27
 
-MCAC 0.3.0 has reached the post-merge automated productization freeze step. Exact module evidence
-and remaining automated gates are maintained only in
+MCAC 0.3.0 has reached the automated productization baseline. Exact module evidence is maintained
+only in
 [RC_COMPLETION_MATRIX.md](RC_COMPLETION_MATRIX.md).
 
 ## Current support
@@ -26,8 +26,9 @@ its fixtures do not establish arbitrary version, Loader, Mod or modpack compatib
   backend and an isolated test launcher instance.
 - Repository documentation, cleanup, full candidate gates, exact candidate release integrity,
   remote CI, and the ordinary merge to `main` are complete.
-- Exact-main release integrity, remote CI, and the immutable annotated baseline tag are the only
-  remaining automated closure actions.
+- The exact-main Release integrity and remote gates passed before the final documentation-only
+  closure commit; that commit is accepted only after its own exact-SHA gates and immutable
+  annotated baseline tag are complete.
 - Live Hermes and subjective human play are explicitly deferred until after the automated baseline.
 
 The only permitted external follow-up labels are:

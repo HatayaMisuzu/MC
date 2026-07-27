@@ -29,7 +29,7 @@ completion matrix. Status values here are `COMPLETED`, `IN_PROGRESS`, `INTERRUPT
 | 13 | Exact candidate Release/Manifest/SBOM/SHA validation | `COMPLETED` | A clean candidate rebuild passed package verification and Golden Path. Independent validation matched all 410 Manifest payload entries by path/size/SHA, all 412 `SHA256SUMS` entries, the external ZIP sidecar, source-bound SPDX 2.3 metadata for 32 versioned/licensed/purl components, required bilingual/compatibility/legal documents, safe ZIP paths, one SLF4J provider and no development/user-state/local-path/secret-shaped residue. The final evidence-only commit is rebuilt once more before push so `sourceCommit` remains exact. |
 | 14 | Commit, push and exact-SHA remote CI | `COMPLETED` | Candidate `48f799e8e880858c81a8516c6d92f128bda24b60`: PR fast `30287614857`, Windows terminal/package `30287614849`, Minecraft heavy `30287667164`, and dependency review plus CodeQL Java/JS `30287614859` all passed. |
 | 15 | PR #3 review readiness and merge to `main` | `COMPLETED` | PR title/body and evidence were aligned, no review threads existed, all required candidate gates were green, PR was marked Ready and merged normally (not squash/rebase) as `20b3b2eaa87756884e3d96e67737c99554d5b67e`. |
-| 16 | Post-merge exact-main rebuild, CI and frozen baseline/tag | `IN_PROGRESS` | Baseline and closeout reports are being committed; the resulting exact main SHA must then rebuild Release, pass applicable local/remote gates, and receive the immutable annotated tag. |
+| 16 | Post-merge exact-main rebuild, CI and frozen baseline/tag | `COMPLETED` | Post-merge main `cb5ddfee5773d74cf4fa970eb29221d6d0223e77` rebuilt the source-bound Release and passed fast `30290340793`, Windows `30290340461`, Minecraft heavy `30290340900`, and supply-chain/CodeQL `30290341011`. Baseline and closeout reports are committed; the final documentation-only closure commit is rechecked at its exact SHA and receives the immutable annotated tag. |
 
 ## Explicit deferrals
 
@@ -40,5 +40,6 @@ completion matrix. Status values here are `COMPLETED`, `IN_PROGRESS`, `INTERRUPT
 
 ## Recovery decision
 
-Work is at item 16. Items 1 through 15 are complete and are not repeated. No current local browser
+Items 1 through 16 are complete. The final documentation-only closure commit is accepted only
+after its own source-bound Release and exact-SHA remote checks are green. No current local browser
 or Terminal process owns port `32145`.

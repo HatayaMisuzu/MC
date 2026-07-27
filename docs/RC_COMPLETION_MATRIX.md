@@ -173,6 +173,21 @@ Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_V
 - `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`
 - `HUMAN_PLAYTEST_PENDING`
 
+## Automated productization freeze checkpoint
+
+Post-merge main `cb5ddfee5773d74cf4fa970eb29221d6d0223e77` rebuilt the Release with an exact
+`sourceCommit` match and passed PR/main fast `30290340793`, Windows terminal/package
+`30290340461`, Minecraft heavy `30290340900`, and supply-chain/CodeQL Java plus
+JavaScript/TypeScript `30290341011`. The Windows chain passed after one audited retry of an earlier
+main SHA whose Forge Maven TLS handshake was terminated before product tests. The first
+post-merge CodeQL Java run exposed that a restored Gradle cache could result in no observed
+compilation; the workflow now forces a no-cache task rerun, and the corrected analysis passed.
+
+The final documentation-only closure commit is the target of annotated tag
+`mcac-productization-baseline-0.3.0`. Its exact-SHA runs and final Release/Manifest/SBOM hashes are
+recorded in that immutable tag annotation and the final delivery; they cannot be embedded into the
+commit before the commit and its runs exist.
+
 ## Historical implementation order
 
 This list records the original build sequence only. It is not the current task queue; the active

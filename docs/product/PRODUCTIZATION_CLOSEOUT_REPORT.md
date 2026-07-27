@@ -32,7 +32,7 @@ tag annotation, and final delivery.
 | 13 | Exact candidate Release/Manifest/SBOM/SHA | PASS |
 | 14 | Exact candidate remote gates | PASS |
 | 15 | PR ready, reviewed, ordinary merge to main | PASS |
-| 16 | Exact-main Release, CI, baseline and immutable tag | Recorded by the tag target and final delivery |
+| 16 | Exact-main Release, CI, baseline and immutable tag | PASS; final tag identity and hashes are recorded by the tag and final delivery |
 
 ## Delivered scope
 
@@ -80,6 +80,11 @@ REMOTE_CODEQL_JS=30287614859 PASS
 
 Post-merge exact-main run IDs are intentionally external to this commit and are placed in the
 immutable annotated-tag message and final delivery.
+
+The pre-freeze exact-main checkpoint `cb5ddfee5773d74cf4fa970eb29221d6d0223e77`
+passed fast `30290340793`, Windows `30290340461`, Minecraft heavy `30290340900`, and
+supply-chain/CodeQL `30290341011`. The final documentation-only tag target is independently
+rechecked, and its run IDs are recorded in the tag annotation and final delivery.
 
 ## Limitations and follow-up
 

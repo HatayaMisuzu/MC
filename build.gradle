@@ -360,14 +360,21 @@ tasks.register('stageTerminal') {
             from('README.md') { rename { 'README.txt' } }
             from('KNOWN_LIMITATIONS.md')
             from('CODEX_EXECUTION.md')
+            from('docs/INDEX.md') { into 'docs' }
+            from('docs/PRODUCT_STATUS.md') { into 'docs' }
             from('docs/ARCHITECTURE.md') { into 'docs' }
+            from('docs/COMPATIBILITY.md') { into 'docs' }
             from('docs/CONTROL_TERMINAL.md') { into 'docs' }
             from('docs/MCP_PROTOCOL.md') { into 'docs' }
             from('docs/TASK_GRAPH_DSL.md') { into 'docs' }
             from('docs/RC_COMPLETION_MATRIX.md') { into 'docs' }
             from('docs/LIVE_BRAIN_HUMAN_PLAYTEST.md') { into 'docs' }
             from('docs/POST_PRODUCTIZATION_P0.md') { into 'docs' }
+            from('docs/user') { into 'docs/user' }
+            from('docs/developer') { into 'docs/developer' }
+            from('docs/compatibility') { into 'docs/compatibility' }
             from('LICENSE') { into 'legal' }
+            from('NOTICE') { into 'legal' }
         }
         def root=terminalImage.get().asFile
         def sha256={f->java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()}

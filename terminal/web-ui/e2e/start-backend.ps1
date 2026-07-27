@@ -15,6 +15,18 @@ $env:APPDATA = Join-Path $fixture 'roaming-app-data'
 New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
 New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
 
+function Get-Sha256Hex {
+    param([string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [System.BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '')
+    } finally {
+        $algorithm.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function New-CompatibilityFixture {
     param([string]$Output, [string]$Version, [string]$Value)
     $stage = Join-Path $repository ('build\playwright-compat-stage-' + $Version)
@@ -83,7 +95,7 @@ limitations:
     $stagePrefix = $stage.TrimEnd('\') + '\'
     $sums = Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
         $relative = $_.FullName.Substring($stagePrefix.Length).Replace('\', '/')
-        "$(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256 | Select-Object -ExpandProperty Hash)  $relative"
+        "$(Get-Sha256Hex -Path $_.FullName)  $relative"
     }
     [System.IO.File]::WriteAllText((Join-Path $stage 'SHA256SUMS.txt'), (($sums -join "`n") + "`n").ToLowerInvariant(), $utf8)
     Remove-Item -LiteralPath $Output -Force -ErrorAction SilentlyContinue

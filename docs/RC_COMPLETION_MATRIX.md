@@ -86,6 +86,10 @@ index, activate, update, rollback, quarantine, disable and removal. Fresh screen
 for overflow, stale Loader metadata and leaked `undefined` values. The production TypeScript build,
 Web lint, 10 Web test files / 15 tests, Compatibility Host tests and Terminal tests pass locally.
 This is local browser automation, not Live Hermes or human-play evidence.
+Documentation now has a single reader-facing status page, sole evidence matrix, bilingual user
+guides, developer entry and historical archive boundary. The strengthened documentation gate and
+the repository productization audit pass alongside secret, dependency-pinning and npm production
+audit checks; exact final-candidate release and remote results are still required.
 
 Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_VERIFIED`,
 `REMOTELY_VERIFIED`, and `BLOCKED_BY_EXCLUDED_LIVE_TEST`. Replay evidence is not Live evidence.

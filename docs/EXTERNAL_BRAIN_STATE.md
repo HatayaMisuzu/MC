@@ -2,7 +2,7 @@
 
 Updated: 2026-07-22
 
-## Current status
+## Historical status log
 
 The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
@@ -11,11 +11,10 @@ updating the Codex Goal UI.
 This is a chronological engineering log, not the completion authority. Current status is in
 `docs/RC_COMPLETION_MATRIX.md`.
 
-The authoritative matrix currently classifies the repository as
-`READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`, with Live-provider verification and human playtesting
-still pending. This file is a chronological implementation log: earlier slice-level statements
-about incomplete Primitive, Task Graph, Workspace, UI, or release work are historical and must not
-override the current matrix.
+This file is superseded as a status source. Its slice-level readiness labels, SHA references and
+statements about incomplete or completed work describe the repository when they were written and
+must not be interpreted as current. Use the matrix for evidence and
+[PRODUCT_STATUS.md](PRODUCT_STATUS.md) for the reader-facing current state.
 
 ## Completed in this slice
 

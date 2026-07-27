@@ -50,8 +50,7 @@ play. `docs/RC_COMPLETION_MATRIX.md` remains the only completion matrix.
 
 ## Next step
 
-Complete documentation governance and repository productization cleanup, then run the final local
-candidate, release-integrity and exact-SHA remote gates.
+Run the final clean-tree local candidate, release-integrity and exact-SHA remote gates.
 
 ## Support and evidence boundaries
 

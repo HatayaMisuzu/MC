@@ -5,8 +5,10 @@ Hermes、DeepSeek 或其他外部 LLM/Agent 是唯一高层决策者；MCAC 提�
 Tools、上下文、记忆、搜索、安全、持久化、验证、确定性 Task Graph 执行和产品界面。
 MCAC 不是内置高层 Agent，也不是隐藏 Planner。
 
-本版本按 Fabric-first RC 交付：自动化验证负责安装、Runtime、Task Graph、Skill Workspace、
-诊断和恢复边界；真实付费 Brain 验证与真人启动器/游玩测试明确留给拿到此 RC 后执行。
+本版本以 Fabric 1.21.1 与 Forge 1.20.1 双 Full Runtime Bridge 为自动化产品目标；
+NeoForge 1.21.1 保持 `LOCAL_ONLY`。自动化验证负责安装、Runtime、Task Graph、Skill
+Workspace、兼容层、诊断和恢复边界；Live Brain 验证与真人启动器/游玩测试明确留到
+产品化冻结基线建立后执行。
 自动化证据与外部待验证项以 [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md) 为准。
 
 ## 使用发布包
@@ -105,9 +107,15 @@ build/distributions/mcac-release.zip
 
 当前文档入口：
 
+- [文档导航](docs/INDEX.md)
+- [当前产品状态与支持矩阵](docs/PRODUCT_STATUS.md)
+- [中文用户指南](docs/user/USER_GUIDE.zh-CN.md)
+- [English user guide](docs/user/USER_GUIDE.en-US.md)
 - [架构与权限边界](docs/ARCHITECTURE.md)
 - [当前执行约束](CODEX_EXECUTION.md)
 - [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md)
+- [兼容层工程](docs/compatibility/MCAC_COMPATIBILITY_LAYER_ENGINEERING.md)
+- [开发者入口](docs/developer/README.md)
 - [Typed Task Graph DSL](docs/TASK_GRAPH_DSL.md)
 - [MCP 协议](docs/MCP_PROTOCOL.md)
 - [真实 Brain 与真人试玩指南](docs/LIVE_BRAIN_HUMAN_PLAYTEST.md)

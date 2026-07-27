@@ -2,8 +2,10 @@
 
 Updated: 2026-07-22
 
-This roadmap starts only after the Fabric 1.21.1 productization closure. The three items below are
-equal-priority P0 directions; none is implemented or claimed by the current RC.
+This roadmap starts only after the dual-Full-Bridge automated productization baseline is frozen.
+It is a future roadmap, not a current status source. The Compatibility Host has begun as a bounded
+declaration-only lifecycle and management foundation; that foundation does not mean arbitrary
+versions, Loaders or third-party Mods are supported.
 
 ## P0-A: Sub-Agent delegation
 
@@ -14,21 +16,19 @@ context, Tool allowlists, read/plan/execute permissions, budgets, expiry and rev
 owner, Evidence return, and a prohibition on recursive uncontrolled delegation or direct Memory
 approval.
 
-## P0-B: Any-version and Loader Bridge
+## P0-B: Broader version and Loader Bridge
 
-The future Bridge should detect instance version and Loader, keep the Runtime protocol
-version-independent, negotiate capabilities, and use thin isolated version shims with conformance
-tests. Shim generation, compilation, installation, and rollback must be user-approved and isolated.
-Unsupported combinations must remain honestly `LOCAL_ONLY`; the Runtime Brain must never receive
-shell, compiler, source-tree, or unrestricted filesystem access.
+Build on the current Compatibility Host and exact instance fingerprinting to add further version
+and Loader implementations. The Runtime protocol remains version-independent; thin isolated
+version shims require conformance tests. Unsupported combinations remain honestly `LOCAL_ONLY`.
+Runtime Brains never receive shell, compiler, source-tree or unrestricted filesystem access.
 
-## P0-C: True arbitrary-Mod compatibility
+## P0-C: Broader third-party Mod compatibility
 
-The future path combines static instance/Mod analysis with live Registry, recipe, tag, component,
-menu, and generic-interaction observations; bounded manuals or authorized search; capability-gap
-discovery; and promotion of reusable generic abstractions. It may classify an unknown mechanism and
-return unsupported. It must not add one production Handler per ordinary Mod, claim one fixture proves
-universal support, or let a Runtime Brain inject code.
+Extend the current Registry/generic-interaction and declaration-only pack foundations with a field
+pack corpus, stronger conformance evidence and, only after a separately reviewed security design,
+bounded native extension isolation. Unknown mechanisms may remain unsupported. One fixture never
+proves universal compatibility, and Runtime Brains cannot inject code.
 
 ## Activation gate
 

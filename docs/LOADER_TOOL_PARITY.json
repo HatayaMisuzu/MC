@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "765997a8962527d1e46d9ad9aab417197a2a7252",
-  "generatedAt": "2026-07-27T14:29:00+08:00",
+  "sourceCommit": "bfa7696eb1a2390831424f4484021f5a6e1780a1",
+  "generatedAt": "2026-07-27T14:37:00+08:00",
   "statusValues": ["PASS", "PARTIAL", "NOT_IMPLEMENTED", "NOT_RUN"],
   "loaders": {
     "fabric-1.21.1": {"java":21,"bridge":"PASS","automatedEvidence":"PASS","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"},
@@ -13,7 +13,7 @@
     {"name":"task.resume","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
     {"name":"task.cancel","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":null},
     {"name":"movement.follow","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge uses its bounded 1.20.1 collision-aware travel executor."},
-    {"name":"movement.navigate","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both Loader adapters use the same bounded deterministic A* contract and ordinary ServerPlayer input. Fabric 31/31 and Forge 3/3 GameTests verify door interaction, stairs/jumping, vertical swimming, ladder/vine climbing, observed entity avoidance, mid-route pause/resume, dynamic re-planning, unchanged hazard fixtures without health loss, moving follow targets, explicit owner stop, non-finite target rejection, unloaded-target non-loading with safe PAUSED evidence, and observed arrival. Separate two-process dedicated-server gates verify UUID/body/inventory recovery and safe PAUSED quarantine on both Loaders; passive user-takeover and combined-task breadth remain pending."},
+    {"name":"movement.navigate","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both Loader adapters use the same bounded deterministic A* contract and ordinary ServerPlayer input. Fabric 31/31 and Forge 3/3 GameTests verify door interaction, stairs/jumping, vertical swimming, ladder/vine climbing, observed entity avoidance, mid-route pause/resume, dynamic re-planning, unchanged hazard fixtures without health loss, moving follow targets, explicit owner stop, non-finite target rejection, unloaded-target non-loading with safe PAUSED evidence, observed arrival, and one same-body navigation-to-collection-to-mining-to-container sequence with exact world and inventory deltas. Separate two-process dedicated-server gates verify UUID/body/inventory recovery and safe PAUSED quarantine on both Loaders; passive user-takeover remains pending."},
     {"name":"movement.return","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PARTIAL"},"knownDifference":"Forge Runtime lease GameTest covers travel rather than return."},
     {"name":"movement.step","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge publishes NavigateTo over the authenticated capability intersection and reuses its already-verified bounded vanilla travel executor."},
     {"name":"movement.look","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both use bounded vanilla body rotation and verify the resulting view vector."},

@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 14:29 +08:00
+Updated: 2026-07-27 14:37 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `765997a8962527d1e46d9ad9aab417197a2a7252`
+- Latest committed source SHA: `bfa7696eb1a2390831424f4484021f5a6e1780a1`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -423,6 +423,13 @@ Passed on the frozen SHA:
   surface. The production behavior path remains ordinary player input. Local
   `forbiddenApiCheck` and the full Forge two-process restart gate both pass
   after the correction.
+- Stage 4 resource-combination slice `bfa7696` extends the same-body Loader
+  navigation scenarios through collection, mining, and container work. After
+  the navigation control/safety route, each Loader body walks to and picks up
+  one coal item entity, breaks one exact dirt target and receives its drop, then
+  withdraws one iron ingot from a real chest. Assertions cover the entity/world
+  mutation, source-container delta, and body-inventory deltas. Fabric 31/31,
+  Forge 3/3, and `forbiddenApiCheck` pass.
 
 ## Remaining work
 

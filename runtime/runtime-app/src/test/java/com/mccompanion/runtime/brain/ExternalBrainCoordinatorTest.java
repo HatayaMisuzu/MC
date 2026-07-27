@@ -74,6 +74,64 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void externalBrainCanHonestlyStopAtUnsupportedGenericInteractionAfterReadOnlyDiscovery() {
+        List<String> calls = new ArrayList<>();
+        ToolGateway discovery = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(
+                        new ToolDefinition(
+                                "registry.describe", "1.0", "Describe connected Registry content",
+                                Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                                Duration.ofSeconds(5), true),
+                        new ToolDefinition(
+                                "recipe.query", "1.0", "Query connected recipes",
+                                Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                                Duration.ofSeconds(5), true));
+            }
+
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                calls.add(call.name());
+                if (call.name().equals("registry.describe")) {
+                    return new ToolResult(
+                            call.callId(), call.name(), true, "OK",
+                            Json.object().put("id", "mcac_unknown_fixture:special_console")
+                                    .put("genericInteraction", false), true);
+                }
+                return new ToolResult(
+                        call.callId(), call.name(), true, "OK",
+                        Json.object().putArray("recipes"), true);
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> switch (turns.getAndIncrement()) {
+            case 0 -> BrainTurnResult.tools(List.of(new ToolCall(
+                    "describe-special", "registry.describe",
+                    Json.object().put("kind", "BLOCK")
+                            .put("id", "mcac_unknown_fixture:special_console"))));
+            case 1 -> BrainTurnResult.tools(List.of(new ToolCall(
+                    "query-special-recipe", "recipe.query",
+                    Json.object().put("output", "mcac_unknown_fixture:special_result"))));
+            default -> BrainTurnResult.finalResponse(
+                    "UNSUPPORTED_GENERIC_INTERACTION: Registry and recipe observations expose no "
+                            + "bounded generic interaction for this special mechanism.");
+        });
+
+        try (ExternalBrainCoordinator coordinator =
+                     new ExternalBrainCoordinator(brain, discovery, 4)) {
+            BrainCoordinatorResult result = coordinator.continueTurn(
+                    "external-agent", "c1",
+                    "Use the unknown special console without guessing its internal mechanism.",
+                    context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+            assertTrue(result.response().startsWith("UNSUPPORTED_GENERIC_INTERACTION"));
+            assertEquals(List.of("registry.describe", "recipe.query"), calls);
+            assertTrue(calls.stream().noneMatch(name ->
+                    name.startsWith("block.") || name.startsWith("menu.")
+                            || name.startsWith("memory.")));
+        }
+    }
+
+    @Test
     void acceptedMinecraftCommandIsNeverReturnedToBrainBeforeTerminalFabricObservation() {
         AtomicInteger turns = new AtomicInteger();
         ToolGateway gateway = new ToolGateway() {

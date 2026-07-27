@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-26 22:19 +08:00
+Updated: 2026-07-27 13:07 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -10,9 +10,9 @@ only completion matrix.
 
 ## Current checkpoint
 
-- Current stage: `3 — FORGE_FULL_RUNTIME_BRIDGE`
+- Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `ac50c74c72bb6722d6c3e06dcc838a4bf67c6715`
+- Latest committed source SHA: `9b0ceed34ed918d18309939f47ebb9e0ed925735`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -41,11 +41,12 @@ only completion matrix.
 - Fabric 1.21.1: current audited RC full Runtime path; Live Brain and human
   verification remain pending.
 - Forge 1.20.1: the connected Runtime bridge now performs authenticated control,
-  live Registry/recipe/body/menu observations, eight bounded primitive actions,
-  opaque exact-menu sessions, player-text ingress, owner block-activity handoff,
-  lifecycle publication and safe disconnect pause. Composite execution,
-  recovery breadth, global navigation, installer/Doctor acceptance and external
-  verification remain incomplete, so this is not yet a Full Runtime Bridge.
+  live Registry/recipe/body/menu observations, bounded primitive and composite
+  actions, opaque exact-menu sessions, player-text ingress, owner block-activity
+  handoff, lifecycle publication, safe disconnect pause, and the shared bounded
+  global-navigation core. Recovery breadth, the full navigation scenario matrix,
+  installer/Doctor acceptance and external verification remain incomplete, so
+  this is not yet a Full Runtime Bridge.
 - NeoForge 1.21.1: `LOCAL_ONLY`; it is outside the new Full Bridge target.
 - The current release staging includes artifacts for all three targets. Loader
   installation selection and final public support wording require later
@@ -369,6 +370,17 @@ Passed on the frozen SHA:
   GameTest structure overlap. Forge 3/3 GameTests, authenticated Runtime/Forge
   E2E, root `check`, and all Loader builds pass. This is real Forge server
   automation, not Live Hermes or human-play evidence.
+- Stage 4 initial navigation slice `9b0ceed` replaces local yaw-offset avoidance
+  with a shared bounded deterministic A* core and thin 1.20.1/1.21.1 collision,
+  support, hazard, water, climbable and door adapters. Destination choice remains
+  external-Brain authority. Both Loader directors re-plan on route invalidation,
+  target movement and lack of progress, and report honest unloaded-target,
+  out-of-range and unreachable outcomes. Fabric 28/28 and Forge 3/3 real-server
+  GameTests verify travel around an initial wall, re-planning after a second wall,
+  unchanged obstacles and observed arrival. The authenticated Fabric and Forge
+  Runtime E2E gates, pure planner tests, root `check`, and all Loader builds pass.
+  Door/stairs/swim/climb/entity obstruction, restart, user-takeover and combined
+  task breadth remain open; no Live-Hermes or human evidence is claimed.
 
 ## Remaining work
 

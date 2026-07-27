@@ -20,7 +20,7 @@ export function GamePage() {
       <StatusRail instance={selected} runtime={runtime.data} session={session.data} />
       <div className="session-layout">
         <section className="session-state"><header><h2>实时会话</h2><ActionButton tone="ghost" icon={<RefreshCw size={15} />} onClick={() => { void runtime.refresh(); void session.refresh() }}>刷新</ActionButton></header><dl className="detail-list"><div><dt>Launcher</dt><dd>{selected.launcherId}</dd></div><div><dt>Runtime</dt><dd><StatusBadge value={runtime.data?.healthy ? 'ONLINE' : 'WAITING'} /></dd></div><div><dt>Mod</dt><dd><StatusBadge value={selected.mode === 'LOCAL_ONLY' ? 'LOCAL_ONLY' : session.data?.connected ? 'CONNECTED' : 'WAITING'} /></dd></div><div><dt>会话数</dt><dd>{session.data?.sessions ?? 0}</dd></div><div><dt>Companion</dt><dd>{session.data?.companions ?? 0}</dd></div><div><dt>Mode</dt><dd><StatusBadge value={session.data?.mode ?? selected.mode} /></dd></div></dl></section>
-        <section className="flow-explanation"><h2>当前流程</h2><ol><li>运行动态 Doctor 并阻止高风险目标</li><li>验证受管安装清单与文件哈希</li><li>Fabric 启动或附加独立 Runtime Profile</li><li>打开 PCL2/HMCL，由启动器继续负责登录</li><li>等待 Minecraft 进程与认证 Mod 握手</li></ol>{selected.mode === 'LOCAL_ONLY' && <div className="warning-callout"><span>Forge/NeoForge 当前无 Runtime Bridge，页面只会诚实显示 LOCAL_ONLY。</span></div>}</section>
+        <section className="flow-explanation"><h2>当前流程</h2><ol><li>运行动态 Doctor 并阻止高风险目标</li><li>验证受管安装清单与文件哈希</li><li>启动或附加当前实例的独立 Runtime Profile</li><li>打开 PCL2/HMCL，由启动器继续负责登录</li><li>等待 Minecraft 进程与认证 Mod 握手</li></ol>{selected.mode === 'LOCAL_ONLY' && <div className="warning-callout"><span>当前 Loader 无 Runtime Bridge，页面只会诚实显示 LOCAL_ONLY。</span></div>}</section>
       </div>
     </div>
   )

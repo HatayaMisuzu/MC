@@ -62,5 +62,9 @@ class TerminalDiagnosticServiceTest {
                 bridge.severity());
         assertEquals("FORGE", bridge.evidence().get("loader"));
         assertEquals("1.20.1", bridge.evidence().get("minecraftVersion"));
+        var codes = results.stream().map(value -> value.code()).collect(java.util.stream.Collectors.toSet());
+        assertTrue(codes.containsAll(java.util.Set.of(
+                "runtime.profile", "runtime.health", "mcp.protocol",
+                "registry.generic_tools", "navigation.global_tool", "brain.provider")));
     }
 }

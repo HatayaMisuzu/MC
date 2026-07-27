@@ -304,7 +304,7 @@ export interface CompatibilitySnapshot {
   fingerprint: {
     digest: string
     minecraftVersion: string
-    loader: string
+    loaderType: string
     loaderVersion: string
     mods: Record<string, string>
   }

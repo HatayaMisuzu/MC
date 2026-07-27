@@ -1,5 +1,6 @@
 package com.mccompanion.compat;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.time.Instant;
@@ -89,6 +90,7 @@ public record CompatibilityPack(
             limitations = boundedStrings(limitations, 64, 512, "limitations");
         }
 
+        @JsonProperty("coordinate")
         public String coordinate() {
             return id + '@' + version;
         }

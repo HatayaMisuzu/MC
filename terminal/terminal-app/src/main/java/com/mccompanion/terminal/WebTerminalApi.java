@@ -2,8 +2,10 @@ package com.mccompanion.terminal;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.mccompanion.compat.CompatibilityGrant;
 import com.mccompanion.compat.CompatibilityHost;
 import com.mccompanion.compat.CompatibilityPack;
@@ -33,7 +35,9 @@ import java.util.UUID;
 
 /** Typed local API backed by the existing Java service layer. */
 final class WebTerminalApi {
-  private static final ObjectMapper JSON = new ObjectMapper();
+  static final ObjectMapper JSON = new ObjectMapper()
+      .registerModule(new JavaTimeModule())
+      .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
   private final ControlTerminalMain root;
   private final OperationManager operations;
   private final RuntimeSnapshotService snapshots = new RuntimeSnapshotService();

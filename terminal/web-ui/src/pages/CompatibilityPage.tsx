@@ -54,7 +54,7 @@ export function CompatibilityPage() {
       <article>
         <span>{t('compat.fingerprint')}</span>
         <strong>{data?.fingerprint.digest?.slice(0, 16) ?? t('common.loading')}</strong>
-        <small>{data ? `${data.fingerprint.minecraftVersion} · ${data.fingerprint.loader} ${data.fingerprint.loaderVersion}` : ''}</small>
+        <small>{data ? `${data.fingerprint.minecraftVersion} · ${data.fingerprint.loaderType} ${data.fingerprint.loaderVersion}` : ''}</small>
         <small>{data ? t('compat.fingerprint.mods', { count: Object.keys(data.fingerprint.mods ?? {}).length }) : ''}</small>
       </article>
       <article>
@@ -89,6 +89,10 @@ export function CompatibilityPage() {
         onClick={() => void plan('install', undefined, { archivePath: archivePath.trim(), source: 'terminal' })}>
         {t('compat.reviewInstall')}
       </ActionButton>
+      <ActionButton disabled={!archivePath.trim()}
+        onClick={() => void plan('update', undefined, { archivePath: archivePath.trim(), source: 'terminal' })}>
+        {t('compat.reviewUpdate')}
+      </ActionButton>
     </section>
 
     <section className="compat-panel">
@@ -107,7 +111,7 @@ export function CompatibilityPage() {
             <td>{match ? t('compat.active') : t('compat.inactive')}</td>
             <td><div className="inline-actions">
               {pack.state === 'STAGING' && <ActionButton onClick={() => void plan('record-evidence', pack, {
-                evidenceId: `fixture-${Date.now()}`, kind: 'FIXTURE', matchLevel: 'EXACT',
+                evidenceId: `fixture-${Date.now()}`, kind: 'FIXTURE', matchLevel: 'EXACT_VERIFIED',
                 passed: true, summary: 'Fixture evidence recorded by authenticated local user',
                 artifactHash: pack.contentHash,
               })}>{t('compat.evidenceFixture')}</ActionButton>}

@@ -1,5 +1,6 @@
 package com.mccompanion.compat;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -574,6 +575,7 @@ public final class CompatibilityStore {
             if (!activatedAt.isEmpty()) Instant.parse(activatedAt);
         }
 
+        @JsonProperty("coordinate")
         public String coordinate() {
             return packId + '@' + version;
         }

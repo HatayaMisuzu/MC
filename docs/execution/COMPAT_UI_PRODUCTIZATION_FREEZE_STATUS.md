@@ -11,8 +11,9 @@ play. `docs/RC_COMPLETION_MATRIX.md` remains the only completion matrix.
 - Base branch: `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - PR: `#3`
-- Latest completed stable slice: `dc4d530` — Compatibility Host lifecycle and Terminal page
-- Previous stable slice: `16fd1c8` — productization safety/reliability hardening
+- Previous pushed stable slice: `ca91fd7` — full Terminal localization and compatibility sources
+- Candidate stable slice: this document's source SHA — bilingual real-backend browser and complete
+  compatibility-pack button lifecycle
 
 ## Completed in this execution
 
@@ -38,12 +39,19 @@ play. `docs/RC_COMPLETION_MATRIX.md` remains the only completion matrix.
 - Language switching test proves current component state survives an English/Chinese switch and
   the selection persists.
 - Mojibake scan over non-test Web source: clean.
+- Bilingual packaged-backend Chromium path: pass against the real Java Terminal and Runtime with an
+  isolated PCL2 fixture and no `fetch` mocks.
+- Compatibility pack lifecycle buttons: install, evidence, index, activate, update, rollback,
+  quarantine, disable and remove all pass for isolated v1/v2 archives.
+- Fresh `zh-CN` and `en-US` screenshots: visually checked for overflow, stale Loader metadata and
+  leaked `undefined` values.
+- Current focused revalidation: Web lint, 10 test files / 15 tests, Web production build,
+  Compatibility Host tests and Terminal tests all pass.
 
 ## Next step
 
-Exercise compatibility and high-frequency product flows through the real local Terminal backend,
-record the button/backend/result matrix and both-language screenshots, then continue documentation
-governance and final candidate gates.
+Complete documentation governance and repository productization cleanup, then run the final local
+candidate, release-integrity and exact-SHA remote gates.
 
 ## Support and evidence boundaries
 

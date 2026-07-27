@@ -282,6 +282,76 @@ public final class CompanionLifecycleForgeGameTests {
                                 companionId,
                                 "forge-primitive-lease",
                                 2L,
+                                "forge-menu-click-pickup",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "MenuAction",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        menuToken,
+                                        0,
+                                        0,
+                                        "CLICK",
+                                        null))
+                        .success(),
+                "menu click pickup primitive failed to start");
+        registry.tick();
+        helper.assertTrue(
+                body.containerMenu.getCarried().is(Items.IRON_INGOT)
+                        && body.containerMenu.getCarried().getCount() == 3
+                        && chest.getItem(0).isEmpty(),
+                "menu click did not move the exact live chest stack onto the vanilla carried slot");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
+                                "forge-menu-click-return",
+                                "skill",
+                                null,
+                                null,
+                                null,
+                                new SkillParameters(
+                                        "MenuAction",
+                                        "",
+                                        1,
+                                        false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        null,
+                                        null,
+                                        null,
+                                        "",
+                                        "UP",
+                                        "MAIN_HAND",
+                                        menuToken,
+                                        0,
+                                        0,
+                                        "CLICK",
+                                        null))
+                        .success(),
+                "menu click return primitive failed to start");
+        registry.tick();
+        helper.assertTrue(
+                body.containerMenu.getCarried().isEmpty()
+                        && chest.getItem(0).is(Items.IRON_INGOT)
+                        && chest.getItem(0).getCount() == 3,
+                "second menu click did not restore the exact live stack");
+        helper.assertTrue(
+                registry.runtimeStart(
+                                companionId,
+                                "forge-primitive-lease",
+                                2L,
                                 "forge-menu-quick-move",
                                 "skill",
                                 null,

@@ -44,7 +44,7 @@ Runtime Tool Gateway / MCP / authenticated Brain ingress
                               │
 Task Graph Runtime · Skill Workspace · reviewed Memory · Episode Capsule · Search · Audit
                               │ authenticated WebSocket
-Minecraft loader bridge (Fabric full bridge; Forge/NeoForge LOCAL_ONLY)
+Minecraft loader bridge (Fabric + Forge full bridge; NeoForge LOCAL_ONLY)
                               │
 Version body / CompanionPlayer / behavior lifecycle
                               │

@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 14:43 +08:00
+Updated: 2026-07-27 15:00 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -10,9 +10,9 @@ only completion matrix.
 
 ## Current checkpoint
 
-- Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
+- Current stage: `5 — UNKNOWN_MOD_AND_BOUNDED_SEARCH`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `331e12f4aed2927ddbfc0f8edf96c7519711f2c2`
+- Latest committed source SHA: `f9a17527f1f90493d970667a0ee8e069223c9603`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -21,6 +21,9 @@ only completion matrix.
 - Stage 0 result: `PASS`
 - Stage 1 result: `PASS`
 - Stage 2 result: `PASS`
+- Stage 3 result: `LOCALLY_VERIFIED`
+- Stage 4 automated result: `LOCALLY_VERIFIED`
+- Stage 4 human-play result: `NOT_RUN`
 
 ## Frozen environment
 
@@ -44,9 +47,9 @@ only completion matrix.
   live Registry/recipe/body/menu observations, bounded primitive and composite
   actions, opaque exact-menu sessions, player-text ingress, owner block-activity
   handoff, lifecycle publication, safe disconnect pause, and the shared bounded
-  global-navigation core. Recovery breadth, the full navigation scenario matrix,
-  installer/Doctor acceptance and external verification remain incomplete, so
-  this is not yet a Full Runtime Bridge.
+  global-navigation core. Restart recovery, direct menu mutation, the navigation
+  scenario matrix, PCL2/HMCL Java-17 detection, clean installer lifecycle and
+  Doctor surfaces are locally verified. Live Hermes and human play remain pending.
 - NeoForge 1.21.1: `LOCAL_ONLY`; it is outside the new Full Bridge target.
 - The current release staging includes artifacts for all three targets. Loader
   installation selection and final public support wording require later
@@ -437,11 +440,22 @@ Passed on the frozen SHA:
   exact-target-only matching and that a matching event pauses the old external
   Brain Tool before the short instruction is handled. This is layered local
   automation, not a fabricated human-click result.
+- Stage 3 Terminal/installer closure `19a1ccc`, `d58f528`, and `be47d4b`
+  centralizes the exact Full-Bridge support matrix, exposes Runtime/smoke/control
+  paths for Forge 1.20.1, detects Java-17 Forge instances in PCL2 and HMCL, and
+  drives the production installer, pairing, repair, update, rollback and both
+  uninstall policies against a clean Forge fixture while preserving a world and
+  unrelated Mod. Doctor lists Bridge, Runtime, MCP, Registry, navigation and
+  external-Brain state for the Forge target.
+- Stage 3 direct-menu evidence `93ccedb` runs token-bound vanilla `CLICK`
+  pickup and return mutations before the existing Forge quick-move/close path.
+  The real Java 17 Forge 47.4.10 GameTest server reports all 3 required tests
+  passed. Forge Full Runtime Bridge is therefore locally verified; this remains
+  automated server evidence, not Live-Hermes or human-play evidence.
 
 ## Remaining work
 
-- Complete stages 3–6 before requesting any Live-Hermes or human action,
-  starting with the Forge 1.20.1 Full Runtime Bridge.
+- Complete stages 5–6 before requesting any Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.
 

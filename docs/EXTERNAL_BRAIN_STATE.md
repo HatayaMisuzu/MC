@@ -355,7 +355,7 @@ Example response extension:
 
 ## Deposit to storage slice
 
-- Added `inventory.deposit` / `DepositToStorage` only when the connected Fabric body
+- Added `inventory.deposit` / `DepositToStorage` only when the connected Full-Bridge body
   reports the capability as `AVAILABLE_NOW`.
 - Deposits use the opened vanilla container menu and validated PICKUP/right-click slot
   transactions. Production code does not edit either inventory or create items.
@@ -448,7 +448,7 @@ Example response extension:
 ## Bounded owner-defense slice
 
 - Added `combat.defend_owner` backed by `DefendOwner`, exposed only when Runtime implementation,
-  connected Fabric body, and current availability intersect. It accepts no target injection: the
+  connected Full-Bridge body, and current availability intersect. It accepts no target injection: the
   body itself selects one live vanilla hostile within eight blocks of the verified owner.
 - Defense approaches through ordinary player input, waits for the vanilla attack-strength cooldown,
   and attacks through `ServerPlayer.attack` plus the normal hand swing. It ends only when the tracked
@@ -527,7 +527,7 @@ Example response extension:
 
 ## Craft item slice
 
-- Added `item.craft` / `CraftItem` only when the connected Fabric body reports the
+- Added `item.craft` / `CraftItem` only when the connected Full-Bridge body reports the
   capability as `AVAILABLE_NOW`.
 - The body resolves server-side vanilla crafting recipes, calculates the bounded material
   delta, and uses PICKUP menu transactions to place ingredients and retrieve output.

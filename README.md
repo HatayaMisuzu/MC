@@ -76,9 +76,10 @@ Task Graph/Skill 工作。它不能访问 Shell、Git、Gradle、任意文件系
 |---|---|---:|---|
 | 1.21.1 | Fabric | 21 | FULL Runtime Bridge |
 | 1.21.1 | NeoForge | 21 | LOCAL_ONLY |
-| 1.20.1 | Forge | 17 | LOCAL_ONLY |
+| 1.20.1 | Forge | 17 | FULL Runtime Bridge |
 
-Forge/NeoForge 当前没有 Runtime Bridge，界面会明确显示 `LOCAL_ONLY`，不会伪装成完整握手成功。其他版本可扫描和诊断，但安装会被阻止且不会修改实例。
+Fabric 1.21.1 与 Forge 1.20.1 使用完整 Runtime Bridge；NeoForge 1.21.1 会明确显示
+`LOCAL_ONLY`，不会伪装成完整握手成功。其他版本可扫描和诊断，但安装会被阻止且不会修改实例。
 
 Provider API Key 只能来自环境变量或 Windows Credential Manager；普通配置文件只保存环境变量名称，不保存 Key 值。
 

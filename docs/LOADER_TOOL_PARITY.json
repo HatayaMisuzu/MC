@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "331e12f4aed2927ddbfc0f8edf96c7519711f2c2",
-  "generatedAt": "2026-07-27T14:43:00+08:00",
+  "sourceCommit": "f9a17527f1f90493d970667a0ee8e069223c9603",
+  "generatedAt": "2026-07-27T15:00:00+08:00",
   "statusValues": ["PASS", "PARTIAL", "NOT_IMPLEMENTED", "NOT_RUN"],
   "loaders": {
     "fabric-1.21.1": {"java":21,"bridge":"PASS","automatedEvidence":"PASS","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"},
-    "forge-1.20.1": {"java":17,"bridge":"PARTIAL","automatedEvidence":"PARTIAL","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"}
+    "forge-1.20.1": {"java":17,"bridge":"PASS","automatedEvidence":"PARTIAL","liveHermes":"NOT_RUN","humanTest":"NOT_RUN"}
   },
   "tools": [
     {"name":"world.observe","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge snapshot currently omits visible-container observations."},
@@ -17,7 +17,7 @@
     {"name":"movement.return","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PARTIAL"},"knownDifference":"Forge Runtime lease GameTest covers travel rather than return."},
     {"name":"movement.step","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge publishes NavigateTo over the authenticated capability intersection and reuses its already-verified bounded vanilla travel executor."},
     {"name":"movement.look","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both use bounded vanilla body rotation and verify the resulting view vector."},
-    {"name":"movement.stop","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"NOT_IMPLEMENTED","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":null},
+    {"name":"movement.stop","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Runtime emits the same bounded cancel_behavior command for either connected Full-Bridge body; the Forge navigation GameTest verifies explicit owner stop reaches stable IDLE."},
     {"name":"world.scan","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both scan only loaded chunks with a 256-block-per-tick budget and return at most 64 distance-ranked candidates; Forge evidence is from live 1.20.1 block state."},
     {"name":"resource.collect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge GameTest verifies bounded nearest-item movement and vanilla ItemEntity pickup."},
     {"name":"entity.collect","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both collection aliases share the same bounded ItemEntity executor."},
@@ -27,7 +27,7 @@
     {"name":"block.place","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both require loaded, visible support and verify exact placed state; Forge GameTest also verifies vanilla item consumption."},
     {"name":"entity.interact","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge GameTest targets an exact live cow UUID and verifies the vanilla wheat interaction state."},
     {"name":"entity.attack","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both target an externally selected living-entity UUID and verify actual health/death change."},
-    {"name":"menu.click","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"NOT_RUN"},"knownDifference":"Forge click implementation shares the opaque exact-menu capability; direct CLICK evidence remains pending."},
+    {"name":"menu.click","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"The Forge GameTest uses the opaque exact-menu token to pick up and return the live chest stack through two vanilla PICKUP clicks before quick-move and close."},
     {"name":"menu.quick_move","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge GameTest quick-moves a live chest stack into the connected body inventory."},
     {"name":"menu.close","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Both invalidate the exact process-local menu capability on close."},
     {"name":"item.smelt","fabric":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"forge":{"implementation":"PASS","schema":"PASS","evidence":"PASS"},"knownDifference":"Forge resolves the live 1.20.1 smelting recipe and verifies real FurnaceMenu input, fuel, cook lifecycle, result pickup and inventory delta."},

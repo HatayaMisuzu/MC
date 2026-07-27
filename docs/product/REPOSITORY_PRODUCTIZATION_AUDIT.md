@@ -27,6 +27,7 @@ evidence, and must be updated with exact release results after the final candida
 | DOC-04 | Documentation gate | Existing link/readiness checks did not require the product status, bilingual guides, developer entry or archive boundary, and did not detect the Fabric-first/Forge-mode contradiction. | Fixed. `documentationCheck` requires the authoritative structure and checks current documents for obsolete readiness, Fabric-first and Forge `LOCAL_ONLY` contradictions and local-machine paths. |
 | UI-01 | Real browser | Compatibility API dates failed JSON serialization; `coordinate` and Loader type were missing/misread; the update action and complete lifecycle lacked browser proof. | Fixed and locally verified. Java Time serialization, explicit coordinate properties, Loader field, update action and the isolated v1/v2 lifecycle pass against the real packaged Java backend in both locales. |
 | CI-01 | Windows portability | The E2E fixture builder used `Get-FileHash`, which was unavailable in the hosted PowerShell 7 job and stopped Windows CI before Chromium launched. | Fixed with a bounded .NET SHA-256 helper that disposes the algorithm and stream. The same E2E passes locally after the change; exact-SHA remote confirmation remains required. |
+| PROTO-01 | Behavior lifecycle | Loaders report a safely blocked behavior with `BLOCKED` plus a machine-readable failure code, but the protocol model allowed failure details only on `FAILED`; Runtime rejected a legitimate blocked observation and emitted `SEVERE`. | Fixed. `BLOCKED` now requires the same bounded failure code/message detail while non-failure states still reject it. Protocol tests cover accepted/missing details and the full unknown-Mod Runtime/Fabric E2E passes without unexpected severe logs. |
 | CLEAN-01 | Generated/state files | Build, Gradle, Web dist, Playwright result and screenshot directories exist locally. | Correctly ignored. No build/output/test-result/log/database/cache/archive artifact is tracked. They are rebuilt for gates and excluded from source/release unless explicitly assembled. |
 | TEST-01 | Skips | One test uses `Assumptions.abort` when the host cannot create symbolic links. | Retained with explicit reason. The security behavior is tested on capable hosts; this is not an unlabelled or product-path skip. No `@Disabled`, Playwright skip or workflow `continue-on-error` was found. |
 | TEST-02 | Restart fixture | Fabric persistence seed used a finite 150-block `GOTO`; the accelerated GameTest clock could complete it before shutdown and save truthful `IDLE`, invalidating the intended in-flight premise. | Fixed by seeding continuous FOLLOW navigation after moving the owner. The two-process gate again proves the same UUID/body/inventory and restart quarantine to `PAUSED` without extending a timeout. |
@@ -48,6 +49,8 @@ evidence, and must be updated with exact release results after the final candida
 - bilingual packaged-backend Playwright path after the PowerShell portability fix: 1 passed.
 - Fabric and Forge two-process persistence restart gates: passed.
 - Runtime-disabled launch and authenticated multi-Profile isolation gates: passed.
+- Brain reconnect, unknown-Mod generic Runtime/Fabric E2E, 105-turn reliability and 200-turn
+  bounded local soak gates: passed when run as isolated gates.
 
 ## Known limitations retained
 

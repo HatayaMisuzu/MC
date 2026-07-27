@@ -61,6 +61,12 @@ class ProtocolModelTest {
         BehaviorEvent failed = event(BehaviorEventType.FAILED, ProtocolBehaviorState.FAILED,
                 "PATH_BLOCKED", "blocked");
         assertEquals("PATH_BLOCKED", failed.failureCode());
+
+        BehaviorEvent blocked = event(BehaviorEventType.BLOCKED, ProtocolBehaviorState.BLOCKED,
+                "TARGET_CHUNK_UNLOADED", "target chunk is not loaded");
+        assertEquals("TARGET_CHUNK_UNLOADED", blocked.failureCode());
+        assertThrows(NullPointerException.class,
+                () -> event(BehaviorEventType.BLOCKED, ProtocolBehaviorState.BLOCKED, null, "blocked"));
     }
 
     @Test

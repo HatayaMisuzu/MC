@@ -95,6 +95,12 @@ the Fabric restart seed now uses continuous FOLLOW navigation so accelerated Gam
 finish a finite route before shutdown, and launch-test preparation declares disabled/persistence
 mode properties as inputs so Gradle cannot reuse a fixture prepared for another mode. Focused
 Fabric/Forge restart, Runtime-disabled launch and multi-Profile gates pass.
+The same preflight exposed a protocol mismatch when a Loader published an honestly blocked
+behavior: the sender included its required machine-readable failure detail, while the protocol
+model admitted details only for terminal `FAILED`. `BehaviorEvent` now requires bounded
+failureCode/message details for both `BLOCKED` and `FAILED` and continues to reject them for
+non-failure states. Protocol tests and the full unknown-Mod Runtime/Fabric chain pass without an
+unexpected severe log.
 
 Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_VERIFIED`,
 `REMOTELY_VERIFIED`, and `BLOCKED_BY_EXCLUDED_LIVE_TEST`. Replay evidence is not Live evidence.

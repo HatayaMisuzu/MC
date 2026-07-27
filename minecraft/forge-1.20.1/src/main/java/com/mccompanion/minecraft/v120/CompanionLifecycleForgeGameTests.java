@@ -1299,14 +1299,59 @@ public final class CompanionLifecycleForgeGameTests {
             return;
         }
 
-        Vec3 before = body.position();
-        CompanionRegistry.Result moving = registry.goTo(owner, before.x + 4.0D, before.y, before.z);
-        helper.assertTrue(moving.success(), "goto failed: " + moving.code());
-        helper.runAfterDelay(60, () -> {
-            helper.assertTrue(body.position().distanceToSqr(before) > 0.20D,
-                    "body did not move through vanilla player travel");
-            CompanionRegistry.Result stopped = registry.stop(owner);
-            helper.assertTrue(stopped.success(), "stop failed: " + stopped.code());
+        helper.runAfterDelay(220, () -> {
+            BlockPos pathOrigin = body.blockPosition();
+            for (int x = -1; x <= 15; x++) {
+                for (int z = -4; z <= 4; z++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            pathOrigin.offset(x, -1, z),
+                            Blocks.STONE.defaultBlockState());
+                    for (int y = 0; y <= 2; y++) {
+                        body.serverLevel().setBlockAndUpdate(
+                                pathOrigin.offset(x, y, z),
+                                Blocks.AIR.defaultBlockState());
+                    }
+                }
+            }
+            for (int z = -1; z <= 1; z++) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            pathOrigin.offset(3, y, z),
+                            Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+            Vec3 target = Vec3.atBottomCenterOf(pathOrigin.offset(10, 0, 0));
+            CompanionRegistry.Result moving = registry.goTo(owner, target.x, target.y, target.z);
+            helper.assertTrue(moving.success(), "global navigation failed to start: " + moving.code());
+            helper.runAfterDelay(20, () -> {
+                for (int z = -2; z <= 2; z++) {
+                    for (int y = 0; y <= 2; y++) {
+                        body.serverLevel().setBlockAndUpdate(
+                                pathOrigin.offset(6, y, z),
+                                Blocks.COBBLESTONE.defaultBlockState());
+                    }
+                }
+            });
+            helper.runAfterDelay(240, () -> {
+                helper.assertTrue(
+                        body.position().distanceToSqr(target) <= 2.25D,
+                        "global navigation did not route around the dynamic walls");
+                helper.assertTrue(
+                        body.serverLevel().getBlockState(pathOrigin.offset(3, 0, 0))
+                                        .is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(pathOrigin.offset(6, 0, 0))
+                                        .is(Blocks.COBBLESTONE),
+                        "navigation modified an obstacle instead of routing around it");
+                Vec3 stopStart = body.position();
+                CompanionRegistry.Result stopRun =
+                        registry.goTo(owner, stopStart.x + 4.0D, stopStart.y, stopStart.z);
+                helper.assertTrue(stopRun.success(), "stop regression goto failed: " + stopRun.code());
+                helper.runAfterDelay(20, () -> {
+                    helper.assertTrue(
+                            body.position().distanceToSqr(stopStart) > 0.20D,
+                            "body did not move through vanilla player travel");
+                    CompanionRegistry.Result stopped = registry.stop(owner);
+                    helper.assertTrue(stopped.success(), "stop failed: " + stopped.code());
             Vec3 stoppedAt = body.position();
             helper.runAfterDelay(12, () -> {
                 helper.assertTrue(body.position().distanceToSqr(stoppedAt) < 0.04D,
@@ -1340,6 +1385,8 @@ public final class CompanionLifecycleForgeGameTests {
                     helper.getLevel().getServer().getPlayerList().remove(owner);
                     ownerConnection.disconnect(Component.literal("Forge GameTest complete"));
                     helper.succeed();
+                });
+            });
                 });
             });
         });

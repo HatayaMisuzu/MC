@@ -1,6 +1,8 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.navigation.GridPathPlanner;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -44,16 +46,15 @@ import org.slf4j.Logger;
 final class BehaviorDirector {
     private static final int STUCK_TICKS = 80;
     private static final int MAX_REPLANS = 3;
-    private static final int AVOIDANCE_TICKS = 35;
     private static final int BEHAVIOR_TIMEOUT_TICKS = 20 * 60 * 5;
     private static final double ARRIVAL_DISTANCE_SQUARED = 1.5D * 1.5D;
     private static final double FOLLOW_DISTANCE_SQUARED = 3.0D * 3.0D;
-    private static final float[] REPLAN_YAW_OFFSETS = {45.0F, -45.0F, 90.0F};
 
     private final MinecraftServer server;
     private final CompanionSavedData savedData;
     private final Logger logger;
     private final PlayerActionGateway actionGateway = new PlayerActionGateway();
+    private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
     private final ReflexController reflexController = new ReflexController();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, PrimitiveProgress> primitives = new HashMap<>();
@@ -148,6 +149,14 @@ final class BehaviorDirector {
             return;
         }
 
+        tickNavigation(entry, body, target, arrivalDistanceSquared);
+    }
+
+    private void tickNavigation(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            Vec3 target,
+            double arrivalDistanceSquared) {
         NavigationProgress progress = navigation.computeIfAbsent(
                 entry.companionId,
                 ignored -> new NavigationProgress(server.getTickCount()));
@@ -155,10 +164,8 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "BEHAVIOR_TIMEOUT");
             return;
         }
-
-        Vec3 delta = target.subtract(body.position());
-        double distanceSquared = delta.lengthSqr();
-        if (distanceSquared <= arrivalDistanceSquared) {
+        Vec3 targetDelta = target.subtract(body.position());
+        if (targetDelta.lengthSqr() <= arrivalDistanceSquared) {
             stop(entry, body, true, "NONE");
             if (entry.mode == CompanionEntry.Mode.GOTO) {
                 entry.mode = CompanionEntry.Mode.IDLE;
@@ -169,32 +176,110 @@ final class BehaviorDirector {
             return;
         }
 
-        if (distanceSquared + 0.25D < progress.bestDistanceSquared) {
-            progress.bestDistanceSquared = distanceSquared;
-            progress.stagnantTicks = 0;
-        } else if (++progress.stagnantTicks >= STUCK_TICKS) {
-            if (progress.replanCount >= MAX_REPLANS) {
+        GridPathPlanner.Point goal = SurvivalNavigationAdapter.point(BlockPos.containing(target));
+        GridPathPlanner.Point current = SurvivalNavigationAdapter.point(body.blockPosition());
+        boolean targetMoved = !goal.equals(progress.goal);
+        boolean routeMissing = progress.waypointIndex >= progress.route.size();
+        boolean routeInvalid = !routeMissing
+                && !navigationAdapter.remainsTraversable(
+                        body,
+                        current,
+                        progress.route.get(progress.waypointIndex));
+        if (targetMoved || routeMissing || routeInvalid) {
+            if (routeInvalid && ++progress.replanCount > MAX_REPLANS) {
                 pauseSafely(entry, body, "STUCK");
                 return;
             }
-            progress.yawOffset = REPLAN_YAW_OFFSETS[progress.replanCount++];
-            progress.avoidanceTicks = AVOIDANCE_TICKS;
-            progress.stagnantTicks = 0;
-            logger.info("companion_replan companion={} attempt={} yawOffset={}",
-                    entry.companionId,
-                    progress.replanCount,
-                    progress.yawOffset);
+            String failure = replanNavigation(body, target, progress, goal);
+            if (failure != null) {
+                pauseSafely(entry, body, failure);
+                return;
+            }
         }
 
-        float yaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
-        if (progress.avoidanceTicks > 0) {
-            yaw += progress.yawOffset;
-            progress.avoidanceTicks--;
-        } else {
-            progress.yawOffset = 0.0F;
+        while (progress.waypointIndex < progress.route.size()) {
+            Vec3 candidate = SurvivalNavigationAdapter.waypoint(
+                    progress.route.get(progress.waypointIndex));
+            double horizontal = horizontalDistanceSquared(body.position(), candidate);
+            if (horizontal > 0.45D || Math.abs(body.getY() - candidate.y) > 1.1D) break;
+            progress.waypointIndex++;
+            progress.bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
+            progress.stagnantTicks = 0;
         }
-        boolean jumpRequested = delta.y > 0.6D || body.horizontalCollision;
-        actionGateway.applyMoveInput(body, yaw, jumpRequested);
+        if (progress.waypointIndex >= progress.route.size()) {
+            String failure = replanNavigation(body, target, progress, goal);
+            if (failure != null || progress.route.isEmpty()) {
+                if (failure != null) pauseSafely(entry, body, failure);
+                else actionGateway.applyMoveInput(
+                        body,
+                        (float) Math.toDegrees(Math.atan2(-targetDelta.x, targetDelta.z)),
+                        targetDelta.y > 0.6D || body.horizontalCollision);
+                return;
+            }
+        }
+
+        GridPathPlanner.Point waypointPoint = progress.route.get(progress.waypointIndex);
+        if (navigationAdapter.openDoorIfNeeded(body, waypointPoint)) {
+            actionGateway.markVanillaGameModeAction(body);
+        }
+        Vec3 waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
+        Vec3 delta = waypoint.subtract(body.position());
+        double waypointDistanceSquared = delta.lengthSqr();
+        if (waypointDistanceSquared + 0.04D < progress.bestWaypointDistanceSquared) {
+            progress.bestWaypointDistanceSquared = waypointDistanceSquared;
+            progress.stagnantTicks = 0;
+        } else if (++progress.stagnantTicks >= STUCK_TICKS) {
+            if (++progress.replanCount > MAX_REPLANS) {
+                pauseSafely(entry, body, "STUCK");
+                return;
+            }
+            String failure = replanNavigation(body, target, progress, goal);
+            if (failure != null) {
+                pauseSafely(entry, body, failure);
+                return;
+            }
+            logger.info(
+                    "companion_replan companion={} attempt={} reason=NO_WAYPOINT_PROGRESS",
+                    entry.companionId,
+                    progress.replanCount);
+            waypointPoint = progress.route.get(progress.waypointIndex);
+            waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
+            delta = waypoint.subtract(body.position());
+        }
+        float yaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+        actionGateway.applyMoveInput(
+                body,
+                yaw,
+                waypointPoint.y() > body.blockPosition().getY()
+                        || body.horizontalCollision);
+    }
+
+    private String replanNavigation(
+            CompanionPlayer body,
+            Vec3 target,
+            NavigationProgress progress,
+            GridPathPlanner.Point goal) {
+        GridPathPlanner.Plan plan = navigationAdapter.plan(body, target);
+        if (plan.status() != GridPathPlanner.Status.READY) {
+            return switch (plan.status()) {
+                case TARGET_UNLOADED -> "TARGET_CHUNK_UNLOADED";
+                case OUT_OF_RANGE -> "TARGET_OUT_OF_RANGE";
+                case UNREACHABLE -> "PATH_UNREACHABLE";
+                case READY -> null;
+            };
+        }
+        progress.goal = goal;
+        progress.route = plan.points();
+        progress.waypointIndex = 0;
+        progress.bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
+        progress.stagnantTicks = 0;
+        return null;
+    }
+
+    private static double horizontalDistanceSquared(Vec3 first, Vec3 second) {
+        double x = first.x - second.x;
+        double z = first.z - second.z;
+        return x * x + z * z;
     }
 
     private void tickPrimitive(CompanionEntry entry, CompanionPlayer body) {
@@ -1361,11 +1446,12 @@ final class BehaviorDirector {
     }
 
     private static final class NavigationProgress {
-        private double bestDistanceSquared = Double.POSITIVE_INFINITY;
+        private List<GridPathPlanner.Point> route = List.of();
+        private GridPathPlanner.Point goal;
+        private int waypointIndex;
+        private double bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
         private int stagnantTicks;
         private int replanCount;
-        private int avoidanceTicks;
-        private float yawOffset;
         private final int startedTick;
 
         private NavigationProgress(int startedTick) {

@@ -1595,8 +1595,68 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600, batch = "global_navigation")
+    public void globalNavigationRoutesAroundDynamicWalls(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "PathCompanion").success(), "path test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "path test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -1; x <= 11; x++) {
+            for (int z = -4; z <= 4; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, -1, z),
+                        Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z),
+                            Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        for (int z = -1; z <= 1; z++) {
+            for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(3, y, z),
+                        Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(10, 0, 0));
+        helper.assertTrue(
+                registry.goTo(owner, target.x, target.y, target.z).success(),
+                "global navigation failed to start");
+        helper.runAfterDelay(20, () -> {
+            for (int z = -2; z <= 2; z++) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(6, y, z),
+                            Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+            helper.succeedWhen(() -> {
+                helper.assertTrue(
+                        body.position().distanceToSqr(target) <= 2.25D,
+                        "global navigation has not reached the verified target");
+                helper.assertTrue(
+                        body.serverLevel().getBlockState(origin.offset(3, 0, 0)).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(origin.offset(6, 0, 0))
+                                        .is(Blocks.COBBLESTONE),
+                        "navigation modified an obstacle instead of routing around it");
+                helper.assertTrue(registry.remove(owner).success(), "path test cleanup failed");
+            });
+        });
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000, batch = "blocked_navigation")
-    public void blockedGotoStopsWithBoundedStuckFailure(GameTestHelper helper) {
+    public void blockedGotoStopsWithObservedUnreachableFailure(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
                 || Boolean.getBoolean("mccompanion.runtime.e2e")
@@ -1621,10 +1681,12 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         helper.assertTrue(registry.goTo(owner, origin.getX() + 8.0D, origin.getY(), origin.getZ()).success(),
                 "blocked goto failed to start");
-        helper.runAfterDelay(450, () -> {
+        helper.runAfterDelay(10, () -> {
             String status = registry.status(owner);
             helper.assertTrue(status.contains("mode=PAUSED"), "blocked goto did not enter safe PAUSED state: " + status);
-            helper.assertTrue(status.contains("failure=STUCK"), "blocked goto did not expose STUCK evidence: " + status);
+            helper.assertTrue(
+                    status.contains("failure=PATH_UNREACHABLE"),
+                    "blocked goto did not expose PATH_UNREACHABLE evidence: " + status);
             helper.assertValueEqual(body.fakeConnection().retainedPacketCount(), 0,
                     "blocked goto retained packets in fake connection");
             helper.assertTrue(registry.remove(owner).success(), "blocked test cleanup failed");

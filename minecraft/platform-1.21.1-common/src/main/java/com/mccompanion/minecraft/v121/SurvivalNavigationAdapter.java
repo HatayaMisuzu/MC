@@ -12,6 +12,7 @@ import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /** Thin 1.21.1 collision/safety adapter for the deterministic grid planner. */
@@ -30,14 +31,14 @@ final class SurvivalNavigationAdapter {
             public GridPathPlanner.Traversal traversal(
                     GridPathPlanner.Point from,
                     GridPathPlanner.Point to) {
-                return classify(level, from, to);
+                return classify(level, body, from, to);
             }
         });
     }
 
     boolean remainsTraversable(CompanionPlayer body, GridPathPlanner.Point from, GridPathPlanner.Point to) {
         return body.serverLevel().hasChunkAt(block(to))
-                && classify(body.serverLevel(), from, to).passable();
+                && classify(body.serverLevel(), body, from, to).passable();
     }
 
     boolean openDoorIfNeeded(CompanionPlayer body, GridPathPlanner.Point point) {
@@ -70,8 +71,20 @@ final class SurvivalNavigationAdapter {
         return Vec3.atBottomCenterOf(block(point));
     }
 
+    float movementYaw(CompanionPlayer body, GridPathPlanner.Point point, Vec3 delta) {
+        BlockState state = body.serverLevel().getBlockState(block(point));
+        if (isClimbable(state)
+                && Math.abs(delta.x) + Math.abs(delta.z) < 0.25D
+                && state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+            Direction support = state.getValue(BlockStateProperties.HORIZONTAL_FACING).getOpposite();
+            return (float) Math.toDegrees(Math.atan2(-support.getStepX(), support.getStepZ()));
+        }
+        return (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+    }
+
     private static GridPathPlanner.Traversal classify(
             ServerLevel level,
+            CompanionPlayer body,
             GridPathPlanner.Point from,
             GridPathPlanner.Point to) {
         int vertical = to.y() - from.y();
@@ -85,6 +98,16 @@ final class SurvivalNavigationAdapter {
         BlockState head = level.getBlockState(position.above());
         BlockState fromFeet = level.getBlockState(fromPosition);
         if (isHazard(feet) || isHazard(head) || isHazard(level.getBlockState(position.below()))) {
+            return GridPathPlanner.Traversal.blocked();
+        }
+        AABB occupiedVolume = new AABB(position).expandTowards(0.0D, 1.0D, 0.0D);
+        if (!level.getEntities(
+                        body,
+                        occupiedVolume,
+                        entity -> entity.isAlive()
+                                && entity.isPickable()
+                                && !entity.getUUID().equals(body.ownerId()))
+                .isEmpty()) {
             return GridPathPlanner.Traversal.blocked();
         }
         boolean water = isWater(feet) || isWater(head);

@@ -8,6 +8,7 @@ import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
@@ -18,6 +19,8 @@ import net.minecraft.world.inventory.DataSlot;
 import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -1027,7 +1030,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         BlockPos origin = body.blockPosition().offset(2, 0, 0);
         BlockPos second = origin.offset(1, 0, 0);
         for (int x = -1; x <= 4; x++) {
-            for (int z = -1; z <= 1; z++) {
+            for (int z = 0; z <= 0; z++) {
                 body.serverLevel().setBlockAndUpdate(body.blockPosition().offset(x, -1, z),
                         Blocks.STONE.defaultBlockState());
             }
@@ -1223,7 +1226,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                 chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
                 "withdraw skill failed to start");
 
-        helper.runAfterDelay(30, () -> {
+        helper.runAfterDelay(20, () -> {
             helper.assertValueEqual(count(body, Items.IRON_INGOT), 3,
                     "withdraw did not produce the verified companion inventory delta");
             helper.assertValueEqual(count(chest, Items.IRON_INGOT), 2,
@@ -1629,12 +1632,38 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         Blocks.COBBLESTONE.defaultBlockState());
             }
         }
+        var lowerDoor = Blocks.OAK_DOOR.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST)
+                .setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.LOWER)
+                .setValue(BlockStateProperties.OPEN, false);
+        body.serverLevel().setBlockAndUpdate(origin.offset(3, 0, 0), lowerDoor);
+        body.serverLevel().setBlockAndUpdate(
+                origin.offset(3, 1, 0),
+                lowerDoor.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER));
+        body.serverLevel().setBlockAndUpdate(origin.offset(3, 2, 0), Blocks.AIR.defaultBlockState());
+        var blocker = EntityType.PIG.create(body.serverLevel());
+        helper.assertTrue(blocker != null, "navigation blocker could not be created");
+        blocker.setNoAi(true);
+        blocker.moveTo(Vec3.atBottomCenterOf(origin.offset(8, 0, 0)));
+        helper.assertTrue(body.serverLevel().addFreshEntity(blocker),
+                "navigation blocker could not be spawned");
+        Vec3 blockerPosition = blocker.position();
         Vec3 target = Vec3.atBottomCenterOf(origin.offset(10, 0, 0));
         helper.assertTrue(
                 registry.goTo(owner, target.x, target.y, target.z).success(),
                 "global navigation failed to start");
+        helper.runAfterDelay(5, () -> {
+            helper.assertTrue(registry.pause(owner).success(), "mid-route navigation pause failed");
+            Vec3 pausedAt = body.position();
+            helper.runAfterDelay(7, () -> {
+                helper.assertTrue(
+                        body.position().distanceToSqr(pausedAt) < 0.04D,
+                        "paused global navigation kept moving");
+                helper.assertTrue(registry.resume(owner).success(), "mid-route navigation resume failed");
+            });
+        });
         helper.runAfterDelay(20, () -> {
-            for (int z = -2; z <= 2; z++) {
+            for (int z = 0; z <= 0; z++) {
                 for (int y = 0; y <= 2; y++) {
                     body.serverLevel().setBlockAndUpdate(
                             origin.offset(6, y, z),
@@ -1646,12 +1675,185 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         body.position().distanceToSqr(target) <= 2.25D,
                         "global navigation has not reached the verified target");
                 helper.assertTrue(
-                        body.serverLevel().getBlockState(origin.offset(3, 0, 0)).is(Blocks.COBBLESTONE)
+                        body.serverLevel().getBlockState(origin.offset(3, 0, 0)).is(Blocks.OAK_DOOR)
+                                && body.serverLevel().getBlockState(origin.offset(3, 0, 0))
+                                        .getValue(BlockStateProperties.OPEN)
                                 && body.serverLevel().getBlockState(origin.offset(6, 0, 0))
                                         .is(Blocks.COBBLESTONE),
-                        "navigation modified an obstacle instead of routing around it");
+                        "navigation did not open the door or modified the dynamic obstacle");
+                helper.assertTrue(
+                        blocker.isAlive() && blocker.position().distanceToSqr(blockerPosition) < 0.04D,
+                        "navigation displaced or harmed the observed entity blocker");
+                blocker.discard();
                 helper.assertTrue(registry.remove(owner).success(), "path test cleanup failed");
             });
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 400, batch = "vertical_navigation")
+    public void navigationUsesVanillaStairsAndJumping(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "VerticalPathCompanion").success(),
+                "vertical path test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "vertical path test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -1; x <= 8; x++) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -1; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        for (int x = -1; x <= 1; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(x, -1, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        var stair = Blocks.OAK_STAIRS.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST);
+        body.serverLevel().setBlockAndUpdate(origin.offset(2, -1, 0), stair);
+        for (int x = 3; x <= 8; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(x, 0, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(6, 1, 0));
+        helper.assertTrue(
+                registry.goTo(owner, target.x, target.y, target.z).success(),
+                "vertical navigation failed to start");
+        helper.succeedWhen(() -> {
+            helper.assertTrue(
+                    body.position().distanceToSqr(target) <= 2.25D,
+                    "navigation did not reach the raised platform through vanilla movement");
+            helper.assertTrue(
+                    body.serverLevel().getBlockState(origin.offset(2, -1, 0)).is(Blocks.OAK_STAIRS)
+                            && body.serverLevel().getBlockState(origin.offset(3, 0, 0)).is(Blocks.STONE),
+                    "vertical navigation mutated the stair or platform");
+            helper.assertTrue(registry.remove(owner).success(), "vertical path test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 500, batch = "swim_navigation")
+    public void navigationSwimsThroughObservedWaterVolume(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SwimPathCompanion").success(),
+                "swim path test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "swim path test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -1; x <= 8; x++) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -1; y <= 4; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        for (int x = -1; x <= 8; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(x, -1, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        for (int x = 3; x <= 7; x++) {
+            for (int y = 0; y <= 3; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, y, 0),
+                        Blocks.WATER.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, y, -1),
+                        Blocks.GLASS.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, y, 1),
+                        Blocks.GLASS.defaultBlockState());
+            }
+        }
+        for (int y = 0; y <= 3; y++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(8, y, 0),
+                    Blocks.GLASS.defaultBlockState());
+        }
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(6, 2, 0));
+        helper.assertTrue(
+                registry.goTo(owner, target.x, target.y, target.z).success(),
+                "swim navigation failed to start");
+        helper.succeedWhen(() -> {
+            helper.assertTrue(
+                    body.position().distanceToSqr(target) <= 2.25D,
+                    "navigation did not swim to the observed underwater target");
+            helper.assertTrue(
+                    body.serverLevel().getFluidState(origin.offset(6, 2, 0))
+                            .is(net.minecraft.tags.FluidTags.WATER),
+                    "swim navigation mutated the target water volume");
+            helper.assertTrue(registry.remove(owner).success(), "swim path test cleanup failed");
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 500, batch = "climb_navigation")
+    public void navigationClimbsObservedLadder(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "ClimbPathCompanion").success(),
+                "climb path test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "climb path test created no live body");
+        BlockPos origin = body.blockPosition();
+        for (int x = -1; x <= 4; x++) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -1; y <= 5; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        for (int x = -1; x <= 2; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(x, -1, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        for (int y = 0; y <= 4; y++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(3, y, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        var ladder = Blocks.LADDER.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.WEST);
+        for (int y = 0; y <= 3; y++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(2, y, 0), ladder);
+        }
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(2, 3, 0));
+        helper.assertTrue(
+                registry.goTo(owner, target.x, target.y, target.z).success(),
+                "climb navigation failed to start");
+        helper.succeedWhen(() -> {
+            helper.assertTrue(
+                    body.position().distanceToSqr(target) <= 2.25D,
+                    "navigation did not climb the observed ladder");
+            helper.assertTrue(
+                    body.serverLevel().getBlockState(origin.offset(2, 3, 0)).is(Blocks.LADDER),
+                    "climb navigation mutated the ladder");
+            helper.assertTrue(registry.remove(owner).success(), "climb path test cleanup failed");
         });
     }
 

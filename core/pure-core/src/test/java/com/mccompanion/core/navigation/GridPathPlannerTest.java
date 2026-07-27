@@ -56,6 +56,37 @@ final class GridPathPlannerTest {
         assertFalse(unreachable.exploredNodes() == 0);
     }
 
+    @Test
+    void choosesLowerObservedTraversalCostWithoutChangingTheWorldModel() {
+        GridPathPlanner.Point start = new GridPathPlanner.Point(0, 0, 0);
+        GridPathPlanner.Point target = new GridPathPlanner.Point(4, 0, 0);
+        Set<GridPathPlanner.Point> expensive = Set.of(
+                new GridPathPlanner.Point(1, 0, 0),
+                new GridPathPlanner.Point(2, 0, 0),
+                new GridPathPlanner.Point(3, 0, 0));
+        GridPathPlanner.Plan plan = GridPathPlanner.plan(
+                start,
+                target,
+                new GridPathPlanner.Environment() {
+                    @Override
+                    public boolean loaded(GridPathPlanner.Point point) {
+                        return true;
+                    }
+
+                    @Override
+                    public GridPathPlanner.Traversal traversal(
+                            GridPathPlanner.Point from,
+                            GridPathPlanner.Point to) {
+                        if (to.y() != 0) return GridPathPlanner.Traversal.blocked();
+                        return GridPathPlanner.Traversal.passable(expensive.contains(to) ? 8.0D : 1.0D);
+                    }
+                });
+
+        assertEquals(GridPathPlanner.Status.READY, plan.status());
+        assertTrue(plan.points().stream().noneMatch(expensive::contains));
+        assertEquals(target, plan.points().get(plan.points().size() - 1));
+    }
+
     private static GridPathPlanner.Environment environment(
             Set<GridPathPlanner.Point> blocked,
             Set<GridPathPlanner.Point> unloaded) {

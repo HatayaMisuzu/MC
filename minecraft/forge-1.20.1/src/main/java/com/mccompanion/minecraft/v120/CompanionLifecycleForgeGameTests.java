@@ -7,6 +7,7 @@ import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
@@ -20,6 +21,8 @@ import net.minecraft.world.entity.projectile.Snowball;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.phys.Vec3;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
@@ -1320,11 +1323,38 @@ public final class CompanionLifecycleForgeGameTests {
                             Blocks.COBBLESTONE.defaultBlockState());
                 }
             }
+            var lowerDoor = Blocks.OAK_DOOR.defaultBlockState()
+                    .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST)
+                    .setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.LOWER)
+                    .setValue(BlockStateProperties.OPEN, false);
+            body.serverLevel().setBlockAndUpdate(pathOrigin.offset(3, 0, 0), lowerDoor);
+            body.serverLevel().setBlockAndUpdate(
+                    pathOrigin.offset(3, 1, 0),
+                    lowerDoor.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER));
+            body.serverLevel().setBlockAndUpdate(pathOrigin.offset(3, 2, 0), Blocks.AIR.defaultBlockState());
+            var blocker = EntityType.PIG.create(body.serverLevel());
+            helper.assertTrue(blocker != null, "navigation blocker could not be created");
+            blocker.setNoAi(true);
+            blocker.moveTo(Vec3.atBottomCenterOf(pathOrigin.offset(8, 0, 0)));
+            helper.assertTrue(body.serverLevel().addFreshEntity(blocker),
+                    "navigation blocker could not be spawned");
+            Vec3 blockerPosition = blocker.position();
             Vec3 target = Vec3.atBottomCenterOf(pathOrigin.offset(10, 0, 0));
             CompanionRegistry.Result moving = registry.goTo(owner, target.x, target.y, target.z);
             helper.assertTrue(moving.success(), "global navigation failed to start: " + moving.code());
+            helper.runAfterDelay(5, () -> {
+                helper.assertTrue(registry.pause(owner).success(), "mid-route navigation pause failed");
+                Vec3 pausedAt = body.position();
+                helper.runAfterDelay(7, () -> {
+                    helper.assertTrue(
+                            body.position().distanceToSqr(pausedAt) < 0.04D,
+                            "paused global navigation kept moving");
+                    helper.assertTrue(registry.resume(owner).success(),
+                            "mid-route navigation resume failed");
+                });
+            });
             helper.runAfterDelay(20, () -> {
-                for (int z = -2; z <= 2; z++) {
+                for (int z = 0; z <= 0; z++) {
                     for (int y = 0; y <= 2; y++) {
                         body.serverLevel().setBlockAndUpdate(
                                 pathOrigin.offset(6, y, z),
@@ -1335,23 +1365,227 @@ public final class CompanionLifecycleForgeGameTests {
             helper.runAfterDelay(240, () -> {
                 helper.assertTrue(
                         body.position().distanceToSqr(target) <= 2.25D,
-                        "global navigation did not route around the dynamic walls");
+                        "global navigation did not route around the dynamic walls: position="
+                                + body.position()
+                                + " target="
+                                + target
+                                + " door="
+                                + body.serverLevel().getBlockState(pathOrigin.offset(3, 0, 0))
+                                + " status="
+                                + registry.status(owner));
                 helper.assertTrue(
                         body.serverLevel().getBlockState(pathOrigin.offset(3, 0, 0))
-                                        .is(Blocks.COBBLESTONE)
+                                        .is(Blocks.OAK_DOOR)
+                                && body.serverLevel().getBlockState(pathOrigin.offset(3, 0, 0))
+                                        .getValue(BlockStateProperties.OPEN)
                                 && body.serverLevel().getBlockState(pathOrigin.offset(6, 0, 0))
                                         .is(Blocks.COBBLESTONE),
-                        "navigation modified an obstacle instead of routing around it");
-                Vec3 stopStart = body.position();
-                CompanionRegistry.Result stopRun =
-                        registry.goTo(owner, stopStart.x + 4.0D, stopStart.y, stopStart.z);
-                helper.assertTrue(stopRun.success(), "stop regression goto failed: " + stopRun.code());
-                helper.runAfterDelay(20, () -> {
+                        "navigation did not open the door or modified the dynamic obstacle");
+                helper.assertTrue(
+                        blocker.isAlive() && blocker.position().distanceToSqr(blockerPosition) < 0.04D,
+                        "navigation displaced or harmed the observed entity blocker");
+                blocker.discard();
+
+                BlockPos verticalOrigin = body.blockPosition();
+                for (int x = -1; x <= 12; x++) {
+                    for (int z = -1; z <= 1; z++) {
+                        for (int y = -1; y <= 3; y++) {
+                            body.serverLevel().setBlockAndUpdate(
+                                    verticalOrigin.offset(x, y, z),
+                                    Blocks.AIR.defaultBlockState());
+                        }
+                    }
+                }
+                for (int x = -1; x <= 1; x++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            verticalOrigin.offset(x, -1, 0),
+                            Blocks.STONE.defaultBlockState());
+                }
+                var stair = Blocks.OAK_STAIRS.defaultBlockState()
+                        .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST);
+                body.serverLevel().setBlockAndUpdate(verticalOrigin.offset(2, -1, 0), stair);
+                for (int x = 3; x <= 12; x++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            verticalOrigin.offset(x, 0, 0),
+                            Blocks.STONE.defaultBlockState());
+                }
+                Vec3 verticalTarget = Vec3.atBottomCenterOf(verticalOrigin.offset(6, 1, 0));
+                CompanionRegistry.Result verticalRun =
+                        registry.goTo(owner, verticalTarget.x, verticalTarget.y, verticalTarget.z);
+                helper.assertTrue(
+                        verticalRun.success(),
+                        "vertical navigation failed to start: " + verticalRun.code());
+                helper.runAfterDelay(140, () -> {
                     helper.assertTrue(
-                            body.position().distanceToSqr(stopStart) > 0.20D,
-                            "body did not move through vanilla player travel");
-                    CompanionRegistry.Result stopped = registry.stop(owner);
-                    helper.assertTrue(stopped.success(), "stop failed: " + stopped.code());
+                            body.position().distanceToSqr(verticalTarget) <= 2.25D,
+                            "Forge navigation did not reach the raised platform through vanilla movement");
+                    helper.assertTrue(
+                            body.serverLevel().getBlockState(verticalOrigin.offset(2, -1, 0))
+                                            .is(Blocks.OAK_STAIRS)
+                                    && body.serverLevel().getBlockState(verticalOrigin.offset(3, 0, 0))
+                                            .is(Blocks.STONE),
+                            "Forge vertical navigation mutated the stair or platform");
+                    runAquaticAndClimbingAcceptance(
+                            helper,
+                            registry,
+                            owner,
+                            body,
+                            ownerConnection);
+                });
+            });
+        });
+    }
+
+    private static void runAquaticAndClimbingAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            FakeConnection ownerConnection) {
+        BlockPos swimOrigin = body.blockPosition();
+        for (int x = -1; x <= 8; x++) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -1; y <= 4; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            swimOrigin.offset(x, y, z),
+                            Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        for (int x = -1; x <= 8; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    swimOrigin.offset(x, -1, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        for (int x = 3; x <= 7; x++) {
+            for (int y = 0; y <= 3; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        swimOrigin.offset(x, y, 0),
+                        Blocks.WATER.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(
+                        swimOrigin.offset(x, y, -1),
+                        Blocks.GLASS.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(
+                        swimOrigin.offset(x, y, 1),
+                        Blocks.GLASS.defaultBlockState());
+            }
+        }
+        for (int y = 0; y <= 3; y++) {
+            body.serverLevel().setBlockAndUpdate(
+                    swimOrigin.offset(8, y, 0),
+                    Blocks.GLASS.defaultBlockState());
+        }
+        Vec3 swimTarget = Vec3.atBottomCenterOf(swimOrigin.offset(6, 2, 0));
+        CompanionRegistry.Result swimRun =
+                registry.goTo(owner, swimTarget.x, swimTarget.y, swimTarget.z);
+        helper.assertTrue(swimRun.success(), "Forge swim navigation failed to start: " + swimRun.code());
+        awaitNavigationPosition(helper, body, swimTarget, 240, () -> {
+            helper.assertTrue(
+                    body.serverLevel().getFluidState(swimOrigin.offset(6, 2, 0))
+                            .is(net.minecraft.tags.FluidTags.WATER),
+                    "Forge swim navigation mutated the target water volume");
+            runClimbingAndLifecycleAcceptance(
+                    helper,
+                    registry,
+                    owner,
+                    body,
+                    ownerConnection);
+        });
+    }
+
+    private static void runClimbingAndLifecycleAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            FakeConnection ownerConnection) {
+        BlockPos climbOrigin = body.blockPosition();
+        for (int x = -1; x <= 4; x++) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -1; y <= 5; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            climbOrigin.offset(x, y, z),
+                            Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        for (int x = -1; x <= 2; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    climbOrigin.offset(x, -1, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        for (int y = 0; y <= 4; y++) {
+            body.serverLevel().setBlockAndUpdate(
+                    climbOrigin.offset(3, y, 0),
+                    Blocks.STONE.defaultBlockState());
+        }
+        var ladder = Blocks.LADDER.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.WEST);
+        for (int y = 0; y <= 3; y++) {
+            body.serverLevel().setBlockAndUpdate(climbOrigin.offset(2, y, 0), ladder);
+        }
+        Vec3 climbTarget = Vec3.atBottomCenterOf(climbOrigin.offset(2, 3, 0));
+        CompanionRegistry.Result climbRun =
+                registry.goTo(owner, climbTarget.x, climbTarget.y, climbTarget.z);
+        helper.assertTrue(climbRun.success(), "Forge climb navigation failed to start: " + climbRun.code());
+        awaitNavigationPosition(helper, body, climbTarget, 240, () -> {
+            helper.assertTrue(
+                    body.serverLevel().getBlockState(climbOrigin.offset(2, 3, 0)).is(Blocks.LADDER),
+                    "Forge climb navigation mutated the ladder");
+            finishLifecycleAcceptance(helper, registry, owner, body, ownerConnection);
+        });
+    }
+
+    private static void awaitNavigationPosition(
+            GameTestHelper helper,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        if (body.position().distanceToSqr(target) <= 2.25D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(
+                ticksRemaining > 0,
+                "navigation did not reach the observed target: position="
+                        + body.position()
+                        + " target="
+                        + target);
+        helper.runAfterDelay(
+                1,
+                () -> awaitNavigationPosition(
+                        helper,
+                        body,
+                        target,
+                        ticksRemaining - 1,
+                        reached));
+    }
+
+    private static void finishLifecycleAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            FakeConnection ownerConnection) {
+        BlockPos stopOrigin = body.blockPosition();
+        for (int x = -6; x <= 0; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    stopOrigin.offset(x, -1, 0),
+                    Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(stopOrigin.offset(x, 0, 0), Blocks.AIR.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(stopOrigin.offset(x, 1, 0), Blocks.AIR.defaultBlockState());
+        }
+        Vec3 stopStart = body.position();
+        CompanionRegistry.Result stopRun =
+                registry.goTo(owner, stopStart.x - 4.0D, stopStart.y, stopStart.z);
+        helper.assertTrue(stopRun.success(), "stop regression goto failed: " + stopRun.code());
+        helper.runAfterDelay(20, () -> {
+            helper.assertTrue(
+                    body.position().distanceToSqr(stopStart) > 0.20D,
+                    "body did not move through vanilla player travel");
+            CompanionRegistry.Result stopped = registry.stop(owner);
+            helper.assertTrue(stopped.success(), "stop failed: " + stopped.code());
             Vec3 stoppedAt = body.position();
             helper.runAfterDelay(12, () -> {
                 helper.assertTrue(body.position().distanceToSqr(stoppedAt) < 0.04D,
@@ -1365,12 +1599,14 @@ public final class CompanionLifecycleForgeGameTests {
                 helper.assertTrue(registry.spawn(owner).success(), "spawn failed");
                 CompanionPlayer reloaded = registry.liveBodyForOwner(owner.getUUID());
                 helper.assertTrue(reloaded != null, "spawn did not restore body");
-                helper.assertTrue(reloaded.getUUID().equals(body.getUUID()), "body UUID changed across sleep/wake");
+                helper.assertTrue(reloaded.getUUID().equals(body.getUUID()),
+                        "body UUID changed across sleep/wake");
                 helper.assertTrue(reloaded.fakeConnection().retainedPacketCount() == 0,
                         "replacement fake connection retained packets");
                 helper.assertTrue(reloaded.getInventory().contains(new ItemStack(Items.DIAMOND)),
                         "inventory did not persist across sleep/wake");
-                helper.assertTrue(reloaded.hurt(reloaded.damageSources().fellOutOfWorld(), Float.MAX_VALUE),
+                helper.assertTrue(
+                        reloaded.hurt(reloaded.damageSources().fellOutOfWorld(), Float.MAX_VALUE),
                         "lethal vanilla damage was rejected");
                 helper.runAfterDelay(4, () -> {
                     helper.assertTrue(registry.liveBodyForOwner(owner.getUUID()) == null,
@@ -1385,8 +1621,6 @@ public final class CompanionLifecycleForgeGameTests {
                     helper.getLevel().getServer().getPlayerList().remove(owner);
                     ownerConnection.disconnect(Component.literal("Forge GameTest complete"));
                     helper.succeed();
-                });
-            });
                 });
             });
         });

@@ -287,10 +287,13 @@ final class BehaviorDirector {
         GridPathPlanner.Point current = SurvivalNavigationAdapter.point(body.blockPosition());
         boolean targetMoved = !goal.equals(progress.goal);
         boolean routeMissing = progress.waypointIndex >= progress.route.size();
+        GridPathPlanner.Point plannedFrom = progress.waypointIndex == 0
+                ? current
+                : progress.route.get(progress.waypointIndex - 1);
         boolean routeInvalid = !routeMissing
                 && !navigationAdapter.remainsTraversable(
                         body,
-                        current,
+                        plannedFrom,
                         progress.route.get(progress.waypointIndex));
         if (targetMoved || routeMissing || routeInvalid) {
             if (routeInvalid && ++progress.replanCount > MAX_REPLANS) {
@@ -353,7 +356,7 @@ final class BehaviorDirector {
             waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
             delta = waypoint.subtract(body.position());
         }
-        float yaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+        float yaw = navigationAdapter.movementYaw(body, waypointPoint, delta);
         actionGateway.applyMoveInput(
                 body,
                 yaw,

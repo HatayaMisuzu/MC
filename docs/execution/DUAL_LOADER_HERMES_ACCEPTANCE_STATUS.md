@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 16:16 +08:00
+Updated: 2026-07-27 16:32 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `6 — REMOTE_CI_CLOSURE`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `f57a95fd851d30da4896aa84254c8c6f8e1bf429`
+- Latest committed source SHA: `8f656c9867c7c0e7b1ae81dbf6818e01ba957c2e`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -512,6 +512,16 @@ Passed on the frozen SHA:
   JavaScript/TypeScript CodeQL in run `30247587041` passed. Minecraft-heavy run
   `30247592089` failed only on the Forge overlap described above; it is
   historical failure evidence, not a pass for the corrected SHA.
+- At corrected checkpoint `7d4140f`, PR fast run `30249327282`, Windows package
+  run `30249327104`, and dependency review plus both CodeQL analyses in run
+  `30249327156` passed. Minecraft-heavy run `30249333781` passed all Loader
+  builds, dedicated-server launches and GameTests, including the corrected
+  Forge 4/4 suite. Its subsequent Runtime/Forge E2E stayed alive but reached
+  the verified registration marker after the script's 90-second cold-start
+  deadline. Slice `8f656c9` raises only that bounded startup allowance to 180
+  seconds; the marker, authenticated online body, FOLLOW/pause/resume/cancel
+  assertions and successful GameTest exit remain mandatory. The focused local
+  Runtime/Forge E2E passes after this change.
 
 ## Remaining work
 

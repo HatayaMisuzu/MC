@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 16:32 +08:00
+Updated: 2026-07-27 16:45 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -27,7 +27,7 @@ only completion matrix.
 - Stage 5 automated result: `LOCALLY_VERIFIED`
 - Stage 5 Live-Hermes result: `NOT_RUN`
 - Stage 6 local result: `LOCALLY_VERIFIED`
-- Stage 6 remote-CI result: `NOT_RUN`
+- Stage 6 remote-CI result: `REMOTELY_VERIFIED`
 
 ## Frozen environment
 
@@ -522,11 +522,17 @@ Passed on the frozen SHA:
   seconds; the marker, authenticated online body, FOLLOW/pause/resume/cancel
   assertions and successful GameTest exit remain mandatory. The focused local
   Runtime/Forge E2E passes after this change.
+- At closure checkpoint `7fbc47d7595f3fbab6ddbea2ed35bbaa56669e5f`,
+  PR fast run `30250337641`, Windows terminal/package run `30250337599`,
+  dependency review plus both CodeQL analyses in run `30250337611`, and
+  Minecraft-heavy run `30250341444` all completed successfully. Heavy passed
+  all Loader builds, all dedicated-server launches, Fabric 31/31, Forge 4/4
+  and NeoForge 1/1 GameTests, both authenticated Runtime E2E paths, both
+  two-process restart-recovery gates, and the remaining reliability gates.
 
 ## Remaining work
 
-- Push the corrected Stage 6 closure and record same-SHA PR fast, Windows
-  package, Minecraft heavy, dependency-review and both CodeQL results.
+- No automated Stage 6 implementation gate remains open.
 - Live Hermes discovery/verification and human play are user-deferred. Keep
   `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING` and `HUMAN_PLAYTEST_PENDING`;
   do not convert local automation into either form of evidence.

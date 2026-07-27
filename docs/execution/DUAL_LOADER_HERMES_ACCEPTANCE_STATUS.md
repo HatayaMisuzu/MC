@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 14:26 +08:00
+Updated: 2026-07-27 14:29 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `28db27e2cb28b8b791dd5ec6aecb5104168b6654`
+- Latest committed source SHA: `765997a8962527d1e46d9ad9aab417197a2a7252`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -418,6 +418,11 @@ Passed on the frozen SHA:
   `TARGET_CHUNK_UNLOADED`. Fabric 31/31 and Forge 3/3 pass serially. An attempted
   parallel run was discarded because both Gradle builds write the same shared
   core output; it is not acceptance evidence.
+- CI follow-up `765997a` records narrowly scoped forbidden-API exceptions for
+  the explicitly enabled Forge two-process probe's owner placement and support
+  surface. The production behavior path remains ordinary player input. Local
+  `forbiddenApiCheck` and the full Forge two-process restart gate both pass
+  after the correction.
 
 ## Remaining work
 

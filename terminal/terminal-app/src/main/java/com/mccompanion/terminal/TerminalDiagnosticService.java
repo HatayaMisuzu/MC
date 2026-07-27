@@ -27,6 +27,13 @@ final class TerminalDiagnosticService {
             LauncherInstallation launcher,
             Path controlHome) {
         List<DiagnosticResult> results = new ArrayList<>(new DiagnosticEngine().run(instance));
+        results.add(result(FullBridgeSupport.supports(instance), "loader.full_bridge",
+                FullBridgeSupport.supports(instance)
+                        ? instance.loader() + " " + instance.minecraftVersion() + " Full Runtime Bridge target"
+                        : instance.loader() + " " + instance.minecraftVersion() + " remains LOCAL_ONLY",
+                Map.of("loader", instance.loader().name(),
+                        "minecraftVersion", instance.minecraftVersion()),
+                "Select a supported Fabric 1.21.1 or Forge 1.20.1 instance"));
         Path identity = profile.profileDirectory().resolve("profile.json");
         results.add(result(Files.isRegularFile(identity), "runtime.profile", "Runtime profile identity file",
                 Map.of("profile", profile.instanceId()), "Run mcac runtime start " + instance.instanceId()));
@@ -58,7 +65,12 @@ final class TerminalDiagnosticService {
                 mcp.genericRegistry() ? "Generic Registry discovery is available in the current Tool scope"
                         : "Generic Registry discovery is unavailable in the current Tool scope",
                 Map.of("registrySearch", Boolean.toString(mcp.genericRegistry())),
-                "Connect a supported Fabric body and rerun Doctor"));
+                "Connect a supported Full Bridge body and rerun Doctor"));
+        results.add(result(mcp.globalNavigation(), "navigation.global_tool",
+                mcp.globalNavigation() ? "Bounded global navigation is available in the current Tool scope"
+                        : "Bounded global navigation is unavailable in the current Tool scope",
+                Map.of("movementNavigate", Boolean.toString(mcp.globalNavigation())),
+                "Connect a supported Full Bridge body and rerun Doctor"));
         results.add(result(mcp.episodeCapsules(), "memory.episode_capsules",
                 mcp.episodeCapsules() ? "Episode Capsule read surface is available"
                         : "Episode Capsule read surface is unavailable",

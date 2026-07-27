@@ -7,7 +7,6 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.terminal.diagnostics.DiagnosticResult;
 import com.mccompanion.terminal.install.InstallPlan;
 import com.mccompanion.terminal.install.InstallTransaction;
-import com.mccompanion.terminal.launcher.LoaderType;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
 import com.mccompanion.terminal.runtime.PairingService;
 import com.mccompanion.terminal.runtime.RuntimeProfile;
@@ -140,7 +139,7 @@ final class WebTerminalApi {
             .put("companions", connection.companions())
             .put(
                 "mode",
-                selected.loader() == LoaderType.FABRIC
+                FullBridgeSupport.supports(selected)
                     ? (connection.connected() ? connection.mode() : "SAFE_IDLE")
                     : "LOCAL_ONLY");
       } else {
@@ -148,7 +147,7 @@ final class WebTerminalApi {
             .put("runtime", "NOT_CONFIGURED")
             .put("mod", "WAITING")
             .put("companions", 0)
-            .put("mode", selected.loader() == LoaderType.FABRIC ? "SAFE_IDLE" : "LOCAL_ONLY");
+            .put("mode", FullBridgeSupport.supports(selected) ? "SAFE_IDLE" : "LOCAL_ONLY");
       }
     }
     return value;
@@ -200,7 +199,7 @@ final class WebTerminalApi {
         .put("isolation", instance.isolation().name())
         .put("compatible", com.mccompanion.terminal.install.InstallPlanner.isSupported(instance))
         .put("installed", installed)
-        .put("mode", instance.loader() == LoaderType.FABRIC ? "FULL" : "LOCAL_ONLY");
+        .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY");
   }
 
   private ObjectNode doctor(JsonNode request) throws Exception {
@@ -305,7 +304,7 @@ final class WebTerminalApi {
 
   private ObjectNode sessionStatus(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) {
+    if (!FullBridgeSupport.supports(instance)) {
       return JSON.createObjectNode()
           .put("instanceId", instanceId)
           .put("connected", false)
@@ -327,7 +326,7 @@ final class WebTerminalApi {
 
   ObjectNode companionSnapshot(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) {
+    if (!FullBridgeSupport.supports(instance)) {
       return JSON.createObjectNode()
           .put("instanceId", instanceId)
           .put("mode", "LOCAL_ONLY")
@@ -651,7 +650,7 @@ final class WebTerminalApi {
         JSON.createObjectNode()
             .put("summary", action.equals("attach") ? "附加到当前会话" : "启动游戏并等待 Mod 握手")
             .put("launcher", root.launcher(instance).type().name())
-            .put("mode", instance.loader() == LoaderType.FABRIC ? "FULL" : "LOCAL_ONLY");
+            .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY");
     int waitSeconds = Math.max(5, Math.min(300, request.path("waitSeconds").asInt(90)));
     return operations.create(
         "session",
@@ -671,7 +670,7 @@ final class WebTerminalApi {
           if (blocked) throw new IOException("Doctor 检测到阻断项，请先修复");
           if (!new InstallTransaction().verify(instance.gameDirectory()))
             throw new IOException("未检测到经过验证的 Companion 安装，请先完成安装");
-          if (instance.loader() == LoaderType.FABRIC) {
+          if (FullBridgeSupport.supports(instance)) {
             progress.update(35, "正在启动 Runtime");
             new PairingService().ensureConfigured(instance, profile);
             new WindowsRuntimeSupervisor().start(profile);
@@ -680,7 +679,7 @@ final class WebTerminalApi {
           Path executable = root.launcher(instance).executable();
           if (Desktop.isDesktopSupported()) Desktop.getDesktop().open(executable.toFile());
           else new ProcessBuilder(executable.toString()).start();
-          if (instance.loader() != LoaderType.FABRIC) {
+          if (!FullBridgeSupport.supports(instance)) {
             return JSON.createObjectNode()
                 .put("state", "LOCAL_ONLY")
                 .put("message", "启动器已打开；该 Loader 当前没有 Runtime Bridge");
@@ -698,7 +697,8 @@ final class WebTerminalApi {
     String companionId = required(request, "companionId");
     String action = required(request, "action").toLowerCase();
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) throw new IOException("LOCAL_ONLY 不支持 Companion 远程控制");
+    if (!FullBridgeSupport.supports(instance))
+      throw new IOException("LOCAL_ONLY 不支持 Companion 远程控制");
     Map<String, String> types =
         Map.of(
             "status", "STATUS",
@@ -753,7 +753,8 @@ final class WebTerminalApi {
     String text = request.path("text").asText("").strip();
     if (text.isEmpty() || text.length() > 4096) throw new IllegalArgumentException("请输入 1..4096 字符的伙伴请求");
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) throw new IOException("LOCAL_ONLY 不支持智能伙伴任务");
+    if (!FullBridgeSupport.supports(instance))
+      throw new IOException("LOCAL_ONLY 不支持智能伙伴任务");
     ObjectNode details = JSON.createObjectNode().put("summary", "让伙伴理解并处理自然语言目标")
         .put("companionId", companionId).put("request", text).put("modelMayBeCalled", true)
         .put("completionRequiresWorldEvidence", true);

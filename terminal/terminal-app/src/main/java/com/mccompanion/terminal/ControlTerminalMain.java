@@ -740,7 +740,7 @@ public final class ControlTerminalMain implements Runnable {
       if (root.printDoctor(i) == BLOCKED) return BLOCKED;
       System.out.println("State PREPARING");
       RuntimeProfile p = root.profile(i);
-      if (i.loader() == LoaderType.FABRIC) {
+      if (FullBridgeSupport.supports(i)) {
         new PairingService().ensureConfigured(i, p);
         new WindowsRuntimeSupervisor().start(p);
         System.out.println("State RUNTIME_STARTING port=" + p.port());
@@ -749,7 +749,7 @@ public final class ControlTerminalMain implements Runnable {
       if (Desktop.isDesktopSupported()) Desktop.getDesktop().open(l.executable().toFile());
       else new ProcessBuilder(l.executable().toString()).start();
       System.out.println("State LAUNCHER_OPEN\nState WAITING_FOR_HANDSHAKE");
-      if (i.loader() != LoaderType.FABRIC) return WARNING;
+      if (!FullBridgeSupport.supports(i)) return WARNING;
       var s = new ConnectionService().waitForHandshake(p, Duration.ofSeconds(wait));
       System.out.printf(
           "Launcher OPEN%nRuntime %s%nMod %s%nCompanion %d%nMode %s%n",

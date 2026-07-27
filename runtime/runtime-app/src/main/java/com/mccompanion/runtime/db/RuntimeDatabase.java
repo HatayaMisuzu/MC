@@ -22,9 +22,12 @@ public final class RuntimeDatabase implements AutoCloseable {
     private static final Set<String> REQUIRED_TABLES = Set.of(
             "runtime_session", "companion", "control_lease", "task", "task_event",
             "behavior_run", "action_evidence", "agent_plan", "agent_step", "agent_plan_revision",
-            "memory_fact", "memory_suggestion", "episode_capsule", "conversation_event", "waiting_question",
-            "brain_session", "brain_tool_call",
-            "task_graph_execution", "skill_version", "mcp_request", "mcp_session", "mcp_event",
+            "memory_fact", "memory_suggestion", "memory_fact_history", "memory_settings",
+            "episode_capsule", "conversation_event", "waiting_question",
+            "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
+            "brain_completion_claim", "proactive_message_admission",
+            "task_graph_execution", "skill_version", "skill_trial_lease",
+            "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
 
     private final Path path;
@@ -737,6 +740,123 @@ public final class RuntimeDatabase implements AutoCloseable {
                 """,
                 "CREATE INDEX episode_capsule_scope_idx ON episode_capsule(companion_id,ended_at)",
                 "ALTER TABLE memory_suggestion ADD COLUMN capsule_id TEXT REFERENCES episode_capsule(episode_id) ON DELETE SET NULL");
+        List<String> brainSemanticState = List.of(
+                """
+                CREATE TABLE brain_semantic_state (
+                  session_id TEXT PRIMARY KEY REFERENCES brain_session(session_id) ON DELETE CASCADE,
+                  controller_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  state_json TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  authored_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX brain_semantic_state_scope_idx ON brain_semantic_state(" +
+                        "controller_id,companion_id,authored_at)");
+        List<String> brainBehaviorSettings = List.of(
+                """
+                CREATE TABLE brain_behavior_settings (
+                  companion_id TEXT PRIMARY KEY,
+                  initiative_mode TEXT NOT NULL,
+                  personality_mode TEXT NOT NULL,
+                  revision INTEGER NOT NULL,
+                  updated_by TEXT NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """);
+        List<String> brainCompletionClaim = List.of(
+                """
+                CREATE TABLE brain_completion_claim (
+                  session_id TEXT NOT NULL REFERENCES brain_session(session_id) ON DELETE CASCADE,
+                  claim_sequence INTEGER NOT NULL,
+                  certainty TEXT NOT NULL,
+                  claim_text TEXT NOT NULL,
+                  observation_call_id TEXT,
+                  task_id TEXT,
+                  explanation TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(session_id,claim_sequence),
+                  FOREIGN KEY(session_id,observation_call_id)
+                    REFERENCES brain_tool_call(session_id,call_id)
+                )
+                """,
+                "CREATE INDEX brain_completion_claim_task_idx ON brain_completion_claim(task_id,created_at)");
+        List<String> memoryManagement = List.of(
+                """
+                CREATE TABLE memory_settings (
+                  companion_id TEXT PRIMARY KEY,
+                  auto_save_enabled INTEGER NOT NULL,
+                  revision INTEGER NOT NULL,
+                  updated_by TEXT NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                """
+                CREATE TABLE memory_fact_history (
+                  history_id TEXT PRIMARY KEY,
+                  memory_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  kind TEXT NOT NULL,
+                  fact_key TEXT NOT NULL,
+                  value_json TEXT NOT NULL,
+                  verified INTEGER NOT NULL,
+                  confidence REAL NOT NULL,
+                  source TEXT NOT NULL,
+                  expires_at INTEGER,
+                  change_kind TEXT NOT NULL,
+                  changed_by TEXT NOT NULL,
+                  changed_at INTEGER NOT NULL
+                )
+                """,
+                "CREATE INDEX memory_fact_history_scope_idx ON memory_fact_history(companion_id,changed_at)");
+        List<String> skillTrialLease = List.of(
+                """
+                CREATE TABLE skill_trial_lease (
+                  lease_id TEXT PRIMARY KEY,
+                  profile_id TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  controller_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  skill_id TEXT NOT NULL,
+                  format TEXT NOT NULL,
+                  document TEXT NOT NULL,
+                  sha256 TEXT NOT NULL,
+                  tools_json TEXT NOT NULL,
+                  permissions_json TEXT NOT NULL,
+                  limits_json TEXT NOT NULL,
+                  status TEXT NOT NULL,
+                  remaining_uses INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  execution_id TEXT,
+                  evidence_json TEXT NOT NULL,
+                  revoked_by TEXT,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL
+                )
+                """,
+                """
+                CREATE INDEX skill_trial_lease_scope_idx
+                ON skill_trial_lease(profile_id,companion_id,brain_session_id,status,updated_at)
+                """);
+        List<String> proactiveMessageAdmission = List.of(
+                """
+                CREATE TABLE proactive_message_admission (
+                  admission_id TEXT PRIMARY KEY,
+                  companion_id TEXT NOT NULL,
+                  brain_session_id TEXT NOT NULL,
+                  evidence_call_id TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  message_sha256 TEXT NOT NULL,
+                  initiative_mode TEXT NOT NULL,
+                  conversation_event_id TEXT,
+                  created_at INTEGER NOT NULL,
+                  UNIQUE(brain_session_id,evidence_call_id,event_type)
+                )
+                """,
+                """
+                CREATE INDEX proactive_message_admission_scope_idx
+                ON proactive_message_admission(companion_id,created_at DESC)
+                """);
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -760,6 +880,13 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(20, "persist bounded MCP SSE replay events", mcpEventReplay),
                 new Migration(21, "persist isolated search source sessions", searchSessionLifecycle),
                 new Migration(22, "audit local review of memory suggestions", memorySuggestionReview),
-                new Migration(23, "persist deterministic episode capsules and candidate provenance", episodeCapsules));
+                new Migration(23, "persist deterministic episode capsules and candidate provenance", episodeCapsules),
+                new Migration(24, "persist external Brain-authored semantic state", brainSemanticState),
+                new Migration(25, "persist local Brain behavior settings", brainBehaviorSettings),
+                new Migration(26, "link external Brain completion claims to final observations", brainCompletionClaim),
+                new Migration(27, "persist Memory settings and user-visible history", memoryManagement),
+                new Migration(28, "persist bounded one-time generated Skill trial leases", skillTrialLease),
+                new Migration(29, "rate-limit and deduplicate evidence-bound proactive messages",
+                        proactiveMessageAdmission));
     }
 }

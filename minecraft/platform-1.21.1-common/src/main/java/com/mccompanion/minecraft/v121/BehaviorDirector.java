@@ -1,8 +1,11 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.navigation.GridPathPlanner;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -45,16 +48,15 @@ import org.slf4j.Logger;
 final class BehaviorDirector {
     private static final int STUCK_TICKS = 80;
     private static final int MAX_REPLANS = 3;
-    private static final int AVOIDANCE_TICKS = 35;
     private static final int BEHAVIOR_TIMEOUT_TICKS = 20 * 60 * 5;
     private static final double ARRIVAL_DISTANCE_SQUARED = 1.5D * 1.5D;
     private static final double FOLLOW_DISTANCE_SQUARED = 3.0D * 3.0D;
-    private static final float[] REPLAN_YAW_OFFSETS = {45.0F, -45.0F, 90.0F};
 
     private final MinecraftServer server;
     private final CompanionSavedData savedData;
     private final Logger logger;
     private final PlayerActionGateway actionGateway = new PlayerActionGateway();
+    private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
     private final ReflexController reflexController = new ReflexController();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, SkillProgress> skills = new HashMap<>();
@@ -170,6 +172,7 @@ final class BehaviorDirector {
             body.closeContainer();
         }
         if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
+                || code.equals("RUNTIME_OFFLINE")
                 || code.equals("LEASE_EXPIRED"))) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
@@ -253,6 +256,14 @@ final class BehaviorDirector {
             return;
         }
 
+        tickNavigation(entry, body, target, arrivalDistanceSquared);
+    }
+
+    private void tickNavigation(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            Vec3 target,
+            double arrivalDistanceSquared) {
         NavigationProgress progress = navigation.computeIfAbsent(
                 entry.companionId,
                 ignored -> new NavigationProgress(server.getTickCount()));
@@ -260,10 +271,8 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "BEHAVIOR_TIMEOUT");
             return;
         }
-
-        Vec3 delta = target.subtract(body.position());
-        double distanceSquared = delta.lengthSqr();
-        if (distanceSquared <= arrivalDistanceSquared) {
+        Vec3 targetDelta = target.subtract(body.position());
+        if (targetDelta.lengthSqr() <= arrivalDistanceSquared) {
             stop(entry, body, true, "NONE");
             if (entry.mode == CompanionEntry.Mode.GOTO) {
                 entry.mode = CompanionEntry.Mode.IDLE;
@@ -274,34 +283,113 @@ final class BehaviorDirector {
             return;
         }
 
-        // Collision and gravity can make a trapped player jitter without getting closer.
-        // Only measurable target-distance reduction counts as navigation progress.
-        if (distanceSquared + 0.25D < progress.bestDistanceSquared) {
-            progress.bestDistanceSquared = distanceSquared;
-            progress.stagnantTicks = 0;
-        } else if (++progress.stagnantTicks >= STUCK_TICKS) {
-            if (progress.replanCount >= MAX_REPLANS) {
+        GridPathPlanner.Point goal = SurvivalNavigationAdapter.point(BlockPos.containing(target));
+        GridPathPlanner.Point current = SurvivalNavigationAdapter.point(body.blockPosition());
+        boolean targetMoved = !goal.equals(progress.goal);
+        boolean routeMissing = progress.waypointIndex >= progress.route.size();
+        GridPathPlanner.Point plannedFrom = progress.waypointIndex == 0
+                ? current
+                : progress.route.get(progress.waypointIndex - 1);
+        boolean routeInvalid = !routeMissing
+                && !navigationAdapter.remainsTraversable(
+                        body,
+                        plannedFrom,
+                        progress.route.get(progress.waypointIndex));
+        if (targetMoved || routeMissing || routeInvalid) {
+            if (routeInvalid && ++progress.replanCount > MAX_REPLANS) {
                 pauseSafely(entry, body, "STUCK");
                 return;
             }
-            progress.yawOffset = REPLAN_YAW_OFFSETS[progress.replanCount++];
-            progress.avoidanceTicks = AVOIDANCE_TICKS;
-            progress.stagnantTicks = 0;
-            logger.info("companion_replan companion={} attempt={} yawOffset={}",
-                    entry.companionId,
-                    progress.replanCount,
-                    progress.yawOffset);
+            String failure = replanNavigation(body, target, progress, goal);
+            if (failure != null) {
+                pauseSafely(entry, body, failure);
+                return;
+            }
         }
 
-        float yaw = (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
-        if (progress.avoidanceTicks > 0) {
-            yaw += progress.yawOffset;
-            progress.avoidanceTicks--;
-        } else {
-            progress.yawOffset = 0.0F;
+        while (progress.waypointIndex < progress.route.size()) {
+            Vec3 candidate = SurvivalNavigationAdapter.waypoint(
+                    progress.route.get(progress.waypointIndex));
+            double horizontal = horizontalDistanceSquared(body.position(), candidate);
+            if (horizontal > 0.45D || Math.abs(body.getY() - candidate.y) > 1.1D) break;
+            progress.waypointIndex++;
+            progress.bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
+            progress.stagnantTicks = 0;
         }
-        boolean jumpRequested = delta.y > 0.6D || body.horizontalCollision;
-        actionGateway.applyMoveInput(body, yaw, jumpRequested);
+        if (progress.waypointIndex >= progress.route.size()) {
+            String failure = replanNavigation(body, target, progress, goal);
+            if (failure != null || progress.route.isEmpty()) {
+                if (failure != null) pauseSafely(entry, body, failure);
+                else actionGateway.applyMoveInput(
+                        body,
+                        (float) Math.toDegrees(Math.atan2(-targetDelta.x, targetDelta.z)),
+                        targetDelta.y > 0.6D || body.horizontalCollision);
+                return;
+            }
+        }
+
+        GridPathPlanner.Point waypointPoint = progress.route.get(progress.waypointIndex);
+        if (navigationAdapter.openDoorIfNeeded(body, waypointPoint)) {
+            actionGateway.markVanillaGameModeAction(body);
+        }
+        Vec3 waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
+        Vec3 delta = waypoint.subtract(body.position());
+        double waypointDistanceSquared = delta.lengthSqr();
+        if (waypointDistanceSquared + 0.04D < progress.bestWaypointDistanceSquared) {
+            progress.bestWaypointDistanceSquared = waypointDistanceSquared;
+            progress.stagnantTicks = 0;
+        } else if (++progress.stagnantTicks >= STUCK_TICKS) {
+            if (++progress.replanCount > MAX_REPLANS) {
+                pauseSafely(entry, body, "STUCK");
+                return;
+            }
+            String failure = replanNavigation(body, target, progress, goal);
+            if (failure != null) {
+                pauseSafely(entry, body, failure);
+                return;
+            }
+            logger.info(
+                    "companion_replan companion={} attempt={} reason=NO_WAYPOINT_PROGRESS",
+                    entry.companionId,
+                    progress.replanCount);
+            waypointPoint = progress.route.get(progress.waypointIndex);
+            waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
+            delta = waypoint.subtract(body.position());
+        }
+        float yaw = navigationAdapter.movementYaw(body, waypointPoint, delta);
+        actionGateway.applyMoveInput(
+                body,
+                yaw,
+                waypointPoint.y() > body.blockPosition().getY()
+                        || body.horizontalCollision);
+    }
+
+    private String replanNavigation(
+            CompanionPlayer body,
+            Vec3 target,
+            NavigationProgress progress,
+            GridPathPlanner.Point goal) {
+        GridPathPlanner.Plan plan = navigationAdapter.plan(body, target);
+        if (plan.status() != GridPathPlanner.Status.READY) {
+            return switch (plan.status()) {
+                case TARGET_UNLOADED -> "TARGET_CHUNK_UNLOADED";
+                case OUT_OF_RANGE -> "TARGET_OUT_OF_RANGE";
+                case UNREACHABLE -> "PATH_UNREACHABLE";
+                case READY -> null;
+            };
+        }
+        progress.goal = goal;
+        progress.route = plan.points();
+        progress.waypointIndex = 0;
+        progress.bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
+        progress.stagnantTicks = 0;
+        return null;
+    }
+
+    private static double horizontalDistanceSquared(Vec3 first, Vec3 second) {
+        double x = first.x - second.x;
+        double z = first.z - second.z;
+        return x * x + z * z;
     }
 
     private void beginRetreat(CompanionEntry entry, CompanionPlayer body, Entity threat) {
@@ -773,22 +861,30 @@ final class BehaviorDirector {
                     progress.hand, hit);
             actionGateway.markVanillaGameModeAction(body);
             boolean placed = body.serverLevel().getBlockState(progress.blockPosition).is(progress.placementBlock);
-            int remaining = count(body, progress.placementItem);
-            if (!result.consumesAction() || !placed || remaining >= progress.itemBaseline) {
-                logger.warn("companion_block_place_no_effect companion={} result={} placed={} remaining={} baseline={} target={}",
-                        entry.companionId, result, placed, remaining, progress.itemBaseline,
-                        progress.blockPosition);
-                pauseSafely(entry, body, "BLOCK_PLACE_NO_EFFECT");
+            if (!placed) {
+                logger.warn("companion_effect_uncertain companion={} capability=PlaceBlock result={} "
+                                + "inventoryRemaining={} inventoryBaseline={} target={}",
+                        entry.companionId, result, count(body, progress.placementItem),
+                        progress.itemBaseline, progress.blockPosition);
+                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                 return;
             }
         } else if (progress.blockPosition != null) {
+            var beforeBlock = body.serverLevel().getBlockState(progress.blockPosition);
+            int beforeInventory = inventoryDigest(body);
+            MenuEffectSnapshot beforeMenu = menuEffectSnapshot(body.containerMenu);
             BlockHitResult hit = new BlockHitResult(Vec3.atCenterOf(progress.blockPosition),
                     progress.face, progress.blockPosition, false);
             var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getItemInHand(progress.hand),
                     progress.hand, hit);
             actionGateway.markVanillaGameModeAction(body);
-            if (!result.consumesAction()) {
-                pauseSafely(entry, body, "INTERACTION_REJECTED");
+            boolean observed = !body.serverLevel().getBlockState(progress.blockPosition).equals(beforeBlock)
+                    || inventoryDigest(body) != beforeInventory
+                    || menuEffectChanged(beforeMenu, body.containerMenu);
+            if (!observed) {
+                logger.warn("companion_effect_uncertain companion={} capability=InteractBlock result={} target={}",
+                        entry.companionId, result, progress.blockPosition);
+                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                 return;
             }
         } else {
@@ -810,10 +906,22 @@ final class BehaviorDirector {
                     return;
                 }
             } else {
+                int beforeEntity = entityEffectDigest(target);
+                int beforeInventory = inventoryDigest(body);
+                MenuEffectSnapshot beforeMenu = menuEffectSnapshot(body.containerMenu);
+                UUID beforeVehicle = body.getVehicle() == null ? null : body.getVehicle().getUUID();
                 var result = body.interactOn(target, progress.hand);
                 actionGateway.markVanillaEntityInteraction(body);
-                if (!result.consumesAction()) {
-                    pauseSafely(entry, body, "INTERACTION_REJECTED");
+                Entity afterTarget = body.serverLevel().getEntity(progress.entityId);
+                UUID afterVehicle = body.getVehicle() == null ? null : body.getVehicle().getUUID();
+                boolean observed = afterTarget == null || entityEffectDigest(afterTarget) != beforeEntity
+                        || inventoryDigest(body) != beforeInventory
+                        || menuEffectChanged(beforeMenu, body.containerMenu)
+                        || !Objects.equals(beforeVehicle, afterVehicle);
+                if (!observed) {
+                    logger.warn("companion_effect_uncertain companion={} capability=InteractEntity result={} target={}",
+                            entry.companionId, result, progress.entityId);
+                    pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                     return;
                 }
             }
@@ -856,13 +964,25 @@ final class BehaviorDirector {
                 return;
             }
         } else {
-            int before = menuDigest(session.menu());
+            session.menu().broadcastChanges();
+            MenuEffectSnapshot before = menuEffectSnapshot(session.menu());
+            MenuMutationTracker mutations = new MenuMutationTracker();
+            session.menu().addSlotListener(mutations);
             ClickType clickType = action.equals("QUICK_MOVE") ? ClickType.QUICK_MOVE : ClickType.PICKUP;
             int button = action.equals("CLICK") ? progress.parameters.button() : 0;
-            session.menu().clicked(progress.parameters.slot(), button, clickType, body);
+            try {
+                session.menu().clicked(progress.parameters.slot(), button, clickType, body);
+                session.menu().broadcastChanges();
+            } finally {
+                session.menu().removeSlotListener(mutations);
+            }
             actionGateway.markVanillaMenuAction(body);
-            if (menuDigest(session.menu()) == before) {
-                pauseSafely(entry, body, "MENU_ACTION_NO_EFFECT");
+            if (!mutations.changed && !menuEffectChanged(before, session.menu())) {
+                logger.warn("companion_effect_uncertain companion={} capability=MenuAction action={} slot={} "
+                                + "containerId={} stateId={}",
+                        entry.companionId, action, progress.parameters.slot(),
+                        session.menu().containerId, session.menu().getStateId());
+                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
                 return;
             }
         }
@@ -887,6 +1007,63 @@ final class BehaviorDirector {
         hash = 31 * hash + carried.getCount();
         hash = 31 * hash + carried.getComponents().hashCode();
         return hash;
+    }
+
+    private static int inventoryDigest(CompanionPlayer body) {
+        int hash = 1;
+        for (int index = 0; index < body.getInventory().getContainerSize(); index++) {
+            ItemStack stack = body.getInventory().getItem(index);
+            hash = 31 * hash + stack.getItem().hashCode();
+            hash = 31 * hash + stack.getCount();
+            hash = 31 * hash + stack.getComponents().hashCode();
+        }
+        return hash;
+    }
+
+    private static int entityEffectDigest(Entity entity) {
+        int hash = Objects.hash(
+                entity.getType(), entity.isAlive(), entity.position(), entity.getDeltaMovement(),
+                entity.getXRot(), entity.getYRot(), entity.getPose(), entity.getAirSupply(),
+                entity.getRemainingFireTicks(), entity.onGround(), entity.isNoGravity(),
+                entity.isInvulnerable(), entity.getCustomName());
+        if (entity instanceof LivingEntity living) {
+            hash = 31 * hash + Float.hashCode(living.getHealth());
+            hash = 31 * hash + Float.hashCode(living.getAbsorptionAmount());
+        }
+        Entity vehicle = entity.getVehicle();
+        hash = 31 * hash + (vehicle == null ? 0 : vehicle.getUUID().hashCode());
+        for (Entity passenger : entity.getPassengers()) {
+            hash = 31 * hash + passenger.getUUID().hashCode();
+        }
+        return hash;
+    }
+
+    private static MenuEffectSnapshot menuEffectSnapshot(
+            net.minecraft.world.inventory.AbstractContainerMenu menu) {
+        return new MenuEffectSnapshot(menu, menu.getStateId(), menuDigest(menu));
+    }
+
+    private static boolean menuEffectChanged(
+            MenuEffectSnapshot before, net.minecraft.world.inventory.AbstractContainerMenu after) {
+        return before.menu != after || before.stateId != after.getStateId()
+                || before.digest != menuDigest(after);
+    }
+
+    private record MenuEffectSnapshot(
+            net.minecraft.world.inventory.AbstractContainerMenu menu, int stateId, int digest) { }
+
+    private static final class MenuMutationTracker implements net.minecraft.world.inventory.ContainerListener {
+        private boolean changed;
+
+        @Override
+        public void slotChanged(net.minecraft.world.inventory.AbstractContainerMenu menu, int slot, ItemStack stack) {
+            changed = true;
+        }
+
+        @Override
+        public void dataChanged(net.minecraft.world.inventory.AbstractContainerMenu menu, int property, int value) {
+            changed = true;
+        }
     }
 
     private void tickCollection(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -1837,11 +2014,12 @@ final class BehaviorDirector {
     }
 
     private static final class NavigationProgress {
-        private double bestDistanceSquared = Double.POSITIVE_INFINITY;
+        private List<GridPathPlanner.Point> route = List.of();
+        private GridPathPlanner.Point goal;
+        private int waypointIndex;
+        private double bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
         private int stagnantTicks;
         private int replanCount;
-        private int avoidanceTicks;
-        private float yawOffset;
         private final int startedTick;
 
         private NavigationProgress(int startedTick) {

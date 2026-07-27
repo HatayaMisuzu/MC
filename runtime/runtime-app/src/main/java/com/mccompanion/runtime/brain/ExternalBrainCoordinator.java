@@ -27,6 +27,9 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     private final Map<String, BrainSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, Object> companionLocks = new ConcurrentHashMap<>();
     private final Map<String, ActiveTool> activeTools = new ConcurrentHashMap<>();
+    private final Map<String, String> pendingInterruptions = new ConcurrentHashMap<>();
+    private final Map<String, List<ToolResult>> interruptedObservations = new ConcurrentHashMap<>();
+    private final Map<String, BrainSemanticState> semanticStates = new ConcurrentHashMap<>();
     private volatile String activeControllerId;
 
     public ExternalBrainCoordinator(ExternalBrainAdapter adapter, ToolGateway tools, int maxToolCallsPerTurn) {
@@ -89,17 +92,26 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
                                                        String userMessage, AgentContext context) {
         requireController(controllerId);
+        BrainBehaviorSettings behaviorSettings = audit == null
+                ? BrainBehaviorSettings.defaults(companionId) : audit.behaviorSettings(companionId);
+        AgentContext baseContext = context.withBrainBehaviorSettings(behaviorSettings.toJson());
         BrainSession session = sessions.get(companionId);
-        List<ToolResult> recovered = List.of();
+        List<ToolResult> recovered = interruptedObservations.remove(companionId);
+        if (recovered == null) recovered = List.of();
         if (session == null) {
             ToolContext provisional = new ToolContext(controllerId, "opening", companionId);
-            BrainSessionRequest opening = new BrainSessionRequest(controllerId, companionId, context,
+            BrainSessionRequest opening = new BrainSessionRequest(controllerId, companionId, baseContext,
                     tools.definitions(provisional));
             BrainSession interrupted = audit != null && adapter.supportsResume()
                     ? audit.interrupted(controllerId, companionId).orElse(null) : null;
             if (interrupted != null) {
                 session = adapter.resumeSession(opening, interrupted.sessionId());
-                recovered = audit.undeliveredTerminal(session.sessionId());
+                List<ToolResult> durableRecovered = audit.undeliveredTerminal(session.sessionId());
+                if (!durableRecovered.isEmpty()) {
+                    List<ToolResult> combined = new ArrayList<>(recovered);
+                    combined.addAll(durableRecovered);
+                    recovered = List.copyOf(combined);
+                }
                 audit.state(session.sessionId(), "ACTIVE", "RESUMED");
             } else {
                 session = adapter.openSession(opening);
@@ -112,6 +124,16 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
 
         ToolContext toolContext = new ToolContext(controllerId, session.sessionId(), companionId);
+        BrainSemanticState restoredState = semanticStates.get(companionId);
+        if (restoredState == null && audit != null) {
+            BrainAuditRepository.SemanticStateSnapshot persisted = audit.semanticState(session.sessionId());
+            if (persisted != null) {
+                restoredState = persisted.state();
+                semanticStates.put(companionId, restoredState);
+            }
+        }
+        AgentContext turnContext = restoredState == null ? baseContext
+                : baseContext.withBrainSemanticState(restoredState.toJson());
         List<ToolResult> observations = new ArrayList<>(recovered);
         List<ToolResult> pending = recovered;
         String message = userMessage;
@@ -119,7 +141,15 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         while (true) {
             List<ToolResult> submitted = pending;
             BrainTurnResult result = adapter.continueTurn(new BrainTurnRequest(session.sessionId(), message,
-                    context, submitted, remaining));
+                    turnContext, submitted, remaining));
+            if (result.semanticState() != null) {
+                requireBehaviorSettings(result.semanticState(), behaviorSettings);
+                semanticStates.put(companionId, result.semanticState());
+                turnContext = baseContext.withBrainSemanticState(result.semanticState().toJson());
+                if (audit != null) {
+                    audit.semanticState(session.sessionId(), controllerId, companionId, result.semanticState());
+                }
+            }
             if (audit != null) {
                 String submittedSessionId = session.sessionId();
                 submitted.forEach(value -> audit.delivered(submittedSessionId, value.callId()));
@@ -127,6 +157,11 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             message = "";
             pending = List.of();
             if (result.kind() != BrainTurnResult.Kind.TOOL_CALLS) {
+                if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE
+                        && result.completionClaim() != null) {
+                    validateCompletionClaim(toolContext, result.completionClaim(), observations);
+                    if (audit != null) audit.completionClaim(session.sessionId(), result.completionClaim());
+                }
                 if (audit != null) audit.state(session.sessionId(), "ACTIVE",
                         result.kind() == BrainTurnResult.Kind.CANCEL ? "BRAIN_CANCELLED" : result.kind().name());
                 WaitingQuestion question = null;
@@ -189,6 +224,17 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 batch.add(observation);
                 observations.add(observation);
                 remaining--;
+                String interruption = pendingInterruptions.remove(companionId);
+                if (interruption != null) {
+                    interruptedObservations.merge(companionId, List.of(observation), (existing, added) -> {
+                        List<ToolResult> combined = new ArrayList<>(existing);
+                        combined.addAll(added);
+                        return List.copyOf(combined);
+                    });
+                    if (audit != null) audit.state(session.sessionId(), "ACTIVE", interruption);
+                    return new BrainCoordinatorResult(session.sessionId(), BrainTurnResult.Kind.WAIT, "",
+                            "BRAIN_TURN_PAUSED_FOR_USER_INSTRUCTION", observations);
+                }
             }
             if (sessions.get(companionId) != session) {
                 return new BrainCoordinatorResult(session.sessionId(), BrainTurnResult.Kind.CANCEL, "",
@@ -206,6 +252,9 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     public void cancel(String controllerId, String companionId, String reason) {
         requireController(controllerId);
         BrainSession session = sessions.remove(companionId);
+        semanticStates.remove(companionId);
+        pendingInterruptions.remove(companionId);
+        interruptedObservations.remove(companionId);
         ActiveTool active = activeTools.get(companionId);
         if (active != null) tools.cancel(active.context(), active.call().callId(), reason);
         if (session != null) {
@@ -214,10 +263,45 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
     }
 
+    /**
+     * Pauses only the currently awaited bounded Tool. The external Brain remains the author of
+     * what to do with the new instruction; the paused terminal observation is delivered with that
+     * next turn instead of letting the old turn silently continue.
+     */
+    public boolean pauseActiveForUserInstruction(String controllerId, String companionId, String reason) {
+        requireController(controllerId);
+        ActiveTool active = activeTools.get(companionId);
+        if (active == null) return false;
+        String boundedReason = reason == null || reason.isBlank()
+                ? "OWNER_IMMEDIATE_INSTRUCTION" : reason.strip();
+        pendingInterruptions.put(companionId, boundedReason);
+        boolean accepted = tools.pause(active.context(), active.call().callId(), boundedReason);
+        if (!accepted) pendingInterruptions.remove(companionId, boundedReason);
+        return accepted;
+    }
+
+    public boolean yieldToOwnerActivity(String controllerId, String companionId,
+                                        com.fasterxml.jackson.databind.JsonNode activity) {
+        requireController(controllerId);
+        ActiveTool active = activeTools.get(companionId);
+        if (active == null || !tools.conflictsWithOwnerActivity(
+                active.context(), active.call().callId(), activity)) {
+            return false;
+        }
+        String reason = "OWNER_SAME_TARGET_ACTIVITY";
+        pendingInterruptions.put(companionId, reason);
+        boolean accepted = tools.pause(active.context(), active.call().callId(), reason);
+        if (!accepted) pendingInterruptions.remove(companionId, reason);
+        return accepted;
+    }
+
     public void releaseController(String controllerId) {
         requireController(controllerId);
         List<BrainSession> cancelledSessions = List.copyOf(sessions.values());
         sessions.clear();
+        semanticStates.clear();
+        pendingInterruptions.clear();
+        interruptedObservations.clear();
         activeTools.values().forEach(active -> tools.cancel(active.context(), active.call().callId(),
                 "CONTROLLER_RELEASED"));
         for (BrainSession session : cancelledSessions) adapter.cancel(session.sessionId(), "CONTROLLER_RELEASED");
@@ -226,6 +310,15 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
 
     public String activeControllerId() { return activeControllerId; }
     public BrainHealth health() { return adapter.health(); }
+    public BrainBehaviorSettings behaviorSettings(String companionId) {
+        return audit == null ? BrainBehaviorSettings.defaults(companionId) : audit.behaviorSettings(companionId);
+    }
+    public BrainBehaviorSettings updateBehaviorSettings(String companionId,
+                                                        BrainSemanticState.InitiativeMode initiativeMode,
+                                                        BrainSemanticState.PersonalityMode personalityMode) {
+        if (audit == null) throw new IllegalStateException("BRAIN_BEHAVIOR_SETTINGS_PERSISTENCE_DISABLED");
+        return audit.updateBehaviorSettings(companionId, initiativeMode, personalityMode, "LOCAL_MANAGEMENT_USER");
+    }
 
     private synchronized void requireController(String controllerId) {
         if (controllerId == null || controllerId.isBlank()) throw new IllegalArgumentException("controllerId is required");
@@ -233,6 +326,44 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         else if (!activeControllerId.equals(controllerId.strip())) {
             throw new IllegalStateException("BRAIN_CONTROLLER_ALREADY_ACTIVE");
         }
+    }
+
+    private static void requireBehaviorSettings(BrainSemanticState state, BrainBehaviorSettings settings) {
+        if (state.initiativeMode() != settings.initiativeMode()
+                || state.personalityMode() != settings.personalityMode()) {
+            throw new IllegalArgumentException("BRAIN_SEMANTIC_STATE_POLICY_MISMATCH");
+        }
+    }
+
+    private void validateCompletionClaim(ToolContext context, BrainCompletionClaim claim,
+                                         List<ToolResult> turnObservations) {
+        if (claim.certainty() != BrainCompletionClaim.Certainty.VERIFIED) return;
+        ToolResult observation = turnObservations.stream()
+                .filter(value -> value.callId().equals(claim.observationCallId()))
+                .findFirst().orElse(null);
+        if (observation == null && audit != null) {
+            observation = audit.tool(context.brainSessionId(), claim.observationCallId())
+                    .map(BrainAuditRepository.AuditedToolCall::result).orElse(null);
+        }
+        if (observation == null) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_NOT_FOUND");
+        }
+        if (!observation.terminal() || !observation.success()) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_NOT_VERIFIED");
+        }
+        String toolName = observation.toolName();
+        if (!isRealObservationTool(toolName)) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_TOOL_INVALID");
+        }
+    }
+
+    private static boolean isRealObservationTool(String name) {
+        if (name == null) return false;
+        return name.equals("world.observe") || name.equals("world.query") || name.equals("world.scan")
+                || name.equals("inventory.inspect") || name.equals("safety.inspect")
+                || name.equals("task.inspect") || name.equals("block.inspect")
+                || name.equals("item.inspect") || name.equals("entity.inspect")
+                || name.equals("menu.inspect");
     }
 
     @Override public void close() {

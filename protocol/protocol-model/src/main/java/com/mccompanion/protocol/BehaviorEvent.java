@@ -37,12 +37,16 @@ public record BehaviorEvent(
         if (!Double.isFinite(progress) || progress < 0.0 || progress > 1.0) {
             throw new IllegalArgumentException("progress must be finite and between 0 and 1");
         }
-        boolean failed = state == ProtocolBehaviorState.FAILED || event == BehaviorEventType.FAILED;
-        if (failed) {
+        boolean reportsFailure = state == ProtocolBehaviorState.FAILED
+                || event == BehaviorEventType.FAILED
+                || state == ProtocolBehaviorState.BLOCKED
+                || event == BehaviorEventType.BLOCKED;
+        if (reportsFailure) {
             failureCode = ProtocolFields.identifier(failureCode, "failureCode");
             message = ProtocolFields.text(message, "message");
         } else if (failureCode != null) {
-            throw new IllegalArgumentException("failureCode is only valid for a failed behavior event");
+            throw new IllegalArgumentException(
+                    "failureCode is only valid for a blocked or failed behavior event");
         }
         if (message != null) {
             message = ProtocolFields.text(message, "message");

@@ -1456,7 +1456,7 @@ try {
     Write-Output '[runtime-e2e] exercising in-flight owner goal modification'
     $probePlan = Invoke-AgentRequest $pairingToken $companionId 'Start the modification probe target'
     if (-not $probePlan.accepted -or -not $probePlan.planId) { throw 'Goal-modification probe plan was rejected.' }
-    $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'NavigateTo'
+    $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'FollowOwner'
     $probeTaskId = @($probeRunning.plan.steps | Where-Object { $_.index -eq $probeRunning.plan.currentStep })[0].taskId
     $null = Wait-RuntimeTaskState $pairingToken $probeTaskId 'RUNNING'
     # Freeze the unfinished probe through the real control path. This removes the accelerated
@@ -1505,13 +1505,27 @@ try {
         throw 'External Brain answer opened a competing session instead of resuming the original.'
     }
     $brainTools = @($brainReply.result.toolResults)
-    $expectedBrainTools = @('movement.navigate', 'inventory.withdraw', 'movement.return', 'inventory.deliver')
-    if ($brainTools.Count -ne $expectedBrainTools.Count) { throw 'External Brain did not execute exactly four tools.' }
+    $expectedBrainTools = @(
+        'movement.navigate',
+        'inventory.withdraw',
+        'movement.return',
+        'inventory.deliver',
+        'inventory.inspect')
+    if ($brainTools.Count -ne $expectedBrainTools.Count) {
+        throw 'External Brain did not execute the four mutations and final verification observation.'
+    }
     for ($index = 0; $index -lt $expectedBrainTools.Count; $index++) {
+        $isFinalObservation = $index -eq ($expectedBrainTools.Count - 1)
+        $observationVerified = if ($isFinalObservation) {
+            $brainTools[$index].observation.verified -and
+                $brainTools[$index].observation.source -eq 'CONNECTED_BODY_OBSERVATION'
+        } else {
+            $brainTools[$index].observation.state -eq 'SUCCEEDED' -and
+                $brainTools[$index].observation.fabricObservation
+        }
         if ($brainTools[$index].toolName -ne $expectedBrainTools[$index] -or
             -not $brainTools[$index].terminal -or -not $brainTools[$index].success -or
-            $brainTools[$index].observation.state -ne 'SUCCEEDED' -or
-            -not $brainTools[$index].observation.fabricObservation) {
+            -not $observationVerified) {
             throw "External Brain tool $index lacked its terminal Fabric observation."
         }
     }
@@ -1522,7 +1536,7 @@ try {
         question = $brainQuestion; waitingConversation = $waitingConversation
         reply = $brainReply; audit = $brainAudit
     }
-    Write-Output '[runtime-e2e] External Brain resumed its ASK_USER session and completed navigate, withdraw, return, and deliver'
+    Write-Output '[runtime-e2e] External Brain resumed ASK_USER, completed four mutations, and bound its final claim to a live inventory observation'
 
     if (-not $game.WaitForExit(90000)) { throw 'Fabric Runtime GameTest did not exit in time.' }
     Write-Output '[runtime-e2e] Fabric GameTest exited; stopping Runtime'
@@ -1585,8 +1599,8 @@ try {
     if ($gameStdout -notmatch 'runtime_e2e_conversation_complete.*delivered=6') {
         throw 'Fabric did not verify the final six-item External Brain delivery.'
     }
-    if (-not $externalBrainEvidence -or $externalBrainEvidence.reply.result.toolResults.Count -ne 4) {
-        throw 'External Brain evidence did not retain the four terminal tool observations.'
+    if (-not $externalBrainEvidence -or $externalBrainEvidence.reply.result.toolResults.Count -ne 5) {
+        throw 'External Brain evidence did not retain the four mutation results and final verification observation.'
     }
     if (-not $representativeTaskGraphEvidence -or
         $representativeTaskGraphEvidence.graphs.Count -ne 6 -or
@@ -1625,7 +1639,7 @@ try {
     if (-not $expectedCrashWindowSevereObserved -or $unexpectedSevere.Count -gt 0) {
         throw 'Runtime emitted a SEVERE error during E2E.'
     }
-    Write-Output 'Runtime/Fabric E2E passed: External Brain 6/16 ASK_USER, same-session answer, navigate, withdraw, return, deliver, and final reply from verified observations.'
+    Write-Output 'Runtime/Fabric E2E passed: External Brain 6/16 ASK_USER, same-session answer, navigate, withdraw, return, deliver, final inventory observation, and evidence-bound reply.'
 } catch {
     foreach ($process in @($game, $provider, $brainProvider, $runtime)) {
         if ($process -and -not $process.HasExited) {

@@ -2,8 +2,8 @@
 
 Updated: 2026-07-22
 
-This is the shortest supported Fabric 1.21.1 validation path for a real external Brain and a human
-player. Automated Replay, Fake, Fixture, 105-turn, and soak results are not substitutes for this run.
+This is the shortest supported Fabric 1.21.1 or Forge 1.20.1 validation path for a real external
+Brain and a human player. Automated Replay, Fake, Fixture, 105-turn, and soak results are not substitutes for this run.
 Use a disposable test world and test account; do not point the test at a private world.
 
 ## 1. Verify and unpack the RC
@@ -21,11 +21,11 @@ Set-Location .\mcac-live-test\mcac-release
 Do not continue after a hash mismatch. Do not paste the provider key into a command, JSON file,
 result form, screenshot, log, or Support Bundle.
 
-## 2. Install only to a supported Fabric instance
+## 2. Install only to a supported Full-Bridge instance
 
-Open `mcac.exe` to use the HTML terminal. Select a disposable Fabric 1.21.1 instance, review the
-installation plan, and confirm Install. Do not use this guide to expand the test to Forge,
-NeoForge, another Minecraft version, or an arbitrary personal world.
+Open `mcac.exe` to use the HTML terminal. Select a disposable Fabric 1.21.1 or Forge 1.20.1
+instance, review the installation plan, and confirm Install. Record the Loader in the result form.
+Do not use this guide with NeoForge, another Minecraft version, or an arbitrary personal world.
 
 Record the instance ID shown by the Terminal. The equivalent CLI checks are:
 
@@ -63,7 +63,7 @@ An absent credential must remain an honest `BLOCKED_BY_CREDENTIALS`, never a sim
 
 Start the selected instance normally, enter the disposable world, create/spawn a Companion if
 needed, and confirm `/companion runtime`, `/companion status`, and `/companion capabilities` show
-the expected local Runtime and Fabric body. Open the Brain page in the HTML terminal. Confirm it
+the expected local Runtime and selected Full-Bridge body. Open the Brain page in the HTML terminal. Confirm it
 shows provider health, reconnect/session state, aggregate context budgets, Capsule summaries, and
 the local-only candidate review controls without displaying a key or full Prompt.
 
@@ -128,7 +128,7 @@ Overall result: `PASS / FAIL / BLOCKED_BY_CREDENTIALS / STOPPED_FOR_SAFETY`
 Also record, without personal identifiers:
 
 - RC SHA-256 and source SHA:
-- Fabric/Minecraft versions:
+- Loader/Minecraft/Java versions:
 - Provider type and model name (never the key):
 - Doctor warnings:
 - Capsule ID(s):

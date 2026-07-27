@@ -28,7 +28,8 @@ public final class RuleIntentParser {
         }
         String normalized = text.toLowerCase(Locale.ROOT);
         return switch (normalized) {
-            case "跟着我", "跟随我", "follow", "follow me" -> intent(TaskType.FOLLOW, text);
+            case "跟着我", "跟随我", "先跟我走", "先跟着我", "先跟随我",
+                    "follow", "follow me" -> intent(TaskType.FOLLOW, text);
             case "停止", "停下", "stop" -> intentWithAction(TaskType.STOP, "cancel", text);
             case "pause", "暂停" -> intentWithAction(TaskType.STOP, "pause", text);
             case "继续", "resume" -> intentWithAction(TaskType.STOP, "resume", text);

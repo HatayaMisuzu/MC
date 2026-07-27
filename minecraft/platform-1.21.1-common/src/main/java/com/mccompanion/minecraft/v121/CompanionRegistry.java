@@ -46,6 +46,11 @@ public final class CompanionRegistry {
 
     public void start() {
         for (CompanionEntry entry : new ArrayList<>(savedData.entries())) {
+            if (entry.mode != CompanionEntry.Mode.IDLE && entry.mode != CompanionEntry.Mode.PAUSED) {
+                entry.resumeMode = entry.mode;
+                entry.mode = CompanionEntry.Mode.PAUSED;
+                savedData.changed();
+            }
             if (entry.spawned) {
                 spawnBody(entry, null);
             }
@@ -158,6 +163,9 @@ public final class CompanionRegistry {
         if (entry == null) {
             return missingOrSleeping(owner);
         }
+        if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
+            return Result.failure("INVALID_TARGET", "Navigation target coordinates must be finite.");
+        }
         entry.mode = CompanionEntry.Mode.GOTO;
         entry.resumeMode = CompanionEntry.Mode.GOTO;
         entry.hasTarget = true;
@@ -255,6 +263,10 @@ public final class CompanionRegistry {
         for (CompanionEntry entry : savedData.entries()) {
             CompanionPlayer body = liveBodies.get(entry.companionId);
             RuntimeControl control = runtimeControls.get(entry.companionId);
+            String behaviorId = control == null ? entry.runtimeBehaviorId : control.behaviorId;
+            long behaviorRevision =
+                    control == null ? entry.runtimeBehaviorRevision : control.behaviorRevision;
+            long controlEpoch = control == null ? entry.runtimeEpoch : control.epoch;
             java.util.Map<String, Integer> inventory = new java.util.TreeMap<>();
             int freeSlots = 0;
             if (body != null) {
@@ -274,10 +286,10 @@ public final class CompanionRegistry {
                     body == null ? 0.0D : body.getY(),
                     body == null ? 0.0D : body.getZ(),
                     body == null ? "SLEEPING" : "SPAWNED",
-                    control == null ? null : control.behaviorId,
+                    behaviorId,
                     behaviorState(entry),
-                    control == null || control.behaviorId == null ? 0L : control.behaviorRevision,
-                    control == null ? 0L : control.epoch,
+                    behaviorId == null ? 0L : behaviorRevision,
+                    controlEpoch,
                     runtimeConnected,
                     body == null ? 0.0F : body.getHealth(),
                     body == null ? 0.0F : body.getMaxHealth(),
@@ -329,12 +341,24 @@ public final class CompanionRegistry {
             return RuntimeResult.failure("INVALID_LEASE");
         }
         RuntimeControl previous = runtimeControls.get(entry.companionId);
-        if (previous != null && proposedEpoch <= previous.epoch) {
+        if (proposedEpoch <= entry.runtimeEpoch
+                || previous != null && proposedEpoch <= previous.epoch) {
             return RuntimeResult.failure("STALE_EPOCH");
         }
         RuntimeControl control = new RuntimeControl(proposedLeaseId, proposedEpoch, expiresAt);
+        if (entry.mode == CompanionEntry.Mode.PAUSED
+                && entry.runtimeBehaviorId != null
+                && !entry.runtimeBehaviorId.isBlank()) {
+            control.behaviorId = entry.runtimeBehaviorId;
+            control.behaviorRevision = entry.runtimeBehaviorRevision;
+        }
         runtimeControls.put(entry.companionId, control);
-        return RuntimeResult.success(null, control.behaviorRevision, "IDLE");
+        entry.runtimeEpoch = proposedEpoch;
+        savedData.changed();
+        return RuntimeResult.success(
+                control.behaviorId,
+                control.behaviorRevision,
+                behaviorState(entry));
     }
 
     public RuntimeResult runtimeRenewLease(String companionId, String leaseId, long epoch, long expiresAt) {
@@ -417,6 +441,8 @@ public final class CompanionRegistry {
         }
         control.behaviorId = behaviorId;
         control.behaviorRevision++;
+        entry.runtimeBehaviorId = behaviorId;
+        entry.runtimeBehaviorRevision = control.behaviorRevision;
         savedData.changed();
         if (entry.mode == CompanionEntry.Mode.SKILL) behaviorDirector.startSkill(entry, body, skill);
         else behaviorDirector.start(entry, body);
@@ -434,9 +460,12 @@ public final class CompanionRegistry {
             entry.resumeMode = entry.mode;
             entry.mode = CompanionEntry.Mode.PAUSED;
             behaviorDirector.stop(entry, body, false, "RUNTIME_PAUSE");
-            control.behaviorRevision++;
-            savedData.changed();
         }
+        // An explicit Runtime control is a new lifecycle event even when a safety reflex
+        // already placed the body in PAUSED. Keep its revision strictly monotonic.
+        control.behaviorRevision++;
+        entry.runtimeBehaviorRevision = control.behaviorRevision;
+        savedData.changed();
         return RuntimeResult.success(control.behaviorId, control.behaviorRevision, "PAUSED");
     }
 
@@ -450,6 +479,7 @@ public final class CompanionRegistry {
         if (entry.mode != CompanionEntry.Mode.PAUSED) return RuntimeResult.failure("NOT_PAUSED");
         entry.mode = entry.resumeMode == CompanionEntry.Mode.PAUSED ? CompanionEntry.Mode.IDLE : entry.resumeMode;
         control.behaviorRevision++;
+        entry.runtimeBehaviorRevision = control.behaviorRevision;
         savedData.changed();
         if (entry.mode == CompanionEntry.Mode.SKILL) behaviorDirector.resumeSkill(entry, body);
         else if (entry.mode != CompanionEntry.Mode.IDLE) behaviorDirector.start(entry, body);
@@ -469,6 +499,8 @@ public final class CompanionRegistry {
         control.behaviorRevision++;
         String behaviorId = control.behaviorId;
         control.behaviorId = null;
+        entry.runtimeBehaviorId = null;
+        entry.runtimeBehaviorRevision = control.behaviorRevision;
         savedData.changed();
         return RuntimeResult.success(behaviorId, control.behaviorRevision, "CANCELLED");
     }
@@ -491,6 +523,12 @@ public final class CompanionRegistry {
                 behaviorDirector.stop(entry, body, false, "RUNTIME_OFFLINE");
                 savedData.changed();
             }
+            if (entry != null) {
+                entry.runtimeEpoch = Math.max(entry.runtimeEpoch, value.getValue().epoch);
+                entry.runtimeBehaviorId = value.getValue().behaviorId;
+                entry.runtimeBehaviorRevision = value.getValue().behaviorRevision;
+                savedData.changed();
+            }
         }
         runtimeControls.clear();
     }
@@ -505,6 +543,17 @@ public final class CompanionRegistry {
 
     public void recordRuntimeLifecyclePublished(String behaviorId) {
         runtimeLastPublishedBehaviorId = behaviorId;
+        for (Map.Entry<UUID, RuntimeControl> value : runtimeControls.entrySet()) {
+            RuntimeControl control = value.getValue();
+            if (!Objects.equals(control.behaviorId, behaviorId)) continue;
+            control.behaviorRevision++;
+            CompanionEntry entry = entryByCompanion(value.getKey().toString());
+            if (entry != null) {
+                entry.runtimeBehaviorRevision = control.behaviorRevision;
+                savedData.changed();
+            }
+            break;
+        }
     }
 
     public String runtimeLastPublishedBehaviorId() {

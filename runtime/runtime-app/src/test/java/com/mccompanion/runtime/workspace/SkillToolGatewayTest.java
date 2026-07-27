@@ -32,7 +32,8 @@ class SkillToolGatewayTest {
             ToolContext context = new ToolContext("controller", "brain-session", "companion-a");
             assertEquals(List.of("skill.list", "skill.read", "skill.save_draft", "skill.restore_draft",
                             "skill.validate",
-                            "skill.request_promotion", "skill.disable", "skill.rollback", "skill.execute"),
+                            "skill.request_promotion", "skill.request_trial", "skill.disable",
+                            "skill.rollback", "skill.execute", "skill.execute_trial"),
                     gateway.definitions(context).stream().map(value -> value.name()).toList());
 
             String graph = """
@@ -167,6 +168,199 @@ class SkillToolGatewayTest {
                 assertEquals("APPROVED_GENERATED_SKILL",
                         new TaskGraphExecutionRepository(database).get("execute-approved").orElseThrow()
                                 .provenance().path("source").asText());
+            }
+        }
+    }
+
+    @Test
+    void oneTimeTrialRunsValidatedLowRiskDraftOnceWithoutPromotion() throws Exception {
+        AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("trial-workspace"), "profile");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("trial-execute.db"))) {
+            database.initialize();
+            SkillRepository repository = new SkillRepository(database);
+            SkillToolGateway[] holder = new SkillToolGateway[1];
+            holder[0] = new SkillToolGateway(workspace, repository, "profile",
+                    context -> holder[0].definitions(context));
+            SkillToolGateway gateway = holder[0];
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway,
+                    new TaskGraphExecutionRepository(database))) {
+                gateway.attachTaskGraphRuntime(runtime);
+                ToolContext context = new ToolContext("controller", "brain-session", "c1");
+                String graph = """
+                        version: mcac-task-graph/1
+                        id: trial_return
+                        permissions: []
+                        limits:
+                          maxNodes: 8
+                          maxDepth: 4
+                          maxLoopIterations: 2
+                          maxRetriesPerNode: 1
+                          maxParallelNodes: 1
+                          maxToolCalls: 4
+                          maxWallTimeSeconds: 30
+                          maxSerializedStateBytes: 65536
+                          maxEvidenceEntries: 16
+                          maxEvidenceBytes: 8192
+                        root:
+                          id: done
+                          type: return
+                          value: trial-result
+                        """;
+                assertTrue(gateway.execute(context, new ToolCall("save-trial", "skill.save_draft",
+                        Json.object().put("skillId", "trial_return").put("format", "yaml")
+                                .put("document", graph))).success());
+                var requested = gateway.execute(context, new ToolCall(
+                        "request-trial", "skill.request_trial",
+                        Json.object().put("skillId", "trial_return").put("format", "yaml")
+                                .put("durationSeconds", 120)));
+                assertTrue(requested.success(), requested.observation().toString());
+                assertEquals("SKILL_TRIAL_LEASE_CREATED", requested.code());
+                assertTrue(requested.observation().path("singleUse").asBoolean());
+                assertTrue(requested.observation().path("requiresUserApprovalForPermanentUse").asBoolean());
+                assertTrue(repository.list("profile", "c1").isEmpty(),
+                        "trial silently created a promotable or active version");
+
+                String leaseId = requested.observation().path("leaseId").asText();
+                ToolCall execute = new ToolCall("execute-trial", "skill.execute_trial",
+                        Json.object().put("leaseId", leaseId));
+                ToolResult accepted = gateway.execute(context, execute);
+                assertTrue(accepted.success(), accepted.observation().toString());
+                assertFalse(accepted.terminal());
+                ToolResult terminal = gateway.awaitTerminal(
+                        context, execute, accepted, Duration.ofSeconds(5), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertEquals("trial-result", terminal.observation().path("value").asText());
+                var consumed = repository.trial(leaseId).orElseThrow();
+                assertEquals("CONSUMED", consumed.status());
+                assertEquals("SUCCEEDED", consumed.evidence().path("state").asText());
+                assertFalse(gateway.execute(context, new ToolCall(
+                        "execute-trial-again", "skill.execute_trial",
+                        Json.object().put("leaseId", leaseId))).success());
+            }
+        }
+    }
+
+    @Test
+    void trialRejectsBroadLimitsAndEffectPermissions() throws Exception {
+        AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("trial-policy-workspace"), "profile");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("trial-policy.db"))) {
+            database.initialize();
+            var movement = new com.mccompanion.runtime.tool.ToolDefinition(
+                    "movement.step", "1.0", "move", Json.object().put("type", "object"),
+                    "MEDIUM", "MOVE", Duration.ofSeconds(5), false);
+            SkillToolGateway gateway = new SkillToolGateway(
+                    workspace, new SkillRepository(database), "profile", context -> List.of(movement));
+            ToolContext context = new ToolContext("controller", "brain-session", "c1");
+            String broad = """
+                    version: mcac-task-graph/1
+                    id: broad_trial
+                    permissions: [MOVE]
+                    limits:
+                      maxWallTimeSeconds: 30
+                    root:
+                      id: move
+                      type: call_tool
+                      tool: movement.step
+                      arguments: {}
+                    """;
+            gateway.execute(context, new ToolCall("save-broad", "skill.save_draft",
+                    Json.object().put("skillId", "broad_trial").put("format", "yaml")
+                            .put("document", broad)));
+            ToolResult rejected = gateway.execute(context, new ToolCall(
+                    "request-broad", "skill.request_trial",
+                    Json.object().put("skillId", "broad_trial").put("format", "yaml")
+                            .put("durationSeconds", 120)));
+            assertFalse(rejected.success());
+            assertEquals("SKILL_TRIAL_LIMITS_TOO_BROAD", rejected.code());
+
+            String effect = """
+                    version: mcac-task-graph/1
+                    id: effect_trial
+                    permissions: [MOVE]
+                    limits:
+                      maxNodes: 8
+                      maxDepth: 4
+                      maxLoopIterations: 2
+                      maxRetriesPerNode: 1
+                      maxParallelNodes: 1
+                      maxToolCalls: 4
+                      maxWallTimeSeconds: 30
+                      maxSerializedStateBytes: 65536
+                      maxEvidenceEntries: 16
+                      maxEvidenceBytes: 8192
+                    root:
+                      id: move
+                      type: call_tool
+                      tool: movement.step
+                      arguments: {}
+                    """;
+            gateway.execute(context, new ToolCall("save-effect", "skill.save_draft",
+                    Json.object().put("skillId", "broad_trial").put("format", "yaml")
+                            .put("document", effect)));
+            ToolResult denied = gateway.execute(context, new ToolCall(
+                    "request-effect", "skill.request_trial",
+                    Json.object().put("skillId", "broad_trial").put("format", "yaml")
+                            .put("durationSeconds", 120)));
+            assertFalse(denied.success());
+            assertEquals("SKILL_TRIAL_PERMISSION_DENIED", denied.code());
+        }
+    }
+
+    @Test
+    void localTrialRevocationImmediatelyCancelsOnlyItsRunningGraph() throws Exception {
+        AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("trial-revoke-workspace"), "profile");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("trial-revoke.db"))) {
+            database.initialize();
+            SkillRepository repository = new SkillRepository(database);
+            SkillToolGateway[] holder = new SkillToolGateway[1];
+            holder[0] = new SkillToolGateway(workspace, repository, "profile",
+                    context -> holder[0].definitions(context));
+            SkillToolGateway gateway = holder[0];
+            TaskGraphExecutionRepository executions = new TaskGraphExecutionRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, executions)) {
+                gateway.attachTaskGraphRuntime(runtime);
+                ToolContext context = new ToolContext("controller", "brain-session", "c1");
+                String graph = """
+                        version: mcac-task-graph/1
+                        id: revocable_trial_wait
+                        permissions: []
+                        limits:
+                          maxNodes: 8
+                          maxDepth: 4
+                          maxLoopIterations: 2
+                          maxRetriesPerNode: 1
+                          maxParallelNodes: 1
+                          maxToolCalls: 4
+                          maxWallTimeSeconds: 30
+                          maxSerializedStateBytes: 65536
+                          maxEvidenceEntries: 16
+                          maxEvidenceBytes: 8192
+                        root:
+                          id: wait
+                          type: wait
+                          durationMillis: 10000
+                        """;
+                gateway.execute(context, new ToolCall("save-revocable-trial", "skill.save_draft",
+                        Json.object().put("skillId", "revocable_trial").put("format", "yaml")
+                                .put("document", graph)));
+                ToolResult requested = gateway.execute(context, new ToolCall(
+                        "request-revocable-trial", "skill.request_trial",
+                        Json.object().put("skillId", "revocable_trial").put("format", "yaml")
+                                .put("durationSeconds", 120)));
+                String leaseId = requested.observation().path("leaseId").asText();
+                ToolCall execute = new ToolCall("execute-revocable-trial", "skill.execute_trial",
+                        Json.object().put("leaseId", leaseId));
+                ToolResult accepted = gateway.execute(context, execute);
+                assertFalse(accepted.terminal());
+                waitForGraphState(executions, execute.callId(), "WAITING");
+
+                SkillTrialLease revoked = gateway.revokeTrialForLocalUser("c1", leaseId);
+                assertEquals("REVOKED", revoked.status());
+                assertEquals("LOCAL_MANAGEMENT_USER", revoked.revokedBy());
+                ToolResult terminal = gateway.awaitTerminal(
+                        context, execute, accepted, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("CANCELLED", terminal.observation().path("state").asText());
+                assertEquals("REVOKED", repository.trial(leaseId).orElseThrow().status());
             }
         }
     }

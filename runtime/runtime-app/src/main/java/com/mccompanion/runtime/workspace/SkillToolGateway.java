@@ -28,6 +28,8 @@ import java.util.stream.Collectors;
 /** Bounded declarative Skill draft access over the logical Agent Workspace. */
 public final class SkillToolGateway implements ToolGateway {
     private static final Pattern SKILL_ID = Pattern.compile("[a-z][a-z0-9_-]{2,63}");
+    private static final Set<String> TRIAL_PERMISSIONS =
+            Set.of("READ_WORLD", "MEMORY", "CONTROL_TASK");
     private final AgentWorkspace workspace;
     private final SkillRepository skills;
     private final BuiltinSkillCatalog builtins = new BuiltinSkillCatalog();
@@ -66,7 +68,24 @@ public final class SkillToolGateway implements ToolGateway {
         observation.set("builtins", Json.MAPPER.valueToTree(builtins.list().stream()
                 .map(SkillToolGateway::withoutBuiltinDocument).toList()));
         observation.set("versions", Json.MAPPER.valueToTree(skills.list(profileId, scopedCompanion)));
+        observation.set("trials", Json.MAPPER.valueToTree(skills.trials(profileId, scopedCompanion).stream()
+                .map(SkillToolGateway::withoutTrialDocument).toList()));
         return observation;
+    }
+
+    public SkillTrialLease revokeTrialForLocalUser(String companionId, String leaseId) throws SQLException {
+        SkillTrialLease revoked = skills.revokeTrial(profileId,
+                requiredIdentifier(companionId, "companionId"), leaseId, "LOCAL_MANAGEMENT_USER");
+        if (taskGraphRuntime != null && revoked.executionId() != null) {
+            activeExecutions.forEach((key, execution) -> {
+                if (revoked.leaseId().equals(execution.leaseId())
+                        && activeExecutions.remove(key, execution)) {
+                    taskGraphRuntime.cancel(execution.context(), execution.callId(),
+                            "SKILL_TRIAL_REVOKED");
+                }
+            });
+        }
+        return revoked;
     }
 
     public WorkspaceResource restoreDraftForLocalUser(
@@ -98,12 +117,18 @@ public final class SkillToolGateway implements ToolGateway {
                 definition("skill.request_promotion",
                         "Request user review of a validated Skill version; the Brain cannot approve it",
                         draftSchema(), true),
+                definition("skill.request_trial",
+                        "Request one bounded low-risk single-use lease for a validated quarantined draft",
+                        trialRequestSchema(), false),
                 definition("skill.disable", "Disable the active approved Skill version", disableSchema(), true),
                 definition("skill.rollback", "Rollback to a previously approved Skill version",
                         rollbackSchema(), true),
                 new ToolDefinition("skill.execute", "1.0",
                         "Execute the current approved Skill through the persistent Task Graph Runtime",
-                        executeSchema(), "MEDIUM", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(30), false));
+                        executeSchema(), "MEDIUM", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(30), false),
+                new ToolDefinition("skill.execute_trial", "1.0",
+                        "Consume one exact-scope generated Skill trial lease through Task Graph Runtime",
+                        trialExecuteSchema(), "LOW", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(30), false));
     }
 
     @Override
@@ -116,13 +141,20 @@ public final class SkillToolGateway implements ToolGateway {
                 case "skill.restore_draft" -> restoreDraft(context, call);
                 case "skill.validate" -> validate(context, call);
                 case "skill.request_promotion" -> requestPromotion(context, call);
+                case "skill.request_trial" -> requestTrial(context, call);
                 case "skill.disable" -> disable(context, call);
                 case "skill.rollback" -> rollback(context, call);
                 case "skill.execute" -> executeApproved(context, call);
+                case "skill.execute_trial" -> executeTrial(context, call);
                 default -> ToolResult.rejected(call, "TOOL_UNAVAILABLE", "Skill tool is unavailable");
             };
         } catch (IllegalArgumentException failure) {
             return ToolResult.rejected(call, "INVALID_TOOL_ARGUMENTS", failure.getMessage());
+        } catch (IllegalStateException failure) {
+            String code = failure.getMessage() != null
+                    && failure.getMessage().matches("SKILL_[A-Z0-9_]{1,64}")
+                    ? failure.getMessage() : "SKILL_STATE_CONFLICT";
+            return ToolResult.rejected(call, code, "Skill lifecycle state does not allow this operation");
         } catch (IOException failure) {
             return ToolResult.rejected(call, "WORKSPACE_IO_FAILED", "Workspace operation failed");
         } catch (SQLException failure) {
@@ -133,9 +165,18 @@ public final class SkillToolGateway implements ToolGateway {
     @Override
     public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted, Duration timeout,
                                     java.util.function.Consumer<ToolResult> progress) {
-        if (call.name().equals("skill.execute") && taskGraphRuntime != null && !accepted.terminal()) {
+        if ((call.name().equals("skill.execute") || call.name().equals("skill.execute_trial"))
+                && taskGraphRuntime != null && !accepted.terminal()) {
+            ActiveSkillExecution execution = activeExecutions.get(executionKey(context, call.callId()));
             try {
-                return taskGraphRuntime.await(context, call, timeout, progress);
+                ToolResult terminal = taskGraphRuntime.await(context, call, timeout, progress);
+                if (execution != null && execution.leaseId() != null) {
+                    skills.finishTrial(execution.leaseId(), call.callId(), trialEvidence(terminal));
+                }
+                return terminal;
+            } catch (SQLException failure) {
+                return ToolResult.rejected(call, "SKILL_TRIAL_EVIDENCE_FAILED",
+                        "Skill trial evidence could not be persisted");
             } finally {
                 activeExecutions.remove(executionKey(context, call.callId()));
             }
@@ -145,9 +186,28 @@ public final class SkillToolGateway implements ToolGateway {
 
     @Override
     public void cancel(ToolContext context, String callId, String reason) {
-        if (taskGraphRuntime != null && activeExecutions.remove(executionKey(context, callId)) != null) {
+        ActiveSkillExecution execution = activeExecutions.remove(executionKey(context, callId));
+        if (taskGraphRuntime != null && execution != null) {
+            if (execution.leaseId() != null) {
+                try {
+                    skills.revokeTrial(profileId, context.companionId(),
+                            execution.leaseId(), "BRAIN_CANCELLED");
+                } catch (SQLException ignored) {
+                    // Task cancellation still wins; the durable running lease remains visible for repair.
+                }
+            }
             taskGraphRuntime.cancel(context, callId, reason);
         }
+    }
+
+    @Override
+    public boolean pause(ToolContext context, String callId, String reason) {
+        ActiveSkillExecution execution = activeExecutions.get(executionKey(context, callId));
+        if (taskGraphRuntime == null || execution == null) return false;
+        ToolResult paused = taskGraphRuntime.pause(context,
+                new ToolCall("interrupt-pause-" + callId, "task_graph.pause",
+                        Json.object().put("executionId", callId)), callId);
+        return paused.success();
     }
 
     private ToolResult list(ToolContext context, ToolCall call) throws IOException, SQLException {
@@ -248,6 +308,55 @@ public final class SkillToolGateway implements ToolGateway {
                         : "SKILL_PROMOTION_PENDING_USER_APPROVAL", observation, true);
     }
 
+    private ToolResult requestTrial(ToolContext context, ToolCall call) throws IOException, SQLException {
+        rejectUnexpected(call.arguments(), Set.of("skillId", "format", "durationSeconds"));
+        rejectBuiltinId(skillId(call.arguments()));
+        ValidatedDraft draft = validatedDraft(context, call.arguments());
+        if (!draft.validation().valid()) {
+            return ToolResult.rejected(call, "SKILL_INVALID",
+                    "Skill must pass current validation before a trial lease");
+        }
+        long durationSeconds = integer(call.arguments(), "durationSeconds", 60, 900);
+        var limits = draft.validation().limits();
+        if (limits.maxNodes() > 32 || limits.maxDepth() > 8 || limits.maxLoopIterations() > 8
+                || limits.maxRetriesPerNode() > 1 || limits.maxParallelNodes() > 2
+                || limits.maxToolCalls() > 16 || limits.maxWallTimeSeconds() > durationSeconds
+                || limits.maxSerializedStateBytes() > 262_144 || limits.maxEvidenceEntries() > 64
+                || limits.maxEvidenceBytes() > 65_536) {
+            return ToolResult.rejected(call, "SKILL_TRIAL_LIMITS_TOO_BROAD",
+                    "Trial graph limits exceed the low-risk trial policy");
+        }
+        Set<String> permissions = new java.util.TreeSet<>();
+        draft.graph().path("permissions").forEach(value -> permissions.add(value.asText()));
+        if (!TRIAL_PERMISSIONS.containsAll(permissions)) {
+            return ToolResult.rejected(call, "SKILL_TRIAL_PERMISSION_DENIED",
+                    "Trial permissions must stay within READ_WORLD, MEMORY, and CONTROL_TASK");
+        }
+        Map<String, ToolDefinition> definitions = availableTools.apply(context).stream()
+                .filter(value -> !value.name().startsWith("skill."))
+                .collect(Collectors.toMap(ToolDefinition::name, value -> value, (left, right) -> left));
+        Set<String> toolNames = new java.util.TreeSet<>();
+        collectGraphTools(draft.graph().path("root"), toolNames);
+        for (String toolName : toolNames) {
+            ToolDefinition definition = definitions.get(toolName);
+            if (definition == null || !"LOW".equals(definition.risk())
+                    || !TRIAL_PERMISSIONS.contains(definition.permission())) {
+                return ToolResult.rejected(call, "SKILL_TRIAL_TOOL_DENIED",
+                        "Trial contains a Tool outside the explicit low-risk policy: " + toolName);
+            }
+        }
+        SkillTrialLease lease = skills.requestTrial(profileId, context.companionId(),
+                context.controllerId(), context.brainSessionId(), draft.skillId(), draft.format(),
+                draft.document().content(), draft.document().resource().sha256(),
+                Json.MAPPER.valueToTree(toolNames), Json.MAPPER.valueToTree(permissions),
+                limits.toJson(), Duration.ofSeconds(durationSeconds));
+        ObjectNode observation = withoutTrialDocument(lease);
+        observation.put("trust", "TRIAL_ONLY").put("singleUse", true)
+                .put("requiresUserApprovalForPermanentUse", true);
+        return new ToolResult(call.callId(), call.name(), true, "SKILL_TRIAL_LEASE_CREATED",
+                observation, true);
+    }
+
     private ToolResult disable(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), Set.of("skillId", "reason"));
         String skillId = skillId(call.arguments());
@@ -308,7 +417,7 @@ public final class SkillToolGateway implements ToolGateway {
         if (started.success() && !started.terminal()) {
             String key = executionKey(context, call.callId());
             ActiveSkillExecution execution = new ActiveSkillExecution(
-                    context, call.callId(), skillId, active == null ? null : active.requestId());
+                    context, call.callId(), skillId, active == null ? null : active.requestId(), null);
             activeExecutions.put(key, execution);
             if (active != null) {
                 SkillVersion current = skills.active(profileId, context.companionId(), skillId).orElse(null);
@@ -317,6 +426,52 @@ public final class SkillToolGateway implements ToolGateway {
                         taskGraphRuntime.cancel(context, call.callId(), "SKILL_VERSION_REVOKED");
                     }
                 }
+            }
+        }
+        return started;
+    }
+
+    private ToolResult executeTrial(ToolContext context, ToolCall call) throws SQLException {
+        if (taskGraphRuntime == null) {
+            return ToolResult.rejected(call, "SKILL_RUNTIME_UNAVAILABLE",
+                    "Task Graph Runtime is unavailable");
+        }
+        rejectUnexpected(call.arguments(), Set.of("leaseId", "inputs"));
+        String leaseId = text(call.arguments(), "leaseId", 1, 128);
+        SkillTrialLease lease = skills.claimTrial(leaseId, profileId, context.companionId(),
+                context.controllerId(), context.brainSessionId(), call.callId());
+        if (!Digests.sha256(lease.document()).equals(lease.sha256())) {
+            ToolResult failed = ToolResult.rejected(call, "SKILL_INTEGRITY_FAILED",
+                    "Trial Skill hash does not match");
+            skills.finishTrial(leaseId, call.callId(), trialEvidence(failed));
+            return failed;
+        }
+        JsonNode graph = TaskGraphCodec.parse(lease.document(), lease.format().equals("json")
+                ? TaskGraphCodec.Format.JSON : TaskGraphCodec.Format.YAML);
+        if (containsSkillTool(graph)) {
+            ToolResult failed = ToolResult.rejected(call, "SKILL_RECURSION_FORBIDDEN",
+                    "Generated Skills cannot call Skill lifecycle or execution Tools");
+            skills.finishTrial(leaseId, call.callId(), trialEvidence(failed));
+            return failed;
+        }
+        JsonNode inputs = call.arguments().path("inputs");
+        if (inputs.isMissingNode()) inputs = Json.object();
+        if (!inputs.isObject()) throw new IllegalArgumentException("inputs must be an object");
+        ObjectNode provenance = Json.object().put("source", "GENERATED_SKILL_TRIAL")
+                .put("skillId", lease.skillId()).put("skillSha256", lease.sha256())
+                .put("trialLeaseId", lease.leaseId()).put("singleUse", true);
+        ToolResult started = taskGraphRuntime.start(context, call, graph, inputs, provenance);
+        if (!started.success() || started.terminal()) {
+            skills.finishTrial(leaseId, call.callId(), trialEvidence(started));
+            return started;
+        }
+        ActiveSkillExecution execution = new ActiveSkillExecution(
+                context, call.callId(), lease.skillId(), null, lease.leaseId());
+        activeExecutions.put(executionKey(context, call.callId()), execution);
+        SkillTrialLease current = skills.trial(leaseId).orElseThrow();
+        if (!current.status().equals("RUNNING")) {
+            if (activeExecutions.remove(executionKey(context, call.callId()), execution)) {
+                taskGraphRuntime.cancel(context, call.callId(), "SKILL_TRIAL_REVOKED");
             }
         }
         return started;
@@ -414,6 +569,23 @@ public final class SkillToolGateway implements ToolGateway {
         return schema;
     }
 
+    private static ObjectNode trialRequestSchema() {
+        ObjectNode schema = draftSchema();
+        schema.withObject("properties").putObject("durationSeconds")
+                .put("type", "integer").put("minimum", 60).put("maximum", 900);
+        schema.withArray("required").add("durationSeconds");
+        return schema;
+    }
+
+    private static ObjectNode trialExecuteSchema() {
+        ObjectNode schema = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = schema.putObject("properties");
+        properties.putObject("leaseId").put("type", "string").put("minLength", 1).put("maxLength", 128);
+        properties.putObject("inputs").put("type", "object");
+        schema.putArray("required").add("leaseId");
+        return schema;
+    }
+
     private static String skillId(JsonNode arguments) {
         String value = text(arguments, "skillId", 3, 64);
         if (!SKILL_ID.matcher(value).matches()) throw new IllegalArgumentException("skillId is invalid");
@@ -471,6 +643,35 @@ public final class SkillToolGateway implements ToolGateway {
         return node;
     }
 
+    private static ObjectNode withoutTrialDocument(SkillTrialLease value) {
+        ObjectNode node = Json.MAPPER.valueToTree(value);
+        node.remove("document");
+        return node;
+    }
+
+    private static ObjectNode trialEvidence(ToolResult result) {
+        JsonNode observation = result.observation();
+        return Json.object().put("executionId", result.callId()).put("success", result.success())
+                .put("code", result.code()).put("state", observation.path("state").asText(""))
+                .put("completedNodeCount", observation.path("completedNodes").size())
+                .put("evidenceEntryCount", observation.path("evidence").size())
+                .put("recordedAt", java.time.Instant.now().toString());
+    }
+
+    private static void collectGraphTools(JsonNode value, Set<String> tools) {
+        if (value == null || value.isMissingNode()) return;
+        if (value.isObject()) {
+            String type = value.path("type").asText();
+            if (type.equals("call_tool")) tools.add(value.path("tool").asText());
+            if (type.equals("read_memory")) tools.add("memory.search");
+            if (type.equals("suggest_memory")) tools.add("memory.suggest");
+            var fields = value.fields();
+            while (fields.hasNext()) collectGraphTools(fields.next().getValue(), tools);
+        } else if (value.isArray()) {
+            value.forEach(child -> collectGraphTools(child, tools));
+        }
+    }
+
     private void rejectBuiltinId(String skillId) {
         if (builtins.get(skillId).isPresent()) {
             throw new IllegalArgumentException("built-in Skill IDs are read-only");
@@ -513,6 +714,7 @@ public final class SkillToolGateway implements ToolGateway {
                                   com.mccompanion.runtime.taskgraph.TaskGraphValidationResult validation) {
     }
 
-    private record ActiveSkillExecution(ToolContext context, String callId, String skillId, String requestId) {
+    private record ActiveSkillExecution(ToolContext context, String callId, String skillId,
+                                        String requestId, String leaseId) {
     }
 }

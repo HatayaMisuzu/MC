@@ -2,16 +2,23 @@ package com.mccompanion.terminal;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.mccompanion.compat.CompatibilityGrant;
+import com.mccompanion.compat.CompatibilityHost;
+import com.mccompanion.compat.CompatibilityPack;
+import com.mccompanion.compat.EnvironmentFingerprint;
+import com.mccompanion.compat.EnvironmentFingerprinter;
 import com.mccompanion.terminal.diagnostics.DiagnosticResult;
 import com.mccompanion.terminal.install.InstallPlan;
 import com.mccompanion.terminal.install.InstallTransaction;
-import com.mccompanion.terminal.launcher.LoaderType;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
 import com.mccompanion.terminal.runtime.PairingService;
 import com.mccompanion.terminal.runtime.RuntimeProfile;
 import com.mccompanion.terminal.runtime.WindowsRuntimeSupervisor;
+import com.mccompanion.terminal.probe.ModJarInspector;
 import com.sun.net.httpserver.HttpExchange;
 import java.awt.Desktop;
 import java.io.IOException;
@@ -28,10 +35,18 @@ import java.util.UUID;
 
 /** Typed local API backed by the existing Java service layer. */
 final class WebTerminalApi {
-  private static final ObjectMapper JSON = new ObjectMapper();
+  static final ObjectMapper JSON = new ObjectMapper()
+      .registerModule(new JavaTimeModule())
+      .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
   private final ControlTerminalMain root;
   private final OperationManager operations;
   private final RuntimeSnapshotService snapshots = new RuntimeSnapshotService();
+  private final Map<String, CompatibilityHost> compatibilityHosts =
+      java.util.Collections.synchronizedMap(new java.util.LinkedHashMap<>(16, 0.75f, true) {
+        @Override protected boolean removeEldestEntry(Map.Entry<String, CompatibilityHost> eldest) {
+          return size() > 64;
+        }
+      });
 
   WebTerminalApi(ControlTerminalMain root, OperationManager operations) {
     this.root = root;
@@ -74,10 +89,16 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/brain"));
       else if ("GET".equals(method) && "/api/brain/audit".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/brain/audit", "companionId"));
+      else if ("GET".equals(method) && "/api/brain/settings".equals(path))
+        send(exchange, 200, runtimeInspect(exchange, "/brain/settings", "companionId"));
+      else if ("POST".equals(method) && "/api/brain/settings".equals(path))
+        send(exchange, 200, updateBrainSettings(body(exchange)));
       else if ("GET".equals(method) && "/api/memories".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/memories", "companionId", "kind", "query"));
       else if ("POST".equals(method) && "/api/memories/review".equals(path))
         send(exchange, 200, reviewMemorySuggestion(body(exchange)));
+      else if ("POST".equals(method) && "/api/memories/manage".equals(path))
+        send(exchange, 200, manageMemory(body(exchange)));
       else if ("GET".equals(method) && "/api/task-graphs".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/task-graphs", "companionId"));
       else if ("POST".equals(method) && "/api/task-graphs/control".equals(path))
@@ -86,6 +107,13 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/skills", "companionId"));
       else if ("POST".equals(method) && "/api/skills/manage".equals(path))
         send(exchange, 200, manageSkill(body(exchange)));
+      else if ("GET".equals(method) && "/api/compatibility".equals(path))
+        send(exchange, 200, compatibilitySnapshot(requiredQuery(exchange, "instanceId")));
+      else if ("GET".equals(method) && "/api/compatibility/pack".equals(path))
+        send(exchange, 200, compatibilityPack(requiredQuery(exchange, "instanceId"),
+            requiredQuery(exchange, "coordinate")));
+      else if ("GET".equals(method) && "/api/compatibility/trace".equals(path))
+        send(exchange, 200, compatibilityTrace(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/logs/tail".equals(path))
         send(exchange, 200, logSnapshot(exchange));
       else if ("POST".equals(method) && path.endsWith("/plan"))
@@ -95,6 +123,8 @@ final class WebTerminalApi {
       else if ("GET".equals(method) && path.startsWith("/api/operations/"))
         send(exchange, 200, operation(path.substring("/api/operations/".length())));
       else sendError(exchange, 404, "NOT_FOUND", "API 路径不存在");
+    } catch (TerminalRequestBodies.Failure failure) {
+      sendError(exchange, failure.status(), failure.code(), failure.getMessage());
     } catch (IllegalArgumentException failure) {
       sendError(exchange, 400, "INVALID_REQUEST", failure.getMessage());
     } catch (IOException failure) {
@@ -132,7 +162,7 @@ final class WebTerminalApi {
             .put("companions", connection.companions())
             .put(
                 "mode",
-                selected.loader() == LoaderType.FABRIC
+                FullBridgeSupport.supports(selected)
                     ? (connection.connected() ? connection.mode() : "SAFE_IDLE")
                     : "LOCAL_ONLY");
       } else {
@@ -140,7 +170,7 @@ final class WebTerminalApi {
             .put("runtime", "NOT_CONFIGURED")
             .put("mod", "WAITING")
             .put("companions", 0)
-            .put("mode", selected.loader() == LoaderType.FABRIC ? "SAFE_IDLE" : "LOCAL_ONLY");
+            .put("mode", FullBridgeSupport.supports(selected) ? "SAFE_IDLE" : "LOCAL_ONLY");
       }
     }
     return value;
@@ -192,7 +222,7 @@ final class WebTerminalApi {
         .put("isolation", instance.isolation().name())
         .put("compatible", com.mccompanion.terminal.install.InstallPlanner.isSupported(instance))
         .put("installed", installed)
-        .put("mode", instance.loader() == LoaderType.FABRIC ? "FULL" : "LOCAL_ONLY");
+        .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY");
   }
 
   private ObjectNode doctor(JsonNode request) throws Exception {
@@ -297,7 +327,7 @@ final class WebTerminalApi {
 
   private ObjectNode sessionStatus(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) {
+    if (!FullBridgeSupport.supports(instance)) {
       return JSON.createObjectNode()
           .put("instanceId", instanceId)
           .put("connected", false)
@@ -319,7 +349,7 @@ final class WebTerminalApi {
 
   ObjectNode companionSnapshot(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) {
+    if (!FullBridgeSupport.supports(instance)) {
       return JSON.createObjectNode()
           .put("instanceId", instanceId)
           .put("mode", "LOCAL_ONLY")
@@ -359,6 +389,32 @@ final class WebTerminalApi {
         root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
   }
 
+  private JsonNode manageMemory(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String companionId = required(request, "companionId");
+    String path = "/memories?companionId=" + java.net.URLEncoder.encode(
+        companionId, StandardCharsets.UTF_8);
+    ObjectNode bounded = JSON.createObjectNode().put("action", required(request, "action"));
+    if (request.hasNonNull("memoryId")) bounded.put("memoryId", required(request, "memoryId"));
+    if (request.hasNonNull("kind")) bounded.put("kind", required(request, "kind"));
+    if (request.has("value")) bounded.set("value", request.path("value"));
+    if (request.has("enabled")) bounded.put("enabled", request.path("enabled").asBoolean());
+    return new RuntimeControlClient().manage(
+        root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
+  }
+
+  private JsonNode updateBrainSettings(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String companionId = required(request, "companionId");
+    String path = "/brain/settings?companionId=" + java.net.URLEncoder.encode(
+        companionId, StandardCharsets.UTF_8);
+    ObjectNode bounded = JSON.createObjectNode()
+        .put("initiativeMode", required(request, "initiativeMode"))
+        .put("personalityMode", required(request, "personalityMode"));
+    return new RuntimeControlClient().manage(
+        root.profile(root.instance(instanceId)), path, bounded, Duration.ofSeconds(8));
+  }
+
   private JsonNode controlTaskGraph(JsonNode request) throws Exception {
     String instanceId = required(request, "instanceId");
     String companionId = required(request, "companionId");
@@ -377,6 +433,7 @@ final class WebTerminalApi {
         .put("action", required(request, "action"))
         .put("companionId", required(request, "companionId"));
     if (request.hasNonNull("requestId")) bounded.put("requestId", required(request, "requestId"));
+    if (request.hasNonNull("leaseId")) bounded.put("leaseId", required(request, "leaseId"));
     if (request.hasNonNull("skillId")) bounded.put("skillId", required(request, "skillId"));
     if (request.hasNonNull("format")) bounded.put("format", required(request, "format"));
     if (request.hasNonNull("version")) bounded.put("version", requiredPositiveLong(request, "version"));
@@ -404,6 +461,46 @@ final class WebTerminalApi {
         .set("lines", lines);
   }
 
+  private ObjectNode compatibilitySnapshot(String instanceId) throws Exception {
+    MinecraftInstance instance = root.instance(instanceId);
+    CompatibilityHost host = compatibilityHost(instance);
+    CompatibilityGrant grant = compatibilityGrant(instance, host);
+    EnvironmentFingerprint fingerprint = compatibilityFingerprint(instance);
+    CompatibilityHost.Diagnosis diagnosis = host.diagnose(grant, fingerprint);
+    ObjectNode value = JSON.createObjectNode()
+        .put("instanceId", instanceId)
+        .put("store", "PROFILE_INSTANCE_SCOPED")
+        .put("nativeExecutionAvailable", host.nativeExtensionPolicy().dynamicExecutionAvailable())
+        .put("nativeStatus", host.nativeExtensionPolicy().status())
+        .put("capabilityCount", diagnosis.capabilityCount())
+        .put("enabledCapabilityCount", diagnosis.enabledCapabilityCount());
+    value.set("fingerprint", JSON.valueToTree(fingerprint));
+    value.set("packs", JSON.valueToTree(host.list(grant)));
+    value.set("matchedPacks", JSON.valueToTree(diagnosis.matchedPacks()));
+    value.set("capabilities", JSON.valueToTree(diagnosis.capabilities()));
+    value.set("conflicts", JSON.valueToTree(diagnosis.conflicts()));
+    value.set("suppressions", JSON.valueToTree(diagnosis.suppressions()));
+    value.set("trace", JSON.valueToTree(host.recentTrace(50)));
+    value.set("authorization", JSON.createObjectNode()
+        .put("controller", "terminal-controller")
+        .put("profileId", instanceId)
+        .put("instanceId", instanceId)
+        .put("maximumRisk", "CRITICAL")
+        .set("operations", JSON.valueToTree(host.operations())));
+    return value;
+  }
+
+  private JsonNode compatibilityPack(String instanceId, String coordinate) throws Exception {
+    MinecraftInstance instance = root.instance(instanceId);
+    CompatibilityHost host = compatibilityHost(instance);
+    return JSON.valueToTree(host.inspect(compatibilityGrant(instance, host), coordinate));
+  }
+
+  private JsonNode compatibilityTrace(String instanceId) throws Exception {
+    MinecraftInstance instance = root.instance(instanceId);
+    return JSON.valueToTree(compatibilityHost(instance).recentTrace(100));
+  }
+
   private ObjectNode plan(String path, JsonNode request) throws Exception {
     String category = path.substring("/api/".length(), path.length() - "/plan".length());
     OperationManager.Plan plan =
@@ -418,6 +515,7 @@ final class WebTerminalApi {
           case "smoke" -> smokePlan(request);
           case "support-bundle" -> supportPlan(request);
           case "doctor/repair" -> doctorRepairPlan(request);
+          case "compatibility" -> compatibilityPlan(request);
           default -> throw new IllegalArgumentException("不支持的计划类型: " + category);
         };
     return plan(plan);
@@ -504,6 +602,136 @@ final class WebTerminalApi {
               .put("rollbackId", result.rollbackId())
               .put("verified", true);
         });
+  }
+
+  private OperationManager.Plan compatibilityPlan(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String action = required(request, "action").toLowerCase(java.util.Locale.ROOT);
+    if (!List.of("install", "record-evidence", "index", "activate", "deactivate",
+        "update", "patch", "rollback", "remove", "quarantine", "export").contains(action)) {
+      throw new IllegalArgumentException("Compatibility action is not supported");
+    }
+    MinecraftInstance instance = root.instance(instanceId);
+    CompatibilityHost previewHost = compatibilityHost(instance);
+    ObjectNode details = JSON.createObjectNode().put("summary", "Compatibility " + action)
+        .put("instance", instance.displayName())
+        .put("storeScoped", true)
+        .put("nativeCodeExecutesInProcess", false);
+    if (List.of("install", "update", "patch").contains(action)) {
+      Path archive = Path.of(required(request, "archivePath")).toAbsolutePath().normalize();
+      if (!Files.isRegularFile(archive) || Files.isSymbolicLink(archive)
+          || !archive.getFileName().toString().endsWith(".mcac-compat")) {
+        throw new IOException("Compatibility archive must be a regular .mcac-compat file");
+      }
+      var pack = new com.mccompanion.compat.CompatibilityPackLoader().load(archive);
+      details.put("coordinate", pack.manifest().coordinate())
+          .put("packType", pack.manifest().type().name())
+          .put("contentHash", pack.contentHash())
+          .put("sourceFile", archive.getFileName().toString())
+          .put("nativeCodeDeclared", pack.manifest().runtime().nativeCode());
+    } else if (request.hasNonNull("coordinate")) {
+      details.put("coordinate", required(request, "coordinate"));
+    } else if ("rollback".equals(action)) {
+      details.put("packId", required(request, "packId"));
+    }
+    JsonNode copy = request.deepCopy();
+    boolean dangerous = List.of("activate", "rollback", "remove", "quarantine").contains(action);
+    return operations.create("compatibility", action, instanceId, dangerous, details, progress -> {
+      CompatibilityHost host = compatibilityHost(instance);
+      CompatibilityGrant grant = compatibilityGrant(instance, host);
+      String operationId = "terminal-" + UUID.randomUUID();
+      progress.update(20, "Validating compatibility authorization and immutable package state");
+      Object result = switch (action) {
+        case "install" -> host.install(grant, Path.of(required(copy, "archivePath")),
+            copy.path("source").asText("terminal"), operationId);
+        case "update" -> host.update(grant, Path.of(required(copy, "archivePath")),
+            copy.path("source").asText("terminal"), operationId);
+        case "patch" -> host.patch(grant, Path.of(required(copy, "archivePath")),
+            copy.path("source").asText("terminal"), operationId);
+        case "record-evidence" -> host.recordEvidence(grant, required(copy, "coordinate"),
+            required(copy, "evidenceId"), required(copy, "kind"),
+            CompatibilityPack.MatchLevel.valueOf(required(copy, "matchLevel")),
+            copy.path("passed").asBoolean(false), required(copy, "summary"),
+            copy.path("artifactHash").asText(""), operationId);
+        case "index" -> host.index(grant, required(copy, "coordinate"), operationId);
+        case "activate" -> host.activate(grant, required(copy, "coordinate"),
+            compatibilityFingerprint(instance), operationId);
+        case "deactivate" -> host.deactivate(grant, required(copy, "coordinate"), operationId);
+        case "rollback" -> host.rollback(grant, required(copy, "packId"), operationId);
+        case "remove" -> {
+          host.remove(grant, required(copy, "coordinate"), operationId);
+          yield Map.of("removed", true, "coordinate", required(copy, "coordinate"));
+        }
+        case "quarantine" -> host.quarantine(grant, required(copy, "coordinate"), operationId);
+        case "export" -> host.export(grant, required(copy, "coordinate"),
+            Path.of(required(copy, "destination")));
+        default -> throw new IllegalStateException(action);
+      };
+      progress.update(90, "Verifying signed active index and resolved capability view");
+      ObjectNode response = JSON.createObjectNode().put("action", action).put("verified", true);
+      response.set("result", JSON.valueToTree(result));
+      response.set("compatibility", compatibilitySnapshot(instanceId));
+      return response;
+    });
+  }
+
+  private CompatibilityHost compatibilityHost(MinecraftInstance instance) throws IOException {
+    synchronized (compatibilityHosts) {
+      CompatibilityHost existing = compatibilityHosts.get(instance.instanceId());
+      if (existing != null) return existing;
+      CompatibilityHost created = new CompatibilityHost(
+          compatibilityStore(instance), instance.instanceId(), instance.instanceId());
+      compatibilityHosts.put(instance.instanceId(), created);
+      return created;
+    }
+  }
+
+  private Path compatibilityStore(MinecraftInstance instance) {
+    return ControlTerminalMain.controlHome().resolve("compatibility")
+        .resolve("profiles").resolve(instance.instanceId())
+        .resolve("instances").resolve(instance.instanceId()).toAbsolutePath().normalize();
+  }
+
+  private CompatibilityGrant compatibilityGrant(MinecraftInstance instance, CompatibilityHost host) {
+    return new CompatibilityGrant("terminal-local", "local-developer", "terminal-controller",
+        instance.instanceId(), instance.instanceId(), compatibilityStore(instance),
+        CompatibilityGrant.KNOWN_OPERATIONS, Instant.now().plus(Duration.ofMinutes(5)),
+        CompatibilityPack.Risk.CRITICAL);
+  }
+
+  private EnvironmentFingerprint compatibilityFingerprint(MinecraftInstance instance) throws IOException {
+    Map<String, EnvironmentFingerprinter.ModInput> mods = new java.util.LinkedHashMap<>();
+    for (ModJarInspector.ModInfo mod : new ModJarInspector().inspectDirectory(instance.modsDirectory())) {
+      if (!mod.id().matches("[a-z0-9][a-z0-9._-]{0,127}") || "unknown".equals(mod.id())) continue;
+      Path relative = instance.gameDirectory().toAbsolutePath().normalize()
+          .relativize(mod.jar().toAbsolutePath().normalize());
+      mods.putIfAbsent(mod.id(), new EnvironmentFingerprinter.ModInput(
+          "unknown".equals(mod.version()) ? "0" : mod.version(), relative));
+    }
+    List<Path> configuration = boundedRelativeFiles(instance.gameDirectory(), instance.configDirectory(), 256);
+    List<Path> scripts = boundedRelativeFiles(instance.gameDirectory(),
+        instance.gameDirectory().resolve("kubejs"), 256);
+    List<Path> dataPacks = boundedRelativeFiles(instance.gameDirectory(),
+        instance.gameDirectory().resolve("datapacks"), 256);
+    return new EnvironmentFingerprinter().fingerprint(instance.gameDirectory(), instance.instanceId(),
+        instance.minecraftVersion(), instance.loader().name().toLowerCase(java.util.Locale.ROOT),
+        instance.loaderVersion(), instance.requiredJavaMajor(), mods, configuration, scripts,
+        dataPacks, null);
+  }
+
+  private static List<Path> boundedRelativeFiles(Path root, Path directory, int maximum)
+      throws IOException {
+    if (!Files.isDirectory(directory)) return List.of();
+    Path normalizedRoot = root.toAbsolutePath().normalize();
+    try (var files = Files.walk(directory, 8)) {
+      List<Path> values = files.filter(path -> Files.isRegularFile(path)
+              && !Files.isSymbolicLink(path))
+          .limit(maximum + 1L)
+          .map(path -> normalizedRoot.relativize(path.toAbsolutePath().normalize()))
+          .toList();
+      if (values.size() > maximum) throw new IOException("Compatibility fingerprint file limit reached");
+      return values;
+    }
   }
 
   private OperationManager.Plan runtimePlan(JsonNode request) throws Exception {
@@ -616,7 +844,7 @@ final class WebTerminalApi {
         JSON.createObjectNode()
             .put("summary", action.equals("attach") ? "附加到当前会话" : "启动游戏并等待 Mod 握手")
             .put("launcher", root.launcher(instance).type().name())
-            .put("mode", instance.loader() == LoaderType.FABRIC ? "FULL" : "LOCAL_ONLY");
+            .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY");
     int waitSeconds = Math.max(5, Math.min(300, request.path("waitSeconds").asInt(90)));
     return operations.create(
         "session",
@@ -636,7 +864,7 @@ final class WebTerminalApi {
           if (blocked) throw new IOException("Doctor 检测到阻断项，请先修复");
           if (!new InstallTransaction().verify(instance.gameDirectory()))
             throw new IOException("未检测到经过验证的 Companion 安装，请先完成安装");
-          if (instance.loader() == LoaderType.FABRIC) {
+          if (FullBridgeSupport.supports(instance)) {
             progress.update(35, "正在启动 Runtime");
             new PairingService().ensureConfigured(instance, profile);
             new WindowsRuntimeSupervisor().start(profile);
@@ -645,7 +873,7 @@ final class WebTerminalApi {
           Path executable = root.launcher(instance).executable();
           if (Desktop.isDesktopSupported()) Desktop.getDesktop().open(executable.toFile());
           else new ProcessBuilder(executable.toString()).start();
-          if (instance.loader() != LoaderType.FABRIC) {
+          if (!FullBridgeSupport.supports(instance)) {
             return JSON.createObjectNode()
                 .put("state", "LOCAL_ONLY")
                 .put("message", "启动器已打开；该 Loader 当前没有 Runtime Bridge");
@@ -663,7 +891,8 @@ final class WebTerminalApi {
     String companionId = required(request, "companionId");
     String action = required(request, "action").toLowerCase();
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) throw new IOException("LOCAL_ONLY 不支持 Companion 远程控制");
+    if (!FullBridgeSupport.supports(instance))
+      throw new IOException("LOCAL_ONLY 不支持 Companion 远程控制");
     Map<String, String> types =
         Map.of(
             "status", "STATUS",
@@ -718,7 +947,8 @@ final class WebTerminalApi {
     String text = request.path("text").asText("").strip();
     if (text.isEmpty() || text.length() > 4096) throw new IllegalArgumentException("请输入 1..4096 字符的伙伴请求");
     MinecraftInstance instance = root.instance(instanceId);
-    if (instance.loader() != LoaderType.FABRIC) throw new IOException("LOCAL_ONLY 不支持智能伙伴任务");
+    if (!FullBridgeSupport.supports(instance))
+      throw new IOException("LOCAL_ONLY 不支持智能伙伴任务");
     ObjectNode details = JSON.createObjectNode().put("summary", "让伙伴理解并处理自然语言目标")
         .put("companionId", companionId).put("request", text).put("modelMayBeCalled", true)
         .put("completionRequiresWorldEvidence", true);
@@ -855,11 +1085,10 @@ final class WebTerminalApi {
     }
   }
 
-  private static JsonNode body(HttpExchange exchange) throws IOException {
-    byte[] bytes = exchange.getRequestBody().readNBytes(1_048_577);
-    if (bytes.length > 1_048_576) throw new IllegalArgumentException("请求体过大");
-    if (bytes.length == 0) return JSON.createObjectNode();
-    JsonNode value = JSON.readTree(bytes);
+  private static JsonNode body(HttpExchange exchange)
+      throws IOException, TerminalRequestBodies.Failure {
+    JsonNode value =
+        TerminalRequestBodies.readJson(exchange, JSON, TerminalRequestBodies.JSON_LIMIT);
     if (!value.isObject()) throw new IllegalArgumentException("请求必须是 JSON 对象");
     return value;
   }

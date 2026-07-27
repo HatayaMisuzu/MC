@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcac.local/schema/compat/native-extension-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "artifacts", "permissions", "isolation"],
+  "properties": {
+    "schemaVersion": {"const": "mcac-compat-native/1"},
+    "artifacts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^native/modules/[A-Za-z0-9._/-]{1,200}$"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+        }
+      }
+    },
+    "permissions": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
+    "isolation": {"const": "restart-out-of-process"},
+    "dynamicExecutionAvailable": {"const": false}
+  }
+}

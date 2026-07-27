@@ -78,6 +78,58 @@ class BrainAuditRepositoryTest {
         }
     }
 
+    @Test
+    void semanticStateIsSessionScopedVersionedAndVisibleInAudit() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-semantic.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            BrainSession session = new BrainSession("semantic-session-1", "hermes", "c1", Instant.now());
+            audit.opened(session, "hermes");
+            BrainSemanticState initial = semantic("Mine safely", List.of("chest contents"));
+            var first = audit.semanticState(session.sessionId(), "hermes", "c1", initial);
+            var second = audit.semanticState(session.sessionId(), "hermes", "c1",
+                    semantic("Return to owner", List.of()));
+
+            assertEquals(1, first.revision());
+            assertEquals(2, second.revision());
+            assertEquals("Return to owner", audit.semanticState(session.sessionId()).state().currentTask());
+            assertThrows(IllegalArgumentException.class, () ->
+                    audit.semanticState(session.sessionId(), "other-controller", "c1", initial));
+            var inspected = audit.inspect("c1", 10).path(0);
+            assertEquals(2, inspected.path("semanticStateRevision").asLong());
+            assertEquals("Return to owner", inspected.path("semanticState").path("currentTask").asText());
+        }
+    }
+
+    @Test
+    void behaviorSettingsDefaultToNormalCompanionAndRemainCompanionScoped() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-behavior-settings.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            BrainBehaviorSettings defaults = audit.behaviorSettings("c1");
+            assertEquals(BrainSemanticState.InitiativeMode.NORMAL, defaults.initiativeMode());
+            assertEquals(BrainSemanticState.PersonalityMode.COMPANION, defaults.personalityMode());
+            assertEquals(0, defaults.revision());
+
+            BrainBehaviorSettings updated = audit.updateBehaviorSettings("c1",
+                    BrainSemanticState.InitiativeMode.QUIET,
+                    BrainSemanticState.PersonalityMode.IMMERSIVE_ROLEPLAY, "LOCAL_MANAGEMENT_USER");
+            assertEquals(1, updated.revision());
+            assertEquals(BrainSemanticState.InitiativeMode.QUIET, audit.behaviorSettings("c1").initiativeMode());
+            assertEquals(BrainSemanticState.InitiativeMode.NORMAL, audit.behaviorSettings("c2").initiativeMode());
+            assertFalse(updated.toJson().path("changesToolPermissions").asBoolean());
+            assertFalse(updated.toJson().path("changesSafetyPolicy").asBoolean());
+            assertFalse(updated.toJson().path("changesBudgets").asBoolean());
+            assertFalse(updated.toJson().path("changesMemoryPolicy").asBoolean());
+        }
+    }
+
+    private static BrainSemanticState semantic(String task, List<String> stale) {
+        return new BrainSemanticState("Current conversation", "", task, "", "", false,
+                BrainSemanticState.InitiativeMode.NORMAL, BrainSemanticState.PersonalityMode.COMPANION,
+                BrainSemanticState.PermissionPreset.ASK_FOR_EFFECTS, false, null, stale);
+    }
+
     private static final class ObserveGateway implements ToolGateway {
         @Override public List<ToolDefinition> definitions(ToolContext context) {
             return List.of(new ToolDefinition("world.observe", "1.0", "observe", Json.object(),

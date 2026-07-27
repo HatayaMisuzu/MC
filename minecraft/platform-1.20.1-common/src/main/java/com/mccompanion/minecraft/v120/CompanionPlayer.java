@@ -42,7 +42,9 @@ public final class CompanionPlayer extends ServerPlayer {
         setXRot(0.0F);
         xxa = 0.0F;
         zza = 1.0F;
-        setJumping((jumpRequested || horizontalCollision) && onGround());
+        setJumping(
+                jumpRequested && (onGround() || isInWater() || onClimbable())
+                        || horizontalCollision && onGround());
         setShiftKeyDown(false);
     }
 

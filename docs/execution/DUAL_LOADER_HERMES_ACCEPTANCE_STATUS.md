@@ -1,0 +1,542 @@
+# Dual-loader Hermes acceptance execution status
+
+Updated: 2026-07-27 16:45 +08:00
+
+This is the checkpoint log for
+`MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
+promoting Replay, deterministic clients, GameTest, or local automation to
+Live-Hermes or human-play evidence. `docs/RC_COMPLETION_MATRIX.md` remains the
+only completion matrix.
+
+## Current checkpoint
+
+- Current stage: `6 — REMOTE_CI_CLOSURE`
+- Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
+- Latest committed source SHA: `8f656c9867c7c0e7b1ae81dbf6818e01ba957c2e`
+- Source/default branch at freeze: `origin/main` / `main`
+- Working branch: `codex/forge-hermes-human-acceptance`
+- Final seal allowed: `NO`
+- Live Hermes evidence: `NOT_RUN`
+- Human playtest evidence: `NOT_RUN`
+- Stage 0 result: `PASS`
+- Stage 1 result: `PASS`
+- Stage 2 result: `PASS`
+- Stage 3 result: `LOCALLY_VERIFIED`
+- Stage 4 automated result: `LOCALLY_VERIFIED`
+- Stage 4 human-play result: `NOT_RUN`
+- Stage 5 automated result: `LOCALLY_VERIFIED`
+- Stage 5 Live-Hermes result: `NOT_RUN`
+- Stage 6 local result: `LOCALLY_VERIFIED`
+- Stage 6 remote-CI result: `REMOTELY_VERIFIED`
+
+## Frozen environment
+
+| Component | Baseline value |
+|---|---|
+| Host | Windows 11 10.0 amd64 |
+| Java on PATH | Oracle JDK 25, `25+37-LTS-3491` |
+| Gradle | 8.14.5 |
+| Gradle launcher/daemon JVM | Oracle JDK 25 |
+| Node.js | 22.22.3 |
+| npm | 10.9.8 |
+| Fabric target toolchain | Java 21 |
+| Forge 1.20.1 target toolchain | Java 17 |
+| NeoForge target toolchain | Java 21 |
+
+## Baseline support truth
+
+- Fabric 1.21.1: current audited RC full Runtime path; Live Brain and human
+  verification remain pending.
+- Forge 1.20.1: the connected Runtime bridge now performs authenticated control,
+  live Registry/recipe/body/menu observations, bounded primitive and composite
+  actions, opaque exact-menu sessions, player-text ingress, owner block-activity
+  handoff, lifecycle publication, safe disconnect pause, and the shared bounded
+  global-navigation core. Restart recovery, direct menu mutation, the navigation
+  scenario matrix, PCL2/HMCL Java-17 detection, clean installer lifecycle and
+  Doctor surfaces are locally verified. Live Hermes and human play remain pending.
+- NeoForge 1.21.1: `LOCAL_ONLY`; it is outside the new Full Bridge target.
+- The current release staging includes artifacts for all three targets. Loader
+  installation selection and final public support wording require later
+  dual-loader verification.
+
+## Baseline remote evidence
+
+All three latest `main` workflows completed successfully on the frozen SHA:
+
+| Workflow | Run ID | Result |
+|---|---:|---|
+| PR fast checks | 30184815597 | `success` |
+| Windows terminal validation | 30184815562 | `success` |
+| Minecraft heavy validation | 30184815565 | `success` |
+
+## Baseline release evidence
+
+- Staged manifest source: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
+- Product version: `0.3.0`
+- Manifest payload entries: 401
+- Staged SBOM package entries: 27
+- Baseline release ZIP SHA-256:
+  `79480d0a386bffbdf3ba30bc43b4e6b7eac3202939a0c9354276542cc9cacb42`
+- Baseline release manifest SHA-256:
+  `ec19745317c5b3d7b773ca5f4047e5da951dcfaa181a10845e3579e98b1bd991`
+- Baseline SBOM SHA-256:
+  `e2626b2724669f8021df47fa68d42a8255d6a3bbc034b2307e9da4b5586336b4`
+- Confirmed audit defect: all 27 staged JAR packages currently use product
+  version `0.3.0`; dependency versions and licenses are not represented
+  accurately. This describes the frozen baseline artifact; the stage-1
+  generator repair below does not rewrite that historical evidence.
+- A fresh release ZIP will be created only after the remaining baseline package
+  tasks; no stale pre-clean ZIP is counted as this branch's baseline artifact.
+
+## Automated baseline evidence
+
+Passed on the frozen SHA:
+
+- `clean check`: shared JVM tests, nine Web test files / thirteen tests,
+  forbidden API, independence, secret, and documentation checks.
+- `buildPlatforms`: Fabric 1.21.1, Forge 1.20.1, and NeoForge 1.21.1.
+- `launchTest`: real dedicated-server startup on all three loaders.
+- `gameTest`: Fabric 23 required tests, Forge one required lifecycle test, and
+  NeoForge one required lifecycle test.
+- `runtimeFabricE2E`: authenticated Runtime/Fabric external-client chain,
+  Registry/recipe/menu primitives, ASK_USER, restart, and non-idempotent crash
+  reconciliation. This run used deterministic/Replay providers and is not Live
+  Hermes evidence.
+- `persistenceRestartTest`, `runtimeDisabledLaunchTest`, and
+  `runtimeMultiProfileTest`.
+- focused reconnect, capsule, memory-candidate, 105-turn long-play, 200-turn
+  soak, and generic unknown-Mod suites;
+- release package verification, TUI/root/release entry points, authenticated
+  HTML first-start and single-instance reuse, and the clean-extraction browser
+  release golden path.
+
+## Current failures and audit observations
+
+- No baseline command has failed.
+- Top-level Gradle has emitted `DisconnectableInputStream ... Write end dead`
+  after otherwise successful nested-loader invocations. It is non-fatal in the
+  observed runs but is retained for shutdown/thread audit.
+- JDK 25 emits a future native-access warning for SQLite JDBC. Target release
+  toolchains remain Java 21/17; the warning is retained for compatibility
+  review.
+- NeoForge GameTest coverage remains one lifecycle case and NeoForge remains
+  `LOCAL_ONLY`. Forge now has four required real-server GameTests, including an
+  isolated unknown-namespace Mod fixture; this is not Live-Hermes,
+  third-party-Mod, or human-play evidence.
+- Live Hermes and human play evidence are intentionally absent.
+- The user explicitly deferred Live Hermes and human play on 2026-07-27. They
+  remain pending labels and are not release evidence for this checkpoint.
+
+## Completed work
+
+- Read and froze the complete 1,268-line execution contract.
+- Fetched all remotes and confirmed local `main` equals `origin/main`.
+- Created the dedicated execution branch.
+- Recorded environment, support, CI, manifest, SBOM, and initial baseline
+  evidence.
+- Completed the repository-declared stage-0 baseline without skipped failures
+  and generated a fresh verified baseline package.
+- Replaced both unbounded Task Graph executor queues with fair bounded queues.
+- Added explicit 64-per-Runtime/Profile, 16-per-Brain-session, and
+  24-per-Companion admission. Overload returns `QUEUE_FULL` or
+  `ADMISSION_REJECTED`; a rejected new execution is not persisted.
+- Preserved timed-wait consistency under saturation by leaving it `WAITING` and
+  retrying admission instead of fabricating failure or silently losing work.
+- Added saturation and cross-Companion capacity tests; the complete Runtime test
+  suite passes after the change.
+- Replaced the two-thread shared management bottleneck with fair bounded
+  management and planning pools. Synchronous MCP and streaming MCP have
+  separate 8/4 concurrency limits that reserve control capacity for health and
+  cancellation; saturation returns `RUNTIME_BUSY`.
+- Added bounded-pool rejection/termination coverage and reran the Runtime HTTP
+  integration, including health availability during a blocked Brain request.
+- Added same-Profile Runtime start/stop exclusion with a fair JVM lock, an OS
+  file lock, ten-second timeout, owner PID/operation metadata, and crash-safe
+  reacquisition. Different Profiles remain independent.
+- Bounded Terminal plans and operations (128/512), added a four-worker/64-entry
+  operation queue, retained terminal results for 30 minutes, and serialized all
+  managed operations for the same instance across Runtime/install categories.
+- Added lock timeout/recovery/different-Profile, same-instance serialization,
+  and plan/operation expiry tests.
+- Added pre-parse Runtime request boundaries: 16 KiB for Brain, 128 KiB for
+  ordinary management, and 1 MiB for MCP, with eight bounded readers and a
+  five-second deadline. Compression, conflicting framing, bad lengths, and
+  actual chunked oversize are rejected before JSON parsing.
+- Applied the same boundary to every Terminal JSON route with 16-KiB control
+  and 1-MiB API limits.
+- Added Runtime declared/chunked oversize, compression, length mismatch, slow
+  cleanup and post-attack health coverage, plus authenticated Terminal
+  declared/chunked oversize and compression coverage.
+- Replaced preflight-only Search DNS checks with a pinned HTTP/TLS transport:
+  every socket connects only to the already validated address set while TLS
+  still verifies SNI and the original hostname.
+- Added complete IPv4/IPv6 non-public range rejection, mixed-answer rejection,
+  per-hop redirect validation, redirect-loop/cap handling, response framing
+  bounds, and fail-closed Provider redirect behavior so bearer credentials are
+  never forwarded.
+- Added unit, simulated DNS-rebinding, redirect, and real loopback-socket
+  Provider integration coverage for the Search boundary.
+- Repaired SBOM identity generation to read embedded Maven coordinates and
+  versions or signed JAR Manifest versions. MCAC, Maven, and OpenJDK components
+  now carry distinct versions, declared licenses, supplier, purl, available
+  download source, and exact hashes.
+- Made SBOM creation time deterministic from the source commit and strengthened
+  package verification to require exact JAR-set coverage, source-SHA binding,
+  real versions/licenses/purls, known dependency versions, and rejection of
+  product-version overwrite. A rebuilt 27-package release passes the new gate.
+- Replaced the process-lifetime reusable browser bootstrap URL with hash-only
+  256-bit tickets bound to the server instance and owner PID, limited to 32,
+  expiring after 30 seconds, and deleted on every consume attempt.
+- Removed reusable bootstrap URLs from ordinary console/current-instance state.
+  Double-click reuse now authenticates an internal loopback request and receives
+  a fresh one-use ticket; optional test state contains only a short-lived
+  one-use URL and no session, CSRF, or reopen secret.
+- Added binding, expiry, capacity, replay, cross-site, internal-reopen, no-store,
+  and state-redaction tests while preserving the existing second-launch flow.
+- Replaced all Web `latest` declarations with the exact versions already
+  resolved by the lockfile, moved Vite/build plugins out of production
+  dependencies, and pinned Fabric Loom from `1.17-SNAPSHOT` to `1.17.17`.
+- Pinned every GitHub Action invocation to an official resolved 40-character
+  commit and added a local check that rejects mutable npm, Gradle, or Action
+  declarations.
+- Added weekly Dependabot coverage for all Gradle roots, npm and Actions, plus a
+  least-privilege dependency-review/Java+TypeScript CodeQL workflow. It is
+  configured but remains remotely unverified on this branch.
+- Repaired one high-severity transitive development dependency reported by the
+  real npm audit; a clean `npm ci`, full audit (`0 vulnerabilities`), all Web
+  tests, Web build, and fixed Loom build pass.
+- Extended the release SBOM and verifier from 27 JAR entries to 31 components:
+  the exact four production npm bundle components now carry real versions,
+  licenses, purls, source tarballs, and lockfile SHA-512 checksums.
+- Replaced single-side-effect generic interaction checks with bounded
+  multi-postcondition verification. Block/entity interactions now accept
+  observable world/entity/inventory/vehicle/menu changes; menu actions also
+  observe synchronized menu data and state ID in addition to slot/carried
+  changes.
+- Made exact placed-world state authoritative, so verified Creative and
+  reusable-item placement no longer fails merely because inventory did not
+  decrease.
+- Unobserved generic effects now stop with exact `UNCERTAIN_EFFECT` propagation
+  to the external Brain. The stopped non-idempotent progress is discarded, so
+  explicit resume requires recovery and cannot repeat the uncertain action.
+- Expanded Fabric from 23 baseline GameTests to 26. The complete 26/26 suite
+  passes, including real-server Creative placement, a synthetic Mod-style
+  synchronized-data-only menu, and uncertain-effect/no-replay cases. This is
+  GameTest evidence, not Live Hermes, third-party-Mod, or human-play evidence.
+- After the slice, the complete repository `check` and all three Loader builds
+  pass; Web remains nine files/thirteen tests and dependency, documentation,
+  forbidden-API, independence, and secret gates remain green.
+- Closed stage 1 on committed source `fa17df780f2721af8a60fde8408608371aae318b`.
+  The top-level three-Loader `gameTest` gate passed (Fabric 26/26, Forge 1/1,
+  NeoForge 1/1), and `runtimeFabricE2E` passed its authenticated deterministic
+  external-client, ASK_USER, restart, crash-import/no-replay, generic Registry,
+  menu and transfer chains. This remains local deterministic/Replay evidence.
+- Began stage 2 with the external-Brain semantic-state slice. Hermes may author
+  a strict version-1 snapshot covering every section 5.1 field; Runtime only
+  validates, session-scopes, versions, persists, restores, and presents it.
+  The descriptive permission preset cannot alter Tool Gateway authority.
+- Added migration 24, same-turn projection, authenticated audit visibility,
+  and a Brain-page readout. Adapter, malformed-state, persistence/revision,
+  cross-scope rejection, focused Runtime, Web test, and production Web build
+  evidence pass locally. This is not Live Hermes or human evidence.
+- Added migration 25 for local per-Companion initiative/personality settings,
+  defaulting to `NORMAL`/`COMPANION`. Runtime injects the constraint into
+  bounded Brain context and rejects a conflicting Brain-authored snapshot.
+  Authenticated management and HTML controls can change both modes without
+  changing Tool definitions, permissions, safety, budgets, or Memory policy.
+  Proactive-message admission/rate/dedupe remains unfinished.
+- Added the section 5.4 structured completion-claim boundary. Hermes final
+  responses must declare verified, unverified, or non-task status. Verified
+  claims cite the exact same-session terminal observation chosen by Hermes;
+  Runtime validates and migration 26 links it to audit without inventing an
+  acceptance script. Honest unverified claims require an explanation and no
+  observation citation. Audit and HTML UI expose the relationship.
+- Added migration 27 and authenticated local Memory management: view,
+  search/filter, edit, delete, per-category clear, automatic body-observation
+  save/pause, source/update/scope display, retained prior versions, and an
+  aggregate-only safe export. Central storage rejects common credentials and
+  explicit chat/Prompt/Search-body sources; support bundles still exclude the
+  Runtime database and a sentinel test proves Memory body content is absent.
+- Kept Episode Capsules, quarantined candidates, and formal Memory visually and
+  durably separate. Cross-Companion automatic-save isolation, edit/delete
+  history, sensitive-value rejection, Runtime HTTP actions, HTML dispatch, Web
+  production build, and the complete repository check pass.
+- Fixed two Task Graph worker handoff races found by the full regression run:
+  awaiting an already persisted pause no longer times out and cancels it while
+  admission cleanup finishes, and a durable ASK_USER question is not exposed
+  until the prior worker has released admission. The complete Task Graph class
+  and root `check` pass after the repair.
+- Completed the local section 5.5 automatic low-risk preference boundary.
+  `memory.remember_explicit_preference` lets the external Brain author the
+  semantic judgment, while Runtime requires the latest same-Companion owner
+  message to match exactly within five minutes, automatic save to remain
+  enabled, a bounded preference-only payload, and sensitive-content rejection.
+  The stored fact has `USER_EXPLICIT_BRAIN_CAPTURE` provenance. Tests cover
+  successful save, mismatched/cross-Companion evidence, paused automatic save,
+  and same-Companion isolation across separate Profile/world databases.
+- Completed section 5.7's local one-time generated-Skill trial boundary.
+  `skill.request_trial` grants one exact Profile/Companion/controller/Brain-session
+  lease for 60 to 900 seconds only after the quarantined draft passes current
+  Task Graph validation. Trial graphs are restricted to explicit low-risk
+  permissions, current LOW-risk Tools, strict graph/resource ceilings, one use,
+  a fresh content hash, and the ordinary persistent Task Graph Runtime.
+- Migration 28 persists lease scope, expiry, consumed state, execution binding,
+  policy snapshot and bounded terminal evidence without creating an approved
+  Skill version. Trial Skills cannot call any `skill.*` Tool. A local
+  authenticated user can revoke an available or running trial; running
+  revocation immediately cancels only its bound execution. Restart-left
+  RUNNING leases become visibly `REVOKED` with
+  `SKILL_TRIAL_INTERRUPTED` evidence and cannot resume or be reused.
+- The existing Skills page now shows scoped trial metadata, limits, evidence
+  and a Revoke control without exposing the stored trial document or host
+  paths. Repository, Gateway, Runtime HTTP, Web tests and the complete root
+  `check` pass on implementation commit `4676193`.
+- Completed section 5.3's local proactive-message policy. The external Brain
+  authors the message and event class; Runtime requires exact same-session
+  terminal Tool evidence, enforces meaningful blocked/safety/milestone shapes,
+  atomically deduplicates the evidence event, and applies QUIET/NORMAL/ACTIVE
+  intervals of five minutes/one minute/fifteen seconds. QUIET suppresses
+  ordinary milestones. Migration 29 persists only the admission audit and hash;
+  accepted content uses the existing bounded durable conversation outbox.
+- Added the section 5.2 immediate-instruction interruption core. Exact immediate
+  movement instructions can safely pause the currently awaited Tool without
+  waiting for the old turn lock. The external Brain receives the real PAUSED
+  observation with the new instruction and remains the sole follow-up
+  decision-maker; the old turn cannot silently continue. Explicit goal
+  modification/cancellation invalidates the old Brain session, ordinary chat
+  does not interrupt work, and hypothetical/joke language is not promoted to
+  an instruction. Focused concurrency/classifier tests and root `check` pass on
+  implementation commit `817f1fa`.
+- Completed Stage 2's same-target owner handoff. Fabric reports real owner
+  block-use/break activity over the authenticated Runtime session. Runtime
+  pauses only when the exact dimension and XYZ occur in the active direct or
+  Task-Graph child Tool payload; nearby targets do not preempt. The handoff
+  enters conversation context for the external Brain rather than creating an
+  internal plan. Exact-target/coordinator tests, root `check`, all Loader
+  builds and the complete three-Loader GameTest gate pass on `a06d520`.
+- Stage 2 is locally `PASS`. Replay, unit, integration and GameTest evidence do
+  not establish Live-Hermes judgment or human interaction quality.
+- Started Stage 3 with Forge Runtime control commit `059223b`. A real Java 17
+  Forge 47.4.10 GameTest server first exposed a missing production JSON
+  dependency, then passed after Jackson 2.18.3 was embedded as Forge Jar-in-Jar
+  libraries and added to ModDev runtime classpaths. The GameTest now exercises
+  lease acquisition, stale-epoch rejection, travel, pause, resume, cancel,
+  release, ServerPlayer movement, sleep/wake inventory persistence and death
+  recovery. Root `check` and all three Loader builds pass. The machine-readable
+  per-Tool parity record is `docs/LOADER_TOOL_PARITY.json`.
+- Stage 3 query/E2E slice `040ee51` adds bounded live Forge Registry search and
+  description, live crafting/smelting recipe queries, and connected-body block,
+  item and entity observations. A new root `runtimeForgeE2E` gate launches a
+  real Runtime plus a real Forge GameTest server and verifies authenticated
+  handshake, body registration, lease/start, follow, pause, resume and cancel.
+  The gate passes after correcting the structured status capability shape and
+  waiting for Runtime body registration; direct and Gradle-driven runs both
+  pass. Root `check` and all three Loader builds also pass.
+- Stage 3 primitive/ingress slice `3d2f5ee` adds Forge player text and owner
+  block-use/break handoff, plus bounded `LookAt`, block/entity interaction,
+  attack, placement, use, drop, and opaque-session menu actions through vanilla
+  ServerPlayer paths. Real Forge GameTest verifies look, drop, live chest
+  inspect/quick-move/close and token invalidation. `runtimeForgeE2E` again passes
+  and now also sends an authenticated player request and owner activity. Root
+  `check` and all three Loader builds pass. This remains automated/GameTest
+  evidence, not Live Hermes or human play.
+- Stage 3 resource/inventory slice `ac50c74` adds bounded item collection,
+  hardness/tool-aware block breaking and drop pickup, exact menu-based
+  deposit/withdraw, owner delivery, and food use/recovery. The real Forge
+  GameTest caught and fixed a main-inventory-to-hotbar handoff gap and verifies
+  each executor through live ServerPlayer/container/entity state. The formal
+  Runtime/Forge E2E, root `check`, and all Loader builds pass. Multi-block vein,
+  crafting and smelting breadth remain open.
+- Stage 3 safety/combat slice `8b2b1ef` adds bounded Forge owner defense and
+  exact-UUID danger retreat. The real Forge GameTest verifies a hostile death
+  through the vanilla ServerPlayer attack path and a retreat driven by ordinary
+  player input to at least three blocks of displacement and six blocks of
+  clearance. The Runtime/Forge E2E caught and fixed a premature GameTest cleanup
+  race and now waits through lease/start/pause/resume/cancel before cleanup.
+  Forge GameTest, authenticated Runtime/Forge E2E, root `check`, Web tests and
+  all Loader builds pass. This remains GameTest/automation evidence, not Live
+  Hermes or human play.
+- Stage 3 crafting/smelting slice `9e222f5` removes the final advertised Forge
+  composite-capability gaps. It selects generic recipes from the live 1.20.1
+  RecipeManager, places ingredients through vanilla inventory/crafting-table
+  menus, and drives an empty reachable furnace through real input, fuel, cook
+  and result-pickup state. A second Forge GameTest verifies 2x2 planks, a 3x3
+  chest and raw-iron smelting with exact material/output deltas. Both required
+  Forge tests, authenticated Runtime/Forge E2E, root `check`, Web tests and all
+  Loader builds pass. Broader cancellation/restart/reconnect and global
+  navigation remain open before Forge Full Bridge.
+- Stage 3 scan/step slice `834cea8` publishes Forge `NavigateTo` for the
+  existing bounded vanilla travel executor and adds incremental `ExploreArea`.
+  Scans are limited to radius 1..16, loaded chunks, 256 blocks per tick and 64
+  distance-ranked candidates; those candidates are included in the authenticated
+  behavior lifecycle evidence. Forge GameTest verifies two live gold-ore
+  candidates and ordering. Authenticated Runtime/Forge E2E, root `check`, Web
+  tests and all Loader builds pass.
+- Stage 3 primitive-breadth slice `da0b8ad` closes the remaining direct Forge
+  evidence gaps for exact vanilla block placement and item consumption,
+  snowball use/projectile creation, UUID-bound cow interaction and entity
+  attack, plus a two-block connected vein with verified world and inventory
+  deltas. These checks run inside the established three-test layout to avoid
+  GameTest structure overlap. Forge 3/3 GameTests, authenticated Runtime/Forge
+  E2E, root `check`, and all Loader builds pass. This is real Forge server
+  automation, not Live Hermes or human-play evidence.
+- Stage 4 initial navigation slice `9b0ceed` replaces local yaw-offset avoidance
+  with a shared bounded deterministic A* core and thin 1.20.1/1.21.1 collision,
+  support, hazard, water, climbable and door adapters. Destination choice remains
+  external-Brain authority. Both Loader directors re-plan on route invalidation,
+  target movement and lack of progress, and report honest unloaded-target,
+  out-of-range and unreachable outcomes. Fabric 28/28 and Forge 3/3 real-server
+  GameTests verify travel around an initial wall, re-planning after a second wall,
+  unchanged obstacles and observed arrival. The authenticated Fabric and Forge
+  Runtime E2E gates, pure planner tests, root `check`, and all Loader builds pass.
+  Door/stairs/swim/climb/entity obstruction, restart, user-takeover and combined
+  task breadth remain open; no Live-Hermes or human evidence is claimed.
+- Stage 4 survival-traversal slice `08dd17c` adds vanilla door opening,
+  stairs/jumping, vertical swimming, ladder-facing ascent, live stationary-entity
+  avoidance, and mid-route pause/resume to both supported Loader paths. The
+  route validity check now evaluates the planned edge rather than treating
+  harmless body/waypoint drift as four immediate invalidations, and entity
+  avoidance excludes the Owner so externally requested follow targets remain
+  reachable. A lower-cost route unit case verifies deterministic cost selection.
+  Fabric 31/31 and Forge 3/3 real-server GameTests, root `check`, Web tests, and
+  all Loader builds pass. Vines, loaded-boundary execution, moving/invalid
+  targets, explicit mid-route cancellation, user takeover, Runtime process
+  restart, and combined task scenarios remain open.
+- Stage 4 restart-recovery slices `5d11988`, `712439c`, and `e6b81e4` add
+  explicit vanilla vine traversal and real two-process Minecraft restart
+  evidence on both supported Loaders. Fabric and Forge each preserve the same
+  world directory across stop/restart, recover the same Companion UUID, live
+  body and diamond inventory, and quarantine the interrupted long route as
+  `PAUSED`. The Forge gate uses the normal Java 17 dedicated server because its
+  GameTest server always constructs a fresh world; the clean gate passes in
+  1m15s and the unchanged Forge suite then passes 3/3. This is local automated
+  server evidence, not Live-Hermes or human-play evidence.
+- Stage 4 control/safety slice `85e30af` adds real Loader-world evidence for
+  hazard-cost routing, moving follow targets, and explicit owner stop on both
+  supported Loaders. Fabric 31/31 and Forge 3/3 GameTests route around an
+  unchanged magma fixture without health loss, react after the Owner moves the
+  follow target, then stop movement and settle in `IDLE` after an explicit
+  owner command. The Forge fixture also clears delayed water outside the prior
+  swim volume, removing a nondeterministic ladder-approach failure. This does
+  not claim passive physical user-takeover detection, Live Hermes, or human
+  evidence.
+- Stage 4 boundary/invalid-target slice `28db27e` rejects non-finite navigation
+  coordinates before mutating Companion state and adds real Loader-world
+  loaded-boundary evidence. Each Loader test finds a target within the 192-block
+  navigation bound whose chunk is actually unloaded, verifies that navigation
+  does not load it, and observes safe `PAUSED` state with
+  `TARGET_CHUNK_UNLOADED`. Fabric 31/31 and Forge 3/3 pass serially. An attempted
+  parallel run was discarded because both Gradle builds write the same shared
+  core output; it is not acceptance evidence.
+- CI follow-up `765997a` records narrowly scoped forbidden-API exceptions for
+  the explicitly enabled Forge two-process probe's owner placement and support
+  surface. The production behavior path remains ordinary player input. Local
+  `forbiddenApiCheck` and the full Forge two-process restart gate both pass
+  after the correction.
+- Stage 4 resource-combination slice `bfa7696` extends the same-body Loader
+  navigation scenarios through collection, mining, and container work. After
+  the navigation control/safety route, each Loader body walks to and picks up
+  one coal item entity, breaks one exact dirt target and receives its drop, then
+  withdraws one iron ingot from a real chest. Assertions cover the entity/world
+  mutation, source-container delta, and body-inventory deltas. Fabric 31/31,
+  Forge 3/3, and `forbiddenApiCheck` pass.
+- Stage 4 owner-activity slice `331e12f` adds the missing Fabric E2E event
+  path, reusing the exact bounded callback path used by real block-use/break
+  events. The full Runtime/Fabric E2E passes in 1m10s and records the event;
+  Forge E2E already records its equivalent. Runtime tests separately prove
+  exact-target-only matching and that a matching event pauses the old external
+  Brain Tool before the short instruction is handled. This is layered local
+  automation, not a fabricated human-click result.
+- Stage 3 Terminal/installer closure `19a1ccc`, `d58f528`, and `be47d4b`
+  centralizes the exact Full-Bridge support matrix, exposes Runtime/smoke/control
+  paths for Forge 1.20.1, detects Java-17 Forge instances in PCL2 and HMCL, and
+  drives the production installer, pairing, repair, update, rollback and both
+  uninstall policies against a clean Forge fixture while preserving a world and
+  unrelated Mod. Doctor lists Bridge, Runtime, MCP, Registry, navigation and
+  external-Brain state for the Forge target.
+- Stage 3 direct-menu evidence `93ccedb` runs token-bound vanilla `CLICK`
+  pickup and return mutations before the existing Forge quick-move/close path.
+  The real Java 17 Forge 47.4.10 GameTest server reports all 3 required tests
+  passed. Forge Full Runtime Bridge is therefore locally verified; this remains
+  automated server evidence, not Live-Hermes or human-play evidence.
+- Stage 5 Forge unknown-Mod slices `7e8acb0` and `14207d4` add an isolated
+  GameTest-only Mod with unknown-namespace item, tag and recipe data. The real
+  Java 17 Forge server discovers those resources generically through Registry,
+  tag and recipe mechanisms and reports all 4 required GameTests passed. A
+  production Forge JAR inspection proves the fixture is absent from the shipped
+  artifact.
+- Stage 5 Runtime safety slice `fbc6a3d` keeps Search result bodies as untrusted
+  data: a hostile page is flagged, cannot add shell/filesystem/Memory-approval
+  or world-edit authority, and is omitted from citations. A separate
+  deterministic external-client scenario uses only `registry.describe` and
+  `recipe.query`, then returns the honest
+  `UNSUPPORTED_GENERIC_INTERACTION` result without mutating world, menu, or
+  Memory state. Focused Runtime tests pass. These tests establish bounded
+  mechanism and authority behavior, not Live-Hermes judgment.
+- Stage 6 gate-hardening slice `0469a17` gives Forge Runtime E2E and Forge
+  two-process restart recovery their own unconditional Minecraft-heavy CI
+  steps. The navigation fixtures now run Forge's four large cases in isolated
+  batches, wait for observed door opening before dynamic route invalidation,
+  and reserve collision clearance around observed entities. Fabric 31/31 and
+  Forge 4/4 real-server GameTests pass after the correction.
+- Remote run `30247592089` exposed that separate Forge batches still place
+  their tiny templates only a few blocks apart. The lifecycle arena extended
+  into that adjacent space on the slower hosted runner, and its connected body
+  died from lava before the swim phase. Slice `f57a95f` relocates only the
+  large navigation phase into a separate corridor, keeps the earlier real
+  interaction fixture unchanged, waits on the unchanged three-block
+  displacement/six-block retreat conditions, and gives observed door opening
+  a bounded slow-runner allowance. The complete Forge suite then passes 4/4 in
+  two consecutive runs with all original movement, hazard and mutation
+  assertions retained.
+- The complete local Stage 6 chain passes: `clean check`, all three Loader
+  builds and launches, Fabric 31/31, Forge 4/4 and NeoForge 1/1 GameTests,
+  authenticated Runtime/Fabric and Runtime/Forge E2E, both two-process restart
+  gates, crash/no-replay reconciliation, unknown-Mod generic E2E, Brain
+  reconnect, Capsule/candidate review, 105-turn long play, 200-turn soak,
+  Web unit/build and Chromium product E2E, multi-Profile isolation, disabled
+  Runtime launch, TUI/root/release/HTML entry points, package verification and
+  the clean-extraction install/update/rollback/two-uninstall Golden Path.
+- The local Web dependency audit reports zero vulnerabilities. The verified
+  `0.3.0` candidate at source `0469a179111b2202242493e001ea45575e50a773`
+  contains 401 payload files and 31 SBOM packages. ZIP SHA-256 is
+  `acd85f451f039268deb4c74b9a107ce1d1369cd8e0e89a5a51c97d24f78bf4b2`;
+  manifest SHA-256 is
+  `03b4bce034f887b5a20c03260b01191a28637e55c52802650ee482a8ebb6670f`;
+  SBOM SHA-256 is
+  `ca47c976886278aa5879b05d25f6e655676aec62a9fc223fe2bbe7fa8cfb61b2`.
+- GitHub Dependency Graph was enabled through the repository's official
+  vulnerability-alerts control and the SBOM endpoint now returns SPDX 2.3 with
+  276 packages. At pushed checkpoint `d18084b`, PR fast run `30247587038`,
+  Windows package run `30247587044`, dependency review, Java CodeQL and
+  JavaScript/TypeScript CodeQL in run `30247587041` passed. Minecraft-heavy run
+  `30247592089` failed only on the Forge overlap described above; it is
+  historical failure evidence, not a pass for the corrected SHA.
+- At corrected checkpoint `7d4140f`, PR fast run `30249327282`, Windows package
+  run `30249327104`, and dependency review plus both CodeQL analyses in run
+  `30249327156` passed. Minecraft-heavy run `30249333781` passed all Loader
+  builds, dedicated-server launches and GameTests, including the corrected
+  Forge 4/4 suite. Its subsequent Runtime/Forge E2E stayed alive but reached
+  the verified registration marker after the script's 90-second cold-start
+  deadline. Slice `8f656c9` raises only that bounded startup allowance to 180
+  seconds; the marker, authenticated online body, FOLLOW/pause/resume/cancel
+  assertions and successful GameTest exit remain mandatory. The focused local
+  Runtime/Forge E2E passes after this change.
+- At closure checkpoint `7fbc47d7595f3fbab6ddbea2ed35bbaa56669e5f`,
+  PR fast run `30250337641`, Windows terminal/package run `30250337599`,
+  dependency review plus both CodeQL analyses in run `30250337611`, and
+  Minecraft-heavy run `30250341444` all completed successfully. Heavy passed
+  all Loader builds, all dedicated-server launches, Fabric 31/31, Forge 4/4
+  and NeoForge 1/1 GameTests, both authenticated Runtime E2E paths, both
+  two-process restart-recovery gates, and the remaining reliability gates.
+
+## Remaining work
+
+- No automated Stage 6 implementation gate remains open.
+- Live Hermes discovery/verification and human play are user-deferred. Keep
+  `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING` and `HUMAN_PLAYTEST_PENDING`;
+  do not convert local automation into either form of evidence.
+
+## User-action blockers
+
+None at this checkpoint.

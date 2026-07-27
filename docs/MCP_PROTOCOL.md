@@ -56,7 +56,7 @@ Initialize without `MCP-Protocol-Version` or `Mcp-Session-Id`, but with the iden
 
 Retain the `Mcp-Session-Id` response header. Then send `notifications/initialized` with that
 session and the negotiated protocol header. Tool discovery uses the bound identity and returns
-only tools currently allowed by Runtime configuration and the connected Fabric body's capability
+only tools currently allowed by Runtime configuration and the connected Full-Bridge body's capability
 report:
 
 ```json

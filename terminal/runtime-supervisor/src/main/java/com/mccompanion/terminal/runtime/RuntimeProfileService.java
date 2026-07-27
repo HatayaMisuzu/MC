@@ -13,7 +13,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntPredicate;
 import java.util.regex.Pattern;
 
@@ -21,7 +20,10 @@ import java.util.regex.Pattern;
 public final class RuntimeProfileService {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Pattern SAFE_ID = Pattern.compile("[A-Za-z0-9._-]{1,128}");
-    private static final ConcurrentHashMap<Path, Object> JVM_LOCKS = new ConcurrentHashMap<>();
+    private static final Object[] JVM_LOCKS = new Object[32];
+    static {
+        java.util.Arrays.setAll(JVM_LOCKS, ignored -> new Object());
+    }
     public static final int FIRST_PORT=8766, LAST_PORT=8866;
     private final Path profilesHome;
     private final Path launcher;
@@ -40,7 +42,8 @@ public final class RuntimeProfileService {
         }
         Files.createDirectories(profilesHome);
         Path lockPath = profilesHome.resolve(".allocation.lock");
-        Object jvmLock = JVM_LOCKS.computeIfAbsent(profilesHome.toAbsolutePath().normalize(), ignored -> new Object());
+        Path normalizedHome = profilesHome.toAbsolutePath().normalize();
+        Object jvmLock = JVM_LOCKS[Math.floorMod(normalizedHome.hashCode(), JVM_LOCKS.length)];
         synchronized (jvmLock) {
             try (FileChannel channel = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                  FileLock ignored = channel.lock()) {

@@ -66,7 +66,8 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
                     "Inspect bounded visible entities near the connected body",
                     entityInspectSchema(), "LOW", "READ_WORLD", QUERY_TIMEOUT, true));
             values.add(new ToolDefinition("menu.inspect", "1.0",
-                    "Inspect the exact open menu and issue a short-lived session capability",
+                    "Inspect the exact open menu, its generic effect-verification postconditions, and issue a "
+                            + "short-lived session capability",
                     objectSchema(), "LOW", "INVENTORY", QUERY_TIMEOUT, true));
         }
         return List.copyOf(values);

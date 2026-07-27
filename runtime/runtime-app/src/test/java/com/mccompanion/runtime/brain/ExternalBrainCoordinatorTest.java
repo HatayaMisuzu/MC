@@ -74,6 +74,64 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void externalBrainCanHonestlyStopAtUnsupportedGenericInteractionAfterReadOnlyDiscovery() {
+        List<String> calls = new ArrayList<>();
+        ToolGateway discovery = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(
+                        new ToolDefinition(
+                                "registry.describe", "1.0", "Describe connected Registry content",
+                                Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                                Duration.ofSeconds(5), true),
+                        new ToolDefinition(
+                                "recipe.query", "1.0", "Query connected recipes",
+                                Json.object().put("type", "object"), "LOW", "READ_WORLD",
+                                Duration.ofSeconds(5), true));
+            }
+
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                calls.add(call.name());
+                if (call.name().equals("registry.describe")) {
+                    return new ToolResult(
+                            call.callId(), call.name(), true, "OK",
+                            Json.object().put("id", "mcac_unknown_fixture:special_console")
+                                    .put("genericInteraction", false), true);
+                }
+                return new ToolResult(
+                        call.callId(), call.name(), true, "OK",
+                        Json.object().putArray("recipes"), true);
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> switch (turns.getAndIncrement()) {
+            case 0 -> BrainTurnResult.tools(List.of(new ToolCall(
+                    "describe-special", "registry.describe",
+                    Json.object().put("kind", "BLOCK")
+                            .put("id", "mcac_unknown_fixture:special_console"))));
+            case 1 -> BrainTurnResult.tools(List.of(new ToolCall(
+                    "query-special-recipe", "recipe.query",
+                    Json.object().put("output", "mcac_unknown_fixture:special_result"))));
+            default -> BrainTurnResult.finalResponse(
+                    "UNSUPPORTED_GENERIC_INTERACTION: Registry and recipe observations expose no "
+                            + "bounded generic interaction for this special mechanism.");
+        });
+
+        try (ExternalBrainCoordinator coordinator =
+                     new ExternalBrainCoordinator(brain, discovery, 4)) {
+            BrainCoordinatorResult result = coordinator.continueTurn(
+                    "external-agent", "c1",
+                    "Use the unknown special console without guessing its internal mechanism.",
+                    context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+            assertTrue(result.response().startsWith("UNSUPPORTED_GENERIC_INTERACTION"));
+            assertEquals(List.of("registry.describe", "recipe.query"), calls);
+            assertTrue(calls.stream().noneMatch(name ->
+                    name.startsWith("block.") || name.startsWith("menu.")
+                            || name.startsWith("memory.")));
+        }
+    }
+
+    @Test
     void acceptedMinecraftCommandIsNeverReturnedToBrainBeforeTerminalFabricObservation() {
         AtomicInteger turns = new AtomicInteger();
         ToolGateway gateway = new ToolGateway() {
@@ -274,6 +332,72 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void verifiedInterruptionPausesActiveToolAndDeliversPauseBeforeNewMessage() throws Exception {
+        CountDownLatch awaiting = new CountDownLatch(1);
+        CountDownLatch paused = new CountDownLatch(1);
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("task_graph.execute", "1.0", "execute",
+                        Json.object(), "LOW", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(5), false));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "ACCEPTED",
+                        Json.object().put("state", "ACCEPTED"), false);
+            }
+            @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
+                                                      Duration timeout,
+                                                      java.util.function.Consumer<ToolResult> progress) {
+                awaiting.countDown();
+                try {
+                    if (!paused.await(2, TimeUnit.SECONDS)) throw new AssertionError("pause was blocked");
+                } catch (InterruptedException failure) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(failure);
+                }
+                return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_PAUSED",
+                        Json.object().put("state", "PAUSED"), true);
+            }
+            @Override public boolean pause(ToolContext context, String callId, String reason) {
+                paused.countDown();
+                return true;
+            }
+            @Override public boolean conflictsWithOwnerActivity(
+                    ToolContext context, String callId, com.fasterxml.jackson.databind.JsonNode activity) {
+                return activity.path("position").path("x").asInt() == 4;
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            if (turns.getAndIncrement() == 0) {
+                return BrainTurnResult.tools(List.of(
+                        new ToolCall("long-goal", "task_graph.execute", Json.object())));
+            }
+            assertEquals("先跟我走", request.userMessage());
+            assertEquals(1, request.toolResults().size());
+            assertEquals("PAUSED", request.toolResults().getFirst().observation().path("state").asText());
+            return BrainTurnResult.finalResponse("我已暂停原任务，现在跟你走。");
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            CompletableFuture<BrainCoordinatorResult> original = CompletableFuture.supplyAsync(() ->
+                    coordinator.continueTurn("hermes-1", "c1", "执行长期目标", context()));
+            assertTrue(awaiting.await(1, TimeUnit.SECONDS));
+            long started = System.nanoTime();
+            assertFalse(coordinator.yieldToOwnerActivity("hermes-1", "c1",
+                    Json.object().set("position", Json.object().put("x", 5))));
+            assertTrue(coordinator.yieldToOwnerActivity("hermes-1", "c1",
+                    Json.object().set("position", Json.object().put("x", 4))));
+            assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0);
+            assertEquals("BRAIN_TURN_PAUSED_FOR_USER_INSTRUCTION",
+                    original.get(2, TimeUnit.SECONDS).code());
+
+            BrainCoordinatorResult immediate = coordinator.continueTurn(
+                    "hermes-1", "c1", "先跟我走", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, immediate.kind());
+            assertEquals(2, turns.get(), "the interrupted old turn must not continue on its own");
+        }
+    }
+
+    @Test
     void companionSessionsRunConcurrentlyAndRemainIsolated() throws Exception {
         CountDownLatch bothEntered = new CountDownLatch(2);
         var sessionByCompanion = new ConcurrentHashMap<String, String>();
@@ -299,6 +423,102 @@ class ExternalBrainCoordinatorTest {
             assertEquals("done c2", second.get(2, TimeUnit.SECONDS).response());
             assertEquals(2, sessionByCompanion.size());
             assertNotEquals(sessionByCompanion.get("c1"), sessionByCompanion.get("c2"));
+        }
+    }
+
+    @Test
+    void localBehaviorSettingsReachBrainWithoutChangingAvailableTools() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-settings-context.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            RecordingGateway gateway = new RecordingGateway();
+            List<String> modes = new ArrayList<>();
+            List<List<String>> toolNames = new ArrayList<>();
+            ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+                modes.add(request.context().brainBehaviorSettings().path("initiativeMode").asText());
+                toolNames.add(gateway.definitions(new ToolContext("controller", request.sessionId(), "c1"))
+                        .stream().map(ToolDefinition::name).toList());
+                return BrainTurnResult.finalResponse("acknowledged");
+            });
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, gateway, 4, audit)) {
+                coordinator.continueTurn("controller", "c1", "hello", context());
+                coordinator.updateBehaviorSettings("c1", BrainSemanticState.InitiativeMode.ACTIVE,
+                        BrainSemanticState.PersonalityMode.IMMERSIVE_ROLEPLAY);
+                coordinator.continueTurn("controller", "c1", "continue", context());
+            }
+            assertEquals(List.of("NORMAL", "ACTIVE"), modes);
+            assertEquals(toolNames.getFirst(), toolNames.getLast());
+        }
+    }
+
+    @Test
+    void brainCannotOverrideLocalInitiativeOrPersonalitySetting() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-settings-policy.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            audit.updateBehaviorSettings("c1", BrainSemanticState.InitiativeMode.QUIET,
+                    BrainSemanticState.PersonalityMode.COMPANION, "LOCAL_MANAGEMENT_USER");
+            ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse("override")
+                    .withSemanticState(new BrainSemanticState("", "", "", "", "", false,
+                            BrainSemanticState.InitiativeMode.ACTIVE,
+                            BrainSemanticState.PersonalityMode.COMPANION,
+                            BrainSemanticState.PermissionPreset.ASK_FOR_EFFECTS,
+                            false, null, List.of())));
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, new RecordingGateway(), 4, audit)) {
+                IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                        () -> coordinator.continueTurn("controller", "c1", "hello", context()));
+                assertEquals("BRAIN_SEMANTIC_STATE_POLICY_MISMATCH", failure.getMessage());
+            }
+        }
+    }
+
+    @Test
+    void verifiedCompletionClaimLinksToTheBrainSelectedFinalObservation() throws Exception {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> turns.getAndIncrement() == 0
+                ? BrainTurnResult.tools(List.of(new ToolCall("final-observe-1", "world.observe", Json.object())))
+                : BrainTurnResult.finalResponse("The check is complete.").withCompletionClaim(
+                        new BrainCompletionClaim("Base state checked", BrainCompletionClaim.Certainty.VERIFIED,
+                                "final-observe-1", "task-1", "")));
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("completion-claim.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, new RecordingGateway(), 4, audit)) {
+                BrainCoordinatorResult result = coordinator.continueTurn(
+                        "controller", "c1", "check the base", context());
+                assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+                var inspected = audit.inspect("c1", 10).path(0).path("completionClaims").path(0);
+                assertEquals("VERIFIED", inspected.path("certainty").asText());
+                assertEquals("final-observe-1", inspected.path("observationCallId").asText());
+                assertEquals("task-1", inspected.path("taskId").asText());
+            }
+        }
+    }
+
+    @Test
+    void missingObservationCannotSupportVerifiedClaimButExplicitUnverifiedGapIsAllowed() throws Exception {
+        ReplayBrainAdapter invalid = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse("done")
+                .withCompletionClaim(new BrainCompletionClaim("Done", BrainCompletionClaim.Certainty.VERIFIED,
+                        "missing-observation", "task-1", "")));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                invalid, new RecordingGateway(), 4)) {
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> coordinator.continueTurn("controller", "c1", "finish", context()));
+            assertEquals("BRAIN_FINAL_OBSERVATION_NOT_FOUND", failure.getMessage());
+        }
+
+        ReplayBrainAdapter honest = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse(
+                "I could not verify the result.").withCompletionClaim(new BrainCompletionClaim(
+                "Result unavailable", BrainCompletionClaim.Certainty.UNVERIFIED,
+                "", "task-1", "Companion is offline")));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                honest, new RecordingGateway(), 4)) {
+            BrainCoordinatorResult result = coordinator.continueTurn(
+                    "controller", "c1", "finish", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
         }
     }
 

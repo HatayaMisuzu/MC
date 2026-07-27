@@ -82,13 +82,89 @@ if ($manifestPaths.Count -ne @($payloadPaths).Count) { throw 'Release manifest c
 $sbom = Get-Content -LiteralPath (Join-Path $release 'sbom.spdx.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($sbom.spdxVersion -ne 'SPDX-2.3' -or $sbom.dataLicense -ne 'CC0-1.0') { throw 'SPDX SBOM header is invalid' }
 if (@($sbom.packages).Count -lt 1) { throw 'SPDX SBOM contains no packages' }
+$expectedJarPaths = @($payloadPaths | Where-Object { $_ -like '*.jar' } | Sort-Object)
+$actualJarPaths = @($sbom.packages | Where-Object { $_.packageFileName -like '*.jar' } |
+    ForEach-Object { [string]$_.packageFileName } | Sort-Object)
+if (($expectedJarPaths -join "`n") -ne ($actualJarPaths -join "`n")) {
+    throw 'SPDX SBOM package targets do not exactly match packaged JARs'
+}
+if ([string]$sbom.documentNamespace -ne "https://github.com/HatayaMisuzu/MC/spdx/$($manifest.sourceCommit)") {
+    throw 'SPDX SBOM namespace is not bound to the release source SHA'
+}
+$dependencyVersions = @{
+    'Java-WebSocket-1.6.0.jar' = '1.6.0'
+    'jackson-annotations-2.18.3.jar' = '2.18.3'
+    'jackson-core-2.18.3.jar' = '2.18.3'
+    'jackson-databind-2.18.3.jar' = '2.18.3'
+    'jackson-dataformat-yaml-2.18.3.jar' = '2.18.3'
+    'jackson-datatype-jsr310-2.18.3.jar' = '2.18.3'
+    'jsoup-1.18.3.jar' = '1.18.3'
+    'picocli-4.7.7.jar' = '4.7.7'
+    'slf4j-api-2.0.17.jar' = '2.0.17'
+    'slf4j-simple-2.0.17.jar' = '2.0.17'
+    'snakeyaml-2.3.jar' = '2.3'
+    'sqlite-jdbc-3.49.1.0.jar' = '3.49.1.0'
+}
+$npmVersions = @{
+    'lucide-react' = '1.24.0'
+    'react' = '19.2.7'
+    'react-dom' = '19.2.7'
+    'scheduler' = '0.27.0'
+}
+$observedNpm = @{}
 foreach ($package in $sbom.packages) {
-    $target = Join-Path $release ([string]$package.packageFileName -replace '/', '\')
-    if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "SBOM package target missing: $($package.packageFileName)" }
-    $checksum = @($package.checksums | Where-Object algorithm -eq 'SHA256') | Select-Object -First 1
-    if (-not $checksum -or (Get-Sha256 $target) -ne [string]$checksum.checksumValue) {
-        throw "SBOM package checksum mismatch: $($package.packageFileName)"
+    if ([string]::IsNullOrWhiteSpace([string]$package.versionInfo) -or $package.versionInfo -eq 'NOASSERTION') {
+        throw "SBOM package has no real version: $($package.name)"
     }
+    if ([string]::IsNullOrWhiteSpace([string]$package.licenseDeclared) -or $package.licenseDeclared -eq 'NOASSERTION') {
+        throw "SBOM package has no declared license: $($package.name)"
+    }
+    $purl = @($package.externalRefs | Where-Object {
+        $_.referenceCategory -eq 'PACKAGE-MANAGER' -and $_.referenceType -eq 'purl'
+    }) | Select-Object -First 1
+    if (-not $purl -or [string]::IsNullOrWhiteSpace([string]$purl.referenceLocator)) {
+        throw "SBOM package has no package URL: $($package.name)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$package.packageFileName)) {
+        $target = Join-Path $release ([string]$package.packageFileName -replace '/', '\')
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf)) { throw "SBOM package target missing: $($package.packageFileName)" }
+        $checksum = @($package.checksums | Where-Object algorithm -eq 'SHA256') | Select-Object -First 1
+        if (-not $checksum -or (Get-Sha256 $target) -ne [string]$checksum.checksumValue) {
+            throw "SBOM package checksum mismatch: $($package.packageFileName)"
+        }
+    }
+    else {
+        if ([string]$purl.referenceLocator -notlike 'pkg:npm/*') {
+            throw "SBOM package without a file is not an npm bundle component: $($package.name)"
+        }
+        $checksum = @($package.checksums | Where-Object algorithm -eq 'SHA512') | Select-Object -First 1
+        if (-not $checksum -or [string]$checksum.checksumValue -notmatch '^[0-9a-f]{128}$') {
+            throw "Bundled npm package has no lockfile SHA-512: $($package.name)"
+        }
+        if (-not $npmVersions.ContainsKey([string]$package.name) -or
+                [string]$package.versionInfo -ne [string]$npmVersions[[string]$package.name]) {
+            throw "Bundled npm package identity mismatch: $($package.name)@$($package.versionInfo)"
+        }
+        $observedNpm[[string]$package.name] = $true
+        continue
+    }
+    $jarName = Split-Path -Leaf ([string]$package.packageFileName)
+    if ($dependencyVersions.ContainsKey($jarName) -and
+            [string]$package.versionInfo -ne [string]$dependencyVersions[$jarName]) {
+        throw "SBOM dependency version mismatch for ${jarName}: $($package.versionInfo)"
+    }
+    if (-not $dependencyVersions.ContainsKey($jarName) -and $jarName -ne 'jrt-fs.jar' -and
+            [string]$package.versionInfo -ne [string]$manifest.version) {
+        throw "SBOM MCAC component version mismatch for ${jarName}: $($package.versionInfo)"
+    }
+    if ($dependencyVersions.ContainsKey($jarName) -and
+            [string]$package.versionInfo -eq [string]$manifest.version) {
+        throw "SBOM dependency was overwritten with the product version: $jarName"
+    }
+}
+if ((($observedNpm.Keys | Sort-Object) -join "`n") -ne
+        (($npmVersions.Keys | Sort-Object) -join "`n")) {
+    throw 'SPDX SBOM bundled npm package set is incomplete or contains extras'
 }
 
 $zipPath = Join-Path (Split-Path $release -Parent) 'mcac-release.zip'

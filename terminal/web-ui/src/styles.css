@@ -269,6 +269,27 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .dialog > footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .skill-review-card details { grid-column: 1 / -1; }
 .skill-review-card pre { max-height: 18rem; overflow: auto; white-space: pre-wrap; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.language-switcher select { height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--text); background: var(--surface-2); font-size: 11.5px; }
+.compat-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.compat-summary article, .compat-panel, .compat-next { border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.compat-summary article { min-width: 0; display: grid; gap: 7px; padding: 14px; }
+.compat-summary article > span, .compat-summary small { color: var(--muted); font-size: 11px; }
+.compat-summary strong { overflow-wrap: anywhere; font-size: 13px; }
+.compat-next { display: flex; align-items: flex-start; gap: 11px; padding: 13px; margin-bottom: 12px; }
+.compat-next > svg { flex: 0 0 auto; color: var(--accent); }
+.compat-next p { margin: 3px 0; color: var(--text); font-size: 12px; }
+.compat-next small { color: var(--muted); }
+.compat-install { margin-bottom: 12px; }
+.compat-install > div:first-child { display: flex; align-items: center; gap: 8px; }
+.compat-install h2 { margin: 0; font-size: 14px; }
+.compat-panel { overflow: hidden; margin-bottom: 12px; }
+.compat-panel .empty-state { min-height: 180px; }
+.compat-panel ul { margin: 0; padding: 13px 30px; color: var(--muted); font-size: 12px; }
+.compat-empty { margin: 0; padding: 18px; color: var(--muted); font-size: 12px; }
+.compat-lower { display: grid; grid-template-columns: minmax(280px, .7fr) minmax(0, 1.3fr); gap: 12px; }
+.compatibility-page .data-table tbody tr { cursor: default; }
+.compatibility-page .inline-actions { min-width: 440px; }
 
 @media (max-width: 1240px) {
   .app-shell { grid-template-columns: 210px minmax(0, 1fr); }
@@ -276,6 +297,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .overview-grid { grid-template-columns: 1fr; }
   .detail-panel { min-height: 0; }
   .settings-grid { grid-template-columns: 1fr 1fr; }
+  .compat-summary { grid-template-columns: 1fr 1fr; }
   .install-summary { grid-template-columns: 1fr 1fr; }
   .install-summary > div:nth-child(2) { border-right: 0; }
   .install-summary > div { border-bottom: 1px solid var(--border); }
@@ -292,6 +314,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .topbar { padding: 0 15px; }
   .instance-switcher select { min-width: 0; max-width: 50vw; }
   .session-layout, .companion-grid, .provider-layout, .smoke-grid, .settings-grid { grid-template-columns: 1fr; }
+  .compat-lower { grid-template-columns: 1fr; }
   .detail-list.two-column { grid-template-columns: 1fr; }
   .event-row { grid-template-columns: 65px 120px 80px minmax(160px, 1fr); }
   .event-row .status { display: none; }
@@ -311,6 +334,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
   .doctor-row { grid-template-columns: 75px minmax(0, 1fr); }
   .doctor-row > .button { grid-column: 1 / -1; }
   .dialog-backdrop { padding: 8px; }
+  .compat-summary { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

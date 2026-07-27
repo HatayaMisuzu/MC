@@ -975,13 +975,16 @@ class TaskGraphRuntimeTest {
     }
 
     @Test
-    void queuedExecutionsRemainFairAndCompleteUnderSustainedAdmission() throws Exception {
+    void boundedAdmissionPreservesFairCapacityAndCompletesTheAcceptedCohort() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("scheduler-soak.db"))) {
             database.initialize();
             FairnessGateway gateway = new FairnessGateway();
             TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
             try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, repository)) {
-                ToolContext context = new ToolContext("hermes", "brain-fairness", "companion-1");
+                java.util.function.IntFunction<ToolContext> contextFor = index -> {
+                    int scope = index / TaskGraphRuntime.MAX_ADMITTED_PER_BRAIN_SESSION;
+                    return new ToolContext("controller-" + scope, "brain-" + scope, "companion-" + scope);
+                };
                 var graph = Json.parse("""
                         {"version":"mcac-task-graph/1","id":"scheduler-fairness",
                          "inputs":{"index":{"type":"integer","required":true}},
@@ -991,18 +994,38 @@ class TaskGraphRuntimeTest {
                         """);
                 int executions = 64;
                 for (int index = 0; index < 2; index++) {
-                    runtime.start(context,
+                    runtime.start(contextFor.apply(index),
                             new ToolCall("fair-" + index, "task_graph.execute", Json.object()),
                             graph, Json.object().put("index", index), Json.object());
                 }
                 assertTrue(gateway.firstWorkersEntered.await(2, TimeUnit.SECONDS),
                         "the two graph workers did not enter the controlled saturation boundary");
                 long saturatedAt = System.nanoTime();
-                for (int index = 2; index < executions; index++) {
-                    runtime.start(context,
+                for (int index = 2; index < TaskGraphRuntime.MAX_ADMITTED_PER_BRAIN_SESSION; index++) {
+                    runtime.start(contextFor.apply(index),
                             new ToolCall("fair-" + index, "task_graph.execute", Json.object()),
                             graph, Json.object().put("index", index), Json.object());
                 }
+                ToolResult sessionRejected = runtime.start(contextFor.apply(0),
+                        new ToolCall("fair-session-overflow", "task_graph.execute", Json.object()),
+                        graph, Json.object().put("index", 10_000), Json.object());
+                assertFalse(sessionRejected.success());
+                assertEquals("ADMISSION_REJECTED", sessionRejected.code());
+                assertTrue(repository.get("fair-session-overflow").isEmpty(),
+                        "rejected admission must not create an unallocated durable execution");
+                for (int index = TaskGraphRuntime.MAX_ADMITTED_PER_BRAIN_SESSION;
+                     index < executions; index++) {
+                    runtime.start(contextFor.apply(index),
+                            new ToolCall("fair-" + index, "task_graph.execute", Json.object()),
+                            graph, Json.object().put("index", index), Json.object());
+                }
+                ToolResult globalRejected = runtime.start(
+                        new ToolContext("controller-overflow", "brain-overflow", "companion-overflow"),
+                        new ToolCall("fair-global-overflow", "task_graph.execute", Json.object()),
+                        graph, Json.object().put("index", 20_000), Json.object());
+                assertFalse(globalRejected.success());
+                assertEquals("QUEUE_FULL", globalRejected.code());
+                assertTrue(repository.get("fair-global-overflow").isEmpty());
                 var saturated = runtime.telemetry();
                 assertEquals("READY", saturated.path("status").asText());
                 assertEquals(executions, saturated.path("activeExecutions").asInt());
@@ -1016,7 +1039,8 @@ class TaskGraphRuntimeTest {
                 gateway.release.countDown();
                 for (int index = executions - 1; index >= 0; index--) {
                     ToolCall call = new ToolCall("fair-" + index, "task_graph.execute", Json.object());
-                    ToolResult terminal = runtime.await(context, call, Duration.ofSeconds(10), ignored -> { });
+                    ToolResult terminal = runtime.await(
+                            contextFor.apply(index), call, Duration.ofSeconds(10), ignored -> { });
                     assertTrue(terminal.success(), "execution " + index + " starved: " + terminal.observation());
                     assertEquals("SUCCEEDED", repository.get(call.callId()).orElseThrow().state());
                 }
@@ -1040,6 +1064,65 @@ class TaskGraphRuntimeTest {
                 assertEquals(0, drained.path("workerQueueDepth").asInt());
                 assertEquals(executions,
                         drained.path("durable").path("states").path("SUCCEEDED").asInt());
+            } finally {
+                gateway.release.countDown();
+            }
+        }
+    }
+
+    @Test
+    void companionAdmissionLimitCannotConsumeAnotherCompanionsCapacity() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("companion-admission.db"))) {
+            database.initialize();
+            FairnessGateway gateway = new FairnessGateway();
+            TaskGraphExecutionRepository repository = new TaskGraphExecutionRepository(database);
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(gateway, repository)) {
+                ToolContext firstSession =
+                        new ToolContext("controller-a", "brain-a", "companion-capped");
+                ToolContext secondSession =
+                        new ToolContext("controller-b", "brain-b", "companion-capped");
+                ToolContext otherCompanion =
+                        new ToolContext("controller-c", "brain-c", "companion-other");
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"companion-admission",
+                         "inputs":{"index":{"type":"integer","required":true}},
+                         "permissions":["READ_WORLD"],
+                         "root":{"id":"observe","type":"call_tool","tool":"test.observe",
+                          "arguments":{"index":"${inputs.index}"}}}
+                        """);
+                for (int index = 0; index < TaskGraphRuntime.MAX_ADMITTED_PER_COMPANION; index++) {
+                    ToolContext context = index < TaskGraphRuntime.MAX_ADMITTED_PER_BRAIN_SESSION
+                            ? firstSession : secondSession;
+                    ToolResult accepted = runtime.start(context,
+                            new ToolCall("companion-cap-" + index, "task_graph.execute", Json.object()),
+                            graph, Json.object().put("index", index), Json.object());
+                    assertTrue(accepted.success(), accepted.toString());
+                }
+                assertTrue(gateway.firstWorkersEntered.await(2, TimeUnit.SECONDS));
+                ToolResult rejected = runtime.start(secondSession,
+                        new ToolCall("companion-cap-overflow", "task_graph.execute", Json.object()),
+                        graph, Json.object().put("index", 10_000), Json.object());
+                assertFalse(rejected.success());
+                assertEquals("ADMISSION_REJECTED", rejected.code());
+                assertTrue(repository.get("companion-cap-overflow").isEmpty());
+
+                ToolResult reserved = runtime.start(otherCompanion,
+                        new ToolCall("other-companion", "task_graph.execute", Json.object()),
+                        graph, Json.object().put("index", 20_000), Json.object());
+                assertTrue(reserved.success(), reserved.toString());
+
+                gateway.release.countDown();
+                for (int index = 0; index < TaskGraphRuntime.MAX_ADMITTED_PER_COMPANION; index++) {
+                    ToolContext context = index < TaskGraphRuntime.MAX_ADMITTED_PER_BRAIN_SESSION
+                            ? firstSession : secondSession;
+                    ToolCall call =
+                            new ToolCall("companion-cap-" + index, "task_graph.execute", Json.object());
+                    assertTrue(runtime.await(context, call, Duration.ofSeconds(10), ignored -> { }).success());
+                }
+                ToolCall otherCall =
+                        new ToolCall("other-companion", "task_graph.execute", Json.object());
+                assertTrue(runtime.await(
+                        otherCompanion, otherCall, Duration.ofSeconds(10), ignored -> { }).success());
             } finally {
                 gateway.release.countDown();
             }

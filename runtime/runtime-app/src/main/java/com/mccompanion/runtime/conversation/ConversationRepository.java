@@ -248,6 +248,20 @@ public final class ConversationRepository {
         return List.copyOf(values);
     }
 
+    /** Exact latest owner-authored message for evidence-bound automatic preference capture. */
+    public Optional<ConversationEvent> latestUserMessage(String companionId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT * FROM conversation_event
+                WHERE companion_id=? AND direction='USER' AND kind='MESSAGE'
+                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                """)) {
+            statement.setString(1, required(companionId));
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(readEvent(result)) : Optional.empty();
+            }
+        }
+    }
+
     public List<ConversationEvent> pendingGameDelivery(String companionId, int limit) throws SQLException {
         int bounded = Math.max(1, Math.min(limit, 50));
         List<ConversationEvent> values = new ArrayList<>();

@@ -15,6 +15,7 @@ rootProject.name = 'minecraft-ai-companion'
 
 include 'protocol:protocol-model'
 include 'core:pure-core'
+include 'compatibility:compatibility-host'
 include 'runtime:runtime-app'
 include 'terminal:launcher-api'
 include 'terminal:launcher-generic'

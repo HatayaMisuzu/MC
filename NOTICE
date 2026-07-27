@@ -1,0 +1,12 @@
+Minecraft AI Companion (MCAC)
+Copyright (c) 2026 Minecraft AI Companion contributors.
+
+MCAC is distributed under the evaluation terms in LICENSE.
+
+The binary distribution contains third-party components under their respective licenses. The
+release SBOM (`sbom.spdx.json`) is the authoritative component, version, package URL and declared
+license inventory for the exact release payload. `SOURCE_PROVENANCE.yml` records upstream sources
+used by the project.
+
+Minecraft is a trademark of Microsoft Corporation. MCAC is an independent project and is not
+affiliated with or endorsed by Microsoft or Mojang Studios.

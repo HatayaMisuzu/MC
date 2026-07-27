@@ -16,7 +16,16 @@ java.toolchain.languageVersion = JavaLanguageVersion.of(17)
 
 sourceSets.main.java.srcDir('../platform-bootstrap-common/src/main/java')
 sourceSets.main.java.srcDir('../platform-1.20.1-common/src/main/java')
+sourceSets.main.java.srcDir('../navigation-common/src/main/java')
 sourceSets.main.resources.srcDir('src/generated/resources')
+sourceSets {
+    gameTestMod {
+        java.setSrcDirs(['src/gametestmod/java'])
+        resources.setSrcDirs(['src/gametestmod/resources'])
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
 
 repositories {
     mavenCentral()
@@ -24,6 +33,7 @@ repositories {
 
 legacyForge {
     version = "${project.minecraft_version}-${project.forge_version}"
+    addModdingDependenciesTo sourceSets.gameTestMod
 
     parchment {
         mappingsVersion = project.parchment_mappings_version
@@ -36,11 +46,15 @@ legacyForge {
             gameDirectory = project.file('build/launch-test/server')
             programArgument '--nogui'
             systemProperty 'forge.enabledGameTestNamespaces', project.mod_id
+            systemProperty 'mccompanion.persistence.probe',
+                    "${project.findProperty('mccompanionPersistenceProbe') ?: ''}"
         }
         gameTestServer {
             type = "gameTestServer"
             gameDirectory = project.file('build/gametest')
             systemProperty 'forge.enabledGameTestNamespaces', "${project.mod_id},minecraft"
+            systemProperty 'mccompanion.runtime.e2e',
+                    "${project.findProperty('mccompanionRuntimeE2E') ?: 'false'}"
         }
     }
 
@@ -48,12 +62,41 @@ legacyForge {
         "${mod_id}" {
             sourceSet(sourceSets.main)
         }
+        mcac_unknown_fixture {
+            sourceSet(sourceSets.gameTestMod)
+        }
     }
 }
 
 dependencies {
+    // RuntimeBridge is production code. Embed the JSON stack in the distributable Forge Mod and
+    // add it explicitly to ModDev runs because plain Java libraries are not auto-loaded as mods.
+    jarJar(implementation('com.fasterxml.jackson.core:jackson-databind:2.18.3')) {
+        version {
+            strictly '[2.18.3,2.19)'
+            prefer '2.18.3'
+        }
+    }
+    jarJar(implementation('com.fasterxml.jackson.core:jackson-core:2.18.3')) {
+        version {
+            strictly '[2.18.3,2.19)'
+            prefer '2.18.3'
+        }
+    }
+    jarJar(implementation('com.fasterxml.jackson.core:jackson-annotations:2.18.3')) {
+        version {
+            strictly '[2.18.3,2.19)'
+            prefer '2.18.3'
+        }
+    }
+    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-core:2.18.3'
+    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-annotations:2.18.3'
+
     implementation "com.mccompanion:pure-core:${mod_version}"
     implementation "com.mccompanion:protocol-model:${mod_version}"
+    gameTestModImplementation sourceSets.main.output
+    gameTestModImplementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
 }
 
 def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
@@ -104,3 +147,15 @@ publishing {
 }
 
 apply from: rootProject.file('../gradle/launch-test.gradle')
+
+tasks.named('runGameTestServer').configure {
+    doFirst {
+        if (!project.hasProperty('mccompanionRuntimeE2E')) {
+            delete file('build/gametest')
+        }
+        file('build/gametest').mkdirs()
+        file('build/gametest/server.properties').setText(
+                'online-mode=false\nlevel-name=world\nspawn-protection=0\n', 'UTF-8')
+        file('build/gametest/eula.txt').setText('eula=true\n', 'UTF-8')
+    }
+}

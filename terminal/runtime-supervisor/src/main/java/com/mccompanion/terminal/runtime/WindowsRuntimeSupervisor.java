@@ -10,18 +10,30 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.Optional;
 
 public final class WindowsRuntimeSupervisor {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String PROTOCOL = "mc-companion/1";
+    private static final Duration OPERATION_LOCK_TIMEOUT = Duration.ofSeconds(10);
+    private static final ConcurrentHashMap<Path, ReentrantLock> JVM_LOCKS = new ConcurrentHashMap<>();
 
     public Process start(RuntimeProfile profile) throws IOException {
+        return withProfileOperation(profile, "start", OPERATION_LOCK_TIMEOUT,
+                () -> startLocked(profile));
+    }
+
+    private Process startLocked(RuntimeProfile profile) throws IOException {
         Optional<Long> active = activePid(profile);
         if (active.isPresent()) {
             RuntimeHealth health=status(profile);
@@ -167,6 +179,13 @@ public final class WindowsRuntimeSupervisor {
         }
     }
     public void stop(RuntimeProfile profile) throws IOException {
+        withProfileOperation(profile, "stop", OPERATION_LOCK_TIMEOUT, () -> {
+            stopLocked(profile);
+            return null;
+        });
+    }
+
+    private void stopLocked(RuntimeProfile profile) throws IOException {
         Optional<Long> pid = activePid(profile);
         if (pid.isEmpty()) { Files.deleteIfExists(profile.pidFile()); return; }
         RuntimeHealth health = status(profile);
@@ -183,6 +202,78 @@ public final class WindowsRuntimeSupervisor {
             throw new IOException("Runtime process stopped but its local ports were not released");
         }
     }
+
+    static <T> T withProfileOperation(RuntimeProfile profile, String operation, Duration timeout,
+                                      IoOperation<T> action) throws IOException {
+        if (profile == null || operation == null || operation.isBlank() || operation.length() > 32
+                || timeout == null || timeout.isNegative() || timeout.isZero() || action == null) {
+            throw new IllegalArgumentException("invalid Runtime profile operation lock request");
+        }
+        Path directory = profile.profileDirectory().toAbsolutePath().normalize();
+        Files.createDirectories(directory);
+        Path lockPath = directory.resolve(".runtime-operation.lock");
+        Path ownerPath = directory.resolve(".runtime-operation.owner.json");
+        ReentrantLock local = JVM_LOCKS.computeIfAbsent(lockPath, ignored -> new ReentrantLock(true));
+        long deadline = System.nanoTime() + timeout.toNanos();
+        boolean localHeld = false;
+        try {
+            long localWait = Math.max(1L, deadline - System.nanoTime());
+            localHeld = local.tryLock(localWait, TimeUnit.NANOSECONDS);
+            if (!localHeld) throw busy(ownerPath);
+            try (FileChannel channel = FileChannel.open(lockPath,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                FileLock processLock = null;
+                while (processLock == null && System.nanoTime() < deadline) {
+                    try {
+                        processLock = channel.tryLock();
+                    } catch (java.nio.channels.OverlappingFileLockException heldInProcess) {
+                        processLock = null;
+                    }
+                    if (processLock == null) Thread.sleep(50);
+                }
+                if (processLock == null) throw busy(ownerPath);
+                FileLock acquired = processLock;
+                try (acquired) {
+                    Files.writeString(ownerPath, JSON.createObjectNode()
+                                    .put("pid", ProcessHandle.current().pid())
+                                    .put("operation", operation)
+                                    .put("acquiredAt", Instant.now().toString()).toString(),
+                            StandardCharsets.UTF_8, StandardOpenOption.CREATE,
+                            StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+                    try {
+                        return action.run();
+                    } finally {
+                        Files.deleteIfExists(ownerPath);
+                    }
+                }
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Runtime profile operation lock was interrupted", interrupted);
+        } finally {
+            if (localHeld) local.unlock();
+            if (!local.isLocked() && !local.hasQueuedThreads()) JVM_LOCKS.remove(lockPath, local);
+        }
+    }
+
+    private static IOException busy(Path ownerPath) {
+        String owner = "another local process";
+        try {
+            JsonNode value = JSON.readTree(Files.readString(ownerPath, StandardCharsets.UTF_8));
+            long pid = value.path("pid").asLong(-1);
+            String operation = value.path("operation").asText("unknown");
+            if (pid > 0) owner = "PID " + pid + " (" + operation + ')';
+        } catch (Exception ignored) {
+            // The OS file lock remains authoritative when metadata is missing or stale.
+        }
+        return new IOException("Runtime profile operation is busy: " + owner);
+    }
+
+    @FunctionalInterface
+    interface IoOperation<T> {
+        T run() throws IOException;
+    }
+
     private record HealthIdentity(String runtimeVersion,String protocolVersion,String profileId,String instanceId,
                                   int port,int managementPort,long pid,int sessionCount){}
     public record RuntimeHealth(Long pid,boolean pidAlive,boolean processIdentityMatches,boolean portOnline,

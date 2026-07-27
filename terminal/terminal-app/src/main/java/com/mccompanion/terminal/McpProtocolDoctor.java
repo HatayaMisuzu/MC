@@ -37,41 +37,46 @@ final class McpProtocolDoctor {
             JsonNode initialized = initializedResponse.body();
             String version = initialized.path("result").path("protocolVersion").asText("");
             if (!VERSION.equals(version) || !initialized.path("result").path("capabilities").has("tools")) {
-                return new Result(false, version, 0, false, false, false, "MCP initialize negotiation is incompatible");
+                return new Result(false, version, 0, false, false, false, false,
+                        "MCP initialize negotiation is incompatible");
             }
 
             ObjectNode list = JSON.createObjectNode().put("jsonrpc", "2.0").put("id", "doctor-list")
                     .put("method", "tools/list");
             list.set("params", JSON.createObjectNode());
             if (initializedResponse.sessionId() == null || initializedResponse.sessionId().isBlank()) {
-                return new Result(false, version, 0, false, false, false, "MCP initialize returned no session id");
+                return new Result(false, version, 0, false, false, false, false,
+                        "MCP initialize returned no session id");
             }
             JsonNode listed = post(http, endpoint, token, list, initializedResponse.sessionId()).body();
             JsonNode tools = listed.path("result").path("tools");
-            if (!tools.isArray()) return new Result(false, version, 0, false, false, false,
+            if (!tools.isArray()) return new Result(false, version, 0, false, false, false, false,
                     "MCP tools/list returned no tool array");
             boolean observe = false;
             boolean registry = false;
             boolean capsules = false;
             boolean candidates = false;
+            boolean navigation = false;
             for (JsonNode tool : tools) {
                 String name = tool.path("name").asText("");
                 if (isForbiddenToolName(name)) {
-                    return new Result(false, version, tools.size(), false, false, false,
+                    return new Result(false, version, tools.size(), false, false, false, false,
                             "MCP exposed forbidden tool: " + name);
                 }
                 if (name.equals("world.observe")) observe = true;
                 if (name.equals("registry.search")) registry = true;
                 if (name.equals("memory.episode_capsules")) capsules = true;
                 if (name.equals("memory.suggest")) candidates = true;
+                if (name.equals("movement.navigate")) navigation = true;
                 if (!tool.path("inputSchema").isObject()) {
-                    return new Result(false, version, tools.size(), false, false, false,
+                    return new Result(false, version, tools.size(), false, false, false, false,
                             "MCP tool schema is invalid: " + name);
                 }
             }
             if (!observe) return new Result(false, version, tools.size(), registry, capsules, candidates,
+                    navigation,
                     "MCP world.observe is unavailable");
-            return new Result(true, version, tools.size(), registry, capsules, candidates,
+            return new Result(true, version, tools.size(), registry, capsules, candidates, navigation,
                     "MCP initialize and bounded tools/list passed");
         } catch (Exception unavailable) {
             return Result.unavailable("MCP probe failed: " + unavailable.getClass().getSimpleName());
@@ -105,9 +110,10 @@ final class McpProtocolDoctor {
     private record Response(JsonNode body, String sessionId) { }
 
     record Result(boolean healthy, String protocolVersion, int toolCount, boolean genericRegistry,
-                  boolean episodeCapsules, boolean memoryCandidateSubmission, String detail) {
+                  boolean episodeCapsules, boolean memoryCandidateSubmission, boolean globalNavigation,
+                  String detail) {
         private static Result unavailable(String detail) {
-            return new Result(false, "unavailable", 0, false, false, false, detail);
+            return new Result(false, "unavailable", 0, false, false, false, false, detail);
         }
     }
 }

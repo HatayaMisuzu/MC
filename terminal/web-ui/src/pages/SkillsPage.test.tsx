@@ -23,6 +23,11 @@ vi.mock('../hooks/useResource', () => ({
       provenance: {}, validation: { valid: true }, status: 'PENDING_REVIEW',
       controllerId: 'hermes', brainSessionId: 'b1', createdAt: '', updatedAt: '',
       }],
+      trials: [{ leaseId: 'lease-1', profileId: 'profile', companionId: 'c1',
+        controllerId: 'hermes', brainSessionId: 'b1', skillId: 'trial_skill', format: 'yaml',
+        sha256: '1234567890abcdef', tools: ['world.query'], permissions: ['READ_WORLD'],
+        limits: { maxToolCalls: 4 }, status: 'AVAILABLE', remainingUses: 1,
+        expiresAt: '2026-07-26T12:00:00Z', evidence: {}, createdAt: '', updatedAt: '' }],
     }, refresh: vi.fn(() => Promise.resolve()),
   }),
 }))
@@ -34,7 +39,7 @@ it('reviews a quarantined declarative Skill through the local management path', 
   render(<SkillsPage />)
   expect(screen.getByText('safe_skill')).toBeVisible()
   expect(screen.getByText('defend_owner')).toBeVisible()
-  expect(screen.getByText(/READ_WORLD/)).toBeVisible()
+  expect(screen.getAllByText(/READ_WORLD/)).toHaveLength(2)
   fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
   expect(post).toHaveBeenCalledWith('/api/skills/manage', {
     instanceId: 'instance-1', companionId: 'c1', action: 'approve',
@@ -44,5 +49,10 @@ it('reviews a quarantined declarative Skill through the local management path', 
   expect(post).toHaveBeenCalledWith('/api/skills/manage', {
     instanceId: 'instance-1', companionId: 'c1', action: 'restore_draft',
     skillId: 'safe_skill', format: 'yaml', version: 2,
+  })
+  expect(screen.getByText('trial_skill')).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Revoke trial now' }))
+  expect(post).toHaveBeenCalledWith('/api/skills/manage', {
+    instanceId: 'instance-1', companionId: 'c1', action: 'revoke_trial', leaseId: 'lease-1',
   })
 })

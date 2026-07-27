@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { useI18n } from '../i18n/I18nContext'
 
 interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
   tone?: 'primary' | 'secondary' | 'danger' | 'ghost'
@@ -7,10 +8,9 @@ interface Props extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 export function ActionButton({ tone = 'secondary', loading, icon, children, ...props }: Props) {
-  return (
-    <button className={`button button--${tone}`} disabled={loading || props.disabled} {...props}>
-      {loading ? <span className="spinner" aria-hidden /> : icon}
-      <span>{loading ? '处理中…' : children}</span>
-    </button>
-  )
+  const { t } = useI18n()
+  return <button className={`button button--${tone}`} disabled={loading || props.disabled} {...props}>
+    {loading ? <span className="spinner" aria-hidden /> : icon}
+    <span>{loading ? t('common.processing') : children}</span>
+  </button>
 }

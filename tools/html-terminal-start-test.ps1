@@ -3,6 +3,8 @@ param([Parameter(Mandatory = $true)][string]$ReleaseDir)
 $ErrorActionPreference = 'Stop'
 $release = (Resolve-Path -LiteralPath $ReleaseDir).Path
 $state = Join-Path $env:TEMP ('mcac-html-state-' + [Guid]::NewGuid().ToString('N') + '.json')
+$testLocalAppData = Join-Path $env:TEMP ('mcac-html-localappdata-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $testLocalAppData | Out-Null
 $start = [Diagnostics.ProcessStartInfo]::new()
 $start.FileName = Join-Path $release 'mcac.exe'
 $start.WorkingDirectory = $env:TEMP
@@ -10,6 +12,7 @@ $start.UseShellExecute = $false
 $start.Environment['MCAC_NO_BROWSER'] = 'true'
 $start.Environment['MCAC_WEB_STATE_FILE'] = $state
 $start.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
+$start.Environment['LOCALAPPDATA'] = $testLocalAppData
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $start
 if (-not $process.Start()) { throw 'Unable to start mcac.exe HTML terminal' }
@@ -29,6 +32,7 @@ try {
     $secondStart.UseShellExecute = $false
     $secondStart.Environment['MCAC_NO_BROWSER'] = 'true'
     $secondStart.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
+    $secondStart.Environment['LOCALAPPDATA'] = $testLocalAppData
     $second = [Diagnostics.Process]::Start($secondStart)
     Write-Output 'Second mcac.exe started for reuse check.'
     if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) {
@@ -73,7 +77,7 @@ finally {
         $process.WaitForExit(5000) | Out-Null
     }
     Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath (Join-Path $env:LOCALAPPDATA 'MinecraftAICompanion\html-terminal-current.json') -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Output 'HTML terminal first-start test passed from an arbitrary working directory.'

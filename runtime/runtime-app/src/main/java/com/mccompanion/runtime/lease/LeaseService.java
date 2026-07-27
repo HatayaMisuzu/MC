@@ -187,6 +187,46 @@ public final class LeaseService {
         return processLeases.values().stream().filter(lease -> lease.expiresAt().isAfter(now)).toList();
     }
 
+    /**
+     * Advances the durable epoch floor from an authenticated Mod status snapshot.
+     *
+     * <p>The Minecraft saved data can be newer than a restored Runtime database. Absorbing that
+     * floor prevents the Runtime from replaying an epoch that the Mod has already observed. A
+     * locally cached lease below the reported floor has lost authority and is revoked.</p>
+     */
+    public synchronized void observeRemoteEpoch(String companionId, long observedEpoch) throws SQLException {
+        validateIdentifier(companionId, "companionId");
+        if (observedEpoch <= 0L) {
+            return;
+        }
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                try (PreparedStatement update = connection.prepareStatement("""
+                        INSERT INTO control_epoch(companion_id, last_epoch) VALUES (?, ?)
+                        ON CONFLICT(companion_id) DO UPDATE SET
+                          last_epoch=MAX(control_epoch.last_epoch, excluded.last_epoch)
+                        """)) {
+                    update.setString(1, companionId);
+                    update.setLong(2, observedEpoch);
+                    update.executeUpdate();
+                }
+                try (PreparedStatement revoke = connection.prepareStatement(
+                        "DELETE FROM control_lease WHERE companion_id=? AND epoch<?")) {
+                    revoke.setString(1, companionId);
+                    revoke.setLong(2, observedEpoch);
+                    revoke.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            }
+        }
+        processLeases.computeIfPresent(companionId, (ignored, current) ->
+                current.epoch() < observedEpoch ? null : current);
+    }
+
     /** Revokes the local runtime's lease without requiring a bearer token from a disconnected peer. */
     public synchronized void revoke(String companionId) throws SQLException {
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(

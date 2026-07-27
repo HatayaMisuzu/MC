@@ -7,7 +7,10 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
+import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.world.InteractionResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,6 +47,18 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
         ServerLifecycleEvents.SERVER_STARTED.register(MinecraftAiCompanionFabric::onServerStarted);
         ServerTickEvents.END_SERVER_TICK.register(MinecraftAiCompanionFabric::onServerTick);
         ServerLifecycleEvents.SERVER_STOPPING.register(MinecraftAiCompanionFabric::onServerStopping);
+        UseBlockCallback.EVENT.register((player, world, hand, hit) -> {
+            if (player instanceof net.minecraft.server.level.ServerPlayer owner) {
+                notifyOwnerBlockActivity(owner, hit.getBlockPos(), "BLOCK_USE");
+            }
+            return InteractionResult.PASS;
+        });
+        PlayerBlockBreakEvents.BEFORE.register((world, player, position, state, blockEntity) -> {
+            if (player instanceof net.minecraft.server.level.ServerPlayer owner) {
+                notifyOwnerBlockActivity(owner, position, "BLOCK_BREAK");
+            }
+            return true;
+        });
         LOGGER.info("Minecraft AI Companion Fabric initialized; Runtime is optional and local companion control remains available offline");
         LOGGER.info("capability_report={}", CAPABILITIES.toJson());
     }
@@ -91,5 +106,20 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
         return bridge == null
                 ? new CompanionCommands.TextRequestResult(false, "Runtime 未连接；状态、暂停、继续和取消仍可使用本地命令。")
                 : bridge.submitPlayerText(owner, text);
+    }
+
+    private static void notifyOwnerBlockActivity(net.minecraft.server.level.ServerPlayer owner,
+                                                 net.minecraft.core.BlockPos position,
+                                                 String activityType) {
+        RuntimeBridge bridge = runtimeBridge;
+        if (bridge != null) bridge.submitOwnerBlockActivity(owner, position, activityType);
+    }
+
+    /** Test-only bridge entry that exercises the same bounded event path as real player callbacks. */
+    public static void integrationSubmitOwnerBlockActivity(
+            net.minecraft.server.level.ServerPlayer owner,
+            net.minecraft.core.BlockPos position,
+            String activityType) {
+        notifyOwnerBlockActivity(owner, position, activityType);
     }
 }

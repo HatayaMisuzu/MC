@@ -3,6 +3,7 @@ java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 tasks.withType(JavaCompile).configureEach { options.release = 21; options.encoding = 'UTF-8' }
 application { mainClass = 'com.mccompanion.terminal.ControlTerminalMain'; applicationName = 'mcac' }
 dependencies {
+    implementation project(':compatibility:compatibility-host')
     implementation project(':terminal:launcher-api')
     implementation project(':terminal:launcher-generic')
     implementation project(':terminal:launcher-pcl2')
@@ -13,6 +14,7 @@ dependencies {
     implementation project(':terminal:runtime-supervisor')
     implementation 'info.picocli:picocli:4.7.7'
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.18.3'
     implementation 'org.xerial:sqlite-jdbc:3.49.1.0'
     // The portable image merges Terminal and Runtime libraries into one launcher input.
     // Use the same provider as Runtime so jpackage cannot select NOP ahead of the

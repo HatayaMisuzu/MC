@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.mccompanion.protocol.CapabilitySet;
 import com.mccompanion.protocol.CompanionBodyState;
 import com.mccompanion.protocol.CompanionStatus;
@@ -39,6 +40,24 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class RuntimeToolGatewayTest {
     @TempDir Path temporary;
+
+    @Test
+    void ownerActivityMatchesOnlyTheExactActiveWorldTarget() {
+        JsonNode payload = Json.object().put("capability", "InteractBlock");
+        ((com.fasterxml.jackson.databind.node.ObjectNode) payload).set("parameters",
+                Json.object().set("target", Json.object()
+                        .put("dimension", "minecraft:overworld").put("x", 4).put("y", 64).put("z", -2)));
+        JsonNode same = Json.object().put("activityType", "BLOCK_USE")
+                .set("position", Json.object().put("dimension", "minecraft:overworld")
+                        .put("x", 4).put("y", 64).put("z", -2));
+        JsonNode other = Json.object().put("activityType", "BLOCK_USE")
+                .set("position", Json.object().put("dimension", "minecraft:overworld")
+                        .put("x", 5).put("y", 64).put("z", -2));
+        assertTrue(RuntimeToolGateway.activityMatchesPayload(payload, same));
+        assertFalse(RuntimeToolGateway.activityMatchesPayload(payload, other));
+        assertFalse(RuntimeToolGateway.activityMatchesPayload(payload,
+                Json.object().put("activityType", "CHAT").set("position", same.path("position"))));
+    }
 
     @Test
     void exposesOnlyAvailableToolsAndReturnsVerifiedWorldObservation() throws Exception {
@@ -678,6 +697,24 @@ class RuntimeToolGatewayTest {
                 assertFalse(blocked.success());
                 assertEquals("TOOL_BLOCKED", blocked.code());
                 assertEquals("BLOCKED", blocked.observation().path("state").asText());
+
+                var uncertainTask = tasks.create("c-uncertain", TaskType.TRAVEL, "uncertain", Json.object());
+                uncertainTask = tasks.transition(uncertainTask.taskId(), uncertainTask.revision(), TaskState.ACCEPTED,
+                        "CommandAccepted", Json.object());
+                uncertainTask = tasks.transition(uncertainTask.taskId(), uncertainTask.revision(), TaskState.PAUSED,
+                        "BehaviorBlocked", Json.object().put("code", "UNCERTAIN_EFFECT")
+                                .set("snapshot", Json.object().put("failureCode", "UNCERTAIN_EFFECT")));
+                ToolCall uncertainCall = new ToolCall("navigate-uncertain", "movement.navigate", Json.object());
+                ToolResult uncertainAccepted = new ToolResult(uncertainCall.callId(), uncertainCall.name(), true,
+                        "COMMAND_DISPATCHED", Json.object().put("taskId", uncertainTask.taskId()), false);
+                ToolResult uncertain = gateway.awaitTerminal(
+                        new ToolContext("hermes", "session-uncertain", "c-uncertain"),
+                        uncertainCall, uncertainAccepted, Duration.ofSeconds(2), ignored -> { });
+                assertFalse(uncertain.success());
+                assertTrue(uncertain.terminal());
+                assertEquals("UNCERTAIN_EFFECT", uncertain.code());
+                assertEquals("UNCERTAIN_EFFECT", uncertain.observation()
+                        .path("fabricObservation").path("code").asText());
 
                 for (TaskState immediate : List.of(TaskState.PAUSED, TaskState.RECONCILIATION_REQUIRED)) {
                     String id = immediate.name().toLowerCase(java.util.Locale.ROOT);

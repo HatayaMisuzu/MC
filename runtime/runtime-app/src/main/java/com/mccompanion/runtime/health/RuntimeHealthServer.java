@@ -45,18 +45,36 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.Duration;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Loopback-only authenticated management endpoint used to prove Runtime identity and readiness. */
 public final class RuntimeHealthServer implements AutoCloseable {
+    static final int MANAGEMENT_THREADS = 16;
+    static final int MANAGEMENT_QUEUE_CAPACITY = 64;
+    static final int PLANNING_THREADS = 2;
+    static final int PLANNING_QUEUE_CAPACITY = 16;
+    static final int SYNCHRONOUS_MCP_LIMIT = 8;
+    static final int STREAMING_MCP_LIMIT = 4;
+    public static final int ORDINARY_JSON_LIMIT = 128 * 1024;
+    public static final int MCP_JSON_LIMIT = 1024 * 1024;
+    public static final int BRAIN_JSON_LIMIT = 16 * 1024;
+    static final int BODY_READ_LIMIT = 8;
+    static final Duration BODY_READ_TIMEOUT = Duration.ofSeconds(5);
     private final RuntimeConfig config;
     private final String pairingToken;
     private final SessionRegistry sessions;
@@ -84,6 +102,10 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final HttpServer server;
     private final ExecutorService executor;
     private final ExecutorService planningExecutor;
+    private final Semaphore synchronousMcpPermits = new Semaphore(SYNCHRONOUS_MCP_LIMIT, true);
+    private final Semaphore streamingMcpPermits = new Semaphore(STREAMING_MCP_LIMIT, true);
+    private final Semaphore bodyReadPermits = new Semaphore(BODY_READ_LIMIT, true);
+    private final ExecutorService bodyReadExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public RuntimeHealthServer(
             RuntimeConfig config,
@@ -165,17 +187,20 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/skills", this::skillManagement);
         server.createContext("/mcp", this::mcp);
         server.createContext("/search/sessions", this::searchSessions);
-        executor = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-runtime-management");
-            thread.setDaemon(true);
-            return thread;
-        });
-        planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-runtime-planning");
-            thread.setDaemon(true);
-            return thread;
-        });
+        executor = boundedPool(MANAGEMENT_THREADS, MANAGEMENT_QUEUE_CAPACITY,
+                "mc-companion-runtime-management");
+        planningExecutor = boundedPool(PLANNING_THREADS, PLANNING_QUEUE_CAPACITY,
+                "mc-companion-runtime-planning");
         server.setExecutor(executor);
+    }
+
+    static ExecutorService boundedPool(int threads, int queueCapacity, String name) {
+        return new ThreadPoolExecutor(threads, threads, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(queueCapacity, true), runnable -> {
+                    Thread thread = new Thread(runnable, name);
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private void searchSessions(HttpExchange exchange) throws IOException {
@@ -220,13 +245,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
                 return;
             }
-            JsonNode request;
-            try {
-                request = Json.MAPPER.readTree(exchange.getRequestBody());
-            } catch (IOException | RuntimeException invalid) {
-                sendJson(exchange, 200, mcpError(null, -32700, "Parse error"));
-                return;
-            }
+            JsonNode request = readJsonOrRespond(exchange, MCP_JSON_LIMIT, true);
+            if (request == null) return;
             JsonNode id = request == null ? null : request.get("id");
             if (request == null || !request.isObject() || !"2.0".equals(request.path("jsonrpc").asText())
                     || !request.path("method").isTextual()) {
@@ -377,11 +397,21 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ToolCall call = new ToolCall(callId, name, arguments);
         ToolResult replayed = acquireMcpCall(call);
         if (replayed != null) return mcpToolResult(replayed);
-        ToolResult accepted = toolGateway.execute(context, call);
-        ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
-                context, call, accepted, Duration.ofSeconds(30), ignored -> { });
-        completeMcpCall(call, terminal);
-        return mcpToolResult(terminal);
+        if (!synchronousMcpPermits.tryAcquire()) {
+            ToolResult rejected = ToolResult.rejected(call, "RUNTIME_BUSY",
+                    "synchronous MCP execution capacity is saturated");
+            completeMcpCall(call, rejected);
+            return mcpToolResult(rejected);
+        }
+        try {
+            ToolResult accepted = toolGateway.execute(context, call);
+            ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
+                    context, call, accepted, Duration.ofSeconds(30), ignored -> { });
+            completeMcpCall(call, terminal);
+            return mcpToolResult(terminal);
+        } finally {
+            synchronousMcpPermits.release();
+        }
     }
 
     private void mcpToolCallSse(HttpExchange exchange, JsonNode params, JsonNode requestId)
@@ -393,6 +423,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ToolCall call = new ToolCall(mcpCallId(exchange, context, requestId), name, arguments);
         JsonNode progressToken = params.path("_meta").get("progressToken");
         ToolResult replayed = acquireMcpCall(call);
+        boolean permit = replayed != null || streamingMcpPermits.tryAcquire();
         exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
         exchange.getResponseHeaders().set("Cache-Control", "no-cache");
         exchange.sendResponseHeaders(200, 0);
@@ -400,6 +431,14 @@ public final class RuntimeHealthServer implements AutoCloseable {
             if (replayed != null) {
                 writeDurableSse(exchange, output, call,
                         mcpResult(requestId, mcpToolResult(replayed)), true);
+                return;
+            }
+            if (!permit) {
+                ToolResult rejected = ToolResult.rejected(call, "RUNTIME_BUSY",
+                        "streaming MCP execution capacity is saturated");
+                completeMcpCall(call, rejected);
+                writeDurableSse(exchange, output, call,
+                        mcpResult(requestId, mcpToolResult(rejected)), true);
                 return;
             }
             try {
@@ -433,6 +472,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
             toolGateway.cancel(context, call.callId(), "MCP_EVENT_PERSISTENCE_FAILED");
             quarantineMcpCall(call);
             log.error("MCP SSE event persistence failed closed", persistenceFailure.getCause());
+        } finally {
+            if (replayed == null && permit) streamingMcpPermits.release();
         }
     }
 
@@ -637,7 +678,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
             });
         } catch (RejectedExecutionException rejected) {
             try (exchange) {
-                sendJson(exchange, 503, Json.object().put("code", "RUNTIME_STOPPING"));
+                sendJson(exchange, 503, Json.object().put("code",
+                        planningExecutor.isShutdown() ? "RUNTIME_STOPPING" : "RUNTIME_BUSY"));
             }
         }
     }
@@ -673,25 +715,49 @@ public final class RuntimeHealthServer implements AutoCloseable {
                                     memories.suggestions(companionId, "QUARANTINED", 100)));
                             body.set("episodeCapsules", Json.MAPPER.valueToTree(
                                     memories.capsules().list(companionId, 20)));
+                            body.set("settings", Json.MAPPER.valueToTree(memories.settings(companionId)));
+                            body.set("history", Json.MAPPER.valueToTree(memories.history(companionId, 100)));
+                            body.set("safeSummary", memories.safeSummary(companionId));
                         }
                     }
                     sendJson(exchange, 200, body); return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                    if (request == null) return;
                     String action = request.path("action").asText("");
                     if (!action.isBlank()) {
-                        String suggestionId = requiredText(request, "suggestionId", 256);
                         Object result = switch (action) {
                             case "generate_episode_capsule" -> memories.capsules().generate(
                                     companionId, requiredText(request, "brainSessionId", 256),
                                     requiredText(request, "sourceSha", 64));
                             case "approve_suggestion" -> memories.approveSuggestion(
-                                    companionId, suggestionId, "LOCAL_MANAGEMENT_USER");
+                                    companionId, requiredText(request, "suggestionId", 256),
+                                    "LOCAL_MANAGEMENT_USER");
                             case "reject_suggestion" -> memories.rejectSuggestion(
-                                    companionId, suggestionId, "LOCAL_MANAGEMENT_USER",
+                                    companionId, requiredText(request, "suggestionId", 256),
+                                    "LOCAL_MANAGEMENT_USER",
                                     requiredText(request, "reason", 256));
-                            default -> throw new IllegalArgumentException("memory review action is invalid");
+                            case "update_memory" -> {
+                                JsonNode value = request.path("value");
+                                if (value.isMissingNode()) throw new IllegalArgumentException("value is required");
+                                yield memories.updateByUser(companionId,
+                                        requiredText(request, "memoryId", 256), value);
+                            }
+                            case "set_autosave" -> {
+                                if (!request.path("enabled").isBoolean()) {
+                                    throw new IllegalArgumentException("enabled boolean is required");
+                                }
+                                yield memories.setAutoSave(companionId,
+                                        request.path("enabled").asBoolean(), "LOCAL_MANAGEMENT_USER");
+                            }
+                            case "export_safe_summary" -> memories.safeSummary(companionId);
+                            case "delete_memory" -> Json.object().put("deleted", memories.delete(
+                                    companionId, requiredText(request, "memoryId", 256)));
+                            case "clear_kind" -> Json.object().put("deleted", memories.clear(companionId,
+                                    MemoryKind.valueOf(requiredText(request, "kind", 32)
+                                            .toUpperCase(java.util.Locale.ROOT))));
+                            default -> throw new IllegalArgumentException("memory management action is invalid");
                         };
                         sendJson(exchange, 200, Json.MAPPER.valueToTree(result)); return;
                     }
@@ -753,7 +819,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                    if (request == null) return;
                     ToolResult result = taskGraphRuntime.controlForManagement(companionId,
                             requiredText(request, "executionId", 256),
                             requiredText(request, "action", 32));
@@ -794,7 +861,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     return;
                 }
                 if ("POST".equals(exchange.getRequestMethod())) {
-                    JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                    JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                    if (request == null) return;
                     String action = required(request, "action");
                     String companionId = required(request, "companionId");
                     Object result = switch (action) {
@@ -821,6 +889,11 @@ public final class RuntimeHealthServer implements AutoCloseable {
                             yield skillTools.restoreDraftForLocalUser(companionId,
                                     required(request, "skillId"), required(request, "format"),
                                     requiredPositiveLong(request, "version"));
+                        }
+                        case "revoke_trial" -> {
+                            if (skillTools == null) throw new IllegalArgumentException("Skill workspace is unavailable");
+                            yield skillTools.revokeTrialForLocalUser(
+                                    companionId, required(request, "leaseId"));
                         }
                         default -> throw new IllegalArgumentException("skill action is invalid");
                     };
@@ -853,6 +926,40 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private void brain(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;
+            if (exchange.getRequestURI().getPath().equals("/brain/settings")) {
+                String companionId = queryParameter(exchange, "companionId");
+                if (companionId == null || companionId.isBlank()) {
+                    sendJson(exchange, 400, Json.object().put("code", "COMPANION_ID_REQUIRED")); return;
+                }
+                try {
+                    companions.get(companionId)
+                            .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
+                    if ("GET".equals(exchange.getRequestMethod())) {
+                        sendJson(exchange, 200, brainAudit.behaviorSettings(companionId).toJson());
+                        return;
+                    }
+                    if ("POST".equals(exchange.getRequestMethod())) {
+                        JsonNode request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                        if (request == null) return;
+                        var initiative = com.mccompanion.runtime.brain.BrainSemanticState.InitiativeMode.valueOf(
+                                requiredText(request, "initiativeMode", 16));
+                        var personality = com.mccompanion.runtime.brain.BrainSemanticState.PersonalityMode.valueOf(
+                                requiredText(request, "personalityMode", 32));
+                        sendJson(exchange, 200, brainAudit.updateBehaviorSettings(companionId,
+                                initiative, personality, "LOCAL_MANAGEMENT_USER").toJson());
+                        return;
+                    }
+                    exchange.getResponseHeaders().set("Allow", "GET, POST");
+                    sendJson(exchange, 405, Json.object().put("code", "METHOD_NOT_ALLOWED"));
+                } catch (IllegalArgumentException failure) {
+                    sendJson(exchange, 400, Json.object().put("code", "INVALID_BRAIN_SETTINGS")
+                            .put("message", failure.getMessage()));
+                } catch (java.sql.SQLException failure) {
+                    log.error("Unable to manage Brain behavior settings", failure);
+                    sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
+                }
+                return;
+            }
             if (exchange.getRequestURI().getPath().equals("/brain/audit")) {
                 if (!"GET".equals(exchange.getRequestMethod())) { exchange.sendResponseHeaders(405, -1); return; }
                 String companionId = queryParameter(exchange, "companionId");
@@ -883,7 +990,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
-                JsonNode request = Json.MAPPER.readTree(exchange.getRequestBody());
+                JsonNode request = readJsonOrRespond(exchange, BRAIN_JSON_LIMIT, false);
+                if (request == null) return;
                 String controllerId = required(request, "controllerId");
                 String companionId = required(request, "companionId");
                 String text = requiredText(request, "text", 4096);
@@ -930,16 +1038,32 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
                     return;
                 }
+                if (incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION) {
+                    externalBrain.pauseActiveForUserInstruction(controllerId, companionId,
+                            "OWNER_IMMEDIATE_INSTRUCTION");
+                }
                 if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                        && incoming.kind() == IncomingMessageKind.CONTROL) {
+                        && incoming.kind() == IncomingMessageKind.CONTROL
+                        && "cancel".equals(incoming.optionId())) {
                     conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
                     externalBrain.cancel(controllerId, companionId, "OWNER_CANCELLED");
                     sendJson(exchange, 200, Json.object().put("accepted", true).put("code", "BRAIN_CANCELLED"));
                     return;
                 }
-                if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                        && incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                    conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                if (incoming.kind() == IncomingMessageKind.CONTROL
+                        && "pause".equals(incoming.optionId())) {
+                    boolean paused = externalBrain.pauseActiveForUserInstruction(
+                            controllerId, companionId, "OWNER_PAUSED");
+                    sendJson(exchange, 200, Json.object().put("accepted", true)
+                            .put("code", paused ? "BRAIN_TOOL_PAUSE_REQUESTED" : "NO_ACTIVE_TOOL"));
+                    return;
+                }
+                if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                    if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null) {
+                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                        waiting = java.util.Optional.empty();
+                    }
+                    externalBrain.cancel(controllerId, companionId, "OWNER_MODIFIED_GOAL");
                 }
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
                     conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
@@ -1001,7 +1125,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
-                var request = Json.MAPPER.readTree(exchange.getRequestBody());
+                var request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                if (request == null) return;
                 String commandId = required(request, "commandId");
                 String companionId = required(request, "companionId");
                 String text = requiredText(request, "text", 4096);
@@ -1122,7 +1247,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 return;
             }
             try {
-                var request = Json.MAPPER.readTree(exchange.getRequestBody());
+                var request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
+                if (request == null) return;
                 String commandId = required(request, "commandId");
                 String companionId = required(request, "companionId");
                 TaskType type = TaskType.valueOf(required(request, "type"));
@@ -1233,6 +1359,127 @@ public final class RuntimeHealthServer implements AutoCloseable {
         return false;
     }
 
+    private JsonNode readJsonOrRespond(HttpExchange exchange, int maximumBytes, boolean jsonRpc)
+            throws IOException {
+        try {
+            return Json.MAPPER.readTree(readBoundedBody(exchange, maximumBytes));
+        } catch (BodyFailure failure) {
+            sendJson(exchange, failure.status(),
+                    Json.object().put("code", failure.code()).put("message", failure.getMessage())
+                            .put("maximumBytes", maximumBytes));
+            return null;
+        } catch (IOException | RuntimeException invalid) {
+            if (jsonRpc) sendJson(exchange, 200, mcpError(null, -32700, "Parse error"));
+            else sendJson(exchange, 400, Json.object().put("code", "INVALID_JSON"));
+            return null;
+        }
+    }
+
+    private byte[] readBoundedBody(HttpExchange exchange, int maximumBytes)
+            throws IOException, BodyFailure {
+        if (maximumBytes < 1) throw new IllegalArgumentException("maximumBytes must be positive");
+        String encoding = exchange.getRequestHeaders().getFirst("Content-Encoding");
+        if (encoding != null && !encoding.isBlank() && !encoding.equalsIgnoreCase("identity")) {
+            throw new BodyFailure(415, "UNSUPPORTED_CONTENT_ENCODING",
+                    "compressed request bodies are not accepted");
+        }
+        var lengths = exchange.getRequestHeaders().get("Content-Length");
+        var transferEncodings = exchange.getRequestHeaders().get("Transfer-Encoding");
+        if (lengths != null && !lengths.isEmpty()
+                && transferEncodings != null && !transferEncodings.isEmpty()) {
+            throw new BodyFailure(400, "AMBIGUOUS_BODY_LENGTH",
+                    "Content-Length and Transfer-Encoding cannot be combined");
+        }
+        Long declaredLength = null;
+        if (lengths != null && !lengths.isEmpty()) {
+            if (lengths.size() != 1 || lengths.get(0).contains(",")) {
+                throw new BodyFailure(400, "INVALID_CONTENT_LENGTH",
+                        "exactly one Content-Length is required");
+            }
+            try {
+                declaredLength = Long.parseLong(lengths.get(0));
+            } catch (NumberFormatException invalid) {
+                throw new BodyFailure(400, "INVALID_CONTENT_LENGTH",
+                        "Content-Length is not a non-negative integer");
+            }
+            if (declaredLength < 0) {
+                throw new BodyFailure(400, "INVALID_CONTENT_LENGTH",
+                        "Content-Length is not a non-negative integer");
+            }
+            if (declaredLength > maximumBytes) {
+                throw new BodyFailure(413, "PAYLOAD_TOO_LARGE",
+                        "request body exceeds the endpoint byte limit");
+            }
+        }
+        if (!bodyReadPermits.tryAcquire()) {
+            throw new BodyFailure(503, "BODY_READER_BUSY",
+                    "bounded request-body reader capacity is saturated");
+        }
+        Future<byte[]> pending = bodyReadExecutor.submit(
+                () -> readAtMost(exchange.getRequestBody(), maximumBytes));
+        try {
+            byte[] bytes = pending.get(BODY_READ_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            if (declaredLength != null && declaredLength != bytes.length) {
+                throw new BodyFailure(400, "CONTENT_LENGTH_MISMATCH",
+                        "Content-Length does not match the received body");
+            }
+            return bytes;
+        } catch (java.util.concurrent.TimeoutException timeout) {
+            pending.cancel(true);
+            throw new BodyFailure(408, "REQUEST_BODY_TIMEOUT",
+                    "request body was not received within the bounded deadline");
+        } catch (java.util.concurrent.ExecutionException failed) {
+            Throwable cause = failed.getCause();
+            if (cause instanceof BodyFailure bodyFailure) throw bodyFailure;
+            if (cause instanceof IOException ioFailure) throw ioFailure;
+            throw new IOException("request body read failed", cause);
+        } catch (InterruptedException interrupted) {
+            pending.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IOException("request body read interrupted", interrupted);
+        } finally {
+            bodyReadPermits.release();
+        }
+    }
+
+    private static byte[] readAtMost(InputStream input, int maximumBytes)
+            throws IOException, BodyFailure {
+        ByteArrayOutputStream output = new ByteArrayOutputStream(Math.min(maximumBytes, 8192));
+        byte[] buffer = new byte[8192];
+        int total = 0;
+        while (true) {
+            int read = input.read(buffer, 0, Math.min(buffer.length, maximumBytes + 1 - total));
+            if (read < 0) break;
+            if (read == 0) continue;
+            output.write(buffer, 0, read);
+            total += read;
+            if (total > maximumBytes) {
+                throw new BodyFailure(413, "PAYLOAD_TOO_LARGE",
+                        "request body exceeds the endpoint byte limit");
+            }
+        }
+        return output.toByteArray();
+    }
+
+    private static final class BodyFailure extends Exception {
+        private final int status;
+        private final String code;
+
+        private BodyFailure(int status, String code, String message) {
+            super(message);
+            this.status = status;
+            this.code = code;
+        }
+
+        private int status() {
+            return status;
+        }
+
+        private String code() {
+            return code;
+        }
+    }
+
     private static void sendJson(HttpExchange exchange, int status, com.fasterxml.jackson.databind.JsonNode body)
             throws IOException {
         byte[] bytes = Json.write(body).getBytes(StandardCharsets.UTF_8);
@@ -1287,7 +1534,19 @@ public final class RuntimeHealthServer implements AutoCloseable {
     @Override
     public void close() {
         server.stop(0);
-        planningExecutor.shutdownNow();
-        executor.shutdownNow();
+        shutdown(planningExecutor);
+        shutdown(executor);
+        shutdown(bodyReadExecutor);
+    }
+
+    private static void shutdown(ExecutorService service) {
+        service.shutdownNow();
+        try {
+            if (!service.awaitTermination(5, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("Runtime management executor did not terminate");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

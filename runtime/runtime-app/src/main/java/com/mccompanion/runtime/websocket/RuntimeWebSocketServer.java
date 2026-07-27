@@ -50,8 +50,10 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 
 public final class RuntimeWebSocketServer extends WebSocketServer implements AutoCloseable {
     public static final String PROTOCOL = "mc-companion/1";
@@ -130,9 +132,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.clock = clock;
-        this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-player-planner"); thread.setDaemon(true); return thread;
-        });
+        this.planningExecutor = boundedPlanningExecutor();
         setConnectionLostTimeout(30);
         setReuseAddr(true);
     }
@@ -267,6 +267,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 }
             }
             case "player_request" -> handlePlayerRequest(session, payload);
+            case "owner_activity" -> handleOwnerActivity(session, payload);
             case "conversation_delivery_ack" -> acknowledgeConversationDelivery(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }
             default -> sendError(session.peer(), session, "UNKNOWN_MESSAGE_TYPE", "Unsupported message type");
@@ -281,13 +282,59 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         conversations.acknowledgeGameDelivery(companionId, eventId);
     }
 
+    private void handleOwnerActivity(RuntimeSession session, JsonNode payload) {
+        String companionId = required(payload, "companionId");
+        String ownerId = required(payload, "ownerId");
+        String activityType = required(payload, "activityType");
+        if (!java.util.Set.of("BLOCK_USE", "BLOCK_BREAK").contains(activityType)) {
+            throw new IllegalArgumentException("owner activity type is invalid");
+        }
+        JsonNode position = payload.path("position");
+        if (!position.isObject() || !position.path("dimension").isTextual()
+                || !position.path("x").canConvertToInt() || !position.path("y").canConvertToInt()
+                || !position.path("z").canConvertToInt()) {
+            throw new IllegalArgumentException("owner activity position is invalid");
+        }
+        ObjectNode bounded = Json.object().put("activityType", activityType);
+        bounded.set("position", Json.object()
+                .put("dimension", position.path("dimension").asText())
+                .put("x", position.path("x").asInt())
+                .put("y", position.path("y").asInt())
+                .put("z", position.path("z").asInt()));
+        try {
+            planningExecutor.execute(() -> {
+            try {
+                var companion = companions.get(companionId).orElse(null);
+                if (companion == null || !session.companionIds().contains(companionId)
+                        || !ownerId.equals(companion.ownerId()) || externalBrain == null) {
+                    return;
+                }
+                if (externalBrain.yieldToOwnerActivity(
+                        "runtime-primary", companionId, bounded)) {
+                    conversations.hear(companionId, null, "CONTROL",
+                            "Owner took over the same world target.",
+                            Json.object().put("channel", "CONNECTED_BODY")
+                                    .put("reason", "OWNER_SAME_TARGET_ACTIVITY")
+                                    .set("activity", bounded));
+                }
+            } catch (Exception failure) {
+                log.warn("Owner activity handoff stopped safely: "
+                        + failure.getClass().getSimpleName());
+            }
+            });
+        } catch (RejectedExecutionException saturated) {
+            log.warn("Owner activity handoff skipped because the bounded planning queue is full");
+        }
+    }
+
     private void handlePlayerRequest(RuntimeSession session, JsonNode payload) {
         String requestId = required(payload, "requestId");
         String companionId = required(payload, "companionId");
         String ownerId = required(payload, "ownerId");
         String text = payload.path("text").asText("").strip();
         if (text.isEmpty() || text.length() > 512) throw new IllegalArgumentException("player request text must be 1..512 characters");
-        planningExecutor.execute(() -> {
+        try {
+            planningExecutor.execute(() -> {
             ObjectNode reply = Json.object().put("requestId", requestId).put("companionId", companionId);
             com.mccompanion.runtime.conversation.ConversationEvent directReply = null;
             try {
@@ -355,8 +402,13 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         visible.availableNames(), memories.preferenceContext(companionId, 24),
                         memories.latestCapsuleContext(companionId), 5);
                 if (externalBrain != null) {
+                    if (incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION) {
+                        externalBrain.pauseActiveForUserInstruction(
+                                "runtime-primary", companionId, "OWNER_IMMEDIATE_INSTRUCTION");
+                    }
                     if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                            && incoming.kind() == IncomingMessageKind.CONTROL) {
+                            && incoming.kind() == IncomingMessageKind.CONTROL
+                            && "cancel".equals(incoming.optionId())) {
                         conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_CANCELLED");
                         externalBrain.cancel("runtime-primary", companionId, "OWNER_CANCELLED");
                         reply.put("accepted", true).put("source", "external-brain")
@@ -367,9 +419,24 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
                         return;
                     }
-                    if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
-                            && incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                    if (incoming.kind() == IncomingMessageKind.CONTROL
+                            && "pause".equals(incoming.optionId())) {
+                        boolean paused = externalBrain.pauseActiveForUserInstruction(
+                                "runtime-primary", companionId, "OWNER_PAUSED");
+                        reply.put("accepted", true).put("source", "external-brain")
+                                .put("code", paused ? "BRAIN_TOOL_PAUSE_REQUESTED" : "NO_ACTIVE_TOOL")
+                                .put("reply", paused ? "Paused." : "Nothing is currently running.");
+                        ObjectNode brainMessage = envelope(session, "player_reply");
+                        brainMessage.set("payload", reply);
+                        if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
+                        return;
+                    }
+                    if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
+                        if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null) {
+                            conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
+                            waiting = java.util.Optional.empty();
+                        }
+                        externalBrain.cancel("runtime-primary", companionId, "OWNER_MODIFIED_GOAL");
                     }
                     var brainResult = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                             && incoming.kind() == IncomingMessageKind.WAITING_ANSWER
@@ -469,7 +536,20 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     }
                 }
             }
-        });
+            });
+        } catch (RejectedExecutionException saturated) {
+            sendError(session.peer(), session, "RUNTIME_BUSY",
+                    "The bounded player planning queue is full; retry later");
+        }
+    }
+
+    static ExecutorService boundedPlanningExecutor() {
+        return new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(64, true), runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-player-planner");
+            thread.setDaemon(true);
+            return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private void registerCompanionList(RuntimeSession session, JsonNode payload) throws SQLException {

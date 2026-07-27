@@ -19,12 +19,14 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** Crash-recoverable, cross-process serialized installer transaction. */
 public final class InstallTransaction {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final ConcurrentHashMap<Path, Object> JVM_LOCKS = new ConcurrentHashMap<>();
+    private static final Object[] JVM_LOCKS = new Object[64];
+    static {
+        java.util.Arrays.setAll(JVM_LOCKS, ignored -> new Object());
+    }
     private final FaultInjector faultInjector;
 
     public InstallTransaction() {
@@ -302,7 +304,7 @@ public final class InstallTransaction {
 
     private static <T> T locked(Path game, IoSupplier<T> operation) throws IOException {
         Path state = state(game);
-        Object monitor = JVM_LOCKS.computeIfAbsent(game, ignored -> new Object());
+        Object monitor = JVM_LOCKS[Math.floorMod(game.hashCode(), JVM_LOCKS.length)];
         synchronized (monitor) {
             try (FileChannel channel = FileChannel.open(state.resolve("install.lock"),
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE);

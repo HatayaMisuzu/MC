@@ -141,18 +141,39 @@ export interface WaitingQuestion {
 export interface BrainStatus {
   activeControllerId: string
   health: { status: string; adapter: string; detail: string; checkedAt: string }
-  contextBudget?: { totalChars: number; worldChars: number; conversationChars: number
-    taskChars: number; approvedMemoryChars: number; episodeCapsuleChars: number
+    contextBudget?: { totalChars: number; worldChars: number; conversationChars: number
+      taskChars: number; approvedMemoryChars: number; episodeCapsuleChars: number
+      brainSemanticStateChars?: number
     fullGraphIncluded: boolean; fullToolLogIncluded: boolean; fullSearchPageIncluded: boolean }
 }
 export interface BrainToolAudit {
   callId: string; toolName: string; success: boolean; code: string; terminal: boolean
   observation?: Record<string, unknown>
 }
-export interface BrainSessionAudit {
-  sessionId: string; controllerId: string; provider: string; state: string; lastCode: string
-  createdAt: string; updatedAt: string; toolCalls: BrainToolAudit[]
-}
+  export interface BrainSessionAudit {
+    sessionId: string; controllerId: string; provider: string; state: string; lastCode: string
+    createdAt: string; updatedAt: string; toolCalls: BrainToolAudit[]
+    semanticState?: BrainSemanticState; semanticStateRevision?: number; semanticStateAuthoredAt?: string
+    completionClaims?: BrainCompletionClaimAudit[]
+  }
+  export interface BrainCompletionClaimAudit {
+    sequence: number; certainty: 'VERIFIED' | 'UNVERIFIED' | 'NOT_APPLICABLE'
+    claim: string; observationCallId: string; taskId: string; explanation: string; createdAt: string
+  }
+  export interface BrainSemanticState {
+    schemaVersion: number; conversationContext: string; immediateInstruction: string
+    currentTask: string; longTermGoal: string; pauseReason: string; userTakeover: boolean
+    initiativeMode: 'QUIET' | 'NORMAL' | 'ACTIVE'
+    personalityMode: 'COMPANION' | 'IMMERSIVE_ROLEPLAY'
+    permissionPreset: 'READ_ONLY' | 'ASK_FOR_EFFECTS' | 'BOUNDED_AUTONOMY'
+    playerExplicitlyAway: boolean; latestRealWorldObservationAt: string; staleAssumptions: string[]
+  }
+export interface BrainBehaviorSettings {
+    companionId: string; initiativeMode: 'QUIET' | 'NORMAL' | 'ACTIVE'
+    personalityMode: 'COMPANION' | 'IMMERSIVE_ROLEPLAY'; revision: number
+    updatedBy: string; updatedAt: string; changesToolPermissions: false
+    changesSafetyPolicy: false; changesBudgets: false; changesMemoryPolicy: false
+  }
 export interface MemoryFact {
   memoryId: string; kind: string; key: string; value: unknown; verified: boolean
   confidence: number; source: string; expiresAt?: string; createdAt: string; updatedAt: string
@@ -172,6 +193,11 @@ export interface EpisodeCapsule {
 export interface MemorySnapshot {
   companionId: string; byKind: Record<string, MemoryFact[]>; suggestions?: MemorySuggestion[]
   episodeCapsules?: EpisodeCapsule[]
+  settings?: { companionId: string; autoSaveEnabled: boolean; revision: number; updatedBy: string; updatedAt?: string }
+  history?: Array<{ historyId: string; memoryId: string; companionId: string; kind: string; key: string
+    value: unknown; verified: boolean; confidence: number; source: string; expiresAt?: string
+    changeKind: string; changedBy: string; changedAt: string }>
+  safeSummary?: Record<string, unknown>
 }
 export interface TaskGraphExecution {
   executionId: string; companionId: string; graphId: string; graphVersion: string
@@ -195,6 +221,11 @@ export interface WorkspaceDraft {
 }
 export interface SkillSnapshot {
   companionId: string; builtins: BuiltinSkill[]; drafts: WorkspaceDraft[]; versions: SkillVersion[]
+  trials?: Array<{ leaseId: string; profileId: string; companionId: string; controllerId: string
+    brainSessionId: string; skillId: string; format: string; sha256: string; tools: string[]
+    permissions: string[]; limits: Record<string, number>; status: string; remainingUses: number
+    expiresAt: string; executionId?: string; evidence: Record<string, unknown>; revokedBy?: string
+    createdAt: string; updatedAt: string }>
 }
 
 export interface OperationPlan {
@@ -230,4 +261,71 @@ export interface StreamEvent {
   error?: string
   at?: string
   data?: unknown
+}
+
+export interface CompatibilityPackSummary {
+  coordinate: string
+  packId: string
+  version: string
+  type: string
+  contentHash: string
+  state: string
+  source: string
+  evidence?: unknown[]
+  activationFingerprint?: string
+}
+
+export interface CompatibilityMatch {
+  pack: {
+    manifest: { packId: string; version: string; type: string; coordinate: string }
+    contentHash: string
+  }
+  level: string
+  stale: boolean
+  builtin: boolean
+  reason: string
+}
+
+export interface CompatibilityTraceEntry {
+  at: string
+  capability: string
+  packCoordinate?: string
+  decision: string
+  reason: string
+}
+
+export interface CompatibilitySnapshot {
+  instanceId: string
+  store: string
+  nativeExecutionAvailable: boolean
+  nativeStatus: string
+  capabilityCount: number
+  enabledCapabilityCount: number
+  fingerprint: {
+    digest: string
+    minecraftVersion: string
+    loaderType: string
+    loaderVersion: string
+    mods: Record<string, string>
+  }
+  packs: CompatibilityPackSummary[]
+  matchedPacks: CompatibilityMatch[]
+  capabilities: Array<{
+    id: string
+    kind: string
+    risk: string
+    enabled: boolean
+    sourcePack: string
+    suppressionReason: string
+  }>
+  conflicts: string[]
+  suppressions: string[]
+  trace: CompatibilityTraceEntry[]
+  authorization: {
+    controller: string
+    profileId: string
+    instanceId: string
+    maximumRisk: string
+    operations: string[]
+  }
 }

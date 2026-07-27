@@ -1,5 +1,6 @@
 package com.mccompanion.terminal;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
@@ -28,6 +29,8 @@ import java.util.concurrent.TimeUnit;
 final class WebTerminalServer implements AutoCloseable {
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final SecureRandom RANDOM = new SecureRandom();
+  private static final int MAX_OPEN_WINDOWS = 64;
+  private static final Duration WINDOW_TTL = Duration.ofHours(24);
   private final ControlTerminalMain root;
   private final Path webRoot;
   private final boolean openBrowser;
@@ -39,7 +42,9 @@ final class WebTerminalServer implements AutoCloseable {
   private final CountDownLatch stopped = new CountDownLatch(1);
   private final String sessionToken = token();
   private final String csrfToken = token();
-  private final String bootstrapTicket = token();
+  private final String serverInstanceId = UUID.randomUUID().toString();
+  private final String reopenSecret = token();
+  private final BootstrapTicketStore bootstrapTickets = new BootstrapTicketStore();
   private final Map<String, Instant> windows = new ConcurrentHashMap<>();
   private volatile String shutdownPlan;
   private volatile boolean closed;
@@ -57,6 +62,7 @@ final class WebTerminalServer implements AutoCloseable {
     server = HttpServer.create(new InetSocketAddress("127.0.0.1", requestedPort), 32);
     api = new WebTerminalApi(root, operations);
     server.createContext("/open/", this::bootstrap);
+    server.createContext("/internal/reopen", this::reopen);
     server.createContext("/api/events", this::events);
     server.createContext("/api/logs/stream", this::logEvents);
     server.createContext("/api/window/", this::window);
@@ -71,7 +77,11 @@ final class WebTerminalServer implements AutoCloseable {
   }
 
   URI bootstrapUri() {
-    return URI.create("http://127.0.0.1:" + port() + "/open/" + bootstrapTicket);
+    return URI.create(
+        "http://127.0.0.1:"
+            + port()
+            + "/open/"
+            + bootstrapTickets.issue(bootstrapBinding()));
   }
 
   void start() throws IOException {
@@ -88,9 +98,22 @@ final class WebTerminalServer implements AutoCloseable {
   private void bootstrap(HttpExchange exchange) throws IOException {
     try {
       securityHeaders(exchange);
-      if (!"GET".equals(exchange.getRequestMethod())
-          || !exchange.getRequestURI().getPath().equals("/open/" + bootstrapTicket)) {
+      exchange.getResponseHeaders().set("Cache-Control", "no-store");
+      String path = exchange.getRequestURI().getPath();
+      if (!"GET".equals(exchange.getRequestMethod()) || !path.startsWith("/open/")) {
         exchange.sendResponseHeaders(404, -1);
+        return;
+      }
+      if (!hostValid(exchange)
+          || "cross-site"
+              .equalsIgnoreCase(exchange.getRequestHeaders().getFirst("Sec-Fetch-Site"))) {
+        exchange.sendResponseHeaders(403, -1);
+        return;
+      }
+      String ticket = path.substring("/open/".length());
+      if (bootstrapTickets.consume(ticket, bootstrapBinding())
+          != BootstrapTicketStore.Result.CONSUMED) {
+        exchange.sendResponseHeaders(410, -1);
         return;
       }
       exchange
@@ -104,6 +127,33 @@ final class WebTerminalServer implements AutoCloseable {
           .getResponseHeaders()
           .set("Location", "http://127.0.0.1:" + port() + "/#csrf=" + csrfToken);
       exchange.sendResponseHeaders(303, -1);
+    } finally {
+      exchange.close();
+    }
+  }
+
+  private void reopen(HttpExchange exchange) throws IOException {
+    try {
+      securityHeaders(exchange);
+      exchange.getResponseHeaders().set("Cache-Control", "no-store");
+      if (!"POST".equals(exchange.getRequestMethod()) || !hostValid(exchange)) {
+        exchange.sendResponseHeaders(404, -1);
+        return;
+      }
+      if ("cross-site"
+          .equalsIgnoreCase(exchange.getRequestHeaders().getFirst("Sec-Fetch-Site"))) {
+        exchange.sendResponseHeaders(403, -1);
+        return;
+      }
+      if (!constantTime(
+          reopenSecret, exchange.getRequestHeaders().getFirst("X-MCAC-Reopen-Secret"))) {
+        exchange.sendResponseHeaders(401, -1);
+        return;
+      }
+      WebTerminalApi.send(
+          exchange,
+          200,
+          JSON.createObjectNode().put("bootstrapUrl", bootstrapUri().toString()));
     } finally {
       exchange.close();
     }
@@ -207,15 +257,20 @@ final class WebTerminalServer implements AutoCloseable {
       exchange.close();
       return;
     }
-    var request = JSON.readTree(exchange.getRequestBody());
+    var request = jsonBody(exchange, TerminalRequestBodies.CONTROL_JSON_LIMIT);
+    if (request == null) return;
     String id = request.path("windowId").asText("").trim();
     if (id.isEmpty() || id.length() > 128) {
       WebTerminalApi.sendError(exchange, 400, "INVALID_WINDOW", "窗口标识无效");
       return;
     }
     String path = exchange.getRequestURI().getPath();
+    cleanupWindows();
     if (path.endsWith("/close")) windows.remove(id);
-    else windows.put(id, Instant.now());
+    else if (!windows.containsKey(id) && windows.size() >= MAX_OPEN_WINDOWS) {
+      WebTerminalApi.sendError(exchange, 429, "WINDOW_CAPACITY_REACHED", "打开的窗口记录已达到上限");
+      return;
+    } else windows.put(id, Instant.now());
     WebTerminalApi.send(
         exchange,
         200,
@@ -227,6 +282,7 @@ final class WebTerminalServer implements AutoCloseable {
     if (!authenticated(exchange)) return;
     String path = exchange.getRequestURI().getPath();
     if ("GET".equals(exchange.getRequestMethod()) && path.equals("/api/server/status")) {
+      cleanupWindows();
       WebTerminalApi.send(
           exchange,
           200,
@@ -254,7 +310,8 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     if (path.equals("/api/server/stop/execute")) {
-      var request = JSON.readTree(exchange.getRequestBody());
+      var request = jsonBody(exchange, TerminalRequestBodies.CONTROL_JSON_LIMIT);
+      if (request == null) return;
       String value = request.path("planId").asText();
       if (shutdownPlan == null
           || !constantTime(shutdownPlan, value)
@@ -277,6 +334,21 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     WebTerminalApi.sendError(exchange, 404, "NOT_FOUND", "控制路径不存在");
+  }
+
+  private void cleanupWindows() {
+    Instant cutoff = Instant.now().minus(WINDOW_TTL);
+    windows.entrySet().removeIf(entry -> entry.getValue().isBefore(cutoff));
+  }
+
+  private JsonNode jsonBody(HttpExchange exchange, int maximumBytes) throws IOException {
+    try {
+      return TerminalRequestBodies.readJson(exchange, JSON, maximumBytes);
+    } catch (TerminalRequestBodies.Failure failure) {
+      WebTerminalApi.sendError(
+          exchange, failure.status(), failure.code(), failure.getMessage());
+      return null;
+    }
   }
 
   private void staticFile(HttpExchange exchange) throws IOException {
@@ -368,6 +440,8 @@ final class WebTerminalServer implements AutoCloseable {
         JSON.createObjectNode()
             .put("bind", "127.0.0.1")
             .put("port", port())
+            .put("ownerPid", ProcessHandle.current().pid())
+            .put("serverInstanceId", serverInstanceId)
             .put("bootstrapUrl", bootstrapUri().toString())
             .put("startedAt", Instant.now().toString());
     JSON.writerWithDefaultPrettyPrinter().writeValue(target.toFile(), state);
@@ -387,6 +461,18 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     new ProcessBuilder("rundll32", "url.dll,FileProtocolHandler", uri.toString()).start();
+  }
+
+  String reopenSecret() {
+    return reopenSecret;
+  }
+
+  String serverInstanceId() {
+    return serverInstanceId;
+  }
+
+  private String bootstrapBinding() {
+    return serverInstanceId + ":" + ProcessHandle.current().pid();
   }
 
   private static String contentType(Path file) {

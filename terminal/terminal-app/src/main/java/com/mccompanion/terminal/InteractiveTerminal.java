@@ -2,7 +2,6 @@ package com.mccompanion.terminal;
 
 import com.mccompanion.terminal.install.InstallPlan;
 import com.mccompanion.terminal.install.InstallTransaction;
-import com.mccompanion.terminal.launcher.LoaderType;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
 import com.mccompanion.terminal.runtime.PairingService;
 import com.mccompanion.terminal.runtime.RuntimeProfile;
@@ -100,7 +99,7 @@ final class InteractiveTerminal {
         if (instance == null) return;
         if (root.printDoctor(instance) == ControlTerminalMain.BLOCKED) return;
         RuntimeProfile profile = root.profile(instance);
-        if (instance.loader() == LoaderType.FABRIC) {
+        if (FullBridgeSupport.supports(instance)) {
             new PairingService().ensureConfigured(instance, profile);
             new WindowsRuntimeSupervisor().start(profile);
             output.println("Runtime 已通过身份健康检查，端口 " + profile.port());
@@ -109,7 +108,7 @@ final class InteractiveTerminal {
         }
         open(root.launcher(instance).executable());
         output.println("启动器已打开，等待游戏握手……");
-        if (instance.loader() == LoaderType.FABRIC) {
+        if (FullBridgeSupport.supports(instance)) {
             var state = new ConnectionService().waitForHandshake(profile, Duration.ofSeconds(90));
             output.println(state.connected() ? "握手成功。" : "等待超时；可进入菜单 6 重试连接测试。");
         }

@@ -40,18 +40,18 @@ describe('SearchPage', () => {
   it('submits bounded privacy policy and displays Search Doctor evidence', async () => {
     render(<SearchPage />)
     expect(screen.getByDisplayValue('docs.example')).toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: '审阅 Search 配置计划' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Review Search plan' }))
     expect(requestPlan).toHaveBeenCalledWith('search', {
       instanceId: 'instance-1', action: 'configure', endpoint: 'https://search.example/query',
       tokenEnv: 'MCAC_SEARCH_TOKEN', timeoutSeconds: 12,
       allowedDomains: ['docs.example'], deniedDomains: ['blocked.example'],
     })
 
-    fireEvent.click(screen.getByRole('button', { name: '测试连接' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Test connection' }))
     expect(await screen.findByText('Search provider accepted the bounded Doctor query')).toBeVisible()
     expect(post).toHaveBeenCalledWith('/api/search/test', { instanceId: 'instance-1' })
-    expect(screen.getByText('已发送有界探针')).toBeVisible()
-    const source = screen.getByRole('link', { name: '打开外部来源' })
+    expect(screen.getByText('Bounded probe sent')).toBeVisible()
+    const source = screen.getByRole('link', { name: 'Open external source' })
     expect(source).toHaveAttribute('href', 'https://docs.fabricmc.net/')
     expect(source).toHaveAttribute('rel', 'noopener noreferrer')
     expect(screen.getByText('Official external documentation')).toBeVisible()

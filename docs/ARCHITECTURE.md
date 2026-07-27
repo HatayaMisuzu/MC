@@ -28,7 +28,8 @@ Task Graph Runtime = deterministic orchestration
 External Brain = reasoning and planning
 ```
 
-MCAC can validate and execute a Brain-authored graph, enforce limits and permissions, dispatch
+MCAC can validate and execute a Brain-authored graph, validate and persist a bounded
+Brain-authored semantic-state snapshot, enforce limits and permissions, dispatch
 primitive Minecraft actions, pause/cancel/retry/checkpoint, reconcile after restart, and return
 verified observations. It cannot invent an open-ended goal, choose a high-level strategy, maintain
 a competing personality/plan, or modify production source.
@@ -43,7 +44,7 @@ Runtime Tool Gateway / MCP / authenticated Brain ingress
                               │
 Task Graph Runtime · Skill Workspace · reviewed Memory · Episode Capsule · Search · Audit
                               │ authenticated WebSocket
-Minecraft loader bridge (Fabric full bridge; Forge/NeoForge LOCAL_ONLY)
+Minecraft loader bridge (Fabric + Forge full bridge; NeoForge LOCAL_ONLY)
                               │
 Version body / CompanionPlayer / behavior lifecycle
                               │

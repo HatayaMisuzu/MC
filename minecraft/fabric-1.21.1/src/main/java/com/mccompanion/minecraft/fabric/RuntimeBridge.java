@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import com.mccompanion.minecraft.v121.CompanionCommands;
 import org.slf4j.Logger;
@@ -54,6 +55,7 @@ final class RuntimeBridge implements AutoCloseable {
     private final Map<String, String> observedBehaviorStates = new HashMap<>();
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
     private final Map<UUID, Long> playerRequestTimes = new HashMap<>();
+    private final Map<String, Long> ownerActivityTimes = new HashMap<>();
     private final Map<String, Boolean> deliveredConversationEvents = java.util.Collections.synchronizedMap(
             new LinkedHashMap<>() {
                 @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
@@ -229,6 +231,31 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("ownerId", owner.getUUID().toString()).put("text", text);
         sendEnvelope("player_request", payload);
         return new CompanionCommands.TextRequestResult(true, "收到，我先结合当前世界状态理解这个目标。");
+    }
+
+    void submitOwnerBlockActivity(ServerPlayer owner, BlockPos position, String activityType) {
+        if (socket == null || sessionId == null || owner == null || position == null) return;
+        String companionId = registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElse(null);
+        if (companionId == null) return;
+        String dimension = owner.serverLevel().dimension().location().toString();
+        String key = owner.getUUID() + ":" + activityType + ":" + dimension + ":"
+                + position.getX() + ":" + position.getY() + ":" + position.getZ();
+        long now = System.currentTimeMillis();
+        Long previous = ownerActivityTimes.put(key, now);
+        if (previous != null && now - previous < 250) return;
+        while (ownerActivityTimes.size() > 128) {
+            String oldest = ownerActivityTimes.keySet().iterator().next();
+            ownerActivityTimes.remove(oldest);
+        }
+        ObjectNode payload = JSON.createObjectNode()
+                .put("companionId", companionId)
+                .put("ownerId", owner.getUUID().toString())
+                .put("activityType", activityType);
+        payload.putObject("position").put("dimension", dimension)
+                .put("x", position.getX()).put("y", position.getY()).put("z", position.getZ());
+        sendEnvelope("owner_activity", payload);
     }
 
     private void deliverPlayerReply(JsonNode payload) {
@@ -508,7 +535,7 @@ final class RuntimeBridge implements AutoCloseable {
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("failureCode", failure).put("evidence", snapshot.evidenceSummary());
             appendBehaviorObservation(evidence, snapshot.behaviorObservation());
-            sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, null, evidence);
+            sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, failure, evidence);
         }
     }
 

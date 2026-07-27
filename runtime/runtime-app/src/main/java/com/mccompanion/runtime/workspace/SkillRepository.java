@@ -243,6 +243,283 @@ public final class SkillRepository {
         }
     }
 
+    public SkillTrialLease requestTrial(String profileId, String companionId, String controllerId,
+                                        String brainSessionId, String skillId, String format,
+                                        String document, String sha256, JsonNode tools,
+                                        JsonNode permissions, JsonNode limits,
+                                        java.time.Duration duration) throws SQLException {
+        if (duration == null || duration.compareTo(java.time.Duration.ofSeconds(60)) < 0
+                || duration.compareTo(java.time.Duration.ofMinutes(15)) > 0) {
+            throw new IllegalArgumentException("trial duration must be 60..900 seconds");
+        }
+        long now = clock.millis();
+        long expiresAt = Math.addExact(now, duration.toMillis());
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                expireTrials(connection, now);
+                try (PreparedStatement live = connection.prepareStatement("""
+                        SELECT COUNT(*) FROM skill_trial_lease
+                        WHERE profile_id=? AND companion_id=? AND brain_session_id=?
+                          AND status IN ('AVAILABLE','RUNNING')
+                        """)) {
+                    live.setString(1, required(profileId));
+                    live.setString(2, required(companionId));
+                    live.setString(3, required(brainSessionId));
+                    try (ResultSet result = live.executeQuery()) {
+                        if (result.next() && result.getInt(1) > 0) {
+                            throw new IllegalStateException("SKILL_TRIAL_ALREADY_ACTIVE");
+                        }
+                    }
+                }
+                String leaseId = UUID.randomUUID().toString();
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        INSERT INTO skill_trial_lease(lease_id,profile_id,companion_id,controller_id,
+                        brain_session_id,skill_id,format,document,sha256,tools_json,permissions_json,
+                        limits_json,status,remaining_uses,expires_at,execution_id,evidence_json,
+                        revoked_by,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'AVAILABLE',1,?,NULL,'{}',NULL,?,?)
+                        """)) {
+                    statement.setString(1, leaseId);
+                    statement.setString(2, required(profileId));
+                    statement.setString(3, required(companionId));
+                    statement.setString(4, required(controllerId));
+                    statement.setString(5, required(brainSessionId));
+                    statement.setString(6, required(skillId));
+                    statement.setString(7, required(format));
+                    statement.setString(8, requiredDocument(document));
+                    statement.setString(9, requiredSha(sha256));
+                    statement.setString(10, Json.write(requiredNode(tools)));
+                    statement.setString(11, Json.write(requiredNode(permissions)));
+                    statement.setString(12, Json.write(requiredNode(limits)));
+                    statement.setLong(13, expiresAt);
+                    statement.setLong(14, now);
+                    statement.setLong(15, now);
+                    statement.executeUpdate();
+                }
+                SkillTrialLease created = trial(connection, leaseId).orElseThrow();
+                connection.commit();
+                return created;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    public SkillTrialLease claimTrial(String leaseId, String profileId, String companionId,
+                                      String controllerId, String brainSessionId,
+                                      String executionId) throws SQLException {
+        long now = clock.millis();
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                expireTrials(connection, now);
+                SkillTrialLease lease = trial(connection, leaseId).orElseThrow(
+                        () -> new IllegalArgumentException("Skill trial lease does not exist"));
+                requireTrialScope(lease, profileId, companionId, controllerId, brainSessionId);
+                if (!lease.status().equals("AVAILABLE") || lease.remainingUses() != 1) {
+                    throw new IllegalStateException("SKILL_TRIAL_NOT_AVAILABLE");
+                }
+                long requiredMillis = Math.multiplyExact(
+                        lease.limits().path("maxWallTimeSeconds").asLong(), 1_000L);
+                if (lease.expiresAt().toEpochMilli() - now < requiredMillis) {
+                    throw new IllegalStateException("SKILL_TRIAL_INSUFFICIENT_TIME");
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE skill_trial_lease SET status='RUNNING',remaining_uses=0,
+                        execution_id=?,updated_at=?
+                        WHERE lease_id=? AND status='AVAILABLE' AND remaining_uses=1
+                        """)) {
+                    statement.setString(1, required(executionId));
+                    statement.setLong(2, now);
+                    statement.setString(3, lease.leaseId());
+                    if (statement.executeUpdate() != 1) {
+                        throw new IllegalStateException("SKILL_TRIAL_NOT_AVAILABLE");
+                    }
+                }
+                SkillTrialLease claimed = trial(connection, leaseId).orElseThrow();
+                connection.commit();
+                return claimed;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    public SkillTrialLease finishTrial(String leaseId, String executionId, JsonNode evidence)
+            throws SQLException {
+        long now = clock.millis();
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                UPDATE skill_trial_lease SET status='CONSUMED',evidence_json=?,updated_at=?
+                WHERE lease_id=? AND execution_id=? AND status='RUNNING'
+                """)) {
+            statement.setString(1, Json.write(requiredNode(evidence)));
+            statement.setLong(2, now);
+            statement.setString(3, required(leaseId));
+            statement.setString(4, required(executionId));
+            if (statement.executeUpdate() != 1) {
+                SkillTrialLease current = trial(leaseId).orElseThrow(
+                        () -> new IllegalArgumentException("Skill trial lease does not exist"));
+                if (!java.util.Set.of("REVOKED", "EXPIRED", "CONSUMED").contains(current.status())) {
+                    throw new IllegalStateException("SKILL_TRIAL_EVIDENCE_CONFLICT");
+                }
+                return current;
+            }
+        }
+        return trial(leaseId).orElseThrow();
+    }
+
+    public SkillTrialLease revokeTrial(String profileId, String companionId, String leaseId,
+                                       String actor) throws SQLException {
+        long now = clock.millis();
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                expireTrials(connection, now);
+                SkillTrialLease current = trial(connection, leaseId).orElseThrow(
+                        () -> new IllegalArgumentException("Skill trial lease does not exist"));
+                if (!current.profileId().equals(required(profileId))
+                        || !current.companionId().equals(required(companionId))) {
+                    throw new IllegalArgumentException("Skill trial lease is outside management scope");
+                }
+                if (java.util.Set.of("REVOKED", "EXPIRED", "CONSUMED").contains(current.status())) {
+                    connection.rollback();
+                    return current;
+                }
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE skill_trial_lease SET status='REVOKED',revoked_by=?,updated_at=?
+                        WHERE lease_id=? AND status IN ('AVAILABLE','RUNNING')
+                        """)) {
+                    statement.setString(1, required(actor));
+                    statement.setLong(2, now);
+                    statement.setString(3, current.leaseId());
+                    statement.executeUpdate();
+                }
+                SkillTrialLease revoked = trial(connection, leaseId).orElseThrow();
+                connection.commit();
+                return revoked;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    public Optional<SkillTrialLease> trial(String leaseId) throws SQLException {
+        try (Connection connection = database.open()) {
+            expireTrials(connection, clock.millis());
+            return trial(connection, leaseId);
+        }
+    }
+
+    public List<SkillTrialLease> trials(String profileId, String companionId) throws SQLException {
+        try (Connection connection = database.open()) {
+            expireTrials(connection, clock.millis());
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    SELECT * FROM skill_trial_lease WHERE profile_id=? AND companion_id=?
+                    ORDER BY updated_at DESC LIMIT 100
+                    """)) {
+                statement.setString(1, required(profileId));
+                statement.setString(2, required(companionId));
+                List<SkillTrialLease> values = new ArrayList<>();
+                try (ResultSet result = statement.executeQuery()) {
+                    while (result.next()) values.add(readTrial(result));
+                }
+                return List.copyOf(values);
+            }
+        }
+    }
+
+    /**
+     * A trial is deliberately not resumable after a runtime restart. Its matching Task Graph
+     * execution is reconciled separately, while the capability lease remains consumed and
+     * visibly records why it cannot be reused.
+     */
+    public int recoverInterruptedTrials() throws SQLException {
+        long now = clock.millis();
+        JsonNode evidence = Json.object()
+                .put("success", false)
+                .put("code", "SKILL_TRIAL_INTERRUPTED")
+                .put("state", "REVOKED");
+        try (Connection connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                expireTrials(connection, now);
+                int recovered;
+                try (PreparedStatement statement = connection.prepareStatement("""
+                        UPDATE skill_trial_lease
+                        SET status='REVOKED',evidence_json=?,revoked_by='RUNTIME_RESTART',updated_at=?
+                        WHERE status='RUNNING'
+                        """)) {
+                    statement.setString(1, Json.write(evidence));
+                    statement.setLong(2, now);
+                    recovered = statement.executeUpdate();
+                }
+                connection.commit();
+                return recovered;
+            } catch (SQLException | RuntimeException failure) {
+                connection.rollback();
+                throw failure;
+            } finally {
+                connection.setAutoCommit(true);
+            }
+        }
+    }
+
+    private static void requireTrialScope(SkillTrialLease lease, String profileId, String companionId,
+                                          String controllerId, String brainSessionId) {
+        if (!lease.profileId().equals(required(profileId))
+                || !lease.companionId().equals(required(companionId))
+                || !lease.controllerId().equals(required(controllerId))
+                || !lease.brainSessionId().equals(required(brainSessionId))) {
+            throw new IllegalArgumentException("Skill trial lease is outside exact execution scope");
+        }
+    }
+
+    private static void expireTrials(Connection connection, long now) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement("""
+                UPDATE skill_trial_lease SET status='EXPIRED',updated_at=?
+                WHERE status='AVAILABLE' AND expires_at<=?
+                """)) {
+            statement.setLong(1, now);
+            statement.setLong(2, now);
+            statement.executeUpdate();
+        }
+    }
+
+    private static Optional<SkillTrialLease> trial(Connection connection, String leaseId)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM skill_trial_lease WHERE lease_id=?")) {
+            statement.setString(1, required(leaseId));
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(readTrial(result)) : Optional.empty();
+            }
+        }
+    }
+
+    private static SkillTrialLease readTrial(ResultSet result) throws SQLException {
+        return new SkillTrialLease(result.getString("lease_id"), result.getString("profile_id"),
+                result.getString("companion_id"), result.getString("controller_id"),
+                result.getString("brain_session_id"), result.getString("skill_id"),
+                result.getString("format"), result.getString("document"), result.getString("sha256"),
+                Json.parse(result.getString("tools_json")),
+                Json.parse(result.getString("permissions_json")),
+                Json.parse(result.getString("limits_json")), result.getString("status"),
+                result.getInt("remaining_uses"), Instant.ofEpochMilli(result.getLong("expires_at")),
+                result.getString("execution_id"), Json.parse(result.getString("evidence_json")),
+                result.getString("revoked_by"), Instant.ofEpochMilli(result.getLong("created_at")),
+                Instant.ofEpochMilli(result.getLong("updated_at")));
+    }
+
     private static Optional<SkillVersion> get(Connection connection, String requestId) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(
                 "SELECT * FROM skill_version WHERE request_id=?")) {

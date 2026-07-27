@@ -3,24 +3,59 @@ package com.mccompanion.terminal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 
-/** Stores short-lived confirmed plans and publishes structured operation progress. */
+/** Stores bounded, short-lived confirmed plans and publishes structured operation progress. */
 final class OperationManager implements AutoCloseable {
   private static final ObjectMapper JSON = new ObjectMapper();
+  static final int MAX_PLANS = 128;
+  static final int MAX_OPERATIONS = 512;
+  static final Duration PLAN_TTL = Duration.ofMinutes(5);
+  static final Duration TERMINAL_OPERATION_TTL = Duration.ofMinutes(30);
+
   private final Map<String, Plan> plans = new ConcurrentHashMap<>();
   private final Map<String, Operation> operations = new ConcurrentHashMap<>();
+  private final Map<String, ReentrantLock> instanceLocks = new ConcurrentHashMap<>();
   private final CopyOnWriteArrayList<BlockingQueue<ObjectNode>> subscribers =
       new CopyOnWriteArrayList<>();
-  private final ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor();
+  private final ExecutorService workers;
+  private final Clock clock;
+
+  OperationManager() {
+    this(Clock.systemUTC());
+  }
+
+  OperationManager(Clock clock) {
+    this.clock = java.util.Objects.requireNonNull(clock, "clock");
+    workers =
+        new ThreadPoolExecutor(
+            4,
+            4,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new ArrayBlockingQueue<>(64, true),
+            runnable -> {
+              Thread thread = new Thread(runnable, "mcac-terminal-operation");
+              thread.setDaemon(true);
+              return thread;
+            },
+            new ThreadPoolExecutor.AbortPolicy());
+  }
 
   Plan create(
       String category,
@@ -29,7 +64,14 @@ final class OperationManager implements AutoCloseable {
       boolean dangerous,
       JsonNode details,
       Work work) {
+    cleanup();
+    if (plans.size() >= MAX_PLANS) {
+      plans.values().stream()
+          .min(Comparator.comparing(Plan::createdAt))
+          .ifPresent(value -> plans.remove(value.id(), value));
+    }
     String id = UUID.randomUUID().toString();
+    Instant now = clock.instant();
     Plan plan =
         new Plan(
             id,
@@ -38,8 +80,8 @@ final class OperationManager implements AutoCloseable {
             instanceId,
             dangerous,
             details.deepCopy(),
-            Instant.now(),
-            Instant.now().plusSeconds(300),
+            now,
+            now.plus(PLAN_TTL),
             work);
     plans.put(id, plan);
     publish(
@@ -51,13 +93,19 @@ final class OperationManager implements AutoCloseable {
   }
 
   Operation execute(String planId, String confirmation) {
-    Plan plan = plans.remove(planId);
-    if (plan == null || plan.expiresAt().isBefore(Instant.now())) {
-      throw new IllegalArgumentException("计划不存在或已过期，请重新生成计划");
+    cleanup();
+    Plan plan = plans.get(planId);
+    if (plan == null || plan.expiresAt().isBefore(clock.instant())) {
+      if (plan != null) plans.remove(planId, plan);
+      throw new IllegalArgumentException("Plan does not exist or has expired");
     }
     if (!planId.equals(confirmation)) {
-      throw new IllegalArgumentException("确认标识不匹配");
+      throw new IllegalArgumentException("Plan confirmation does not match");
     }
+    if (operations.size() >= MAX_OPERATIONS) {
+      throw new IllegalStateException("OPERATION_CAPACITY_REACHED");
+    }
+    plans.remove(planId, plan);
     String operationId = UUID.randomUUID().toString();
     Operation operation =
         new Operation(
@@ -67,19 +115,30 @@ final class OperationManager implements AutoCloseable {
             plan.instanceId(),
             "QUEUED",
             0,
-            "等待执行",
+            "Waiting for bounded execution capacity",
             null,
             null,
-            Instant.now(),
+            clock.instant(),
             null);
     operations.put(operationId, operation);
-    workers.submit(() -> run(plan, operationId));
+    try {
+      workers.execute(() -> run(plan, operationId));
+    } catch (RejectedExecutionException saturated) {
+      update(
+          operationId,
+          "FAILED",
+          100,
+          "Operation queue is full",
+          null,
+          "OPERATION_QUEUE_FULL");
+    }
     return operation;
   }
 
   Operation requireOperation(String id) {
+    cleanup();
     Operation value = operations.get(id);
-    if (value == null) throw new IllegalArgumentException("操作不存在");
+    if (value == null) throw new IllegalArgumentException("Operation does not exist or has expired");
     return value;
   }
 
@@ -98,22 +157,38 @@ final class OperationManager implements AutoCloseable {
   }
 
   private void run(Plan plan, String id) {
-    update(id, "RUNNING", 10, "正在执行", null, null);
+    ReentrantLock instanceLock =
+        instanceLocks.computeIfAbsent(plan.instanceId(), ignored -> new ReentrantLock(true));
+    instanceLock.lock();
     try {
-      JsonNode result =
-          plan.work()
-              .run(
-                  (progress, message) ->
-                      update(id, "RUNNING", Math.max(10, Math.min(95, progress)), message, null, null));
-      update(id, "SUCCEEDED", 100, "执行并验证成功", result, null);
-    } catch (Exception failure) {
-      update(
-          id,
-          "FAILED",
-          100,
-          "执行失败，已应用业务层回滚策略",
-          null,
-          failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
+      update(id, "RUNNING", 10, "Executing", null, null);
+      try {
+        JsonNode result =
+            plan.work()
+                .run(
+                    (progress, message) ->
+                        update(
+                            id,
+                            "RUNNING",
+                            Math.max(10, Math.min(95, progress)),
+                            message,
+                            null,
+                            null));
+        update(id, "SUCCEEDED", 100, "Execution and verification succeeded", result, null);
+      } catch (Exception failure) {
+        update(
+            id,
+            "FAILED",
+            100,
+            "Execution failed; the operation-specific rollback policy was applied",
+            null,
+            failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
+      }
+    } finally {
+      instanceLock.unlock();
+      if (!instanceLock.isLocked() && !instanceLock.hasQueuedThreads()) {
+        instanceLocks.remove(plan.instanceId(), instanceLock);
+      }
     }
   }
 
@@ -133,7 +208,7 @@ final class OperationManager implements AutoCloseable {
                 result == null ? old.result() : result.deepCopy(),
                 error,
                 old.startedAt(),
-                state.equals("SUCCEEDED") || state.equals("FAILED") ? Instant.now() : null));
+                terminal(state) ? clock.instant() : null));
     ObjectNode value = event("OPERATION_PROGRESS", id).put("state", state).put("progress", progress);
     value.put("message", message);
     if (error != null) value.put("error", error);
@@ -141,13 +216,26 @@ final class OperationManager implements AutoCloseable {
   }
 
   private void publish(ObjectNode event) {
-    event.put("at", Instant.now().toString());
+    event.put("at", clock.instant().toString());
     for (BlockingQueue<ObjectNode> queue : subscribers) {
       if (!queue.offer(event.deepCopy())) {
         queue.poll();
         queue.offer(event.deepCopy());
       }
     }
+  }
+
+  private void cleanup() {
+    Instant now = clock.instant();
+    plans.values().removeIf(plan -> !plan.expiresAt().isAfter(now));
+    operations.values().removeIf(
+        operation ->
+            operation.finishedAt() != null
+                && !operation.finishedAt().plus(TERMINAL_OPERATION_TTL).isAfter(now));
+  }
+
+  private static boolean terminal(String state) {
+    return state.equals("SUCCEEDED") || state.equals("FAILED") || state.equals("CANCELLED");
   }
 
   private static ObjectNode event(String type, String operationId) {
@@ -158,7 +246,12 @@ final class OperationManager implements AutoCloseable {
 
   @Override
   public void close() {
-    workers.close();
+    workers.shutdownNow();
+    try {
+      workers.awaitTermination(5, TimeUnit.SECONDS);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+    }
   }
 
   interface Progress {

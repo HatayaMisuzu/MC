@@ -17,7 +17,7 @@ describe('InstanceTable', () => {
     render(<InstanceTable instances={[instance]} selectedId="" onSelect={select} />)
     expect(screen.getByText('Fabric 1.21.1')).toBeInTheDocument()
     expect(screen.getByText('FABRIC 0.16.14')).toBeInTheDocument()
-    expect(screen.getByText('需要 Java 21')).toBeInTheDocument()
+    expect(screen.getByText('Java 21 required')).toBeInTheDocument()
     await userEvent.click(screen.getByText('Fabric 1.21.1'))
     expect(select).toHaveBeenCalledWith('fabric-one')
   })

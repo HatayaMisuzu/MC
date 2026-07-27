@@ -14,6 +14,8 @@ import com.mccompanion.runtime.brain.BrainSession;
 import com.mccompanion.runtime.brain.LiveBrainFailureCategory;
 import com.mccompanion.runtime.brain.HermesBrainAdapter;
 import com.mccompanion.runtime.brain.OpenAiCompatibleBrainAdapter;
+import com.mccompanion.runtime.brain.ProactiveMessageRepository;
+import com.mccompanion.runtime.brain.ProactiveMessageToolGateway;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
@@ -212,6 +214,7 @@ public final class RuntimeApplication implements AutoCloseable {
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
                     "database parent").resolve("agent-workspace");
             SkillRepository skillRepository = new SkillRepository(database);
+            int interruptedSkillTrials = skillRepository.recoverInterruptedTrials();
             AgentWorkspace agentWorkspace = new AgentWorkspace(workspaceRoot, config.server.profileId);
             SkillToolGateway skillTools = new SkillToolGateway(
                     agentWorkspace,
@@ -225,8 +228,10 @@ public final class RuntimeApplication implements AutoCloseable {
                             companionId -> activeSessionRegistry.forCompanion(companionId)
                                     .map(value -> value.handshake()).orElse(null)),
                     registryTools,
-                    new MemoryToolGateway(memories), new SearchToolGateway(searchProvider,
-                    config.search.allowedDomains, config.search.deniedDomains, searchSessions), skillTools));
+                    new MemoryToolGateway(memories, conversationRepository), new SearchToolGateway(searchProvider,
+                    config.search.allowedDomains, config.search.deniedDomains, searchSessions), skillTools,
+                    new ProactiveMessageToolGateway(brainAudit,
+                            new ProactiveMessageRepository(database), conversations)));
             toolGatewayReference.set(toolGateway);
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
                     conversationRepository);
@@ -248,7 +253,7 @@ public final class RuntimeApplication implements AutoCloseable {
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
                     || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0
                     || interruptedMcpRequests > 0 || expiredMcpSessions > 0 || prunedMcpEvents > 0
-                    || expiredSearchSessions > 0 || expiredMemories > 0) {
+                    || expiredSearchSessions > 0 || expiredMemories > 0 || interruptedSkillTrials > 0) {
                 log.warn("Startup reconciliation queued: staleSessions=" + staleSessions
                         + ", unfinishedTasks=" + reconciliationTasks
                         + ", invalidatedLeases=" + invalidatedLeases + ", pausedPlans=" + recoveryPlans
@@ -258,7 +263,8 @@ public final class RuntimeApplication implements AutoCloseable {
                         + ", expiredMcpSessions=" + expiredMcpSessions
                         + ", prunedMcpEvents=" + prunedMcpEvents
                         + ", expiredSearchSessions=" + expiredSearchSessions
-                        + ", expiredMemories=" + expiredMemories);
+                        + ", expiredMemories=" + expiredMemories
+                        + ", interruptedSkillTrials=" + interruptedSkillTrials);
             }
 
             webSocket = new RuntimeWebSocketServer(

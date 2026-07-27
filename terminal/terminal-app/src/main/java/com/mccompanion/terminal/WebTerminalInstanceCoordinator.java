@@ -2,6 +2,10 @@ package com.mccompanion.terminal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
@@ -26,11 +30,11 @@ final class WebTerminalInstanceCoordinator {
       FileLock lock = tryLock(channel);
       if (lock == null) {
         var current = awaitCurrent(currentPath);
-        String url = current.path("bootstrapUrl").asText();
-        if (!url.startsWith("http://127.0.0.1:"))
+        int port = current.path("port").asInt(-1);
+        if (!"127.0.0.1".equals(current.path("bind").asText()) || port < 1 || port > 65535)
           throw new IOException("Existing HTML terminal state is invalid");
-        if (options.openBrowser()) WebTerminalServer.openBrowser(java.net.URI.create(url));
-        System.out.println("MCAC HTML terminal already running: " + url);
+        if (options.openBrowser()) WebTerminalServer.openBrowser(requestBootstrap(current));
+        System.out.println("MCAC HTML terminal already running: http://127.0.0.1:" + port);
         return;
       }
       try (lock;
@@ -82,7 +86,9 @@ final class WebTerminalInstanceCoordinator {
             JSON.createObjectNode()
                 .put("bind", "127.0.0.1")
                 .put("port", server.port())
-                .put("bootstrapUrl", server.bootstrapUri().toString())
+                .put("ownerPid", ProcessHandle.current().pid())
+                .put("serverInstanceId", server.serverInstanceId())
+                .put("reopenSecret", server.reopenSecret())
                 .put("startedAt", Instant.now().toString()));
     try {
       Files.move(
@@ -93,5 +99,31 @@ final class WebTerminalInstanceCoordinator {
     } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
       Files.move(temporary, current, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
     }
+  }
+
+  private static URI requestBootstrap(com.fasterxml.jackson.databind.JsonNode current)
+      throws IOException, InterruptedException {
+    int port = current.path("port").asInt(-1);
+    String secret = current.path("reopenSecret").asText();
+    if (port < 1 || port > 65535 || secret.isBlank()) {
+      throw new IOException("Existing HTML terminal reopen state is invalid");
+    }
+    URI endpoint = URI.create("http://127.0.0.1:" + port + "/internal/reopen");
+    HttpResponse<String> response =
+        HttpClient.newHttpClient()
+            .send(
+                HttpRequest.newBuilder(endpoint)
+                    .header("X-MCAC-Reopen-Secret", secret)
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build(),
+                HttpResponse.BodyHandlers.ofString());
+    if (response.statusCode() != 200) {
+      throw new IOException("Existing HTML terminal refused reopen request");
+    }
+    URI bootstrap = URI.create(JSON.readTree(response.body()).path("bootstrapUrl").asText());
+    if (!bootstrap.toString().startsWith("http://127.0.0.1:" + port + "/open/")) {
+      throw new IOException("Existing HTML terminal returned an invalid bootstrap URL");
+    }
+    return bootstrap;
   }
 }

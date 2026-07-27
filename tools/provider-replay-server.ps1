@@ -86,18 +86,18 @@ function New-DecisionContent([string]$requestBody) {
         } | ConvertTo-Json -Compress -Depth 20
     }
     if ($text -match 'modification probe') {
-        # GameTest advances ticks much faster than wall time. Keep this probe well beyond any
-        # reachable test distance so Runtime can pause it before exercising a same-plan revision.
-        $probeX = if ($X -ge 0) { $X + 1000000 } else { $X - 1000000 }
-        $probeTarget = @{ dimension = 'minecraft:overworld'; x = $probeX; y = $Y; z = $Z }
+        # FOLLOW remains active after reaching its owner, so accelerated GameTest ticks cannot
+        # complete or block the probe before Runtime exercises a same-plan semantic revision.
         return @{
-            kind = 'CREATE_PLAN'; understoodGoal = 'travel to the temporary probe target'
-            constraints = @(); assumptions = @(); reply = 'I will start toward the temporary target.'
+            kind = 'CREATE_PLAN'; understoodGoal = 'hold the initial follow objective until revised'
+            constraints = @(); assumptions = @(); reply = 'I will keep following until you revise the goal.'
             reason = 'REPLAY_FIXTURE_GOAL_MODIFICATION_PROBE'
             steps = @(@{
-                goalState = 'reach temporary target'; capability = 'NavigateTo'; parameters = @{ target = $probeTarget }
-                expectedResult = 'body reaches temporary target'; completionCriteria = @{ positionVerified = $true }
-                failurePolicy = 'report and replan when unreachable'; opportunistic = $false; risk = 'LOW'
+                goalState = 'maintain the initial follow objective'; capability = 'FollowOwner'
+                parameters = @{ probePhase = 'initial' }
+                expectedResult = 'body remains under active follow control'
+                completionCriteria = @{ ownerDistanceVerified = $true }
+                failurePolicy = 'report if following is blocked'; opportunistic = $false; risk = 'LOW'
             })
         } | ConvertTo-Json -Compress -Depth 20
     }

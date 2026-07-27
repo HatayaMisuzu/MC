@@ -55,6 +55,16 @@ function Assert-TerminalObservation($request, [string]$expectedTool) {
     }
 }
 
+function Assert-VerifiedObservation($request, [string]$expectedTool) {
+    $results = @($request.toolResults)
+    if ($results.Count -ne 1 -or $results[0].toolName -ne $expectedTool -or
+        -not $results[0].terminal -or -not $results[0].success -or
+        -not $results[0].observation.verified) {
+        $actual = $request.toolResults | ConvertTo-Json -Compress -Depth 20
+        throw "Hermes replay expected a terminal verified observation for $expectedTool; actual=$actual"
+    }
+}
+
 function Tool-Response([string]$callId, [string]$name, $arguments) {
     return @{ kind = 'TOOL_CALLS'; toolCalls = @(@{ callId = $callId; name = $name; arguments = $arguments }) }
 }
@@ -88,8 +98,19 @@ function New-TurnResponse([string]$sessionId, $request) {
         3 { Assert-TerminalObservation $request 'inventory.withdraw'; $response = Tool-Response 'return-owner-1' 'movement.return' @{} }
         4 { Assert-TerminalObservation $request 'movement.return'; $response = Tool-Response 'deliver-iron-1' 'inventory.deliver' @{
                 item = 'minecraft:iron_ingot'; quantity = 6; allowPartial = $false } }
-        5 { Assert-TerminalObservation $request 'inventory.deliver'; $response = @{
-                kind = 'FINAL_RESPONSE'; response = 'I reached the chest, withdrew six iron ingots, returned, and delivered all six.' } }
+        5 { Assert-TerminalObservation $request 'inventory.deliver'; $response =
+                Tool-Response 'verify-delivery-1' 'inventory.inspect' @{} }
+        6 { Assert-VerifiedObservation $request 'inventory.inspect'; $response = @{
+                kind = 'FINAL_RESPONSE'
+                response = 'The delivery command succeeded, and I re-inspected the companion inventory afterward.'
+                completionClaim = @{
+                    claim = 'The companion inventory was inspected after the delivery command completed.'
+                    certainty = 'VERIFIED'
+                    observationCallId = 'verify-delivery-1'
+                    taskId = ''
+                    explanation = ''
+                }
+            } }
         default { throw "Hermes replay session advanced past its terminal turn: $sessionId" }
     }
     $sessions[$sessionId] = $step + 1

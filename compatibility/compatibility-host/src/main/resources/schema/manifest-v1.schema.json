@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcac.local/schema/compat/manifest-v1.schema.json",
+  "title": "MCAC Compatibility Pack Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "pack", "target", "runtime", "permissions", "dependencies", "conflicts"],
+  "properties": {
+    "schemaVersion": {"const": "mcac-compat/1"},
+    "pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "type", "displayName", "authorType", "createdAt"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "version": {"type": "string", "maxLength": 64},
+        "type": {
+          "enum": ["minecraft-base", "loader", "mod", "modpack-overlay", "instance-local", "patch"]
+        },
+        "displayName": {"type": "string", "minLength": 1, "maxLength": 128},
+        "authorType": {"type": "string", "minLength": 1, "maxLength": 64},
+        "createdAt": {"type": "string", "format": "date-time"}
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "minecraft": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "exact": {"type": "string", "maxLength": 32},
+            "range": {"type": "string", "maxLength": 64}
+          }
+        },
+        "loader": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {"type": "string", "maxLength": 32},
+            "versionRange": {"type": "string", "maxLength": 64}
+          }
+        },
+        "java": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "minimum": {"type": "integer", "minimum": 8, "maximum": 99},
+            "maximum": {"type": "integer", "minimum": 8, "maximum": 99}
+          }
+        },
+        "instanceId": {"type": "string", "maxLength": 128},
+        "mods": {"oneOf": [{"type": "array", "maxItems": 512}, {"type": "object", "maxProperties": 512}]},
+        "configurationHash": {"$ref": "#/$defs/hash"},
+        "scriptsHash": {"$ref": "#/$defs/hash"},
+        "dataPacksHash": {"$ref": "#/$defs/hash"},
+        "modpackHash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimumHostVersion", "nativeCode", "hotReloadable", "restartRequired"],
+      "properties": {
+        "minimumHostVersion": {"const": 1},
+        "nativeCode": {"type": "boolean"},
+        "hotReloadable": {"type": "boolean"},
+        "restartRequired": {"type": "boolean"},
+        "nativeProtocol": {"type": "string", "maxLength": 64},
+        "nativeArtifacts": {"type": "array", "maxItems": 32, "items": {"type": "string", "maxLength": 256}}
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["declared", "forbidden"],
+      "properties": {
+        "declared": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/$defs/permission"}},
+        "forbidden": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"$ref": "#/$defs/permission"}}
+      }
+    },
+    "dependencies": {"$ref": "#/$defs/coordinates"},
+    "conflicts": {"$ref": "#/$defs/coordinates"},
+    "replaces": {"$ref": "#/$defs/coordinates"},
+    "extends": {"$ref": "#/$defs/coordinates"},
+    "patches": {"$ref": "#/$defs/coordinates"},
+    "precedence": {"type": "integer", "minimum": -10000, "maximum": 10000},
+    "limitations": {"type": "array", "maxItems": 64, "items": {"type": "string", "maxLength": 512}}
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^$|^[a-f0-9]{64}$"},
+    "permission": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"},
+    "coordinates": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}
+    }
+  }
+}

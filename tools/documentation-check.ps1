@@ -29,8 +29,17 @@ $required = @(
     'README.md',
     'AGENTS.md',
     'CODEX_EXECUTION.md',
+    'KNOWN_LIMITATIONS.md',
+    'NOTICE',
+    'docs/INDEX.md',
+    'docs/PRODUCT_STATUS.md',
     'docs/ARCHITECTURE.md',
+    'docs/COMPATIBILITY.md',
     'docs/RC_COMPLETION_MATRIX.md',
+    'docs/user/USER_GUIDE.zh-CN.md',
+    'docs/user/USER_GUIDE.en-US.md',
+    'docs/developer/README.md',
+    'docs/archive/INDEX.md',
     'docs/TASK_GRAPH_DSL.md',
     'docs/MCP_PROTOCOL.md',
     'runtime/runtime-app/src/main/java/com/mccompanion/runtime/taskgraph/TaskGraphValidator.java'
@@ -62,9 +71,10 @@ $currentDocs = @(
     'AGENTS.md',
     'CODEX_EXECUTION.md',
     'KNOWN_LIMITATIONS.md',
+    'docs/PRODUCT_STATUS.md',
     'docs/ARCHITECTURE.md',
     'docs/RC_COMPLETION_MATRIX.md',
-    'docs/EXTERNAL_BRAIN_STATE.md'
+    'docs/execution/COMPAT_UI_PRODUCTIZATION_FREEZE_STATUS.md'
 )
 $forbiddenPatterns = @(
     'READY_FOR_HUMAN_PRODUCT_TEST(?:_EXCEPT_LIVE_PROVIDER)?',
@@ -77,6 +87,21 @@ foreach ($relative in $currentDocs) {
             $errors.Add("$relative contains obsolete readiness label matching: $pattern")
         }
     }
+}
+
+$currentText = ($currentDocs | ForEach-Object {
+    Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root $_)
+}) -join "`n"
+if ($currentText -match 'Fabric-first RC') {
+    $errors.Add('current documentation still describes the dual-Full-Bridge product as Fabric-first RC')
+}
+$forgeTableIsLocal = $currentText -match '(?m)^\s*\|?\s*1\.20\.1\s*\|\s*Forge\s*\|[^\r\n]*LOCAL_ONLY'
+$forgeListIsLocal = $currentText -match '(?m)^\s*[-*]\s*Forge 1\.20\.1[^\r\n]*LOCAL_ONLY'
+if ($forgeTableIsLocal -or $forgeListIsLocal) {
+    $errors.Add('current documentation incorrectly describes Forge 1.20.1 as LOCAL_ONLY')
+}
+if ($currentText -match '(?i)(?:[A-Z]:\\|/Users/|/home/)[^\s`]*') {
+    $errors.Add('current documentation contains an absolute local-machine path')
 }
 
 if ($errors.Count -gt 0) {

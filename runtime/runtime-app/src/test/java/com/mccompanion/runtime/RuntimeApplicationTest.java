@@ -19,11 +19,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
 import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -38,6 +40,63 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class RuntimeApplicationTest {
     @TempDir Path temporary;
+
+    @Test
+    void boundedJsonBodiesRejectOversizeChunkedCompressedMismatchedAndSlowInputs() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("body-limits"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        try (RuntimeApplication application = RuntimeApplication.start(config, false)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).build();
+            URI brain = new URI("http://127.0.0.1:" + config.server.managementPort + "/brain");
+
+            String oversized = "x".repeat(
+                    com.mccompanion.runtime.health.RuntimeHealthServer.BRAIN_JSON_LIMIT + 1);
+            HttpResponse<String> tooLarge = http.send(HttpRequest.newBuilder(brain)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(oversized)).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(413, tooLarge.statusCode(), tooLarge.body());
+            assertEquals("PAYLOAD_TOO_LARGE", Json.parse(tooLarge.body()).path("code").asText());
+
+            HttpResponse<String> compressed = http.send(HttpRequest.newBuilder(brain)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .header("Content-Encoding", "gzip")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[] {1, 2, 3})).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(415, compressed.statusCode(), compressed.body());
+            assertEquals("UNSUPPORTED_CONTENT_ENCODING",
+                    Json.parse(compressed.body()).path("code").asText());
+
+            byte[] chunkedBytes = new byte[
+                    com.mccompanion.runtime.health.RuntimeHealthServer.ORDINARY_JSON_LIMIT + 1];
+            HttpResponse<String> chunked = http.send(HttpRequest.newBuilder(new URI(
+                            "http://127.0.0.1:" + config.server.managementPort
+                                    + "/task-graphs?companionId=body-test"))
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofInputStream(
+                            () -> new java.io.ByteArrayInputStream(chunkedBytes))).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(413, chunked.statusCode(), chunked.body());
+            assertEquals("PAYLOAD_TOO_LARGE", Json.parse(chunked.body()).path("code").asText());
+
+            assertEquals(400, rawBodyStatus(config.server.managementPort, token, 20,
+                    "{}".getBytes(StandardCharsets.UTF_8), true, 3000));
+            assertTrue(rawSlowBodyWasClosed(config.server.managementPort, token));
+
+            HttpResponse<String> health = http.send(HttpRequest.newBuilder(new URI(
+                            "http://127.0.0.1:" + config.server.managementPort + "/health"))
+                    .header("Authorization", "Bearer " + token)
+                    .timeout(Duration.ofSeconds(2)).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, health.statusCode(), health.body());
+        }
+    }
 
     @Test
     void localManagementApprovesGeneratedSkillButBrainToolOnlyCreatesPendingReview() throws Exception {
@@ -122,6 +181,80 @@ class RuntimeApplicationTest {
             assertEquals(3, Json.parse(restored.body()).path("version").asInt());
             assertEquals("version: one",
                     workspace.read("companion-1", "skills/local_draft/draft.yaml").content());
+
+            var trial = repository.requestTrial(config.server.profileId, "companion-1",
+                    "controller", "brain-session", "managed_trial", "yaml", document,
+                    Digests.sha256(document), Json.MAPPER.createArrayNode(),
+                    Json.MAPPER.createArrayNode(),
+                    Json.object().put("maxWallTimeSeconds", 30), Duration.ofSeconds(120));
+            HttpResponse<String> trialSnapshot = http.send(HttpRequest.newBuilder(new URI(
+                            endpoint + "?companionId=companion-1"))
+                    .header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            JsonNode visibleTrial = Json.parse(trialSnapshot.body()).path("trials").path(0);
+            assertEquals(trial.leaseId(), visibleTrial.path("leaseId").asText());
+            assertFalse(visibleTrial.has("document"), "management snapshots must not expose trial source");
+
+            HttpResponse<String> revoked = http.send(HttpRequest.newBuilder(endpoint)
+                    .header("Authorization", "Bearer " + token)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(Json.write(Json.object()
+                            .put("action", "revoke_trial").put("companionId", "companion-1")
+                            .put("leaseId", trial.leaseId()))))
+                    .build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, revoked.statusCode(), revoked.body());
+            assertEquals("REVOKED", Json.parse(revoked.body()).path("status").asText());
+            assertEquals("LOCAL_MANAGEMENT_USER",
+                    Json.parse(revoked.body()).path("revokedBy").asText());
+        }
+    }
+
+    private static int rawBodyStatus(int port, String token, int contentLength, byte[] body,
+                                     boolean closeOutput, int timeoutMillis) throws Exception {
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(timeoutMillis);
+            String headers = "POST /brain HTTP/1.1\r\n"
+                    + "Host: 127.0.0.1:" + port + "\r\n"
+                    + "Authorization: Bearer " + token + "\r\n"
+                    + "Content-Type: application/json\r\n"
+                    + "Content-Length: " + contentLength + "\r\n"
+                    + "Connection: close\r\n\r\n";
+            socket.getOutputStream().write(headers.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().write(body);
+            socket.getOutputStream().flush();
+            if (closeOutput) socket.shutdownOutput();
+            String status = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
+            assertNotNull(status);
+            return Integer.parseInt(status.split(" ")[1]);
+        }
+    }
+
+    private static boolean rawSlowBodyWasClosed(int port, String token) throws Exception {
+        try (Socket socket = new Socket("127.0.0.1", port)) {
+            socket.setSoTimeout(9000);
+            String headers = "POST /brain HTTP/1.1\r\n"
+                    + "Host: 127.0.0.1:" + port + "\r\n"
+                    + "Authorization: Bearer " + token + "\r\n"
+                    + "Content-Type: application/json\r\n"
+                    + "Content-Length: 10\r\n"
+                    + "Connection: close\r\n\r\n";
+            socket.getOutputStream().write(headers.getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            CompletableFuture<Void> delayedBody = CompletableFuture.runAsync(() -> {
+                try {
+                    Thread.sleep(5500);
+                    socket.getOutputStream().write("0123456789".getBytes(StandardCharsets.US_ASCII));
+                    socket.getOutputStream().flush();
+                    socket.shutdownOutput();
+                } catch (Exception failure) {
+                    throw new java.util.concurrent.CompletionException(failure);
+                }
+            });
+            String status = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    socket.getInputStream(), StandardCharsets.US_ASCII)).readLine();
+            delayedBody.get(8, TimeUnit.SECONDS);
+            return status == null;
         }
     }
 
@@ -591,6 +724,26 @@ class RuntimeApplicationTest {
                 Thread.sleep(20);
             }
 
+            URI settingsUri = new URI("http://127.0.0.1:" + config.server.managementPort
+                    + "/brain/settings?companionId=brain-companion");
+            HttpResponse<String> defaultSettings = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(settingsUri).header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, defaultSettings.statusCode(), defaultSettings.body());
+            assertEquals("NORMAL", Json.parse(defaultSettings.body()).path("initiativeMode").asText());
+            assertEquals("COMPANION", Json.parse(defaultSettings.body()).path("personalityMode").asText());
+            HttpResponse<String> updatedSettings = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(settingsUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"initiativeMode":"QUIET","personalityMode":"IMMERSIVE_ROLEPLAY"}
+                                    """)).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, updatedSettings.statusCode(), updatedSettings.body());
+            assertEquals("QUIET", Json.parse(updatedSettings.body()).path("initiativeMode").asText());
+            assertEquals("IMMERSIVE_ROLEPLAY",
+                    Json.parse(updatedSettings.body()).path("personalityMode").asText());
+            assertFalse(Json.parse(updatedSettings.body()).path("changesToolPermissions").asBoolean());
+
             String requestBody = """
                     {"controllerId":"runtime-primary","companionId":"brain-companion",
                      "text":"What do you see?"}
@@ -785,6 +938,33 @@ class RuntimeApplicationTest {
                     .header("Authorization", "Bearer " + token).GET().build(), HttpResponse.BodyHandlers.ofString());
             assertEquals("USER", Json.parse(listedMemory.body()).path("byKind").path("PREFERENCE")
                     .path(0).path("source").asText());
+            HttpResponse<String> disabledAutoSave = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(
+                                    "{\"action\":\"set_autosave\",\"enabled\":false}")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertFalse(Json.parse(disabledAutoSave.body()).path("autoSaveEnabled").asBoolean());
+            HttpResponse<String> editedMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"action":"update_memory","memoryId":"%s","value":"brief"}
+                                    """.formatted(memoryId))).build(), HttpResponse.BodyHandlers.ofString());
+            assertEquals("USER_EDIT", Json.parse(editedMemory.body()).path("source").asText());
+            HttpResponse<String> safeMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(
+                                    "{\"action\":\"export_safe_summary\"}")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertFalse(Json.parse(safeMemory.body()).path("containsValues").asBoolean());
+            assertFalse(safeMemory.body().contains("brief"));
+            HttpResponse<String> historyMemory = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(memoryUri).header("Authorization", "Bearer " + token).GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals("EDITED", Json.parse(historyMemory.body()).path("history").path(0)
+                    .path("changeKind").asText());
             HttpResponse<String> deletedMemory = HttpClient.newHttpClient().send(HttpRequest.newBuilder(new URI(
                             memoryUri + "&memoryId=" + memoryId)).header("Authorization", "Bearer " + token)
                     .DELETE().build(), HttpResponse.BodyHandlers.ofString());

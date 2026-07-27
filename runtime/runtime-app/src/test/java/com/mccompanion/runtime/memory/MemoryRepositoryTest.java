@@ -99,6 +99,66 @@ class MemoryRepositoryTest {
     }
 
     @Test
+    void localManagementControlsAutomaticSaveRetainsHistoryAndExportsOnlyCounts() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("management.db"))) {
+            database.initialize();
+            MemoryRepository repository = new MemoryRepository(database);
+            assertTrue(repository.settings("c1").autoSaveEnabled());
+            assertFalse(repository.setAutoSave("c1", false, "LOCAL_MANAGEMENT_USER").autoSaveEnabled());
+
+            var status = Json.object().put("bodyState", "spawned");
+            status.putArray("observedContainers").addObject().put("type", "minecraft:chest")
+                    .put("dimension", "minecraft:overworld").put("x", 1).put("y", 64).put("z", 2)
+                    .put("verified", true);
+            repository.rememberObservedContainers("c1", status);
+            assertTrue(repository.relevant("c1", MemoryKind.WORLD, 10).isEmpty());
+            repository.rememberObservedContainers("c2", status);
+            assertEquals(1, repository.relevant("c2", MemoryKind.WORLD, 10).size());
+
+            MemoryFact fact = repository.remember("c1", MemoryKind.PREFERENCE, "private-note",
+                    Json.object().put("privateText", "never-export-this"), true, 1.0, null, "USER");
+            MemoryFact updated = repository.updateByUser(
+                    "c1", fact.memoryId(), Json.object().put("privateText", "still-private"));
+            assertEquals("USER_EDIT", updated.source());
+            assertEquals("never-export-this",
+                    repository.history("c1", 10).getFirst().value().path("privateText").asText());
+            assertThrows(IllegalArgumentException.class, () -> repository.remember("c1",
+                    MemoryKind.PREFERENCE, "credential",
+                    Json.object().put("apiKey", "sk-" + "private123456789"),
+                    true, 1.0, null, "USER"));
+            assertThrows(IllegalArgumentException.class, () -> repository.updateByUser(
+                    "c1", fact.memoryId(), Json.object().put("email", "private@example.com")));
+
+            String summary = Json.write(repository.safeSummary("c1"));
+            assertTrue(summary.contains("\"containsValues\":false"));
+            assertTrue(summary.contains("\"autoSaveEnabled\":false"));
+            assertFalse(summary.contains("never-export-this"));
+            assertFalse(summary.contains("still-private"));
+
+            assertTrue(repository.delete("c1", fact.memoryId()));
+            assertEquals("DELETED", repository.history("c1", 10).getFirst().changeKind());
+        }
+    }
+
+    @Test
+    void separateRuntimeProfileDatabasesIsolateTheSameCompanionAndWorldKeys() throws Exception {
+        try (RuntimeDatabase profileA = new RuntimeDatabase(temporary.resolve("profile-a/companion.db"));
+             RuntimeDatabase profileB = new RuntimeDatabase(temporary.resolve("profile-b/companion.db"))) {
+            profileA.initialize();
+            profileB.initialize();
+            MemoryRepository firstWorld = new MemoryRepository(profileA);
+            MemoryRepository secondWorld = new MemoryRepository(profileB);
+            firstWorld.remember("same-companion", MemoryKind.WORLD, "landmark:base",
+                    Json.object().put("world", "profile-a"), true, 1.0, null, "BODY_OBSERVATION");
+            firstWorld.setAutoSave("same-companion", false, "LOCAL_MANAGEMENT_USER");
+
+            assertEquals(1, firstWorld.relevant("same-companion", MemoryKind.WORLD, 10).size());
+            assertTrue(secondWorld.relevant("same-companion", MemoryKind.WORLD, 10).isEmpty());
+            assertTrue(secondWorld.settings("same-companion").autoSaveEnabled());
+        }
+    }
+
+    @Test
     void quarantinedSuggestionsNeverAppearAsMemoryFacts() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("suggestions.db"))) {
             database.initialize();

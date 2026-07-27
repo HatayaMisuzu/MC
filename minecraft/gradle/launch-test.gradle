@@ -11,12 +11,20 @@ def launchInputHolder = [input: null, output: null, monitor: null]
 def prepareLaunchTest = tasks.register('prepareLaunchTest') {
     group = 'verification'
     description = 'Prepares an isolated, disposable dedicated-server directory for launchTest.'
+    inputs.property('runtimeDisabled',
+            providers.provider { project.hasProperty('mccompanionRuntimeDisabled') })
+    inputs.property('persistenceProbe',
+            providers.gradleProperty('mccompanionPersistenceProbe').orElse(''))
     outputs.dir(launchServerDirectory)
 
     doLast {
         File serverDirectory = launchServerDirectory.get().asFile
         File evidenceDirectory = launchEvidenceDirectory.get().asFile
-        project.delete(serverDirectory, evidenceDirectory)
+        boolean preserveRestartWorld =
+                providers.gradleProperty('mccompanionPersistenceProbe').orElse('').get() == 'verify'
+        if (!preserveRestartWorld) {
+            project.delete(serverDirectory, evidenceDirectory)
+        }
         serverDirectory.mkdirs()
         evidenceDirectory.mkdirs()
         new File(serverDirectory, 'eula.txt').setText('eula=true\n', 'UTF-8')

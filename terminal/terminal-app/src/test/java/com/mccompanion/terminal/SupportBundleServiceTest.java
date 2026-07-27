@@ -31,6 +31,7 @@ class SupportBundleServiceTest {
                 game.resolve("config"),game.resolve("logs"),"1.21.1",LoaderType.FABRIC,"1",21, Optional.empty(),
                 InstanceIsolation.EXPLICIT,DetectionConfidence.HIGH);
         Path profileDir=temp.resolve("control/profiles/id");Files.createDirectories(profileDir);
+        Files.writeString(profileDir.resolve("companion.db"), "memory value that must never enter support archive");
         RuntimeProfile profile=new RuntimeProfile("id",profileDir,temp.resolve("runtime.cmd"),8766,18766);
         Files.writeString(profile.logFile(),sensitive+privateChat,StandardCharsets.UTF_8);
         var doctor=java.util.List.of(new DiagnosticResult(DiagnosticResult.Severity.WARNING,"brain.provider",
@@ -55,6 +56,10 @@ class SupportBundleServiceTest {
             assertEquals(java.util.Set.of("summary.txt","minecraft-errors.log","runtime-summary.txt",
                             "safe-config-summary.txt","runtime-errors.log","doctor.txt","reproduction-steps.txt","mods.txt"),
                     zip.stream().map(java.util.zip.ZipEntry::getName).collect(java.util.stream.Collectors.toSet()));
+            for (var entry : java.util.Collections.list(zip.entries())) {
+                String contents = new String(zip.getInputStream(entry).readAllBytes(), StandardCharsets.UTF_8);
+                assertFalse(contents.contains("memory value that must never enter support archive"));
+            }
         }
     }
 }

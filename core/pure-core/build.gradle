@@ -1,5 +1,7 @@
 plugins { id 'java-library' }
 
+sourceSets.main.java.srcDir('../../minecraft/navigation-common/src/main/java')
+
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(17) }
     withSourcesJar()

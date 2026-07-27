@@ -2,7 +2,7 @@
 
 Updated: 2026-07-22
 
-## Current status
+## Historical status log
 
 The repository is migrating to the External-Brain-first architecture defined by
 `CODEX_EXECUTION.md`. This document tracks implementation evidence without using or
@@ -11,11 +11,10 @@ updating the Codex Goal UI.
 This is a chronological engineering log, not the completion authority. Current status is in
 `docs/RC_COMPLETION_MATRIX.md`.
 
-The authoritative matrix currently classifies the repository as
-`READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`, with Live-provider verification and human playtesting
-still pending. This file is a chronological implementation log: earlier slice-level statements
-about incomplete Primitive, Task Graph, Workspace, UI, or release work are historical and must not
-override the current matrix.
+This file is superseded as a status source. Its slice-level readiness labels, SHA references and
+statements about incomplete or completed work describe the repository when they were written and
+must not be interpreted as current. Use the matrix for evidence and
+[PRODUCT_STATUS.md](PRODUCT_STATUS.md) for the reader-facing current state.
 
 ## Completed in this slice
 
@@ -56,7 +55,7 @@ override the current matrix.
   `memory_fact`; they cannot write verified World facts, enter normal memory search/context, or
   delete memory. The legacy preference Tool is a compatibility wrapper over the same quarantine.
 - Body observations remain the trusted source for verified container World memory;
-  user edits are stored with `USER` provenance and take precedence over inference.
+  user edits are stored with `USER_EDIT` provenance and take precedence over inference.
 - Read-only primitive Tools now split the connected-body status into bounded world, inventory,
   safety, task, and capability observations. Missing status is rejected rather than synthesized,
   and `safety.inspect` explicitly excludes hostile threat scanning from its current result.
@@ -75,6 +74,35 @@ override the current matrix.
 - Added bounded `world.locate_known_container`; it returns only verified container memories,
   exposes verification provenance/time, marks same- versus cross-dimension candidates, and
   filters unverified inferences instead of presenting them as world facts.
+
+### Local Memory management controls
+
+- Migration 27 persists per-Companion automatic-save settings and prior fact versions. Editing,
+  deleting, clearing, inference replacement, and approved-candidate replacement retain the prior
+  value, provenance, verification state, expiry, local actor, and change kind in exact Companion
+  scope.
+- The authenticated Runtime and Terminal management path can update/delete one fact, clear one
+  category, enable or pause future body-observation saves, inspect the last 100 retained changes,
+  and export an aggregate-only safe summary. The export contains counts, source labels, settings,
+  and explicit negative privacy flags; it contains no fact values, chat, Prompt, or Search body.
+- The Brain page now provides view, search/filter, JSON edit, delete, category-clear confirmation,
+  automatic-save control, Profile/world and Companion scope, provenance/update time, version
+  history, and safe export. Episode Capsules and quarantined candidates remain separate panels.
+- Common key-shaped credentials, bearer tokens, credential fields, email addresses, and explicit
+  full-chat/full-Prompt/Search-body sources are rejected at the central Memory repository boundary.
+  Support bundles remain allow-listed and do not include the Runtime database; a regression test
+  places a Memory-body sentinel in that database and proves it is absent from every archive entry.
+- `memory.remember_explicit_preference` is available to the external Brain only through the bounded
+  Gateway. The Brain remains the semantic author: it decides whether an owner statement is a stable
+  low-risk preference. Runtime saves only `PREFERENCE`, requires automatic save to be enabled, an
+  exact match to the latest same-Companion owner message inside a five-minute window, a bounded
+  lower-case key/value, and the central sensitive-content checks. The fact is stored as verified
+  owner speech with `USER_EXPLICIT_BRAIN_CAPTURE` provenance; a mismatch, stale/cross-Companion
+  quote, or paused setting is rejected.
+- Local repository, Tool Gateway, authenticated HTTP, Terminal support-bundle, Vitest, production
+  Web build, Profile/world and Companion isolation, and the complete repository check pass.
+  Section 5.5 is locally complete; Live Hermes must still show appropriate preference judgment and
+  a human must verify the interaction quality.
 
 ## Episode capsule and reviewed episodic candidate slice
 
@@ -119,6 +147,33 @@ override the current matrix.
   p95 26.18 ms, one recovered disconnect, and zero duplicate calls or reconciliation records.
 - Final cleanup reports zero Brain sessions, database connections, queue depth, and active workers.
   No chat, identifiers, Tool arguments, observations, paths, secrets, or raw logs enter the report.
+
+## One-time generated Skill trials
+
+- The external Brain may request a 60-to-900-second, single-use lease for one
+  quarantined Skill draft only after the current Task Graph validator accepts
+  the exact stored document.
+- Runtime snapshots the exact Profile, Companion, controller, Brain session,
+  Skill hash, declared permissions, referenced Tools, resource limits and
+  absolute expiry. Execution requires the same full scope and consumes the
+  lease before starting, so a retry cannot repeat the trial.
+- Trial policy permits only current LOW-risk Tools and the bounded
+  `READ_WORLD`, `MEMORY`, and `CONTROL_TASK` permission set. It applies tighter
+  graph, loop, retry, concurrency, Tool-call, wall-time, serialized-state and
+  Evidence ceilings than ordinary approved Skills. Generated Skills cannot
+  call any `skill.*` lifecycle or execution Tool.
+- The trial runs through the ordinary persistent Task Graph Runtime with
+  `GENERATED_SKILL_TRIAL` provenance and stores bounded terminal evidence. It
+  does not create a review record, version, approval, or permanent capability;
+  permanent use still requires explicit local-user promotion approval.
+- Authenticated local management can revoke an available or running lease.
+  Running revocation cancels only the lease-bound execution. Startup converts
+  crash-left RUNNING trials to `REVOKED` with
+  `SKILL_TRIAL_INTERRUPTED` evidence; they are never silently resumed or
+  re-enabled.
+- Migration 28 stores the durable lease. The Skills page exposes scoped lease
+  status, expiry, Tools, permissions, limits and evidence, but omits the
+  document and every host path.
 
 ## Brain persistence and restart slice
 
@@ -196,9 +251,110 @@ override the current matrix.
   -> deliver -> FINAL_RESPONSE`; vanilla container/player/companion deltas prove conservation.
   This remains Replay evidence and is not a Live provider or human-playtest claim.
 
+## External Brain semantic-state slice
+
+- `mcac-brain/1` turn responses may carry a `semanticState` extension authored by Hermes.
+  Runtime never derives a replacement state. It strictly rejects unknown fields, invalid enum
+  values, oversized text/list values, and future or malformed real-observation timestamps.
+- The version-1 snapshot contains current conversation context, immediate instruction, current
+  task, long-term goal, pause reason, user-takeover state, initiative mode, personality mode,
+  descriptive permission preset, explicit player-away state, latest real-world observation time,
+  and stale assumptions requiring revalidation.
+- `permissionPreset` is descriptive Brain state only. It cannot grant a Tool permission or bypass
+  the authoritative Tool Gateway policy.
+- Migration 24 stores the full validated snapshot and monotonic revision under the exact
+  controller, Brain session, and Companion scope. A resumed session receives its own persisted
+  snapshot; cancellation or controller release clears the in-memory projection.
+- Within a multi-call turn, the next Hermes request receives the newly authored snapshot in the
+  bounded context. The authenticated `/brain/audit` response and External Brain page expose the
+  latest snapshot and revision without exposing hidden reasoning.
+- Local adapter, malformed-schema, persistence/versioning, scope-isolation, audit, and Web tests
+  pass. Live Hermes semantic authorship and human UX remain pending.
+
+### Local behavior-mode constraints
+
+- Migration 25 stores local-user-owned initiative (`QUIET`, `NORMAL`, `ACTIVE`) and personality
+  (`COMPANION`, `IMMERSIVE_ROLEPLAY`) settings per Companion. Defaults are `NORMAL` and
+  `COMPANION`.
+- The settings are injected into bounded Brain context. A Brain-authored semantic snapshot must
+  match them; mismatch is rejected as `BRAIN_SEMANTIC_STATE_POLICY_MISMATCH`.
+- The authenticated `/brain/settings` management route and HTML Terminal provide view/change
+  controls. Changing either mode does not rebuild Tool definitions and cannot alter permissions,
+  safety, budgets, or Memory policy.
+- `conversation.propose_proactive` lets the external Brain author one short message and select one
+  supported event class, but Runtime admits it only when `evidenceCallId` names a terminal Tool
+  observation from the exact Brain session. Blocked-task notices require a blocked/paused/failed/
+  reconciliation state, safety alerts require successful `safety.inspect`, and milestones require
+  successful `task.inspect` state evidence.
+- Migration 29 atomically deduplicates `Brain session + evidence call + event type`, retains the
+  admitted message hash and linked conversation event, prunes old/beyond-capacity admission rows,
+  and routes accepted speech through the existing durable offline outbox.
+- `QUIET` permits blocked/safety events only and applies a five-minute interval; `NORMAL` uses one
+  minute; `ACTIVE` uses fifteen seconds. A mode change still cannot alter Tool authority, safety,
+  execution budgets, Memory rules, or the evidence requirement.
+
+### Immediate instruction interruption
+
+- Runtime conservatively distinguishes exact pause/cancel controls and explicit immediate movement
+  instructions from ordinary conversation. Hypothetical or joke wording remains conversation and
+  does not become a task.
+- An explicit immediate instruction can request a safe pause of the currently awaited Tool without
+  waiting for the Companion turn lock. Runtime does not decide the follow-up strategy: it retains
+  the real terminal `PAUSED` observation and supplies it together with the new owner instruction to
+  the same external Brain.
+- The interrupted old turn stops before it can silently issue another Tool call. Goal modification
+  and cancellation invalidate the prior external-Brain session so the old goal cannot resume in
+  the background. Ordinary chat does not invoke either boundary.
+- The Fabric connected body also emits bounded `owner_activity` for real owner block-use and
+  block-break callbacks. Runtime verifies session/owner/Companion scope and compares the exact
+  dimension and XYZ against the payload of the currently active direct or Task-Graph child Tool.
+  Only an exact collision requests pause; nearby or unrelated activity does nothing. The accepted
+  handoff is recorded as owner control context for the next external-Brain turn.
+
+Example response extension:
+
+```json
+{
+  "kind": "FINAL_RESPONSE",
+  "response": "I checked the base.",
+  "semanticState": {
+    "schemaVersion": 1,
+    "conversationContext": "Owner asked for base status",
+    "immediateInstruction": "",
+    "currentTask": "",
+    "longTermGoal": "Keep base supplies ready",
+    "pauseReason": "",
+    "userTakeover": false,
+    "initiativeMode": "NORMAL",
+    "personalityMode": "COMPANION",
+    "permissionPreset": "ASK_FOR_EFFECTS",
+    "playerExplicitlyAway": false,
+    "latestRealWorldObservationAt": "2026-07-26T06:00:00Z",
+    "staleAssumptions": []
+  }
+}
+```
+
+## Final-observation completion claims
+
+- Every Hermes `FINAL_RESPONSE` must include a bounded `completionClaim`. Ordinary conversation
+  uses `NOT_APPLICABLE`; a task result uses either `VERIFIED` or `UNVERIFIED`.
+- Hermes chooses the final observation Tool. For `VERIFIED`, it must cite that Tool call ID.
+  Runtime accepts only a successful terminal world/inventory/safety/task/block/item/entity/menu
+  observation from the same Brain session and rejects missing, failed, nonterminal, or unrelated
+  calls.
+- `UNVERIFIED` cannot cite an observation and must explain why verification was unavailable.
+  This permits an honest response but does not create verified evidence.
+- Migration 26 stores the claim, certainty, optional task ID, explanation, and foreign-key link to
+  the exact audited Tool call. `/brain/audit` and the Brain page show what was checked immediately
+  before the external Brain claimed completion.
+- Runtime does not select the observation, run a task-specific acceptance script, or rewrite the
+  Brain's natural-language answer. Local Replay tests are protocol/evidence tests, not proof of
+  Live Hermes judgment.
+
 ## Deposit to storage slice
 
-- Added `inventory.deposit` / `DepositToStorage` only when the connected Fabric body
+- Added `inventory.deposit` / `DepositToStorage` only when the connected Full-Bridge body
   reports the capability as `AVAILABLE_NOW`.
 - Deposits use the opened vanilla container menu and validated PICKUP/right-click slot
   transactions. Production code does not edit either inventory or create items.
@@ -291,7 +447,7 @@ override the current matrix.
 ## Bounded owner-defense slice
 
 - Added `combat.defend_owner` backed by `DefendOwner`, exposed only when Runtime implementation,
-  connected Fabric body, and current availability intersect. It accepts no target injection: the
+  connected Full-Bridge body, and current availability intersect. It accepts no target injection: the
   body itself selects one live vanilla hostile within eight blocks of the verified owner.
 - Defense approaches through ordinary player input, waits for the vanilla attack-strength cooldown,
   and attacks through `ServerPlayer.attack` plus the normal hand swing. It ends only when the tracked
@@ -370,7 +526,7 @@ override the current matrix.
 
 ## Craft item slice
 
-- Added `item.craft` / `CraftItem` only when the connected Fabric body reports the
+- Added `item.craft` / `CraftItem` only when the connected Full-Bridge body reports the
   capability as `AVAILABLE_NOW`.
 - The body resolves server-side vanilla crafting recipes, calculates the bounded material
   delta, and uses PICKUP menu transactions to place ingredients and retrieve output.

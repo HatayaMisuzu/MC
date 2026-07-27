@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "ingredients": [
+    {"item": "mcac_unknown_fixture:blue_item"},
+    {"item": "mcac_unknown_fixture:blue_item"}
+  ],
+  "result": {
+    "item": "mcac_unknown_fixture:charged_blue_item",
+    "count": 1
+  }
+}

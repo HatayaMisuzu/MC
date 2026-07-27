@@ -190,7 +190,12 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(task.taskId());
         if (!events.isEmpty()) observation.set("fabricObservation", events.getLast().payload());
         boolean success = state == TaskState.COMPLETED;
+        String durableFailure = events.isEmpty() ? ""
+                : events.getLast().payload().path("code").asText(
+                        events.getLast().payload().path("snapshot").path("failureCode").asText(""));
         String code = success ? "OK" : state == TaskState.CANCELLED ? "TOOL_CANCELLED"
+                : (state == TaskState.BLOCKED || state == TaskState.PAUSED)
+                        && durableFailure.equals("UNCERTAIN_EFFECT") ? "UNCERTAIN_EFFECT"
                 : state == TaskState.BLOCKED || state == TaskState.PAUSED ? "TOOL_BLOCKED"
                 : state == TaskState.RECONCILIATION_REQUIRED ? "TOOL_RECONCILIATION_REQUIRED" : "TOOL_FAILED";
         return new ToolResult(call.callId(), call.name(), success, code, observation, true);
@@ -295,23 +300,29 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Break one observed block through vanilla block-breaking rules", blockBreakSchema(),
                 "MEDIUM", "MINE", false));
         if (available.contains("InteractBlock")) values.add(definition("block.interact",
-                "Interact once with a visible reachable block through vanilla player rules",
+                "Interact once with a visible reachable block through vanilla player rules; success requires an "
+                        + "observed world, inventory, or menu postcondition and otherwise returns UNCERTAIN_EFFECT",
                 blockInteractionSchema(), "LOW", "INTERACT", false));
         if (available.contains("PlaceBlock")) values.add(definition("block.place",
-                "Place one declared block at an exact reachable position through vanilla player rules",
+                "Place one declared block at an exact reachable position through vanilla player rules; the exact "
+                        + "world block is authoritative in Survival, Creative, and reusable-item modes",
                 blockPlaceSchema(), "MEDIUM", "BUILD", false));
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
-                "Interact once with a visible reachable entity through vanilla player rules",
+                "Interact once with a visible reachable entity through vanilla player rules; success requires an "
+                        + "observed entity, inventory, vehicle, or menu postcondition and otherwise returns "
+                        + "UNCERTAIN_EFFECT",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
         if (available.contains("AttackEntity")) values.add(definition("entity.attack",
                 "Attack one externally selected visible reachable living entity through vanilla player rules",
                 entityAttackSchema(), "MEDIUM", "COMBAT", false));
         if (available.contains("MenuAction")) {
             values.add(definition("menu.click",
-                    "Perform one bounded pickup click in the exact short-lived open menu session",
+                    "Perform one bounded pickup click in the exact short-lived open menu session; slot/carried or "
+                            + "synchronized menu data/state must change, otherwise the result is UNCERTAIN_EFFECT",
                     menuClickSchema(), "LOW", "INVENTORY", false));
             values.add(definition("menu.quick_move",
-                    "Quick-move one slot in the exact short-lived open menu session",
+                    "Quick-move one slot in the exact short-lived open menu session; slot/carried or synchronized "
+                            + "menu data/state must change, otherwise the result is UNCERTAIN_EFFECT",
                     menuSlotSchema(), "LOW", "INVENTORY", false));
             values.add(definition("menu.close",
                     "Close the exact short-lived open menu session",
@@ -448,6 +459,82 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             commands.execute("brain-cancel-" + context.brainSessionId() + '-' + callId,
                     context.companionId(), stop("cancel"));
         }
+    }
+
+    @Override public boolean pause(ToolContext context, String callId, String reason) {
+        boolean accepted = false;
+        if (taskGraphRuntime != null) {
+            ToolResult graph = taskGraphRuntime.pause(context,
+                    new ToolCall("interrupt-pause-" + callId, "task_graph.pause",
+                            Json.object().put("executionId", callId)), callId);
+            accepted = graph.success() && !graph.code().equals("TASK_GRAPH_NOT_RUNNING");
+        }
+        if (activeTasks.containsKey(key(context, callId))) {
+            CommandReply paused = commands.execute(
+                    "brain-pause-" + context.brainSessionId() + '-' + callId,
+                    context.companionId(), stop("pause"));
+            accepted |= paused.accepted();
+        }
+        return accepted;
+    }
+
+    @Override public boolean conflictsWithOwnerActivity(
+            ToolContext context, String callId, JsonNode activity) {
+        if (tasks == null || activity == null || !activity.isObject()) return false;
+        String prefix = context.brainSessionId() + ':';
+        for (var entry : activeTasks.entrySet()) {
+            if (!entry.getKey().startsWith(prefix)) continue;
+            try {
+                TaskRecord task = tasks.get(entry.getValue()).orElse(null);
+                if (task != null && task.companionId().equals(context.companionId())
+                        && activityMatchesPayload(task.payload(), activity)) {
+                    return true;
+                }
+            } catch (java.sql.SQLException ignored) {
+                // Fail closed: an unverified target match must not preempt a task.
+            }
+        }
+        return false;
+    }
+
+    static boolean activityMatchesPayload(JsonNode payload, JsonNode activity) {
+        if (!Set.of("BLOCK_USE", "BLOCK_BREAK").contains(activity.path("activityType").asText())) {
+            return false;
+        }
+        JsonNode activityPosition = activity.path("position");
+        if (!validPosition(activityPosition)) return false;
+        return containsPosition(payload, activityPosition, 0);
+    }
+
+    private static boolean containsPosition(JsonNode value, JsonNode expected, int depth) {
+        if (value == null || depth > 6) return false;
+        if (validPosition(value) && samePosition(value, expected)) return true;
+        if (value.isObject()) {
+            var fields = value.fields();
+            while (fields.hasNext()) {
+                if (containsPosition(fields.next().getValue(), expected, depth + 1)) return true;
+            }
+        } else if (value.isArray()) {
+            for (JsonNode child : value) {
+                if (containsPosition(child, expected, depth + 1)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean validPosition(JsonNode value) {
+        return value != null && value.isObject()
+                && value.path("dimension").isTextual()
+                && value.path("x").canConvertToInt()
+                && value.path("y").canConvertToInt()
+                && value.path("z").canConvertToInt();
+    }
+
+    private static boolean samePosition(JsonNode left, JsonNode right) {
+        return left.path("dimension").asText().equals(right.path("dimension").asText())
+                && left.path("x").asInt() == right.path("x").asInt()
+                && left.path("y").asInt() == right.path("y").asInt()
+                && left.path("z").asInt() == right.path("z").asInt();
     }
 
     private static String key(ToolContext context, String callId) {

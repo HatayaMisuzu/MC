@@ -25,8 +25,11 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 /** Executes one reusable capability at a time and advances only from deterministic task observations. */
 public final class AgentKernel implements CommandService.TaskLifecycleListener, AutoCloseable {
@@ -62,11 +65,7 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
         this.memories = memories;
         this.conversations = conversations;
         this.failureClassifier = new FailureClassifier();
-        this.replanner = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-agent-replanner");
-            thread.setDaemon(false);
-            return thread;
-        });
+        this.replanner = boundedReplanner();
     }
 
     public synchronized DurablePlan start(String planId) throws SQLException {
@@ -226,7 +225,20 @@ public final class AgentKernel implements CommandService.TaskLifecycleListener, 
 
     private void scheduleReplan(DurablePlan blocked) {
         if (providers == null || companions == null || sessions == null || capabilityVisibility == null) return;
-        replanner.execute(() -> replan(blocked.planId(), blocked.revision()));
+        try {
+            replanner.execute(() -> replan(blocked.planId(), blocked.revision()));
+        } catch (RejectedExecutionException saturated) {
+            log.warn("Agent replan queue is full; durable blocked plan remains stopped: plan=" + blocked.planId());
+        }
+    }
+
+    static ExecutorService boundedReplanner() {
+        return new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(64, true), runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-agent-replanner");
+            thread.setDaemon(false);
+            return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private void replan(String planId, long blockedRevision) {

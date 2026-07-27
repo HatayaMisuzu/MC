@@ -49,6 +49,7 @@ public final class UnknownModFixture {
     }
 
     @GameTest(
+            batch = "unknownModDiscovery",
             templateNamespace = "minecraft",
             template = "bastion/mobs/empty",
             timeoutTicks = 200)

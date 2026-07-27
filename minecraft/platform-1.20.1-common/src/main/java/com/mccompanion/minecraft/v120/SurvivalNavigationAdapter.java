@@ -115,7 +115,12 @@ final class SurvivalNavigationAdapter {
         if (isHazard(feet) || isHazard(head) || isHazard(level.getBlockState(position.below()))) {
             return GridPathPlanner.Traversal.blocked();
         }
-        AABB occupiedVolume = new AABB(position).expandTowards(0.0D, 1.0D, 0.0D);
+        // A candidate cell alone is narrower than the combined collision radii of a
+        // ServerPlayer and an ordinary mob. Keep a small horizontal clearance so a
+        // valid grid route cannot physically brush and displace the observed entity.
+        AABB occupiedVolume = new AABB(position)
+                .expandTowards(0.0D, 1.0D, 0.0D)
+                .inflate(0.25D, 0.0D, 0.25D);
         if (!level.getEntities(
                         body,
                         occupiedVolume,

@@ -1226,7 +1226,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                 chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
                 "withdraw skill failed to start");
 
-        helper.runAfterDelay(20, () -> {
+        // Allow the paused/resumed body to traverse and open the door before
+        // invalidating the remaining route with the dynamic obstacle.
+        helper.runAfterDelay(40, () -> {
             helper.assertValueEqual(count(body, Items.IRON_INGOT), 3,
                     "withdraw did not produce the verified companion inventory delta");
             helper.assertValueEqual(count(chest, Items.IRON_INGOT), 2,
@@ -1625,7 +1627,16 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 }
             }
         }
-        for (int z = -1; z <= 1; z++) {
+        for (int x = -1; x <= 11; x++) {
+            for (int z : new int[] {-3, 3}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z),
+                            Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int z = -2; z <= 2; z++) {
             for (int y = 0; y <= 2; y++) {
                 body.serverLevel().setBlockAndUpdate(
                         origin.offset(3, y, z),
@@ -1662,15 +1673,13 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 helper.assertTrue(registry.resume(owner).success(), "mid-route navigation resume failed");
             });
         });
-        helper.runAfterDelay(20, () -> {
-            for (int z = 0; z <= 0; z++) {
-                for (int y = 0; y <= 2; y++) {
-                    body.serverLevel().setBlockAndUpdate(
-                            origin.offset(6, y, z),
-                            Blocks.COBBLESTONE.defaultBlockState());
-                }
-            }
-            helper.succeedWhen(() -> {
+        insertDynamicObstacleAfterDoorOpens(
+                helper,
+                body,
+                origin.offset(3, 0, 0),
+                origin.offset(6, 0, 0),
+                100,
+                () -> helper.succeedWhen(() -> {
                 helper.assertTrue(
                         body.position().distanceToSqr(target) <= 2.25D,
                         "global navigation has not reached the verified target");
@@ -1686,7 +1695,34 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         "navigation displaced or harmed the observed entity blocker");
                 blocker.discard();
                 runNavigationControlAcceptance(helper, registry, owner, body);
-            });
+            }));
+    }
+
+    private static void insertDynamicObstacleAfterDoorOpens(
+            GameTestHelper helper,
+            CompanionPlayer body,
+            BlockPos door,
+            BlockPos obstacle,
+            int ticksRemaining,
+            Runnable afterInjection) {
+        helper.runAfterDelay(1, () -> {
+            var state = body.serverLevel().getBlockState(door);
+            if (state.is(Blocks.OAK_DOOR)
+                    && state.hasProperty(BlockStateProperties.OPEN)
+                    && state.getValue(BlockStateProperties.OPEN)) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            obstacle.above(y),
+                            Blocks.COBBLESTONE.defaultBlockState());
+                }
+                afterInjection.run();
+                return;
+            }
+            helper.assertTrue(
+                    ticksRemaining > 1,
+                    "navigation did not open the door before dynamic obstacle injection");
+            insertDynamicObstacleAfterDoorOpens(
+                    helper, body, door, obstacle, ticksRemaining - 1, afterInjection);
         });
     }
 

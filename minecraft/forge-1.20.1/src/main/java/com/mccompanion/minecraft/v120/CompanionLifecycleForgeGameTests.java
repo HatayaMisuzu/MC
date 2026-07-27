@@ -40,6 +40,7 @@ public final class CompanionLifecycleForgeGameTests {
     }
 
     @GameTest(
+            batch = "fullBridgeLifecycle",
             templateNamespace = "minecraft",
             template = "bastion/mobs/empty",
             timeoutTicks = 300000)
@@ -742,6 +743,7 @@ public final class CompanionLifecycleForgeGameTests {
     }
 
     @GameTest(
+            batch = "craftAndSmelt",
             templateNamespace = "minecraft",
             template = "bastion/mobs/empty",
             timeoutTicks = 300000)
@@ -1386,7 +1388,16 @@ public final class CompanionLifecycleForgeGameTests {
                     }
                 }
             }
-            for (int z = -1; z <= 1; z++) {
+            for (int x = -1; x <= 15; x++) {
+                for (int z : new int[] {-3, 3}) {
+                    for (int y = 0; y <= 2; y++) {
+                        body.serverLevel().setBlockAndUpdate(
+                                pathOrigin.offset(x, y, z),
+                                Blocks.COBBLESTONE.defaultBlockState());
+                    }
+                }
+            }
+            for (int z = -2; z <= 2; z++) {
                 for (int y = 0; y <= 2; y++) {
                     body.serverLevel().setBlockAndUpdate(
                             pathOrigin.offset(3, y, z),
@@ -1423,15 +1434,12 @@ public final class CompanionLifecycleForgeGameTests {
                             "mid-route navigation resume failed");
                 });
             });
-            helper.runAfterDelay(20, () -> {
-                for (int z = 0; z <= 0; z++) {
-                    for (int y = 0; y <= 2; y++) {
-                        body.serverLevel().setBlockAndUpdate(
-                                pathOrigin.offset(6, y, z),
-                                Blocks.COBBLESTONE.defaultBlockState());
-                    }
-                }
-            });
+            insertDynamicObstacleAfterDoorOpens(
+                    helper,
+                    body,
+                    pathOrigin.offset(3, 0, 0),
+                    pathOrigin.offset(6, 0, 0),
+                    100);
             helper.runAfterDelay(240, () -> {
                 helper.assertTrue(
                         body.position().distanceToSqr(target) <= 2.25D,
@@ -1839,6 +1847,32 @@ public final class CompanionLifecycleForgeGameTests {
                         target,
                         ticksRemaining - 1,
                         reached));
+    }
+
+    private static void insertDynamicObstacleAfterDoorOpens(
+            GameTestHelper helper,
+            CompanionPlayer body,
+            BlockPos door,
+            BlockPos obstacle,
+            int ticksRemaining) {
+        helper.runAfterDelay(1, () -> {
+            var state = body.serverLevel().getBlockState(door);
+            if (state.is(Blocks.OAK_DOOR)
+                    && state.hasProperty(BlockStateProperties.OPEN)
+                    && state.getValue(BlockStateProperties.OPEN)) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            obstacle.above(y),
+                            Blocks.COBBLESTONE.defaultBlockState());
+                }
+                return;
+            }
+            helper.assertTrue(
+                    ticksRemaining > 1,
+                    "navigation did not open the door before dynamic obstacle injection");
+            insertDynamicObstacleAfterDoorOpens(
+                    helper, body, door, obstacle, ticksRemaining - 1);
+        });
     }
 
     private static void awaitFollowPosition(

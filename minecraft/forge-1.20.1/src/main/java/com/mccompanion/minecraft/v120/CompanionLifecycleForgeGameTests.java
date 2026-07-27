@@ -1595,12 +1595,106 @@ public final class CompanionLifecycleForgeGameTests {
                                 "Forge companion kept moving after explicit owner stop");
                         helper.assertTrue(registry.status(owner).contains("mode=IDLE"),
                                 "Forge explicit owner stop did not leave navigation IDLE");
-                        runNavigationBoundaryAcceptance(
+                        runNavigationCombinationAcceptance(
                                 helper, registry, owner, body, ownerConnection);
                     });
                 });
             });
         });
+    }
+
+    private static void runNavigationCombinationAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            FakeConnection ownerConnection) {
+        BlockPos work = body.blockPosition();
+        for (int x = -5; x <= 5; x++) {
+            for (int z = -3; z <= 3; z++) {
+                body.serverLevel().setBlockAndUpdate(work.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(work.offset(x, 0, z), Blocks.AIR.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(work.offset(x, 1, z), Blocks.AIR.defaultBlockState());
+            }
+        }
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst()
+                .orElseThrow();
+        String lease = "forge-navigation-combination";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, lease, 3L, System.currentTimeMillis() + 30_000L).success(),
+                "Forge navigation combination lease acquisition failed");
+
+        int coalBefore = body.getInventory().countItem(Items.COAL);
+        ItemEntity coal = new ItemEntity(body.serverLevel(),
+                work.getX() + 4.5D, work.getY(), work.getZ() + 0.5D,
+                new ItemStack(Items.COAL));
+        body.serverLevel().addFreshEntity(coal);
+        helper.assertTrue(registry.runtimeStart(
+                        companionId, lease, 3L, "forge-navigation-combo-collect", "skill",
+                        null, null, null,
+                        new SkillParameters("CollectResource", "minecraft:coal", 1, false,
+                                body.serverLevel().dimension().location().toString(),
+                                null, null, null, "", "UP", "MAIN_HAND",
+                                "", null, null, "", null))
+                        .success(),
+                "Forge post-navigation collection failed to start");
+        for (int tick = 0; tick < 180
+                && registry.runtimeSnapshots(true).stream()
+                        .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                && !snapshot.behaviorState().equals("IDLE")); tick++) {
+            registry.tick();
+        }
+        helper.assertTrue(body.getInventory().countItem(Items.COAL) == coalBefore + 1,
+                "Forge post-navigation collection inventory delta was incorrect");
+
+        BlockPos dirt = body.blockPosition().offset(2, 0, 1);
+        body.serverLevel().setBlockAndUpdate(dirt, Blocks.DIRT.defaultBlockState());
+        int dirtBefore = body.getInventory().countItem(Items.DIRT);
+        helper.assertTrue(registry.runtimeStart(
+                        companionId, lease, 3L, "forge-navigation-combo-mine", "skill",
+                        null, null, null,
+                        new SkillParameters("MineResourceVein", "minecraft:dirt", 1, false,
+                                body.serverLevel().dimension().location().toString(),
+                                dirt.getX(), dirt.getY(), dirt.getZ(), "", "UP", "MAIN_HAND",
+                                "", null, null, "", null))
+                        .success(),
+                "Forge post-navigation mining failed to start");
+        for (int tick = 0; tick < 180
+                && registry.runtimeSnapshots(true).stream()
+                        .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                && !snapshot.behaviorState().equals("IDLE")); tick++) {
+            registry.tick();
+        }
+        helper.assertTrue(body.serverLevel().getBlockState(dirt).isAir(),
+                "Forge post-navigation mining did not change the exact world target");
+        helper.assertTrue(body.getInventory().countItem(Items.DIRT) == dirtBefore + 1,
+                "Forge post-navigation mining inventory delta was incorrect");
+
+        BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
+        body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+        Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+        chest.setItem(0, new ItemStack(Items.IRON_INGOT));
+        int ironBefore = body.getInventory().countItem(Items.IRON_INGOT);
+        helper.assertTrue(registry.runtimeStart(
+                        companionId, lease, 3L, "forge-navigation-combo-container", "skill",
+                        null, null, null,
+                        new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
+                                body.serverLevel().dimension().location().toString(),
+                                chestPos.getX(), chestPos.getY(), chestPos.getZ(), "", "UP", "MAIN_HAND",
+                                "", null, null, "", null))
+                        .success(),
+                "Forge post-navigation container withdrawal failed to start");
+        for (int tick = 0; tick < 20; tick++) registry.tick();
+        helper.assertTrue(body.getInventory().countItem(Items.IRON_INGOT) == ironBefore + 1,
+                "Forge post-navigation container inventory delta was incorrect");
+        helper.assertTrue(chest.isEmpty(),
+                "Forge post-navigation container source delta was incorrect");
+        helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 3L).success(),
+                "Forge navigation combination lease release failed");
+        runNavigationBoundaryAcceptance(helper, registry, owner, body, ownerConnection);
     }
 
     private static void runNavigationBoundaryAcceptance(

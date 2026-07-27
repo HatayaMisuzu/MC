@@ -1949,8 +1949,82 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                 "companion kept moving after explicit owner stop");
                         helper.assertTrue(registry.status(owner).contains("mode=IDLE"),
                                 "explicit owner stop did not leave navigation IDLE");
-                        runNavigationBoundaryAcceptance(helper, registry, owner, body);
+                        runNavigationCombinationAcceptance(helper, registry, owner, body);
                     });
+                });
+            });
+        });
+    }
+
+    private static void runNavigationCombinationAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body) {
+        BlockPos work = body.blockPosition();
+        for (int x = -5; x <= 5; x++) {
+            for (int z = -3; z <= 3; z++) {
+                body.serverLevel().setBlockAndUpdate(work.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(work.offset(x, 0, z), Blocks.AIR.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(work.offset(x, 1, z), Blocks.AIR.defaultBlockState());
+            }
+        }
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst()
+                .orElseThrow();
+        String lease = "gametest-navigation-combination";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, lease, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "navigation combination lease acquisition failed");
+
+        int coalBefore = count(body, Items.COAL);
+        ItemEntity coal = new ItemEntity(body.serverLevel(),
+                work.getX() + 4.5D, work.getY(), work.getZ() + 0.5D,
+                new ItemStack(Items.COAL));
+        body.serverLevel().addFreshEntity(coal);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L, "navigation-combo-collect", "skill",
+                        null, null, null,
+                        new SkillParameters("CollectResource", "minecraft:coal", 1, false)).success(),
+                "post-navigation collection failed to start");
+        awaitBehaviorIdle(helper, registry, companionId, 180, collected -> {
+            helper.assertValueEqual(count(body, Items.COAL), coalBefore + 1,
+                    "post-navigation collection inventory delta was incorrect");
+            BlockPos dirt = body.blockPosition().offset(2, 0, 1);
+            body.serverLevel().setBlockAndUpdate(dirt, Blocks.DIRT.defaultBlockState());
+            int dirtBefore = count(body, Items.DIRT);
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L, "navigation-combo-mine", "skill",
+                            null, null, null,
+                            new SkillParameters("MineResourceVein", "minecraft:dirt", 1, false,
+                                    body.serverLevel().dimension().location().toString(),
+                                    dirt.getX(), dirt.getY(), dirt.getZ())).success(),
+                    "post-navigation mining failed to start");
+            awaitBehaviorIdle(helper, registry, companionId, 180, mined -> {
+                helper.assertTrue(body.serverLevel().getBlockState(dirt).isAir(),
+                        "post-navigation mining did not change the exact world target");
+                helper.assertValueEqual(count(body, Items.DIRT), dirtBefore + 1,
+                        "post-navigation mining inventory delta was incorrect");
+                BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
+                body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+                Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+                chest.setItem(0, new ItemStack(Items.IRON_INGOT));
+                int ironBefore = count(body, Items.IRON_INGOT);
+                helper.assertTrue(registry.runtimeStart(
+                                companionId, lease, 1L, "navigation-combo-container", "skill",
+                                null, null, null,
+                                new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
+                        "post-navigation container withdrawal failed to start");
+                awaitBehaviorIdle(helper, registry, companionId, 40, withdrawn -> {
+                    helper.assertValueEqual(count(body, Items.IRON_INGOT), ironBefore + 1,
+                            "post-navigation container inventory delta was incorrect");
+                    helper.assertTrue(chest.isEmpty(),
+                            "post-navigation container source delta was incorrect");
+                    helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                            "navigation combination lease release failed");
+                    runNavigationBoundaryAcceptance(helper, registry, owner, body);
                 });
             });
         });

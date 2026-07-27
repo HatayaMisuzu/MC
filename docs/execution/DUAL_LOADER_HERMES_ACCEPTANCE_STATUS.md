@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 14:37 +08:00
+Updated: 2026-07-27 14:43 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `bfa7696eb1a2390831424f4484021f5a6e1780a1`
+- Latest committed source SHA: `331e12f4aed2927ddbfc0f8edf96c7519711f2c2`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -430,6 +430,13 @@ Passed on the frozen SHA:
   withdraws one iron ingot from a real chest. Assertions cover the entity/world
   mutation, source-container delta, and body-inventory deltas. Fabric 31/31,
   Forge 3/3, and `forbiddenApiCheck` pass.
+- Stage 4 owner-activity slice `331e12f` adds the missing Fabric E2E event
+  path, reusing the exact bounded callback path used by real block-use/break
+  events. The full Runtime/Fabric E2E passes in 1m10s and records the event;
+  Forge E2E already records its equivalent. Runtime tests separately prove
+  exact-target-only matching and that a matching event pauses the old external
+  Brain Tool before the short instruction is handled. This is layered local
+  automation, not a fabricated human-click result.
 
 ## Remaining work
 

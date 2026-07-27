@@ -1949,13 +1949,58 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                 "companion kept moving after explicit owner stop");
                         helper.assertTrue(registry.status(owner).contains("mode=IDLE"),
                                 "explicit owner stop did not leave navigation IDLE");
-                        helper.assertTrue(registry.remove(owner).success(),
-                                "navigation control test cleanup failed");
-                        helper.succeed();
+                        runNavigationBoundaryAcceptance(helper, registry, owner, body);
                     });
                 });
             });
         });
+    }
+
+    private static void runNavigationBoundaryAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body) {
+        CompanionRegistry.Result invalid =
+                registry.goTo(owner, Double.NaN, body.getY(), body.getZ());
+        helper.assertTrue(!invalid.success() && "INVALID_TARGET".equals(invalid.code()),
+                "non-finite target was not rejected honestly: " + invalid.code());
+        helper.assertTrue(registry.status(owner).contains("mode=IDLE"),
+                "invalid target changed the active navigation mode");
+
+        BlockPos unloaded = findUnloadedNavigationTarget(body);
+        helper.assertTrue(unloaded != null,
+                "GameTest could not find an unloaded target within the navigation bound");
+        Vec3 target = Vec3.atBottomCenterOf(unloaded);
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "unloaded-boundary navigation failed to start");
+        helper.runAfterDelay(4, () -> {
+            helper.assertTrue(!body.serverLevel().hasChunkAt(unloaded),
+                    "navigation unexpectedly loaded its target chunk");
+            String status = registry.status(owner);
+            helper.assertTrue(status.contains("mode=PAUSED")
+                            && status.contains("failure=TARGET_CHUNK_UNLOADED"),
+                    "unloaded target did not pause with honest evidence: " + status);
+            helper.assertTrue(registry.remove(owner).success(),
+                    "navigation boundary test cleanup failed");
+            helper.succeed();
+        });
+    }
+
+    private static BlockPos findUnloadedNavigationTarget(CompanionPlayer body) {
+        BlockPos origin = body.blockPosition();
+        for (int distance = 192; distance >= 16; distance -= 16) {
+            BlockPos[] candidates = {
+                    origin.offset(distance, 0, 0),
+                    origin.offset(-distance, 0, 0),
+                    origin.offset(0, 0, distance),
+                    origin.offset(0, 0, -distance)
+            };
+            for (BlockPos candidate : candidates) {
+                if (!body.serverLevel().hasChunkAt(candidate)) return candidate;
+            }
+        }
+        return null;
     }
 
     private static void awaitPosition(

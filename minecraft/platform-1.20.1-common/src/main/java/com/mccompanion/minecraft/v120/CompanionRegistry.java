@@ -153,6 +153,9 @@ public final class CompanionRegistry {
         if (entry == null) {
             return missingOrSleeping(owner);
         }
+        if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
+            return Result.failure("INVALID_TARGET", "Navigation target coordinates must be finite.");
+        }
         entry.mode = CompanionEntry.Mode.GOTO;
         entry.resumeMode = CompanionEntry.Mode.GOTO;
         entry.hasTarget = true;

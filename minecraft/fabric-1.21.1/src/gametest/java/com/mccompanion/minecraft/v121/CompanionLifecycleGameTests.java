@@ -2302,6 +2302,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                             helper.assertValueEqual(registry.runtimeLastPublishedBehaviorId(),
                                     deliveredSnapshot.behaviorId(),
                                     "waiting for RuntimeBridge to publish the terminal delivery observation");
+                            MinecraftAiCompanionFabric.integrationSubmitOwnerBlockActivity(
+                                    owner, owner.blockPosition(), "BLOCK_USE");
+                            LOGGER.info("runtime_e2e_owner_activity_sent companion={} target={}",
+                                    recovered.getUUID(), owner.blockPosition());
                             LOGGER.info("runtime_e2e_conversation_complete companion={} delivered=6",
                                     recovered.getUUID());
                             CompanionRegistry.Result removed = registry.remove(owner);

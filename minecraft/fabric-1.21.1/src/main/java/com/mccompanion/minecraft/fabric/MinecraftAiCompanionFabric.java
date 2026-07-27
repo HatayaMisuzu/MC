@@ -114,4 +114,12 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
         RuntimeBridge bridge = runtimeBridge;
         if (bridge != null) bridge.submitOwnerBlockActivity(owner, position, activityType);
     }
+
+    /** Test-only bridge entry that exercises the same bounded event path as real player callbacks. */
+    public static void integrationSubmitOwnerBlockActivity(
+            net.minecraft.server.level.ServerPlayer owner,
+            net.minecraft.core.BlockPos position,
+            String activityType) {
+        notifyOwnerBlockActivity(owner, position, activityType);
+    }
 }

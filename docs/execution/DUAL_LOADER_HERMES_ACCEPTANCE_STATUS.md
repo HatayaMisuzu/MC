@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 15:00 +08:00
+Updated: 2026-07-27 15:25 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -10,9 +10,9 @@ only completion matrix.
 
 ## Current checkpoint
 
-- Current stage: `5 — UNKNOWN_MOD_AND_BOUNDED_SEARCH`
+- Current stage: `6 — AUTOMATION_AND_RELEASE_GATES`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `f9a17527f1f90493d970667a0ee8e069223c9603`
+- Latest committed source SHA: `fbc6a3d15d0637f641ff7ac3ab71da548ab32ff4`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -24,6 +24,8 @@ only completion matrix.
 - Stage 3 result: `LOCALLY_VERIFIED`
 - Stage 4 automated result: `LOCALLY_VERIFIED`
 - Stage 4 human-play result: `NOT_RUN`
+- Stage 5 automated result: `LOCALLY_VERIFIED`
+- Stage 5 Live-Hermes result: `NOT_RUN`
 
 ## Frozen environment
 
@@ -115,9 +117,10 @@ Passed on the frozen SHA:
 - JDK 25 emits a future native-access warning for SQLite JDBC. Target release
   toolchains remain Java 21/17; the warning is retained for compatibility
   review.
-- Forge and NeoForge GameTest coverage is only one lifecycle case each, far
-  below Fabric's primitive/Registry/menu/effect coverage. Forge parity remains
-  unimplemented.
+- NeoForge GameTest coverage remains one lifecycle case and NeoForge remains
+  `LOCAL_ONLY`. Forge now has four required real-server GameTests, including an
+  isolated unknown-namespace Mod fixture; this is not Live-Hermes,
+  third-party-Mod, or human-play evidence.
 - Live Hermes and human play evidence are intentionally absent.
 
 ## Completed work
@@ -452,10 +455,25 @@ Passed on the frozen SHA:
   The real Java 17 Forge 47.4.10 GameTest server reports all 3 required tests
   passed. Forge Full Runtime Bridge is therefore locally verified; this remains
   automated server evidence, not Live-Hermes or human-play evidence.
+- Stage 5 Forge unknown-Mod slices `7e8acb0` and `14207d4` add an isolated
+  GameTest-only Mod with unknown-namespace item, tag and recipe data. The real
+  Java 17 Forge server discovers those resources generically through Registry,
+  tag and recipe mechanisms and reports all 4 required GameTests passed. A
+  production Forge JAR inspection proves the fixture is absent from the shipped
+  artifact.
+- Stage 5 Runtime safety slice `fbc6a3d` keeps Search result bodies as untrusted
+  data: a hostile page is flagged, cannot add shell/filesystem/Memory-approval
+  or world-edit authority, and is omitted from citations. A separate
+  deterministic external-client scenario uses only `registry.describe` and
+  `recipe.query`, then returns the honest
+  `UNSUPPORTED_GENERIC_INTERACTION` result without mutating world, menu, or
+  Memory state. Focused Runtime tests pass. These tests establish bounded
+  mechanism and authority behavior, not Live-Hermes judgment.
 
 ## Remaining work
 
-- Complete stages 5–6 before requesting any Live-Hermes or human action.
+- Complete stage 6 automation and release gates before requesting any
+  Live-Hermes or human action.
 - Discover the real Hermes entry point and credentials safely at stage 7.
 - Run real dual-loader Hermes and human acceptance before any final seal.
 

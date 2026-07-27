@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 15:50 +08:00
+Updated: 2026-07-27 16:16 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `6 — REMOTE_CI_CLOSURE`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `0469a179111b2202242493e001ea45575e50a773`
+- Latest committed source SHA: `f57a95fd851d30da4896aa84254c8c6f8e1bf429`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -479,6 +479,16 @@ Passed on the frozen SHA:
   batches, wait for observed door opening before dynamic route invalidation,
   and reserve collision clearance around observed entities. Fabric 31/31 and
   Forge 4/4 real-server GameTests pass after the correction.
+- Remote run `30247592089` exposed that separate Forge batches still place
+  their tiny templates only a few blocks apart. The lifecycle arena extended
+  into that adjacent space on the slower hosted runner, and its connected body
+  died from lava before the swim phase. Slice `f57a95f` relocates only the
+  large navigation phase into a separate corridor, keeps the earlier real
+  interaction fixture unchanged, waits on the unchanged three-block
+  displacement/six-block retreat conditions, and gives observed door opening
+  a bounded slow-runner allowance. The complete Forge suite then passes 4/4 in
+  two consecutive runs with all original movement, hazard and mutation
+  assertions retained.
 - The complete local Stage 6 chain passes: `clean check`, all three Loader
   builds and launches, Fabric 31/31, Forge 4/4 and NeoForge 1/1 GameTests,
   authenticated Runtime/Fabric and Runtime/Forge E2E, both two-process restart
@@ -497,13 +507,16 @@ Passed on the frozen SHA:
   `ca47c976886278aa5879b05d25f6e655676aec62a9fc223fe2bbe7fa8cfb61b2`.
 - GitHub Dependency Graph was enabled through the repository's official
   vulnerability-alerts control and the SBOM endpoint now returns SPDX 2.3 with
-  276 packages. The prior dependency-review configuration blocker is ready for
-  same-SHA remote rerun.
+  276 packages. At pushed checkpoint `d18084b`, PR fast run `30247587038`,
+  Windows package run `30247587044`, dependency review, Java CodeQL and
+  JavaScript/TypeScript CodeQL in run `30247587041` passed. Minecraft-heavy run
+  `30247592089` failed only on the Forge overlap described above; it is
+  historical failure evidence, not a pass for the corrected SHA.
 
 ## Remaining work
 
-- Push the Stage 6 closure and record same-SHA PR fast, Windows package,
-  Minecraft heavy, dependency-review and both CodeQL results.
+- Push the corrected Stage 6 closure and record same-SHA PR fast, Windows
+  package, Minecraft heavy, dependency-review and both CodeQL results.
 - Live Hermes discovery/verification and human play are user-deferred. Keep
   `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING` and `HUMAN_PLAYTEST_PENDING`;
   do not convert local automation into either form of evidence.

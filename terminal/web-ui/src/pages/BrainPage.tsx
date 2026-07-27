@@ -8,10 +8,12 @@ import { PageHeader } from '../components/PageHeader'
 import { StatusBadge } from '../components/StatusBadge'
 import { useTerminal } from '../context/TerminalContext'
 import { useResource } from '../hooks/useResource'
+import { useI18n } from '../i18n/I18nContext'
 import type { BrainBehaviorSettings, BrainSessionAudit, BrainStatus, CompanionSnapshot, MemorySnapshot } from '../types'
 
 export function BrainPage() {
   const { selected, selectedId, requestPlan } = useTerminal()
+  const { t } = useI18n()
   const companions = useResource<CompanionSnapshot>(() => selectedId
     ? api<CompanionSnapshot>(`/api/companions?instanceId=${encodeURIComponent(selectedId)}`)
     : Promise.resolve({ instanceId: '', mode: 'SAFE_IDLE', companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [] }), [selectedId])
@@ -56,7 +58,7 @@ export function BrainPage() {
       })
       await memories.refresh()
     } catch (failure) {
-      setReviewError(failure instanceof Error ? failure.message : 'Memory review failed')
+      setReviewError(failure instanceof Error ? failure.message : t('brain.memoryReviewFailed'))
     } finally {
       setReviewing('')
     }
@@ -68,7 +70,7 @@ export function BrainPage() {
     if (action !== 'export_safe_summary') await memories.refresh()
     return result
   }
-  if (!selected) return <EmptyState title="Select an instance">External Brain status belongs to a Runtime profile.</EmptyState>
+  if (!selected) return <EmptyState title={t('empty.selectInstance')}>{t('brain.empty')}</EmptyState>
   const send = () => {
     const text = message.trim()
     if (!text || !companionId) return
@@ -76,71 +78,76 @@ export function BrainPage() {
     setMessage('')
   }
   return <div className="page">
-    <PageHeader title="External Brain" description="The external Brain owns high-level decisions. MCAC exposes bounded tools, verified observations, memory, search, safety, and durable audit."
-      actions={<ActionButton icon={<RefreshCw size={15} />} onClick={refresh}>Refresh</ActionButton>} />
+    <PageHeader title={t('brain.title')} description={t('brain.description')}
+      actions={<ActionButton icon={<RefreshCw size={15} />} onClick={refresh}>{t('common.refresh')}</ActionButton>} />
     <section className="companion-toolbar">
-      <label className="field"><span>Companion</span><select value={companionId} onChange={(event) => setSelectedCompanion(event.target.value)}>
+      <label className="field"><span>{t('term.companion')}</span><select value={companionId} onChange={(event) => setSelectedCompanion(event.target.value)}>
         {(companions.data?.companions ?? []).map((companion) => <option key={companion.id} value={companion.id}>{companion.displayName}</option>)}
       </select></label>
       <StatusBadge value={status.data?.health.status ?? 'WAITING'} />
-      <span>{status.data?.health.adapter || 'No adapter'} · controller {status.data?.activeControllerId || 'none'}</span>
-      <span>Reconnect <StatusBadge value={reconnectState} /></span>
-      <label className="field"><span>Initiative</span><select value={settings.data?.initiativeMode ?? 'NORMAL'}
+      <span>{status.data?.health.adapter || t('brain.noAdapter')} · {t('brain.controller')} {status.data?.activeControllerId || t('common.none')}</span>
+      <span>{t('brain.reconnect')} <StatusBadge value={reconnectState} /></span>
+      <label className="field"><span>{t('brain.initiative')}</span><select value={settings.data?.initiativeMode ?? 'NORMAL'}
         onChange={(event) => void updateSettings(event.target.value as BrainBehaviorSettings['initiativeMode'],
           settings.data?.personalityMode ?? 'COMPANION')}>
-        <option value="QUIET">Quiet</option><option value="NORMAL">Normal</option><option value="ACTIVE">Active</option>
+        <option value="QUIET">{t('brain.quiet')}</option><option value="NORMAL">{t('brain.normal')}</option><option value="ACTIVE">{t('brain.active')}</option>
       </select></label>
-      <label className="field"><span>Personality</span><select value={settings.data?.personalityMode ?? 'COMPANION'}
+      <label className="field"><span>{t('brain.personality')}</span><select value={settings.data?.personalityMode ?? 'COMPANION'}
         onChange={(event) => void updateSettings(settings.data?.initiativeMode ?? 'NORMAL',
           event.target.value as BrainBehaviorSettings['personalityMode'])}>
-        <option value="COMPANION">Companion</option><option value="IMMERSIVE_ROLEPLAY">Immersive roleplay</option>
+        <option value="COMPANION">{t('term.companion')}</option><option value="IMMERSIVE_ROLEPLAY">{t('brain.roleplay')}</option>
       </select></label>
     </section>
-    {!companionId ? <EmptyState title="No connected companion">Connect a Fabric companion before starting a Brain turn.</EmptyState> : <>
-      <section className="companion-chat"><h2>Chat / think / search / act</h2><p>Actions occur only when the external Brain explicitly calls an AVAILABLE_NOW MCAC tool.</p>
+    {!companionId ? <EmptyState title={t('brain.noCompanion')}>{t('brain.noCompanionBody')}</EmptyState> : <>
+      <section className="companion-chat"><h2>{t('brain.chatTitle')}</h2><p>{t('brain.chatBoundary')}</p>
         <div className="companion-chat-row"><textarea maxLength={4096} value={message} onChange={(event) => setMessage(event.target.value)}
-          placeholder="Ask a question, discuss an idea, request a search, or describe an in-game action…"
+          placeholder={t('brain.chatPlaceholder')}
           onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send() } }} />
-          <ActionButton tone="primary" icon={<Send size={15} />} disabled={!message.trim()} onClick={send}>Send</ActionButton></div>
+          <ActionButton tone="primary" icon={<Send size={15} />} disabled={!message.trim()} onClick={send}>{t('brain.send')}</ActionButton></div>
       </section>
-      <section className="main-panel"><header className="panel-header"><h2>Brain sessions and tool audit</h2><span>{audit.data?.length ?? 0} sessions</span></header>
+      <section className="main-panel"><header className="panel-header"><h2>{t('brain.audit')}</h2><span>{t('brain.sessionCount', { count: audit.data?.length ?? 0 })}</span></header>
         <div className="event-rows">{(audit.data ?? []).flatMap((session) => session.toolCalls.length ? session.toolCalls.map((tool) =>
           <div className="event-row" key={`${session.sessionId}-${tool.callId}`}><time>{new Date(session.updatedAt).toLocaleTimeString()}</time><strong>{tool.toolName}</strong>
             <StatusBadge value={tool.success ? 'PASS' : 'FAILED'} /><span>{tool.code}</span><p>{JSON.stringify(tool.observation ?? {})}</p></div>) :
           [<div className="event-row" key={session.sessionId}><time>{new Date(session.updatedAt).toLocaleTimeString()}</time><strong>{session.provider}</strong><StatusBadge value={session.state} /><span>{session.lastCode}</span></div>])}</div>
       </section>
-      <section className="main-panel"><header className="panel-header"><h2>Completion claims and final observations</h2>
-        <span>Brain claim · Runtime-validated evidence link</span></header>
+      <section className="main-panel"><header className="panel-header"><h2>{t('brain.claims')}</h2>
+        <span>{t('brain.claimBoundary')}</span></header>
         <div className="event-rows">{(audit.data ?? []).flatMap((session) => (session.completionClaims ?? []).map((claim) =>
           <div className="event-row" key={`${session.sessionId}-claim-${claim.sequence}`}>
             <time>{new Date(claim.createdAt).toLocaleTimeString()}</time><strong>{claim.claim}</strong>
             <StatusBadge value={claim.certainty} />
-            <span>{claim.observationCallId ? `final observation ${claim.observationCallId}` : 'no verified observation'}</span>
-            <p>{claim.taskId ? `task ${claim.taskId}` : 'no task'}{claim.explanation ? ` · ${claim.explanation}` : ''}</p>
+            <span>{claim.observationCallId ? t('brain.finalObservation', { id: claim.observationCallId }) : t('brain.noVerifiedObservation')}</span>
+            <p>{claim.taskId ? t('brain.taskId', { id: claim.taskId }) : t('brain.noTask')}{claim.explanation ? ` · ${claim.explanation}` : ''}</p>
           </div>))}</div>
       </section>
-      <section className="main-panel"><header className="panel-header"><h2>Bounded context</h2>
-        <span>aggregate budgets only</span></header>
-        <p>Total {status.data?.contextBudget?.totalChars ?? 0} chars · world {status.data?.contextBudget?.worldChars ?? 0} · conversation {status.data?.contextBudget?.conversationChars ?? 0} · task {status.data?.contextBudget?.taskChars ?? 0} · approved Memory {status.data?.contextBudget?.approvedMemoryChars ?? 0} · Capsule {status.data?.contextBudget?.episodeCapsuleChars ?? 0}</p>
-        <p>Full Graph, Tool logs, Search pages, prompts and secrets are not shown or injected here.</p>
+      <section className="main-panel"><header className="panel-header"><h2>{t('brain.context')}</h2>
+        <span>{t('brain.aggregateOnly')}</span></header>
+        <p>{t('brain.contextValues', { total: status.data?.contextBudget?.totalChars ?? 0,
+          world: status.data?.contextBudget?.worldChars ?? 0,
+          conversation: status.data?.contextBudget?.conversationChars ?? 0,
+          task: status.data?.contextBudget?.taskChars ?? 0,
+          memory: status.data?.contextBudget?.approvedMemoryChars ?? 0,
+          capsule: status.data?.contextBudget?.episodeCapsuleChars ?? 0 })}</p>
+        <p>{t('brain.contextBoundary')}</p>
       </section>
-      <section className="main-panel"><header className="panel-header"><h2>Brain-authored semantic state</h2>
-        <span>{semantic ? 'validated session snapshot' : 'not declared by this Brain session'}</span></header>
+      <section className="main-panel"><header className="panel-header"><h2>{t('brain.semantic')}</h2>
+        <span>{semantic ? t('brain.semanticValidated') : t('brain.semanticMissing')}</span></header>
         {semantic ? <div className="event-rows">
-          <div className="event-row"><time>Current</time><strong>{semantic.currentTask || 'No active task declared'}</strong>
+          <div className="event-row"><time>{t('brain.current')}</time><strong>{semantic.currentTask || t('brain.noActiveTask')}</strong>
             <StatusBadge value={semantic.initiativeMode} /><span>{semantic.personalityMode} · {semantic.permissionPreset}</span>
-            <p>{semantic.immediateInstruction || 'No immediate instruction'}{semantic.longTermGoal ? ` · Goal: ${semantic.longTermGoal}` : ''}</p></div>
-          <div className="event-row"><time>Control</time><strong>{semantic.userTakeover ? 'User takeover' : 'Brain active'}</strong>
+            <p>{semantic.immediateInstruction || t('brain.noImmediate')}{semantic.longTermGoal ? ` · ${t('brain.goal')}: ${semantic.longTermGoal}` : ''}</p></div>
+          <div className="event-row"><time>{t('companions.control')}</time><strong>{semantic.userTakeover ? t('brain.userTakeover') : t('brain.brainActive')}</strong>
             <StatusBadge value={semantic.playerExplicitlyAway ? 'PLAYER_AWAY' : 'PLAYER_PRESENT'} />
-            <span>{semantic.latestRealWorldObservationAt || 'No real-world observation declared'}</span>
-            <p>{semantic.pauseReason || 'No pause reason'} · stale assumptions: {semantic.staleAssumptions.length
-              ? semantic.staleAssumptions.join(', ') : 'none'}</p></div>
-        </div> : <p>The external Brain has not authored a semantic snapshot. Runtime does not infer one.</p>}
+            <span>{semantic.latestRealWorldObservationAt || t('brain.noRealObservation')}</span>
+            <p>{semantic.pauseReason || t('brain.noPauseReason')} · {t('brain.staleAssumptions')}: {semantic.staleAssumptions.length
+              ? semantic.staleAssumptions.join(', ') : t('common.none')}</p></div>
+        </div> : <p>{t('brain.noSemanticBody')}</p>}
       </section>
       <MemoryManagementPanel snapshot={memories.data ?? undefined} profileName={selected.name} onManage={manageMemory} />
-      <section className="main-panel"><header className="panel-header"><h2>Quarantined memory suggestions</h2>
-        <span>local user review required</span></header>
-        <p>External Brain suggestions are untrusted and never enter verified Memory automatically.</p>
+      <section className="main-panel"><header className="panel-header"><h2>{t('brain.suggestions')}</h2>
+        <span>{t('brain.localReview')}</span></header>
+        <p>{t('brain.suggestionBoundary')}</p>
         {reviewError && <p role="alert">{reviewError}</p>}
         <div className="event-rows">{(memories.data?.suggestions ?? []).map((suggestion) =>
           <div className="event-row" key={suggestion.suggestionId}><time>{suggestion.kind}</time><strong>{suggestion.key}</strong>
@@ -149,19 +156,21 @@ export function BrainPage() {
             {suggestion.conflictsWithVerified && <StatusBadge value="CONFLICT" />}
             <p>{JSON.stringify(suggestion.value)}</p><div className="inline-actions">
               <ActionButton tone="primary" disabled={reviewing === suggestion.suggestionId}
-                onClick={() => void reviewSuggestion(suggestion.suggestionId, 'approve_suggestion')}>Approve</ActionButton>
+                onClick={() => void reviewSuggestion(suggestion.suggestionId, 'approve_suggestion')}>{t('brain.approve')}</ActionButton>
               <ActionButton disabled={reviewing === suggestion.suggestionId}
-                onClick={() => void reviewSuggestion(suggestion.suggestionId, 'reject_suggestion')}>Reject</ActionButton>
+                onClick={() => void reviewSuggestion(suggestion.suggestionId, 'reject_suggestion')}>{t('brain.reject')}</ActionButton>
             </div></div>)}</div>
       </section>
-      <section className="main-panel"><header className="panel-header"><h2>Episode capsules</h2>
-        <span>deterministic safe summaries; not verified Memory</span></header>
-        <p>Capsules contain bounded evidence references and verified state summaries, never full chat, prompts, or search pages.</p>
+      <section className="main-panel"><header className="panel-header"><h2>{t('brain.capsules')}</h2>
+        <span>{t('brain.capsuleLabel')}</span></header>
+        <p>{t('brain.capsuleBoundary')}</p>
         <div className="event-rows">{(memories.data?.episodeCapsules ?? []).map((capsule) =>
           <div className="event-row" key={capsule.episodeId}><time>{new Date(capsule.endedAt).toLocaleString()}</time>
             <strong>{capsule.episodeId}</strong><StatusBadge value="CAPSULE" />
-            <span>{capsule.taskSummaries.length} tasks · {capsule.evidenceRefs.length} evidence refs · {capsule.failureCategories.length} failure categories</span>
-            <p>world {capsule.verifiedWorldChanges.length} / inventory {capsule.verifiedInventoryChanges.length} / locations {capsule.verifiedLocations.length} / user choices {capsule.userConfirmedChoices.length}</p>
+            <span>{t('brain.capsuleCounts', { tasks: capsule.taskSummaries.length, evidence: capsule.evidenceRefs.length, failures: capsule.failureCategories.length })}</span>
+            <p>{t('brain.capsuleDetails', { world: capsule.verifiedWorldChanges.length,
+              inventory: capsule.verifiedInventoryChanges.length, locations: capsule.verifiedLocations.length,
+              choices: capsule.userConfirmedChoices.length })}</p>
           </div>)}</div>
       </section>
     </>}

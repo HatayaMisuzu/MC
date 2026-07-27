@@ -1,49 +1,51 @@
-# Compatibility, UI and productization freeze execution status
+# Compatibility/UI productization freeze status
 
-Updated: 2026-07-27 17:43 +08:00
+Updated: 2026-07-27
 
-This is the resumable checkpoint for
-`MCAC_CODEX_产品化固定前主执行文件_v1.md`. It records automation evidence
-without treating fixtures, Replay, GameTest, or browser automation as Live
-Hermes or human-play evidence. `docs/RC_COMPLETION_MATRIX.md` remains the only
-completion matrix.
+This resumable checkpoint follows `MCAC_CODEX_产品化固定前主执行文件_v1.md`. It records
+automation precisely: fixture, Replay, GameTest and browser automation are not Live Hermes or human
+play. `docs/RC_COMPLETION_MATRIX.md` remains the only completion matrix.
 
 ## Repository checkpoint
 
 - Base branch: `main`
-- Base SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
 - Working branch: `codex/forge-hermes-human-acceptance`
-- PR: `#3` (`OPEN`, `DRAFT`, `MERGEABLE`)
-- PR head: `b2ddfffa672b7443d2165e0f5928ec57a945ec16`
-- Merge base: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Working tree at audit start: `CLEAN`
-- PR delta at audit start: 80 commits, 151 files
+- PR: `#3`
+- Latest completed stable slice: `dc4d530` — Compatibility Host lifecycle and Terminal page
+- Previous stable slice: `16fd1c8` — productization safety/reliability hardening
 
-## Current phase
+## Completed in this execution
 
-- Phase: `1 — SAFETY_AND_RELIABILITY_RESCAN`
-- Last successful commands:
-  - `git fetch --all --prune`
-  - PR/base/head/merge-base audit
-  - execution-contract and compatibility-spec exact-content verification
-  - `clean check buildPlatforms`
-  - `launchTest`
-  - `gameTest` (Fabric 31, Forge 4, NeoForge 1)
-  - `runtimeFabricE2E runtimeForgeE2E`
-  - `persistenceRestartTest forgePersistenceRestartTest`
-  - `runtimeMultiProfileTest runtimeDisabledLaunchTest`
-  - `verifyTerminalPackage htmlTerminalStartTest releaseGoldenPathTest`
-  - Web `npm ci`, audit, lint, unit tests, build and Playwright E2E
-- Baseline defect fixed: the Fabric mining fixture now contains randomized
-  vanilla drops on a bounded landing platform and timeout failures include
-  behavior, position and evidence diagnostics. Assertions and timeout remain
-  unchanged.
-- Last failed command: initial combined `launchTest gameTest`; Fabric mining
-  pickup timed out before the bounded fixture correction.
-- Next step: complete the repository-wide safety/reliability rescan and its
-  evidence, then implement the Compatibility Host vertical slice.
+- clean baseline, platform builds, all three Loader launch/GameTest suites, dual Runtime E2E,
+  restart, multi-profile, disabled-launch, package, HTML startup, Golden Path and Web gates;
+- bounded installer/profile lock stripes, bounded planning queues with saturation tests, bounded
+  HTML-window tracking and the real Fabric drop-containment fixture correction;
+- declaration-only Compatibility Host, exact environment fingerprinting, immutable Store, signed
+  index, recovery journal, deterministic resolver, scoped authorization and management API;
+- first real compatibility-pack fixture lifecycle including update, rollback and disable;
+- crash-window recovery and security rejection coverage;
+- compatibility management inside the existing authenticated local Terminal;
+- `zh-CN` and `en-US` resources for the full Web surface, system-language default, persistent
+  no-refresh switching, fail-fast missing-key behavior, localized API failure explanations with
+  retained technical codes, and product terminology governance.
 
-## Current support matrix
+## Current local evidence
+
+- Compatibility Host tests: pass.
+- Terminal Java compilation: pass.
+- Web production build: pass.
+- Web unit/component tests: 10 files / 15 tests pass.
+- Language switching test proves current component state survives an English/Chinese switch and
+  the selection persists.
+- Mojibake scan over non-test Web source: clean.
+
+## Next step
+
+Exercise compatibility and high-frequency product flows through the real local Terminal backend,
+record the button/backend/result matrix and both-language screenshots, then continue documentation
+governance and final candidate gates.
+
+## Support and evidence boundaries
 
 | Target | Current mode |
 |---|---|
@@ -51,34 +53,13 @@ completion matrix.
 | Forge 1.20.1 | `FULL_RUNTIME_BRIDGE` |
 | NeoForge 1.21.1 | `LOCAL_ONLY` |
 
-## Current release evidence
+Dynamic native compatibility extension execution remains
+`DYNAMIC_EXECUTION_NOT_OPEN`. The fixture proves framework behavior, not arbitrary third-party Mod
+support.
 
-- Product version: `0.3.0`
-- Last fully verified executable checkpoint:
-  `7fbc47d7595f3fbab6ddbea2ed35bbaa56669e5f`
-- Release ZIP SHA-256:
-  `acd85f451f039268deb4c74b9a107ce1d1369cd8e0e89a5a51c97d24f78bf4b2`
-- This is recovery evidence only. A new package must be generated from the
-  final candidate and again from the merged `main` SHA.
+Live Hermes and human play remain the deliberate post-freeze follow-ups
+`LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING` and `HUMAN_PLAYTEST_PENDING`; neither is a merge gate.
 
-## Remote evidence at recovery point
-
-| Gate | Run | Result |
-|---|---:|---|
-| PR fast | `30251548244` | `SUCCESS` |
-| Windows terminal/package | `30251547954` | `SUCCESS` |
-| Supply chain and CodeQL | `30251547976` | `SUCCESS` |
-| Minecraft heavy at executable parent `7fbc47d` | `30250341444` | `SUCCESS` |
-
-## Execution boundaries
-
-- Compatibility Host remains deterministic infrastructure, not a high-level
-  planner.
-- External development Agents may use the bounded compatibility management
-  contract; runtime game Brains may not compile code, edit active indexes, or
-  gain shell/arbitrary-file/credential authority.
-- Live Hermes and human play are deliberately post-freeze work and are not
-  merge gates for this execution.
-- Merge allowed: `NO`
+- Merge allowed: `NO` (remaining automated productization gates are not complete)
 - Productization baseline created: `NO`
 - User-action blocker: `NONE`

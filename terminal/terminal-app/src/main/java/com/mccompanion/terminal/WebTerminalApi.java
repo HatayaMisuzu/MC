@@ -473,6 +473,7 @@ final class WebTerminalApi {
     value.set("fingerprint", JSON.valueToTree(fingerprint));
     value.set("packs", JSON.valueToTree(host.list(grant)));
     value.set("matchedPacks", JSON.valueToTree(diagnosis.matchedPacks()));
+    value.set("capabilities", JSON.valueToTree(diagnosis.capabilities()));
     value.set("conflicts", JSON.valueToTree(diagnosis.conflicts()));
     value.set("suppressions", JSON.valueToTree(diagnosis.suppressions()));
     value.set("trace", JSON.valueToTree(host.recentTrace(50)));

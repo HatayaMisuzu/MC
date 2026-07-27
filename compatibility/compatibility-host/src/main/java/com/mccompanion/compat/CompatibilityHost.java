@@ -59,7 +59,8 @@ public final class CompatibilityHost {
     public Diagnosis diagnose(CompatibilityGrant grant, EnvironmentFingerprint environment) throws IOException {
         authorize(grant, "compat.diagnose", CompatibilityPack.Risk.LOW);
         CompatibilityResolver.Resolution resolution = resolve(environment);
-        return new Diagnosis(environment, resolution.matchedPacks(), resolution.conflicts(),
+        return new Diagnosis(environment, resolution.matchedPacks(),
+                List.copyOf(resolution.capabilities().values()), resolution.conflicts(),
                 resolution.suppressions(), resolution.capabilities().size(),
                 resolution.capabilities().values().stream().filter(CompatibilityPack.Capability::enabled).count());
     }
@@ -207,6 +208,7 @@ public final class CompatibilityHost {
 
     public record Diagnosis(EnvironmentFingerprint environment,
                             List<CompatibilityResolver.MatchedPack> matchedPacks,
+                            List<CompatibilityPack.Capability> capabilities,
                             List<String> conflicts,
                             List<String> suppressions,
                             int capabilityCount,

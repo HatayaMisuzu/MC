@@ -310,6 +310,14 @@ export interface CompatibilitySnapshot {
   }
   packs: CompatibilityPackSummary[]
   matchedPacks: CompatibilityMatch[]
+  capabilities: Array<{
+    id: string
+    kind: string
+    risk: string
+    enabled: boolean
+    sourcePack: string
+    suppressionReason: string
+  }>
   conflicts: string[]
   suppressions: string[]
   trace: CompatibilityTraceEntry[]

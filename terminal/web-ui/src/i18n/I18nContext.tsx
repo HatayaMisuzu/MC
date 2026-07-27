@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { enUS, zhCN, type TranslationKey } from './resources'
 
 export type Locale = 'zh-CN' | 'en-US'
@@ -36,6 +36,9 @@ const Context = createContext<I18nValue>({
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [locale, updateLocale] = useState<Locale>(defaultLocale)
+  useEffect(() => {
+    document.documentElement.lang = locale
+  }, [locale])
   const setLocale = useCallback((next: Locale) => {
     localStorage.setItem('mcac.locale', next)
     document.documentElement.lang = next

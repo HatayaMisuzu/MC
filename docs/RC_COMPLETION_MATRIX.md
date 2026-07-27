@@ -73,6 +73,15 @@ External follow-up: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`, `HUMAN_PLAYTEST_
 Forge 1.20.1 Full Runtime Bridge is a required gate under the current dual-loader execution
 contract. NeoForge remains `LOCAL_ONLY`.
 
+The Web Terminal now has `zh-CN` and `en-US` resources across navigation, pages, buttons,
+descriptions, empty/loading/error states, confirmation/progress surfaces, tables and ARIA labels.
+It selects the system language initially, persists an explicit choice, switches without reload or
+state loss, fails fast on missing keys in development/tests, and maps backend failures to a
+selected-language explanation while retaining the technical code. Terminology is governed by
+`docs/product/TERMINOLOGY.md`; the production TypeScript build and 10 Web test files / 15 tests pass
+locally. Real-backend browser interaction breadth and bilingual screenshot evidence remain the
+next gate.
+
 Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_VERIFIED`,
 `REMOTELY_VERIFIED`, and `BLOCKED_BY_EXCLUDED_LIVE_TEST`. Replay evidence is not Live evidence.
 

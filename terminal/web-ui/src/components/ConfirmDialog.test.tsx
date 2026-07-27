@@ -28,6 +28,6 @@ describe('ConfirmDialog', () => {
     render(<ConfirmDialog />)
     expect(screen.getByText('FAILED')).toBeVisible()
     expect(screen.getByText('Runtime 本地端口未能安全释放')).toBeVisible()
-    expect(screen.getAllByRole('button', { name: '关闭' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(2)
   })
 })

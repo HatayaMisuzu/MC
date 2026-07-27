@@ -96,12 +96,13 @@ export function CompatibilityPage() {
       {!data?.packs.length ? <EmptyState title={t('compat.noPacks.title')}>{t('compat.noPacks.body')}</EmptyState>
         : <div className="table-scroll"><table className="data-table"><thead><tr>
           <th>{t('compat.pack')}</th><th>{t('compat.type')}</th><th>{t('compat.version')}</th>
-          <th>{t('compat.hash')}</th><th>{t('compat.state')}</th><th>{t('compat.effective')}</th><th />
+          <th>{t('compat.hash')}</th><th>{t('compat.source')}</th><th>{t('compat.state')}</th><th>{t('compat.effective')}</th><th />
         </tr></thead><tbody>{data.packs.map((pack) => {
           const match = data.matchedPacks.find((value) => value.pack.manifest.coordinate === pack.coordinate)
           return <tr key={pack.coordinate}>
             <td>{pack.packId}</td><td>{pack.type}</td><td>{pack.version}</td>
             <td title={pack.contentHash}>{pack.contentHash.slice(0, 12)}</td>
+            <td>{pack.source}</td>
             <td><StatusBadge value={pack.state} /> {match?.stale && <StatusBadge value="STALE" />}</td>
             <td>{match ? t('compat.active') : t('compat.inactive')}</td>
             <td><div className="inline-actions">
@@ -122,6 +123,14 @@ export function CompatibilityPage() {
     </section>
 
     <div className="compat-lower">
+      <section className="compat-panel"><header className="panel-header"><h2>{t('compat.capabilitySources')}</h2></header>
+        {!data?.capabilities.length ? <p className="compat-empty">{t('compat.noCapabilities')}</p>
+          : <div className="event-rows">{data.capabilities.map((capability) =>
+            <article className="event-row" key={capability.id}><time>{capability.risk}</time>
+              <strong>{capability.id}</strong><StatusBadge value={capability.enabled ? 'ACTIVE' : 'SUPPRESSED'} />
+              <span>{capability.sourcePack}</span><p>{capability.suppressionReason || capability.kind}</p>
+            </article>)}</div>}
+      </section>
       <section className="compat-panel"><header className="panel-header"><h2>{t('compat.conflicts')}</h2></header>
         {!issues.length ? <p className="compat-empty">{t('compat.noConflicts')}</p>
           : <ul>{issues.map((issue) => <li key={issue}>{issue}</li>)}</ul>}

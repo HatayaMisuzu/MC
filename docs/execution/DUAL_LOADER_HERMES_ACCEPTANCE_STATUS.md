@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 14:19 +08:00
+Updated: 2026-07-27 14:26 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `85e30af04a52688cc28df8ffc7f1789cc3ecdc81`
+- Latest committed source SHA: `28db27e2cb28b8b791dd5ec6aecb5104168b6654`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -410,6 +410,14 @@ Passed on the frozen SHA:
   swim volume, removing a nondeterministic ladder-approach failure. This does
   not claim passive physical user-takeover detection, Live Hermes, or human
   evidence.
+- Stage 4 boundary/invalid-target slice `28db27e` rejects non-finite navigation
+  coordinates before mutating Companion state and adds real Loader-world
+  loaded-boundary evidence. Each Loader test finds a target within the 192-block
+  navigation bound whose chunk is actually unloaded, verifies that navigation
+  does not load it, and observes safe `PAUSED` state with
+  `TARGET_CHUNK_UNLOADED`. Fabric 31/31 and Forge 3/3 pass serially. An attempted
+  parallel run was discarded because both Gradle builds write the same shared
+  core output; it is not acceptance evidence.
 
 ## Remaining work
 

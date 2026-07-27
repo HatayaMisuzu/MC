@@ -1,6 +1,6 @@
 # Productization execution tracker
 
-Updated: 2026-07-27  
+Updated: 2026-07-28
 Branch: `codex/forge-hermes-human-acceptance`  
 PR: `#3`  
 Recovery starting head: `ca91fd767c9015f3e3d397a348f35ebcbd389be3`
@@ -25,8 +25,8 @@ completion matrix. Status values here are `COMPLETED`, `IN_PROGRESS`, `INTERRUPT
 | 9 | RC matrix and resumable checkpoint alignment | `COMPLETED` | The sole RC matrix and compatibility/UI checkpoint now record the exact bilingual real-backend evidence and retain Live Hermes/human play as explicit post-freeze follow-ups. |
 | 10 | Documentation single source of truth and historical-document governance | `COMPLETED` | Added current documentation navigation, product status, bilingual user guides, developer entry and archive index; corrected Fabric/Forge and Compatibility Host claims; historical logs remain available but cannot override the sole RC matrix. `documentationCheck` passes. |
 | 11 | Repository productization/security/dependency/UI/release cleanup audit | `COMPLETED` | `docs/product/REPOSITORY_PRODUCTIZATION_AUDIT.md` records concrete documentation, UI/API, CI portability, generated-state, skip/debug, legal, dependency and secret findings. Reachable defects were fixed; secret/dependency/docs/npm audit and tracked-state scans pass. |
-| 12 | Full local candidate gates | `NOT_STARTED` | Run every applicable Gradle, Loader, Runtime, persistence, package, HTML, clean-release browser, npm audit/lint/test/build/e2e gate from the final candidate tree; repeat only bounded race-sensitive gates. |
-| 13 | Exact candidate Release/Manifest/SBOM/SHA validation | `NOT_STARTED` | Rebuild from the candidate SHA and verify source commit, every manifest hash/size, SPDX 2.3 component set, sidecar/SHA256SUMS, bilingual docs, compatibility schema and absence of secrets/user data/dev fixtures. |
+| 12 | Full local candidate gates | `COMPLETED` | The final working tree passed `clean check buildPlatforms`; all Loader launch/GameTests; Fabric/Forge Runtime E2E; both restart gates; multi-Profile and Runtime-disabled launch; reconnect and unknown-Mod E2E; 105/200-turn reliability gates; npm audit/lint/test/build; package verification, arbitrary-directory HTML first start and the clean-extraction bilingual Golden Path. A timed-out shell left one duplicate test tree; it was identified by exact repository command line, removed, and the affected launch/GameTest gate then passed cleanly. |
+| 13 | Exact candidate Release/Manifest/SBOM/SHA validation | `IN_PROGRESS` | The working-tree package passed structural verification. Commit the lifecycle revision fix and stable goal-modification fixture, rebuild from that candidate SHA, then verify source commit, every manifest hash/size, SPDX 2.3 component set, sidecar/SHA256SUMS, bilingual docs, compatibility schema and absence of secrets/user data/dev fixtures. |
 | 14 | Commit, push and exact-SHA remote CI | `NOT_STARTED` | New candidate SHA must have PR fast, Windows terminal/package, Minecraft heavy, dependency review, CodeQL Java and CodeQL JS/TS all green. Existing failed Windows run for `ca91fd7` is not reusable. |
 | 15 | PR #3 review readiness and merge to `main` | `NOT_STARTED` | Update title/body/evidence links, remove obsolete remaining gates, keep Live Hermes/human pending, resolve review threads, mark ready and use an ordinary merge commit only after all automated gates pass. |
 | 16 | Post-merge exact-main rebuild, CI and frozen baseline/tag | `NOT_STARTED` | On the merge SHA, rebuild Release, rerun applicable local/remote gates, create baseline/closeout reports and an annotated productization-baseline tag without rewriting it later. |
@@ -40,6 +40,6 @@ completion matrix. Status values here are `COMPLETED`, `IN_PROGRESS`, `INTERRUPT
 
 ## Recovery decision
 
-Work resumes at item 12. Items 1–11 are not repeated. Their implementation remains in place; only
-tests affected by later changes are rerun. No current local browser or Terminal process
-owns port `32145`.
+Work resumes at item 13. Items 1 through 12 are not repeated. Their implementation remains in
+place; only tests affected by the final candidate commit or packaging source binding are rerun.
+No current local browser or Terminal process owns port `32145`.

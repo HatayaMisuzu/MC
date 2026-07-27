@@ -443,10 +443,12 @@ public final class CompanionRegistry {
             entry.resumeMode = entry.mode;
             entry.mode = CompanionEntry.Mode.PAUSED;
             behaviorDirector.stop(entry, body, false, "RUNTIME_PAUSE");
-            control.behaviorRevision++;
-            entry.runtimeBehaviorRevision = control.behaviorRevision;
-            savedData.changed();
         }
+        // An explicit Runtime control is a new lifecycle event even when a safety reflex
+        // already placed the body in PAUSED. Keep its revision strictly monotonic.
+        control.behaviorRevision++;
+        entry.runtimeBehaviorRevision = control.behaviorRevision;
+        savedData.changed();
         return RuntimeResult.success(control.behaviorId, control.behaviorRevision, "PAUSED");
     }
 
@@ -527,6 +529,17 @@ public final class CompanionRegistry {
 
     public void recordRuntimeLifecyclePublished(String behaviorId) {
         runtimeLastPublishedBehaviorId = behaviorId;
+        for (Map.Entry<UUID, RuntimeControl> value : runtimeControls.entrySet()) {
+            RuntimeControl control = value.getValue();
+            if (!Objects.equals(control.behaviorId, behaviorId)) continue;
+            control.behaviorRevision++;
+            CompanionEntry entry = entryByCompanion(value.getKey().toString());
+            if (entry != null) {
+                entry.runtimeBehaviorRevision = control.behaviorRevision;
+                savedData.changed();
+            }
+            break;
+        }
     }
 
     public String runtimeLastPublishedBehaviorId() {

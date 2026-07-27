@@ -1456,7 +1456,7 @@ try {
     Write-Output '[runtime-e2e] exercising in-flight owner goal modification'
     $probePlan = Invoke-AgentRequest $pairingToken $companionId 'Start the modification probe target'
     if (-not $probePlan.accepted -or -not $probePlan.planId) { throw 'Goal-modification probe plan was rejected.' }
-    $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'NavigateTo'
+    $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'FollowOwner'
     $probeTaskId = @($probeRunning.plan.steps | Where-Object { $_.index -eq $probeRunning.plan.currentStep })[0].taskId
     $null = Wait-RuntimeTaskState $pairingToken $probeTaskId 'RUNNING'
     # Freeze the unfinished probe through the real control path. This removes the accelerated

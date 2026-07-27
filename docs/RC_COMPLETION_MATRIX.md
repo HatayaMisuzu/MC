@@ -1,6 +1,6 @@
 # RC completion matrix
 
-Updated: 2026-07-27
+Updated: 2026-07-28
 Audited implementation baseline: `14e7f91`
 Overall status: Stage 3 in progress; final readiness label not assigned.
 
@@ -101,6 +101,15 @@ model admitted details only for terminal `FAILED`. `BehaviorEvent` now requires 
 failureCode/message details for both `BLOCKED` and `FAILED` and continues to reject them for
 non-failure states. Protocol tests and the full unknown-Mod Runtime/Fabric chain pass without an
 unexpected severe log.
+Final-candidate Runtime/Fabric validation also exposed a Loader lifecycle revision regression:
+an internally observed safety pause published revision `n+1` without advancing the persisted
+Loader control revision, so a later explicit pause could return the older `n`. Both 1.21.1 and
+1.20.1 common registries now advance and persist every published lifecycle revision and treat
+each accepted explicit pause as a new monotonic lifecycle event. The owner-goal-modification
+Replay fixture now uses continuous Follow control instead of an intentionally out-of-range
+destination, eliminating a fixture-created `TARGET_OUT_OF_RANGE` race without weakening the
+pause, supersede, cancel and same-plan activation assertions. The complete Runtime/Fabric and
+Runtime/Forge E2E paths pass after these corrections.
 
 Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_VERIFIED`,
 `REMOTELY_VERIFIED`, and `BLOCKED_BY_EXCLUDED_LIVE_TEST`. Replay evidence is not Live evidence.

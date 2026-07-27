@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 13:07 +08:00
+Updated: 2026-07-27 14:07 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `08dd17c289b615c9224e6915608591a7272aa2fb`
+- Latest committed source SHA: `e6b81e4435f0cdf0a361877071dc75d49639143b`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -392,6 +392,15 @@ Passed on the frozen SHA:
   all Loader builds pass. Vines, loaded-boundary execution, moving/invalid
   targets, explicit mid-route cancellation, user takeover, Runtime process
   restart, and combined task scenarios remain open.
+- Stage 4 restart-recovery slices `5d11988`, `712439c`, and `e6b81e4` add
+  explicit vanilla vine traversal and real two-process Minecraft restart
+  evidence on both supported Loaders. Fabric and Forge each preserve the same
+  world directory across stop/restart, recover the same Companion UUID, live
+  body and diamond inventory, and quarantine the interrupted long route as
+  `PAUSED`. The Forge gate uses the normal Java 17 dedicated server because its
+  GameTest server always constructs a fresh world; the clean gate passes in
+  1m15s and the unchanged Forge suite then passes 3/3. This is local automated
+  server evidence, not Live-Hermes or human-play evidence.
 
 ## Remaining work
 

@@ -1598,7 +1598,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600, batch = "global_navigation")
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000, batch = "global_navigation")
     public void globalNavigationRoutesAroundDynamicWalls(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
                 || Boolean.getBoolean("mccompanion.persistence.verify")
@@ -1685,7 +1685,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         blocker.isAlive() && blocker.position().distanceToSqr(blockerPosition) < 0.04D,
                         "navigation displaced or harmed the observed entity blocker");
                 blocker.discard();
-                helper.assertTrue(registry.remove(owner).success(), "path test cleanup failed");
+                runNavigationControlAcceptance(helper, registry, owner, body);
             });
         });
     }
@@ -1900,6 +1900,93 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(registry.remove(owner).success(), "blocked test cleanup failed");
             helper.succeed();
         });
+    }
+
+    private static void runNavigationControlAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body) {
+        BlockPos origin = body.blockPosition();
+        for (int x = -11; x <= 1; x++) {
+            for (int z = -2; z <= 2; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, 0, z), Blocks.AIR.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, 1, z), Blocks.AIR.defaultBlockState());
+            }
+        }
+        for (int x = -3; x <= -2; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(x, -1, 0),
+                    Blocks.MAGMA_BLOCK.defaultBlockState());
+        }
+        float healthBefore = body.getHealth();
+        Vec3 safeTarget = Vec3.atBottomCenterOf(origin.offset(-5, 0, 0));
+        helper.assertTrue(registry.goTo(owner, safeTarget.x, safeTarget.y, safeTarget.z).success(),
+                "hazard-aware navigation failed to start");
+        awaitPosition(helper, body, safeTarget, 260, () -> {
+            helper.assertValueEqual(body.getHealth(), healthBefore,
+                    "hazard-aware navigation damaged the companion");
+            for (int x = -3; x <= -2; x++) {
+                helper.assertTrue(body.serverLevel().getBlockState(origin.offset(x, -1, 0))
+                                .is(Blocks.MAGMA_BLOCK),
+                        "hazard-aware navigation mutated the dangerous fixture");
+            }
+            Vec3 firstOwnerTarget = Vec3.atBottomCenterOf(origin.offset(-9, 0, 0));
+            owner.moveTo(firstOwnerTarget.x, firstOwnerTarget.y, firstOwnerTarget.z, 0.0F, 0.0F);
+            helper.assertTrue(registry.follow(owner).success(), "moving-target follow failed to start");
+            awaitFollowPosition(helper, body, firstOwnerTarget, 220, () -> {
+                Vec3 secondOwnerTarget = Vec3.atBottomCenterOf(origin.offset(-11, 0, 0));
+                owner.moveTo(secondOwnerTarget.x, secondOwnerTarget.y, secondOwnerTarget.z, 0.0F, 0.0F);
+                helper.runAfterDelay(8, () -> {
+                    helper.assertTrue(body.position().distanceToSqr(firstOwnerTarget) > 0.20D,
+                            "navigation did not react to the moved follow target");
+                    helper.assertTrue(registry.stop(owner).success(),
+                            "explicit owner stop did not cancel navigation");
+                    Vec3 stoppedAt = body.position();
+                    helper.runAfterDelay(12, () -> {
+                        helper.assertTrue(body.position().distanceToSqr(stoppedAt) < 0.04D,
+                                "companion kept moving after explicit owner stop");
+                        helper.assertTrue(registry.status(owner).contains("mode=IDLE"),
+                                "explicit owner stop did not leave navigation IDLE");
+                        helper.assertTrue(registry.remove(owner).success(),
+                                "navigation control test cleanup failed");
+                        helper.succeed();
+                    });
+                });
+            });
+        });
+    }
+
+    private static void awaitPosition(
+            GameTestHelper helper,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        if (body.position().distanceToSqr(target) <= 2.25D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(ticksRemaining > 0,
+                "navigation did not reach target: position=" + body.position() + " target=" + target);
+        helper.runAfterDelay(1, () -> awaitPosition(helper, body, target, ticksRemaining - 1, reached));
+    }
+
+    private static void awaitFollowPosition(
+            GameTestHelper helper,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        if (body.position().distanceToSqr(target) <= 9.0D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(ticksRemaining > 0,
+                "follow did not reach moving target: position=" + body.position() + " target=" + target);
+        helper.runAfterDelay(1,
+                () -> awaitFollowPosition(helper, body, target, ticksRemaining - 1, reached));
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300000, batch = "companion_lifecycle")

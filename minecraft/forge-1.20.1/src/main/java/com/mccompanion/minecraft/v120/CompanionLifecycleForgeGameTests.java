@@ -1500,8 +1500,10 @@ public final class CompanionLifecycleForgeGameTests {
             CompanionPlayer body,
             FakeConnection ownerConnection) {
         BlockPos climbOrigin = body.blockPosition();
-        for (int x = -1; x <= 4; x++) {
-            for (int z = -1; z <= 1; z++) {
+        // Clear beyond the prior swim volume so delayed water updates cannot
+        // make the ladder approach nondeterministically unreachable.
+        for (int x = -5; x <= 4; x++) {
+            for (int z = -2; z <= 2; z++) {
                 for (int y = -1; y <= 5; y++) {
                     body.serverLevel().setBlockAndUpdate(
                             climbOrigin.offset(x, y, z),
@@ -1538,7 +1540,65 @@ public final class CompanionLifecycleForgeGameTests {
                     body.serverLevel().getBlockState(climbOrigin.offset(2, 1, 0)).is(Blocks.LADDER)
                             && body.serverLevel().getBlockState(climbOrigin.offset(2, 3, 0)).is(Blocks.VINE),
                     "Forge climb navigation mutated the ladder or vine");
-            finishLifecycleAcceptance(helper, registry, owner, body, ownerConnection);
+            runHazardAndMovingTargetAcceptance(helper, registry, owner, body, ownerConnection);
+        });
+    }
+
+    private static void runHazardAndMovingTargetAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            FakeConnection ownerConnection) {
+        BlockPos origin = body.blockPosition();
+        for (int x = -1; x <= 11; x++) {
+            for (int z = -2; z <= 2; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, 0, z), Blocks.AIR.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, 1, z), Blocks.AIR.defaultBlockState());
+            }
+        }
+        for (int x = 2; x <= 3; x++) {
+            body.serverLevel().setBlockAndUpdate(
+                    origin.offset(x, -1, 0),
+                    Blocks.MAGMA_BLOCK.defaultBlockState());
+        }
+        float healthBefore = body.getHealth();
+        Vec3 safeTarget = Vec3.atBottomCenterOf(origin.offset(5, 0, 0));
+        CompanionRegistry.Result hazardRun =
+                registry.goTo(owner, safeTarget.x, safeTarget.y, safeTarget.z);
+        helper.assertTrue(hazardRun.success(),
+                "Forge hazard-aware navigation failed to start: " + hazardRun.code());
+        awaitNavigationPosition(helper, body, safeTarget, 260, () -> {
+            helper.assertTrue(body.getHealth() == healthBefore,
+                    "Forge hazard-aware navigation damaged the companion");
+            for (int x = 2; x <= 3; x++) {
+                helper.assertTrue(body.serverLevel().getBlockState(origin.offset(x, -1, 0))
+                                .is(Blocks.MAGMA_BLOCK),
+                        "Forge hazard-aware navigation mutated the dangerous fixture");
+            }
+            Vec3 firstOwnerTarget = Vec3.atBottomCenterOf(origin.offset(9, 0, 0));
+            owner.moveTo(firstOwnerTarget.x, firstOwnerTarget.y, firstOwnerTarget.z, 0.0F, 0.0F);
+            helper.assertTrue(registry.follow(owner).success(),
+                    "Forge moving-target follow failed to start");
+            awaitFollowPosition(helper, body, firstOwnerTarget, 220, () -> {
+                Vec3 secondOwnerTarget = Vec3.atBottomCenterOf(origin.offset(11, 0, 0));
+                owner.moveTo(secondOwnerTarget.x, secondOwnerTarget.y, secondOwnerTarget.z, 0.0F, 0.0F);
+                helper.runAfterDelay(8, () -> {
+                    helper.assertTrue(body.position().distanceToSqr(firstOwnerTarget) > 0.20D,
+                            "Forge navigation did not react to the moved follow target");
+                    helper.assertTrue(registry.stop(owner).success(),
+                            "Forge explicit owner stop did not cancel navigation");
+                    Vec3 stoppedAt = body.position();
+                    helper.runAfterDelay(12, () -> {
+                        helper.assertTrue(body.position().distanceToSqr(stoppedAt) < 0.04D,
+                                "Forge companion kept moving after explicit owner stop");
+                        helper.assertTrue(registry.status(owner).contains("mode=IDLE"),
+                                "Forge explicit owner stop did not leave navigation IDLE");
+                        finishLifecycleAcceptance(helper, registry, owner, body, ownerConnection);
+                    });
+                });
+            });
         });
     }
 
@@ -1561,6 +1621,32 @@ public final class CompanionLifecycleForgeGameTests {
         helper.runAfterDelay(
                 1,
                 () -> awaitNavigationPosition(
+                        helper,
+                        body,
+                        target,
+                        ticksRemaining - 1,
+                        reached));
+    }
+
+    private static void awaitFollowPosition(
+            GameTestHelper helper,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        if (body.position().distanceToSqr(target) <= 9.0D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(
+                ticksRemaining > 0,
+                "follow did not reach moving target: position="
+                        + body.position()
+                        + " target="
+                        + target);
+        helper.runAfterDelay(
+                1,
+                () -> awaitFollowPosition(
                         helper,
                         body,
                         target,

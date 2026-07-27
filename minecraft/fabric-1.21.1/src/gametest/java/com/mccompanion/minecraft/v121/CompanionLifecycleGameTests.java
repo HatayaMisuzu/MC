@@ -1839,8 +1839,13 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         var ladder = Blocks.LADDER.defaultBlockState()
                 .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.WEST);
-        for (int y = 0; y <= 3; y++) {
+        for (int y = 0; y <= 1; y++) {
             body.serverLevel().setBlockAndUpdate(origin.offset(2, y, 0), ladder);
+        }
+        var vine = Blocks.VINE.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.VineBlock.EAST, true);
+        for (int y = 2; y <= 3; y++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(2, y, 0), vine);
         }
         Vec3 target = Vec3.atBottomCenterOf(origin.offset(2, 3, 0));
         helper.assertTrue(
@@ -1851,8 +1856,9 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     body.position().distanceToSqr(target) <= 2.25D,
                     "navigation did not climb the observed ladder");
             helper.assertTrue(
-                    body.serverLevel().getBlockState(origin.offset(2, 3, 0)).is(Blocks.LADDER),
-                    "climb navigation mutated the ladder");
+                    body.serverLevel().getBlockState(origin.offset(2, 1, 0)).is(Blocks.LADDER)
+                            && body.serverLevel().getBlockState(origin.offset(2, 3, 0)).is(Blocks.VINE),
+                    "climb navigation mutated the ladder or vine");
             helper.assertTrue(registry.remove(owner).success(), "climb path test cleanup failed");
         });
     }

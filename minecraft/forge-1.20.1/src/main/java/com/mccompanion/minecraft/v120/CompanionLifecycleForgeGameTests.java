@@ -1521,8 +1521,13 @@ public final class CompanionLifecycleForgeGameTests {
         }
         var ladder = Blocks.LADDER.defaultBlockState()
                 .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.WEST);
-        for (int y = 0; y <= 3; y++) {
+        for (int y = 0; y <= 1; y++) {
             body.serverLevel().setBlockAndUpdate(climbOrigin.offset(2, y, 0), ladder);
+        }
+        var vine = Blocks.VINE.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.VineBlock.EAST, true);
+        for (int y = 2; y <= 3; y++) {
+            body.serverLevel().setBlockAndUpdate(climbOrigin.offset(2, y, 0), vine);
         }
         Vec3 climbTarget = Vec3.atBottomCenterOf(climbOrigin.offset(2, 3, 0));
         CompanionRegistry.Result climbRun =
@@ -1530,8 +1535,9 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(climbRun.success(), "Forge climb navigation failed to start: " + climbRun.code());
         awaitNavigationPosition(helper, body, climbTarget, 240, () -> {
             helper.assertTrue(
-                    body.serverLevel().getBlockState(climbOrigin.offset(2, 3, 0)).is(Blocks.LADDER),
-                    "Forge climb navigation mutated the ladder");
+                    body.serverLevel().getBlockState(climbOrigin.offset(2, 1, 0)).is(Blocks.LADDER)
+                            && body.serverLevel().getBlockState(climbOrigin.offset(2, 3, 0)).is(Blocks.VINE),
+                    "Forge climb navigation mutated the ladder or vine");
             finishLifecycleAcceptance(helper, registry, owner, body, ownerConnection);
         });
     }

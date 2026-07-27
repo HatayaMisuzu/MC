@@ -4,6 +4,7 @@ import com.mccompanion.core.navigation.GridPathPlanner;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
@@ -74,12 +75,26 @@ final class SurvivalNavigationAdapter {
     float movementYaw(CompanionPlayer body, GridPathPlanner.Point point, Vec3 delta) {
         BlockState state = body.serverLevel().getBlockState(block(point));
         if (isClimbable(state)
-                && Math.abs(delta.x) + Math.abs(delta.z) < 0.25D
-                && state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
-            Direction support = state.getValue(BlockStateProperties.HORIZONTAL_FACING).getOpposite();
-            return (float) Math.toDegrees(Math.atan2(-support.getStepX(), support.getStepZ()));
+                && Math.abs(delta.x) + Math.abs(delta.z) < 0.25D) {
+            Direction support = climbSupport(body.serverLevel(), block(point), state);
+            if (support != null) {
+                return (float) Math.toDegrees(Math.atan2(-support.getStepX(), support.getStepZ()));
+            }
         }
         return (float) Math.toDegrees(Math.atan2(-delta.x, delta.z));
+    }
+
+    private static Direction climbSupport(ServerLevel level, BlockPos position, BlockState state) {
+        if (state.hasProperty(BlockStateProperties.HORIZONTAL_FACING)) {
+            return state.getValue(BlockStateProperties.HORIZONTAL_FACING).getOpposite();
+        }
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            BlockPos neighbor = position.relative(direction);
+            if (!level.getBlockState(neighbor).getCollisionShape(level, neighbor).isEmpty()) {
+                return direction;
+            }
+        }
+        return null;
     }
 
     private static GridPathPlanner.Traversal classify(
@@ -106,6 +121,7 @@ final class SurvivalNavigationAdapter {
                         occupiedVolume,
                         entity -> entity.isAlive()
                                 && entity.isPickable()
+                                && !(entity instanceof ServerPlayer)
                                 && !entity.getUUID().equals(body.ownerId()))
                 .isEmpty()) {
             return GridPathPlanner.Traversal.blocked();
@@ -145,7 +161,14 @@ final class SurvivalNavigationAdapter {
     }
 
     private static boolean isClimbable(BlockState state) {
-        return state.is(BlockTags.CLIMBABLE);
+        return state.is(BlockTags.CLIMBABLE)
+                || state.is(Blocks.VINE)
+                || state.is(Blocks.CAVE_VINES)
+                || state.is(Blocks.CAVE_VINES_PLANT)
+                || state.is(Blocks.TWISTING_VINES)
+                || state.is(Blocks.TWISTING_VINES_PLANT)
+                || state.is(Blocks.WEEPING_VINES)
+                || state.is(Blocks.WEEPING_VINES_PLANT);
     }
 
     private static boolean isHazard(BlockState state) {

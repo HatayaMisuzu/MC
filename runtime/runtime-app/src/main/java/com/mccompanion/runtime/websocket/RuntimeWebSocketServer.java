@@ -50,8 +50,10 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 
 public final class RuntimeWebSocketServer extends WebSocketServer implements AutoCloseable {
     public static final String PROTOCOL = "mc-companion/1";
@@ -130,9 +132,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.clock = clock;
-        this.planningExecutor = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "mc-companion-player-planner"); thread.setDaemon(true); return thread;
-        });
+        this.planningExecutor = boundedPlanningExecutor();
         setConnectionLostTimeout(30);
         setReuseAddr(true);
     }
@@ -301,7 +301,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 .put("x", position.path("x").asInt())
                 .put("y", position.path("y").asInt())
                 .put("z", position.path("z").asInt()));
-        planningExecutor.execute(() -> {
+        try {
+            planningExecutor.execute(() -> {
             try {
                 var companion = companions.get(companionId).orElse(null);
                 if (companion == null || !session.companionIds().contains(companionId)
@@ -320,7 +321,10 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 log.warn("Owner activity handoff stopped safely: "
                         + failure.getClass().getSimpleName());
             }
-        });
+            });
+        } catch (RejectedExecutionException saturated) {
+            log.warn("Owner activity handoff skipped because the bounded planning queue is full");
+        }
     }
 
     private void handlePlayerRequest(RuntimeSession session, JsonNode payload) {
@@ -329,7 +333,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         String ownerId = required(payload, "ownerId");
         String text = payload.path("text").asText("").strip();
         if (text.isEmpty() || text.length() > 512) throw new IllegalArgumentException("player request text must be 1..512 characters");
-        planningExecutor.execute(() -> {
+        try {
+            planningExecutor.execute(() -> {
             ObjectNode reply = Json.object().put("requestId", requestId).put("companionId", companionId);
             com.mccompanion.runtime.conversation.ConversationEvent directReply = null;
             try {
@@ -531,7 +536,20 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     }
                 }
             }
-        });
+            });
+        } catch (RejectedExecutionException saturated) {
+            sendError(session.peer(), session, "RUNTIME_BUSY",
+                    "The bounded player planning queue is full; retry later");
+        }
+    }
+
+    static ExecutorService boundedPlanningExecutor() {
+        return new ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(64, true), runnable -> {
+            Thread thread = new Thread(runnable, "mc-companion-player-planner");
+            thread.setDaemon(true);
+            return thread;
+        }, new ThreadPoolExecutor.AbortPolicy());
     }
 
     private void registerCompanionList(RuntimeSession session, JsonNode payload) throws SQLException {

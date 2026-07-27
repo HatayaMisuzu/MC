@@ -1029,8 +1029,11 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(body != null, "mine test created no live body");
         BlockPos origin = body.blockPosition().offset(2, 0, 0);
         BlockPos second = origin.offset(1, 0, 0);
+        // Vanilla ore drops have randomized horizontal velocity. Keep a bounded landing
+        // platform around the vein so this test exercises pickup, not an accidental fall
+        // from the one-block-wide empty-structure floor.
         for (int x = -1; x <= 4; x++) {
-            for (int z = 0; z <= 0; z++) {
+            for (int z = -1; z <= 1; z++) {
                 body.serverLevel().setBlockAndUpdate(body.blockPosition().offset(x, -1, z),
                         Blocks.STONE.defaultBlockState());
             }
@@ -1534,7 +1537,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         var snapshot = registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
         if (snapshot.behaviorState().equals("RUNNING")) {
-            helper.assertTrue(ticksRemaining > 0, "timed out waiting for behavior completion");
+            helper.assertTrue(ticksRemaining > 0,
+                    "timed out waiting for behavior completion: behavior=" + snapshot.behaviorId()
+                            + ", position=(" + snapshot.x() + "," + snapshot.y() + "," + snapshot.z() + ")"
+                            + ", evidence=" + snapshot.evidenceSummary());
             helper.runAfterDelay(1, () -> awaitBehaviorIdle(
                     helper, registry, companionId, ticksRemaining - 1, terminalAssertions, completeTest));
             return;

@@ -29,6 +29,8 @@ import java.util.concurrent.TimeUnit;
 final class WebTerminalServer implements AutoCloseable {
   private static final ObjectMapper JSON = new ObjectMapper();
   private static final SecureRandom RANDOM = new SecureRandom();
+  private static final int MAX_OPEN_WINDOWS = 64;
+  private static final Duration WINDOW_TTL = Duration.ofHours(24);
   private final ControlTerminalMain root;
   private final Path webRoot;
   private final boolean openBrowser;
@@ -263,8 +265,12 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     String path = exchange.getRequestURI().getPath();
+    cleanupWindows();
     if (path.endsWith("/close")) windows.remove(id);
-    else windows.put(id, Instant.now());
+    else if (!windows.containsKey(id) && windows.size() >= MAX_OPEN_WINDOWS) {
+      WebTerminalApi.sendError(exchange, 429, "WINDOW_CAPACITY_REACHED", "打开的窗口记录已达到上限");
+      return;
+    } else windows.put(id, Instant.now());
     WebTerminalApi.send(
         exchange,
         200,
@@ -276,6 +282,7 @@ final class WebTerminalServer implements AutoCloseable {
     if (!authenticated(exchange)) return;
     String path = exchange.getRequestURI().getPath();
     if ("GET".equals(exchange.getRequestMethod()) && path.equals("/api/server/status")) {
+      cleanupWindows();
       WebTerminalApi.send(
           exchange,
           200,
@@ -327,6 +334,11 @@ final class WebTerminalServer implements AutoCloseable {
       return;
     }
     WebTerminalApi.sendError(exchange, 404, "NOT_FOUND", "控制路径不存在");
+  }
+
+  private void cleanupWindows() {
+    Instant cutoff = Instant.now().minus(WINDOW_TTL);
+    windows.entrySet().removeIf(entry -> entry.getValue().isBefore(cutoff));
   }
 
   private JsonNode jsonBody(HttpExchange exchange, int maximumBytes) throws IOException {

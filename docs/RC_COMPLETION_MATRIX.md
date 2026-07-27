@@ -35,6 +35,12 @@ the independent delivery inventory-delta assertion.
 The Windows RC artifact upload includes the release `SHA256SUMS.txt` alongside the ZIP, sidecar,
 Manifest, and SBOM, so the downloaded artifact exposes every v5.2 integrity record without requiring
 the reviewer to extract the release ZIP first.
+The productization-freeze safety rescan replaced path-keyed process-lifetime installer/profile lock
+maps with fixed lock stripes, bounded both asynchronous player-planning queues with explicit
+backpressure, capped and expires HTML-window tracking, and made the Fabric vanilla-drop fixture
+contain randomized pickup motion without increasing its timeout or weakening its assertions.
+Focused Runtime and Terminal suites, including explicit queue-saturation tests, pass locally; this
+does not change any Live Brain or human-play evidence label.
 The Skill revocation isolation test retains its three-second persisted wait and exact cross-workspace
 cancellation assertions while allowing a bounded eight-second observation window under the full
 parallel suite, avoiding a one-second scheduler-margin race without changing Runtime timeouts.

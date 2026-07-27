@@ -58,5 +58,5 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build analyzed sources
         if: matrix.build-mode == 'manual'
-        run: ./gradlew classes webBuild --stacktrace
+        run: ./gradlew classes webBuild --rerun-tasks --no-build-cache --stacktrace
       - uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3

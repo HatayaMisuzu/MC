@@ -11,6 +11,10 @@ def launchInputHolder = [input: null, output: null, monitor: null]
 def prepareLaunchTest = tasks.register('prepareLaunchTest') {
     group = 'verification'
     description = 'Prepares an isolated, disposable dedicated-server directory for launchTest.'
+    inputs.property('runtimeDisabled',
+            providers.provider { project.hasProperty('mccompanionRuntimeDisabled') })
+    inputs.property('persistenceProbe',
+            providers.gradleProperty('mccompanionPersistenceProbe').orElse(''))
     outputs.dir(launchServerDirectory)
 
     doLast {

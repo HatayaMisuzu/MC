@@ -2208,25 +2208,12 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         if (Boolean.getBoolean("mccompanion.persistence.seed")) {
             helper.assertTrue(body.addItem(new ItemStack(Items.DIAMOND)),
                     "restart seed item could not enter inventory");
-            BlockPos restartOrigin = body.blockPosition();
-            for (int x = -1; x <= 160; x++) {
-                body.serverLevel().setBlockAndUpdate(
-                        restartOrigin.offset(x, -1, 0),
-                        Blocks.STONE.defaultBlockState());
-                body.serverLevel().setBlockAndUpdate(
-                        restartOrigin.offset(x, 0, 0),
-                        Blocks.AIR.defaultBlockState());
-                body.serverLevel().setBlockAndUpdate(
-                        restartOrigin.offset(x, 1, 0),
-                        Blocks.AIR.defaultBlockState());
-            }
-            Vec3 restartTarget = Vec3.atBottomCenterOf(restartOrigin.offset(150, 0, 0));
-            helper.assertTrue(
-                    registry.goTo(owner, restartTarget.x, restartTarget.y, restartTarget.z).success(),
-                    "restart seed navigation failed to start");
+            owner.moveTo(owner.getX(), owner.getY(), owner.getZ() + 20.0D, owner.getYRot(), owner.getXRot());
+            helper.assertTrue(registry.follow(owner).success(),
+                    "restart seed follow navigation failed to start");
             helper.runAfterDelay(5, () -> {
                 helper.assertTrue(
-                        registry.status(owner).contains("mode=GOTO"),
+                        registry.status(owner).contains("mode=FOLLOW"),
                         "restart seed navigation was not in flight before shutdown");
                 helper.succeed();
             });

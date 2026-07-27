@@ -90,6 +90,11 @@ Documentation now has a single reader-facing status page, sole evidence matrix, 
 guides, developer entry and historical archive boundary. The strengthened documentation gate and
 the repository productization audit pass alongside secret, dependency-pinning and npm production
 audit checks; exact final-candidate release and remote results are still required.
+Final-candidate preflight also removed two fixture ambiguities without weakening product behavior:
+the Fabric restart seed now uses continuous FOLLOW navigation so accelerated GameTest ticks cannot
+finish a finite route before shutdown, and launch-test preparation declares disabled/persistence
+mode properties as inputs so Gradle cannot reuse a fixture prepared for another mode. Focused
+Fabric/Forge restart, Runtime-disabled launch and multi-Profile gates pass.
 
 Status values are limited to `NOT_STARTED`, `PARTIAL`, `IMPLEMENTED`, `LOCALLY_VERIFIED`,
 `REMOTELY_VERIFIED`, and `BLOCKED_BY_EXCLUDED_LIVE_TEST`. Replay evidence is not Live evidence.

@@ -29,6 +29,8 @@ evidence, and must be updated with exact release results after the final candida
 | CI-01 | Windows portability | The E2E fixture builder used `Get-FileHash`, which was unavailable in the hosted PowerShell 7 job and stopped Windows CI before Chromium launched. | Fixed with a bounded .NET SHA-256 helper that disposes the algorithm and stream. The same E2E passes locally after the change; exact-SHA remote confirmation remains required. |
 | CLEAN-01 | Generated/state files | Build, Gradle, Web dist, Playwright result and screenshot directories exist locally. | Correctly ignored. No build/output/test-result/log/database/cache/archive artifact is tracked. They are rebuilt for gates and excluded from source/release unless explicitly assembled. |
 | TEST-01 | Skips | One test uses `Assumptions.abort` when the host cannot create symbolic links. | Retained with explicit reason. The security behavior is tested on capable hosts; this is not an unlabelled or product-path skip. No `@Disabled`, Playwright skip or workflow `continue-on-error` was found. |
+| TEST-02 | Restart fixture | Fabric persistence seed used a finite 150-block `GOTO`; the accelerated GameTest clock could complete it before shutdown and save truthful `IDLE`, invalidating the intended in-flight premise. | Fixed by seeding continuous FOLLOW navigation after moving the owner. The two-process gate again proves the same UUID/body/inventory and restart quarantine to `PAUSED` without extending a timeout. |
+| TEST-03 | Launch fixture inputs | `prepareLaunchTest` declared its directory output but not the Runtime-disabled or persistence-probe mode inputs, allowing Gradle to reuse a normal-launch fixture for the disabled test. | Fixed by declaring both properties as task inputs. The disabled bridge test now writes the correct config and proves there is no token lookup. |
 | DEBUG-01 | Console output | CLI entry points and fault-injection helpers write structured progress to stdout. | Retained. These are user/automation interfaces, not forgotten debug statements; no browser `console.log`, debugger statement, `printStackTrace`, TODO, FIXME or XXX was found in reachable product code. |
 | LEGAL-01 | Legal package | The project license existed, but there was no reader-facing NOTICE in the release assembly. | Fixed. `NOTICE` identifies MCAC terms, routes exact third-party inventory to the SPDX SBOM/provenance file and adds a non-affiliation statement; release assembly includes it under `legal/`. |
 | DEP-01 | Dependencies | Dynamic top-level dependency or mutable GitHub Action references could make the candidate non-reproducible. | No defect found. `dependencyPinningCheck` passed; npm production audit reported 0 vulnerabilities. Transitive npm ranges remain lockfile-resolved and are not treated as floating roots. |
@@ -44,6 +46,8 @@ evidence, and must be updated with exact release results after the final candida
 - `git diff --check`: passed.
 - tracked generated/state file scan: none.
 - bilingual packaged-backend Playwright path after the PowerShell portability fix: 1 passed.
+- Fabric and Forge two-process persistence restart gates: passed.
+- Runtime-disabled launch and authenticated multi-Profile isolation gates: passed.
 
 ## Known limitations retained
 

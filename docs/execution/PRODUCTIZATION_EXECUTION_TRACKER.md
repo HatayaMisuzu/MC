@@ -1,8 +1,8 @@
 # Productization execution tracker
 
 Updated: 2026-07-28
-Branch: `codex/forge-hermes-human-acceptance`  
-PR: `#3`  
+Branch: `main`
+PR: `#3`
 Recovery starting head: `ca91fd767c9015f3e3d397a348f35ebcbd389be3`
 
 This is an execution tracker, not a second completion matrix.
@@ -27,9 +27,9 @@ completion matrix. Status values here are `COMPLETED`, `IN_PROGRESS`, `INTERRUPT
 | 11 | Repository productization/security/dependency/UI/release cleanup audit | `COMPLETED` | `docs/product/REPOSITORY_PRODUCTIZATION_AUDIT.md` records concrete documentation, UI/API, CI portability, generated-state, skip/debug, legal, dependency and secret findings. Reachable defects were fixed; secret/dependency/docs/npm audit and tracked-state scans pass. |
 | 12 | Full local candidate gates | `COMPLETED` | The final working tree passed `clean check buildPlatforms`; all Loader launch/GameTests; Fabric/Forge Runtime E2E; both restart gates; multi-Profile and Runtime-disabled launch; reconnect and unknown-Mod E2E; 105/200-turn reliability gates; npm audit/lint/test/build; package verification, arbitrary-directory HTML first start and the clean-extraction bilingual Golden Path. A timed-out shell left one duplicate test tree; it was identified by exact repository command line, removed, and the affected launch/GameTest gate then passed cleanly. |
 | 13 | Exact candidate Release/Manifest/SBOM/SHA validation | `COMPLETED` | A clean candidate rebuild passed package verification and Golden Path. Independent validation matched all 410 Manifest payload entries by path/size/SHA, all 412 `SHA256SUMS` entries, the external ZIP sidecar, source-bound SPDX 2.3 metadata for 32 versioned/licensed/purl components, required bilingual/compatibility/legal documents, safe ZIP paths, one SLF4J provider and no development/user-state/local-path/secret-shaped residue. The final evidence-only commit is rebuilt once more before push so `sourceCommit` remains exact. |
-| 14 | Commit, push and exact-SHA remote CI | `IN_PROGRESS` | Push the final evidence-only candidate, then require PR fast, Windows terminal/package, Minecraft heavy, dependency review, CodeQL Java and CodeQL JS/TS all green on that exact SHA. Existing runs for older candidates are not reusable. |
-| 15 | PR #3 review readiness and merge to `main` | `NOT_STARTED` | Update title/body/evidence links, remove obsolete remaining gates, keep Live Hermes/human pending, resolve review threads, mark ready and use an ordinary merge commit only after all automated gates pass. |
-| 16 | Post-merge exact-main rebuild, CI and frozen baseline/tag | `NOT_STARTED` | On the merge SHA, rebuild Release, rerun applicable local/remote gates, create baseline/closeout reports and an annotated productization-baseline tag without rewriting it later. |
+| 14 | Commit, push and exact-SHA remote CI | `COMPLETED` | Candidate `48f799e8e880858c81a8516c6d92f128bda24b60`: PR fast `30287614857`, Windows terminal/package `30287614849`, Minecraft heavy `30287667164`, and dependency review plus CodeQL Java/JS `30287614859` all passed. |
+| 15 | PR #3 review readiness and merge to `main` | `COMPLETED` | PR title/body and evidence were aligned, no review threads existed, all required candidate gates were green, PR was marked Ready and merged normally (not squash/rebase) as `20b3b2eaa87756884e3d96e67737c99554d5b67e`. |
+| 16 | Post-merge exact-main rebuild, CI and frozen baseline/tag | `IN_PROGRESS` | Baseline and closeout reports are being committed; the resulting exact main SHA must then rebuild Release, pass applicable local/remote gates, and receive the immutable annotated tag. |
 
 ## Explicit deferrals
 
@@ -40,6 +40,5 @@ completion matrix. Status values here are `COMPLETED`, `IN_PROGRESS`, `INTERRUPT
 
 ## Recovery decision
 
-Work resumes at item 14. Items 1 through 13 are not repeated. Their implementation remains in
-place; only tests affected by the final evidence-only commit or packaging source binding are rerun.
-No current local browser or Terminal process owns port `32145`.
+Work is at item 16. Items 1 through 15 are complete and are not repeated. No current local browser
+or Terminal process owns port `32145`.

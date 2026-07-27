@@ -1,6 +1,6 @@
 # MCAC documentation
 
-Updated: 2026-07-27
+Updated: 2026-07-28
 
 This is the current documentation entry point. It separates product status, evidence, user
 instructions, developer contracts and historical logs so one old milestone cannot override the
@@ -10,6 +10,10 @@ current candidate.
 
 - [Product status](PRODUCT_STATUS.md): reader-facing phase and support matrix.
 - [RC completion matrix](RC_COMPLETION_MATRIX.md): the only completion/evidence matrix.
+- [Productization baseline](product/PRODUCTIZATION_BASELINE.md): automated freeze identity,
+  support boundary and immutable hotfix policy.
+- [Productization closeout report](product/PRODUCTIZATION_CLOSEOUT_REPORT.md): reconstructed
+  checklist and closure evidence.
 - [Known limitations](../KNOWN_LIMITATIONS.md): current explicit limitations.
 - [Execution contract](../CODEX_EXECUTION.md): durable implementation and evidence boundaries.
 - [Architecture](ARCHITECTURE.md): product responsibility and trust boundaries.

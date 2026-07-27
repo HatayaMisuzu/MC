@@ -1,6 +1,6 @@
 # Dual-loader Hermes acceptance execution status
 
-Updated: 2026-07-27 14:07 +08:00
+Updated: 2026-07-27 14:19 +08:00
 
 This is the checkpoint log for
 `MCAC_CODEX_DUAL_LOADER_HERMES_EXECUTION(1).md`. It records evidence without
@@ -12,7 +12,7 @@ only completion matrix.
 
 - Current stage: `4 — FABRIC_FORGE_GLOBAL_NAVIGATION`
 - Baseline source SHA: `63fbb2f66fbebebf9a68cf6b3e08304f0337e765`
-- Latest committed source SHA: `e6b81e4435f0cdf0a361877071dc75d49639143b`
+- Latest committed source SHA: `85e30af04a52688cc28df8ffc7f1789cc3ecdc81`
 - Source/default branch at freeze: `origin/main` / `main`
 - Working branch: `codex/forge-hermes-human-acceptance`
 - Final seal allowed: `NO`
@@ -401,6 +401,15 @@ Passed on the frozen SHA:
   GameTest server always constructs a fresh world; the clean gate passes in
   1m15s and the unchanged Forge suite then passes 3/3. This is local automated
   server evidence, not Live-Hermes or human-play evidence.
+- Stage 4 control/safety slice `85e30af` adds real Loader-world evidence for
+  hazard-cost routing, moving follow targets, and explicit owner stop on both
+  supported Loaders. Fabric 31/31 and Forge 3/3 GameTests route around an
+  unchanged magma fixture without health loss, react after the Owner moves the
+  follow target, then stop movement and settle in `IDLE` after an explicit
+  owner command. The Forge fixture also clears delayed water outside the prior
+  swim volume, removing a nondeterministic ladder-approach failure. This does
+  not claim passive physical user-takeover detection, Live Hermes, or human
+  evidence.
 
 ## Remaining work
 

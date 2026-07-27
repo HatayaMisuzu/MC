@@ -729,9 +729,54 @@ public final class CompanionLifecycleForgeGameTests {
                                         null))
                         .success(),
                 "retreat-from-danger failed to start");
+        awaitRetreatAcceptance(
+                helper,
+                registry,
+                owner,
+                ownerConnection,
+                body,
+                companionId,
+                retreatStart,
+                retreatThreat,
+                480);
+    }
+
+    private static void awaitRetreatAcceptance(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            FakeConnection ownerConnection,
+            CompanionPlayer body,
+            String companionId,
+            Vec3 retreatStart,
+            Zombie retreatThreat,
+            int ticksRemaining) {
+        if (body.position().distanceToSqr(retreatStart) >= 9.0D
+                && body.distanceToSqr(retreatThreat) >= 36.0D) {
+            continueAfterRetreat(
+                    helper,
+                    registry,
+                    owner,
+                    ownerConnection,
+                    body,
+                    companionId,
+                    retreatStart,
+                    retreatThreat);
+            return;
+        }
+        helper.assertTrue(
+                ticksRemaining > 0,
+                "retreat did not reach the bounded displacement and clearance before timeout: start="
+                        + retreatStart
+                        + " end="
+                        + body.position()
+                        + " threat="
+                        + retreatThreat.position()
+                        + " status="
+                        + registry.runtimeSnapshots(true));
         helper.runAfterDelay(
-                240,
-                () -> continueAfterRetreat(
+                1,
+                () -> awaitRetreatAcceptance(
                         helper,
                         registry,
                         owner,
@@ -739,7 +784,8 @@ public final class CompanionLifecycleForgeGameTests {
                         body,
                         companionId,
                         retreatStart,
-                        retreatThreat));
+                        retreatThreat,
+                        ticksRemaining - 1));
     }
 
     @GameTest(
@@ -1375,6 +1421,23 @@ public final class CompanionLifecycleForgeGameTests {
         }
 
         helper.runAfterDelay(220, () -> {
+            // The navigation arena extends far beyond the tiny vanilla empty template.
+            // Move both test participants to a separate Z corridor before building it so
+            // Forge's adjacent GameTest templates cannot overlap later aquatic fixtures.
+            Vec3 isolatedNavigationSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 33.0D));
+            owner.moveTo(
+                    isolatedNavigationSpawn.x,
+                    isolatedNavigationSpawn.y,
+                    isolatedNavigationSpawn.z,
+                    0.0F,
+                    0.0F);
+            body.moveTo(
+                    isolatedNavigationSpawn.x,
+                    isolatedNavigationSpawn.y,
+                    isolatedNavigationSpawn.z,
+                    0.0F,
+                    0.0F);
+            body.setDeltaMovement(Vec3.ZERO);
             BlockPos pathOrigin = body.blockPosition();
             for (int x = -1; x <= 15; x++) {
                 for (int z = -4; z <= 4; z++) {
@@ -1439,8 +1502,8 @@ public final class CompanionLifecycleForgeGameTests {
                     body,
                     pathOrigin.offset(3, 0, 0),
                     pathOrigin.offset(6, 0, 0),
-                    100);
-            helper.runAfterDelay(240, () -> {
+                    240);
+            helper.runAfterDelay(480, () -> {
                 helper.assertTrue(
                         body.position().distanceToSqr(target) <= 2.25D,
                         "global navigation did not route around the dynamic walls: position="

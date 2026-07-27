@@ -148,7 +148,10 @@ try {
     $game = Start-TestProcess 'cmd.exe' $gameArgs $forge $false
 
     $gameLog = Join-Path $gameRun 'logs\latest.log'
-    $readyDeadline = [DateTime]::UtcNow.AddSeconds(90)
+    # The Forge marker is intentionally published only after the real primitive and
+    # retreat acceptance phases complete. Cold hosted runners can spend more than
+    # 90 seconds compiling, starting the server, and reaching that verified point.
+    $readyDeadline = [DateTime]::UtcNow.AddSeconds(180)
     do {
         if ($game.HasExited) { throw "Forge Runtime GameTest exited early ($($game.ExitCode))." }
         if ([DateTime]::UtcNow -gt $readyDeadline) { throw 'Forge companion did not register in time.' }

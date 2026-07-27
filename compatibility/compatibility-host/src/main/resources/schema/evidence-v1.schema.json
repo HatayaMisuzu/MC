@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcac.local/schema/compat/evidence-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "evidenceId", "kind", "matchLevel", "passed", "recordedAt", "summary"],
+  "properties": {
+    "schemaVersion": {"const": "mcac-compat-evidence/1"},
+    "evidenceId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "kind": {"enum": ["SCHEMA", "UNIT", "FIXTURE", "REPLAY", "GAMETEST", "RUNTIME_E2E", "REAL_INSTANCE", "HUMAN"]},
+    "matchLevel": {
+      "enum": ["EXACT_VERIFIED", "RANGE_VERIFIED", "STRUCTURAL_MATCH", "PROVISIONAL", "INCOMPATIBLE", "UNKNOWN"]
+    },
+    "passed": {"type": "boolean"},
+    "recordedAt": {"type": "string", "format": "date-time"},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 512},
+    "artifactHash": {"type": "string", "pattern": "^$|^[a-f0-9]{64}$"}
+  }
+}

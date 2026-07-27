@@ -262,3 +262,62 @@ export interface StreamEvent {
   at?: string
   data?: unknown
 }
+
+export interface CompatibilityPackSummary {
+  coordinate: string
+  packId: string
+  version: string
+  type: string
+  contentHash: string
+  state: string
+  source: string
+  evidence?: unknown[]
+  activationFingerprint?: string
+}
+
+export interface CompatibilityMatch {
+  pack: {
+    manifest: { packId: string; version: string; type: string; coordinate: string }
+    contentHash: string
+  }
+  level: string
+  stale: boolean
+  builtin: boolean
+  reason: string
+}
+
+export interface CompatibilityTraceEntry {
+  at: string
+  capability: string
+  packCoordinate?: string
+  decision: string
+  reason: string
+}
+
+export interface CompatibilitySnapshot {
+  instanceId: string
+  store: string
+  nativeExecutionAvailable: boolean
+  nativeStatus: string
+  capabilityCount: number
+  enabledCapabilityCount: number
+  fingerprint: {
+    digest: string
+    minecraftVersion: string
+    loader: string
+    loaderVersion: string
+    mods: Record<string, string>
+  }
+  packs: CompatibilityPackSummary[]
+  matchedPacks: CompatibilityMatch[]
+  conflicts: string[]
+  suppressions: string[]
+  trace: CompatibilityTraceEntry[]
+  authorization: {
+    controller: string
+    profileId: string
+    instanceId: string
+    maximumRisk: string
+    operations: string[]
+  }
+}

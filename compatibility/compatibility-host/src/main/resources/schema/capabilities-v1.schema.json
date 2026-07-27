@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mcac.local/schema/compat/capabilities-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "capabilities"],
+  "properties": {
+    "schemaVersion": {"const": "mcac-capabilities/1"},
+    "capabilities": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "risk", "enabled", "contract"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "kind": {"enum": ["tool", "observation", "action", "menu", "safety", "builtin-provider", "declarative"]},
+          "risk": {"enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+          "enabled": {"type": "boolean"},
+          "contract": {"type": "object", "maxProperties": 64},
+          "evidence": {"type": "object", "maxProperties": 32}
+        }
+      }
+    }
+  }
+}

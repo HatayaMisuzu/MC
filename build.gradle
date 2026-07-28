@@ -11,6 +11,11 @@ def isWindowsHost = System.getProperty('os.name').toLowerCase().contains('window
 def runProcess = { Closure configuration ->
     providers.exec(configuration).result.get().assertNormalExitValue()
 }
+def runProcessOutput = { Closure configuration ->
+    def execution = providers.exec(configuration)
+    execution.result.get().assertNormalExitValue()
+    execution.standardOutput.asText.get()
+}
 
 allprojects {
     group = providers.gradleProperty('group').get()
@@ -474,12 +479,10 @@ tasks.register('stageTerminal') {
         def root=terminalImage.get().asFile
         def sha256={f->java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()}
         def relative={f->root.toPath().relativize(f.toPath()).toString().replace('\\','/')}
-        def stdout=new ByteArrayOutputStream()
-        runProcess { commandLine 'git','rev-parse','HEAD'; standardOutput=stdout }
-        def sourceCommit=stdout.toString('UTF-8').trim()
-        def timestampOutput=new ByteArrayOutputStream()
-        runProcess { commandLine 'git','show','-s','--format=%cI',sourceCommit; standardOutput=timestampOutput }
-        def sourceTimestamp=java.time.OffsetDateTime.parse(timestampOutput.toString('UTF-8').trim()).toInstant().toString()
+        def sourceCommit=runProcessOutput { commandLine 'git','rev-parse','HEAD' }.trim()
+        def sourceTimestamp=java.time.OffsetDateTime.parse(
+                runProcessOutput { commandLine 'git','show','-s','--format=%cI',sourceCommit }.trim())
+                .toInstant().toString()
         def payload=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt','release-manifest.json','sbom.spdx.json' }
                 .files.findAll { it.isFile() }.sort { relative(it) }
         def manifest=[schemaVersion:1,product:'Minecraft AI Companion',version:project.version.toString(),

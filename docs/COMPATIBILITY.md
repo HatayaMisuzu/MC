@@ -31,3 +31,9 @@ semantic state and completion-claim fields. The OpenAI-compatible adapter suppor
 calling and `ASK_USER`, but its final response is currently natural-language content without those
 Hermes-specific structured fields. Replay is deterministic test evidence, never Live-provider
 evidence.
+
+The exact machine-readable comparison is
+[`product/BRAIN_ADAPTER_CAPABILITIES.json`](product/BRAIN_ADAPTER_CAPABILITIES.json). The first
+real third-party pack remains a future acceptance item; its strict manifest starting point,
+bounded test path and evidence labels are documented in
+[`compatibility/FIRST_REAL_PACK_ACCEPTANCE.md`](compatibility/FIRST_REAL_PACK_ACCEPTANCE.md).

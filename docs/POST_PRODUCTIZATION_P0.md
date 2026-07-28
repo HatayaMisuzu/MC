@@ -38,6 +38,15 @@ design must preserve nondifferentiating denial, least privilege and local recove
 caller-supplied identity headers as authentication. This is a separate reviewed architecture item;
 0.3.1 keeps the pairing-token and exact session-scope boundary honestly `PARTIAL`.
 
+## P0-E: Brain-selected route construction
+
+Design opt-in route construction for digging, bridging and pillaring without placing strategy in
+the navigator. The external Brain must select the route-construction strategy and exact targets;
+deterministic primitive executors enforce block allow/deny policy, inventory and distance budgets,
+hazard checks, ownership, cancellation and verified world deltas. Acceptance requires both Full
+Bridge Loader suites, obstruction/valuable-block/unknown-Mod denial, restart reconciliation and no
+fabricated arrival. Until then navigation does not break or place blocks to invent a route.
+
 ## Activation gate
 
 Implementation of these directions begins only when all of the following are true:

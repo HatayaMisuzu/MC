@@ -40,6 +40,7 @@ public final class PairingService {
         Path providerFile=profile.profileDirectory().resolve("provider.json");
         var provider=Files.isRegularFile(providerFile)?JSON.readTree(providerFile.toFile()):JSON.createObjectNode().put("mode","rules");
         String mode=safe(provider.path("mode").asText("rules")),base=safe(provider.path("baseUrl").asText("https://api.openai.com")),env=safe(provider.path("apiKeyEnv").asText("MC_COMPANION_API_KEY")),model=safe(provider.path("model").asText("disabled"));
+        int providerTimeout = Math.max(1, Math.min(300, provider.path("timeoutSeconds").asInt(15)));
         Path searchFile = profile.profileDirectory().resolve("search.json");
         var search = Files.isRegularFile(searchFile) ? JSON.readTree(searchFile.toFile())
                 : JSON.createObjectNode().put("mode", "disabled");
@@ -52,7 +53,14 @@ public final class PairingService {
                 + "\n  profile_id: \"" + safe(profile.instanceId()) + "\""
                 + "\n  instance_id: \"" + safe(instance.instanceId()) + "\""
                 + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
-                + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: 60\n"
+                + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: "+providerTimeout+"\n"
+                + "brain:\n  mode: " + ("openai-compatible".equals(mode) ? "openai-compatible" : "disabled")
+                + "\n  endpoint: \"" + base + "\"\n  token_env: " + env
+                + "\n  model: \"" + model + "\"\n  timeout_seconds: " + providerTimeout
+                + "\n  max_output_tokens: 1400\n  max_tool_calls_per_turn: 8"
+                + "\n  max_requests: 24\n  max_input_tokens: 30000"
+                + "\n  max_total_output_tokens: 8000\n  max_wall_clock_minutes: 15"
+                + "\n  max_retries: 2\n"
                 + "search:\n  mode: " + searchMode + "\n  endpoint: \"" + searchEndpoint
                 + "\"\n  token_env: " + searchEnv + "\n  timeout_seconds: " + searchTimeout
                 + "\n  allowed_domains: " + yamlList(search.path("allowedDomains"))

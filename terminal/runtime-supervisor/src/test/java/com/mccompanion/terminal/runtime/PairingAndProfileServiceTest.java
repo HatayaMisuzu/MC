@@ -67,6 +67,26 @@ class PairingAndProfileServiceTest {
   }
 
   @Test
+  void providerConfigurationEnablesTheExternalBrainWithoutPersistingItsToken() throws Exception {
+    var i = instance("brain");
+    var p = new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe")).ensure("brain");
+    Files.writeString(p.profileDirectory().resolve("provider.json"), """
+        {"mode":"openai-compatible","baseUrl":"https://provider.example/v1",
+         "apiKeyEnv":"MC_COMPANION_BRAIN_TOKEN","model":"test-model","timeoutSeconds":30}
+        """);
+
+    new PairingService().ensureConfigured(i, p);
+
+    String yaml = Files.readString(p.configFile());
+    assertTrue(yaml.contains("brain:\n  mode: openai-compatible"));
+    assertTrue(yaml.contains("endpoint: \"https://provider.example/v1\""));
+    assertTrue(yaml.contains("token_env: MC_COMPANION_BRAIN_TOKEN"));
+    assertTrue(yaml.contains("model: \"test-model\""));
+    assertTrue(yaml.contains("timeout_seconds: 30"));
+    assertFalse(yaml.contains("Bearer"));
+  }
+
+  @Test
   void profilesGetStableDistinctPorts() throws Exception {
     var service =
         new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe"), port -> true);

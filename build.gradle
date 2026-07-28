@@ -455,6 +455,8 @@ tasks.register('stageTerminal') {
             from('docs/INDEX.md') { into 'docs' }
             from('docs/PRODUCT_STATUS.md') { into 'docs' }
             from('docs/product/PRODUCT_TRUTH.json') { into 'docs/product' }
+            from('docs/product/BRAIN_ADAPTER_CAPABILITIES.json') { into 'docs/product' }
+            from('docs/product/BUILTIN_SKILL_SCOPE.md') { into 'docs/product' }
             from('docs/ARCHITECTURE.md') { into 'docs' }
             from('docs/COMPATIBILITY.md') { into 'docs' }
             from('docs/CONTROL_TERMINAL.md') { into 'docs' }

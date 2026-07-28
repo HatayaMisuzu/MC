@@ -48,6 +48,43 @@ foreach ($relative in $required) {
         Add-Error "missing documented repository path: $relative"
     }
 }
+
+$adapterMatrixPath = Join-Path $root 'docs/product/BRAIN_ADAPTER_CAPABILITIES.json'
+try {
+    $adapterMatrix = Get-Content -Raw -Encoding UTF8 -LiteralPath $adapterMatrixPath | ConvertFrom-Json
+    if ($adapterMatrix.schemaVersion -ne 1 -or $adapterMatrix.productVersion -ne '0.3.1') {
+        Add-Error 'Brain Adapter capability matrix schema or product version is invalid'
+    }
+    $allowedAdapterEvidence = @('SUPPORTED', 'PARTIAL', 'NOT_SUPPORTED', 'TEST_ONLY', 'PENDING_EXTERNAL')
+    $adapterFields = @('toolCalling', 'semanticState', 'completionClaim', 'askUser',
+        'reconnectResume', 'initiativePersonality', 'mcpNativeConfiguration', 'liveEvidence')
+    $adaptersById = @{}
+    foreach ($adapter in @($adapterMatrix.adapters)) {
+        $adaptersById[$adapter.id] = $adapter
+        foreach ($field in $adapterFields) {
+            if ($allowedAdapterEvidence -notcontains $adapter.$field) {
+                Add-Error "Brain Adapter matrix has invalid $field status for $($adapter.id)"
+            }
+        }
+    }
+    if (($adaptersById.Keys | Sort-Object) -join ',' -ne 'hermes,openai-compatible,replay') {
+        Add-Error 'Brain Adapter matrix must contain exactly Hermes, OpenAI-compatible and Replay'
+    }
+    if ($adaptersById['hermes'].liveEvidence -ne 'PENDING_EXTERNAL' -or
+            $adaptersById['hermes'].mcpNativeConfiguration -ne 'PENDING_EXTERNAL') {
+        Add-Error 'Hermes Live and MCP-native evidence must remain pending external verification'
+    }
+    if ($adaptersById['openai-compatible'].semanticState -ne 'NOT_SUPPORTED' -or
+            $adaptersById['openai-compatible'].completionClaim -ne 'NOT_SUPPORTED') {
+        Add-Error 'OpenAI-compatible semantic state and completion claims must remain unsupported'
+    }
+    if ($adaptersById['replay'].liveEvidence -ne 'NOT_SUPPORTED') {
+        Add-Error 'Replay must never be represented as Live evidence'
+    }
+} catch {
+    Add-Error "Brain Adapter capability matrix is missing or invalid JSON: $($_.Exception.Message)"
+}
+
 if (Test-Path -LiteralPath (Join-Path $root 'docs/human-test/INSTANCE_AUDIT.md')) {
     Add-Error 'tracked personal instance audit must not exist in the current tree'
 }

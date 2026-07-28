@@ -1,7 +1,7 @@
 # MCAC 0.3.1 full audit and repair report
 
 Status: Current 0.3.1 closeout report
-Updated: 2026-07-28
+Updated: 2026-07-29
 
 ## Outcome
 
@@ -26,6 +26,8 @@ playtesting.
 | Working branch | `codex/mcac-0.3.1-audit-repair` |
 | Implementation candidate | `8aa284f3f44c8728658232a3cd01d75acd4ec900` |
 | Closeout SHA | Pending this evidence-only commit |
+| Postfreeze repair candidate 1 | `c0e2fe0cf17465c1070efdc6097554cf21659f5d` |
+| Postfreeze final repair candidate | Pending the final premerge repair commit |
 | Merge SHA | `NOT_RUN` |
 | Final `main` SHA | `NOT_RUN` |
 | Version | `0.3.1` |
@@ -77,13 +79,20 @@ insertions and 635 deletions. No destructive history rewrite was performed.
   group/regex expansion, unexpected trust attributes, and unrelated external artifacts. Independent
   Cold A/Cold B caches matched all 47 canonical hashes, and strict Cold B build/launch preparation
   passed through Loom cache-recovery source remapping.
+- Regenerated stable SHA-256 verification metadata through Gradle's official write mode for both
+  Forge 1.20.1 and NeoForge 1.21.1 after the first postfreeze heavy run exposed missing
+  repository-served Gradle module metadata. Independent fresh-cache read-only
+  `createMinecraftArtifacts` runs then passed for both Loader workspaces without writing metadata,
+  adding trust rules, disabling verification, or retrying the failed remote SHA.
 - Removed project-owned internal/deprecated Gradle API use while preserving documented third-party
   Loader-plugin warning boundaries.
 
 ### MCP, local credentials, and filesystem boundaries
 
-- Applied fail-closed current-owner token/state permissions on Windows and POSIX, protected Web
-  bootstrap state, and removed bootstrap state at shutdown.
+- Applied fail-closed current-owner token/state permissions on Windows and POSIX. Sensitive files
+  created by MCAC are now atomically created empty, explicitly assigned to the resolved current
+  Windows principal, and restricted before any secret or state is written; existing foreign-owned
+  files are never taken over. Web bootstrap state remains protected and is removed at shutdown.
 - Bound MCP sessions to a domain-separated pairing-token generation so same-token restart recovery
   remains valid while rotation invalidates old sessions without revealing authorization details.
 - Added real Windows junction coverage and Linux file/directory symlink coverage across Workspace,
@@ -122,6 +131,23 @@ insertions and 635 deletions. No destructive history rewrite was performed.
 - Made Windows installer journal replacement write, close, force, and atomically replace a
   same-directory temporary file; only Windows sharing failures receive one bounded primitive-level
   retry window, and every path removes temporary residue without rerunning an install or E2E.
+
+### Postfreeze final-gate root-cause closure
+
+- Candidate `c0e2fe0cf17465c1070efdc6097554cf21659f5d` passed PR fast and the complete
+  supply-chain/CodeQL workflow. Its first Windows and Minecraft-heavy runs were preserved as
+  failures rather than rerun.
+- The Windows first failure showed that an elevated hosted Runner can assign
+  `BUILTIN\Administrators` as the default owner of a newly created empty state file before MCAC
+  installs its owner-only ACL. The creation API now establishes the individual current-user owner
+  before callers write data, while the existing-file path still rejects every foreign owner.
+- The heavy first failure showed stable `.module`/parent POM artifacts resolved by the Forge
+  toolchain but absent from Loader verification metadata. Official fresh-cache generation added
+  the exact SHA-256 entries to both Forge and NeoForge metadata. Separate read-only fresh caches
+  pass artifact creation for Forge and NeoForge.
+- Focused owner/token/Web tests, the Windows-equivalent prebuilt Terminal/Runtime/Fabric build,
+  and the one-worker real-backend Chromium product path pass locally. Exact final-candidate remote
+  evidence remains pending and is not inferred from these local results.
 
 These repairs changed fixture ownership, timing authority, process diagnostics, or one atomic
 filesystem primitive. They did not weaken assertions, add arbitrary sleeps, delete cases, or

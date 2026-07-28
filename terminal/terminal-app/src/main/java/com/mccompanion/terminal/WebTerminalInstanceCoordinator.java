@@ -11,6 +11,8 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.Files;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
@@ -26,9 +28,7 @@ final class WebTerminalInstanceCoordinator {
     Files.createDirectories(home);
     Path lockPath = home.resolve("html-terminal.lock");
     Path currentPath = home.resolve("html-terminal-current.json");
-    try (FileChannel channel =
-        FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
-      OwnerOnlyFile.secure(lockPath);
+    try (FileChannel channel = openOwnerOnlyLock(lockPath)) {
       FileLock lock = tryLock(channel);
       if (lock == null) {
         var current = awaitCurrent(currentPath);
@@ -57,6 +57,22 @@ final class WebTerminalInstanceCoordinator {
     }
   }
 
+  private static FileChannel openOwnerOnlyLock(Path lockPath) throws IOException {
+    Path staged =
+        OwnerOnlyFile.createTempFile(lockPath.getParent(), ".html-terminal-lock-", ".tmp");
+    try {
+      try {
+        Files.move(staged, lockPath);
+      } catch (FileAlreadyExistsException existing) {
+        // The canonical file is validated below. Never replace another process's lock.
+      }
+    } finally {
+      Files.deleteIfExists(staged);
+    }
+    OwnerOnlyFile.secure(lockPath);
+    return FileChannel.open(lockPath, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
+  }
+
   private static FileLock tryLock(FileChannel channel) throws IOException {
     try {
       return channel.tryLock();
@@ -82,9 +98,9 @@ final class WebTerminalInstanceCoordinator {
   }
 
   static void writeCurrent(Path current, WebTerminalServer server) throws IOException {
-    Path temporary = Files.createTempFile(current.getParent(), ".html-terminal-", ".tmp");
+    Path temporary =
+        OwnerOnlyFile.createTempFile(current.getParent(), ".html-terminal-", ".tmp");
     try {
-      OwnerOnlyFile.secure(temporary);
       JSON.writerWithDefaultPrettyPrinter()
           .writeValue(
               temporary.toFile(),

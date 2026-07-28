@@ -39,9 +39,8 @@ public final class PairingTokenStore {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        Path temporary = Files.createTempFile(parent, ".pairing-", ".token");
+        Path temporary = OwnerOnlyFile.createTempFile(parent, ".pairing-", ".token");
         try {
-            OwnerOnlyFile.secure(temporary);
             Files.writeString(temporary, token + System.lineSeparator(), StandardCharsets.US_ASCII,
                     StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             try {

@@ -127,9 +127,8 @@ public final class PairingService {
     private static void restore(Path file, byte[] value) throws IOException { if(value==null) Files.deleteIfExists(file); else { Files.write(file,value); if (file.getFileName().toString().endsWith(".token")) OwnerOnlyFile.secure(file); } }
     private static void writePrivateAtomic(Path file, String value) throws IOException {
         Files.createDirectories(file.getParent());
-        Path temporary = Files.createTempFile(file.getParent(), ".mcac-token-", ".tmp");
+        Path temporary = OwnerOnlyFile.createTempFile(file.getParent(), ".mcac-token-", ".tmp");
         try {
-            OwnerOnlyFile.secure(temporary);
             Files.writeString(temporary, value + System.lineSeparator(), StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
             try { Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING); }
             catch(java.nio.file.AtomicMoveNotSupportedException ignored){Files.move(temporary,file,StandardCopyOption.REPLACE_EXISTING);}

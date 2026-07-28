@@ -3,6 +3,7 @@ package com.mccompanion.protocol.security;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.AclEntry;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
@@ -20,6 +21,30 @@ public final class OwnerOnlyFile {
             PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
 
     private OwnerOnlyFile() {}
+
+    /**
+     * Atomically creates a new empty file and establishes the current-user-only boundary before
+     * callers write sensitive data. This is intentionally separate from {@link #secure(Path)}:
+     * elevated Windows tokens can assign Administrators as the default owner of a new file, while
+     * an existing file with a foreign owner must remain fail-closed.
+     */
+    public static Path create(Path path, FileAttribute<?>... attributes) throws IOException {
+        Path file = path.toAbsolutePath().normalize();
+        Files.createFile(file, attributes);
+        return secureCreated(file);
+    }
+
+    /**
+     * Creates a new empty temporary file and establishes the current-user-only boundary before
+     * returning it to the caller.
+     */
+    public static Path createTempFile(
+            Path directory, String prefix, String suffix, FileAttribute<?>... attributes)
+            throws IOException {
+        Path file = Files.createTempFile(directory, prefix, suffix, attributes)
+                .toAbsolutePath().normalize();
+        return secureCreated(file);
+    }
 
     public static void secure(Path path) throws IOException {
         Path file = path.toAbsolutePath().normalize();
@@ -76,16 +101,44 @@ public final class OwnerOnlyFile {
 
     private static void verifyCurrentOwner(Path file) throws IOException {
         UserPrincipal owner = Files.getOwner(file);
-        String userName = System.getProperty("user.name", "").strip();
-        if (userName.isEmpty()) throw new IOException("Current user identity is unavailable");
-        UserPrincipal current;
-        try {
-            current = file.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(userName);
-        } catch (Exception failure) {
-            throw new IOException("Current user principal could not be resolved", failure);
-        }
+        UserPrincipal current = currentPrincipal(file);
         if (!samePrincipal(owner, current)) {
             throw new IOException("Sensitive local state is not owned by the current user");
+        }
+    }
+
+    private static Path secureCreated(Path file) throws IOException {
+        boolean secured = false;
+        try {
+            if (!Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    || Files.isSymbolicLink(file)
+                    || Files.size(file) != 0L) {
+                throw new IOException("New sensitive local state must be an empty regular non-link file");
+            }
+            AclFileAttributeView acl = Files.getFileAttributeView(file, AclFileAttributeView.class);
+            if (acl != null) {
+                UserPrincipal current = currentPrincipal(file);
+                acl.setOwner(current);
+                if (!samePrincipal(acl.getOwner(), current)) {
+                    throw new IOException("Unable to establish current-user ownership");
+                }
+            }
+            secure(file);
+            secured = true;
+            return file;
+        } finally {
+            if (!secured) Files.deleteIfExists(file);
+        }
+    }
+
+    private static UserPrincipal currentPrincipal(Path file) throws IOException {
+        String userName = System.getProperty("user.name", "").strip();
+        if (userName.isEmpty()) throw new IOException("Current user identity is unavailable");
+        try {
+            return file.getFileSystem().getUserPrincipalLookupService()
+                    .lookupPrincipalByName(userName);
+        } catch (Exception failure) {
+            throw new IOException("Current user principal could not be resolved", failure);
         }
     }
 

@@ -445,9 +445,9 @@ final class WebTerminalServer implements AutoCloseable {
             .put("serverInstanceId", serverInstanceId)
             .put("bootstrapUrl", bootstrapUri().toString())
             .put("startedAt", Instant.now().toString());
-    Path temporary = Files.createTempFile(target.getParent(), ".terminal-state-", ".tmp");
+    Path temporary =
+        OwnerOnlyFile.createTempFile(target.getParent(), ".terminal-state-", ".tmp");
     try {
-      OwnerOnlyFile.secure(temporary);
       JSON.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), state);
       try {
         Files.move(temporary, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,

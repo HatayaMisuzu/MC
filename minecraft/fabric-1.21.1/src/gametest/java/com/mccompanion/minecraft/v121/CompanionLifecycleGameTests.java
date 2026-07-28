@@ -592,9 +592,16 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "block-place test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "block-place test created no live body");
-        // Player-shaped GameTest fixtures are retained until the server exits. Keep the placement
-        // volume above their collision boxes so an earlier mock owner cannot reject BlockItem.place.
-        BlockPos target = body.blockPosition().offset(2, 2, 0);
+        Vec3 placementArena = new Vec3(192.5D, body.getY(), 192.5D);
+        owner.moveTo(placementArena.x, placementArena.y, placementArena.z,
+                owner.getYRot(), owner.getXRot());
+        body.moveTo(placementArena.x, placementArena.y, placementArena.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        // Put the support at foot level so its top face remains unambiguously visible from the
+        // player's eye even if vanilla gravity settles the newly spawned body before the next tick.
+        BlockPos target = body.blockPosition().offset(2, 1, 0);
+        body.serverLevel().setChunkForced(target.getX() >> 4, target.getZ() >> 4, true);
         BlockPos support = target.below();
         body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
@@ -643,7 +650,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "creative block-place test created no live body");
         body.setGameMode(GameType.CREATIVE);
-        BlockPos target = body.blockPosition().offset(2, 2, 0);
+        Vec3 placementArena = new Vec3(224.5D, body.getY(), 224.5D);
+        owner.moveTo(placementArena.x, placementArena.y, placementArena.z,
+                owner.getYRot(), owner.getXRot());
+        body.moveTo(placementArena.x, placementArena.y, placementArena.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        BlockPos target = body.blockPosition().offset(2, 1, 0);
+        body.serverLevel().setChunkForced(target.getX() >> 4, target.getZ() >> 4, true);
         BlockPos support = target.below();
         body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
@@ -2220,7 +2234,31 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             return;
         }
 
+        // This lifecycle path leaves the one-block empty template in two directions. Isolate it
+        // from parallel GameTest structures, then build only a bounded walking surface and
+        // headroom so another batch cannot turn an otherwise valid route into PATH_UNREACHABLE.
+        // Fabric schedules the independent batches concurrently, so a transformed structure-local
+        // offset can still overlap a neighboring test. Use a fixed remote arena outside the packed
+        // GameTest grid; the two real player bodies keep its chunk active for the lifecycle.
+        Vec3 isolatedLifecycleSpawn = new Vec3(128.5D, body.getY(), 128.5D);
+        owner.moveTo(isolatedLifecycleSpawn.x, isolatedLifecycleSpawn.y, isolatedLifecycleSpawn.z,
+                owner.getYRot(), owner.getXRot());
+        body.moveTo(isolatedLifecycleSpawn.x, isolatedLifecycleSpawn.y, isolatedLifecycleSpawn.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
         BlockPos movementOrigin = body.blockPosition();
+        body.serverLevel().setChunkForced(
+                movementOrigin.getX() >> 4, movementOrigin.getZ() >> 4, true);
+        for (int x = -2; x <= 8; x++) {
+            for (int z = -2; z <= 14; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        movementOrigin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            movementOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
         owner.moveTo(movementOrigin.getX() - 1.5D, movementOrigin.getY(), movementOrigin.getZ() + 0.5D,
                 owner.getYRot(), owner.getXRot());
         Vec3 before = body.position();

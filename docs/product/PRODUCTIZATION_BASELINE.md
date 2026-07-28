@@ -1,5 +1,8 @@
 # MCAC 0.3.0 automated productization baseline
 
+Status: Superseded / Historical. This file describes the immutable 0.3.0 baseline, not current
+0.3.1 status. Current truth: `docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Prepared: 2026-07-28 (Asia/Shanghai)
 
 This document freezes the automated product boundary required by the productization execution

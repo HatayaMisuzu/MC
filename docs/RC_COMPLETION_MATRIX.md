@@ -1,8 +1,19 @@
 # RC completion matrix
 
 Updated: 2026-07-28
-Audited implementation baseline: `14e7f91`
-Overall status: Stage 3 in progress; final readiness label not assigned.
+Overall status: `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`
+Automated productization baseline: `FROZEN`
+Product version: `0.3.1`
+Previous immutable baseline: `mcac-productization-baseline-0.3.0`
+Current baseline tag: created only after exact-main validation
+External follow-up:
+
+- `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`
+- `HUMAN_PLAYTEST_PENDING`
+
+Machine-readable current product facts: [product/PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json).
+Historical candidate SHAs and workflow run IDs below are evidence for their named revisions only;
+they do not establish the final identity of this repair release.
 
 Closure-only documentation, packaging, and verification changes after this audited baseline are
 bound to their exact source SHA by `release-manifest.json` and final remote CI; they do not upgrade

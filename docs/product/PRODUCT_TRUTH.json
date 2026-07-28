@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "mcac-product-truth/1",
+  "productVersion": "0.3.1",
+  "readiness": "READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC",
+  "automatedBaseline": "FROZEN",
+  "loaders": {
+    "fabric-1.21.1": {
+      "java": 21,
+      "mode": "FULL_RUNTIME_BRIDGE"
+    },
+    "forge-1.20.1": {
+      "java": 17,
+      "mode": "FULL_RUNTIME_BRIDGE"
+    },
+    "neoforge-1.21.1": {
+      "java": 21,
+      "mode": "LOCAL_ONLY"
+    }
+  },
+  "runtimeProfilePortRange": {
+    "first": 8766,
+    "last": 8866
+  },
+  "pendingExternalEvidence": [
+    "LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING",
+    "HUMAN_PLAYTEST_PENDING"
+  ]
+}

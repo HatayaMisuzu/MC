@@ -228,6 +228,11 @@ tasks.register('documentationCheck') {
                     file('tools/documentation-check.ps1').absolutePath,
                     '-RepositoryRoot', projectDir.absolutePath
         }
+        exec {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/documentation-check-negative.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
     }
 }
 
@@ -362,6 +367,7 @@ tasks.register('stageTerminal') {
             from('CODEX_EXECUTION.md')
             from('docs/INDEX.md') { into 'docs' }
             from('docs/PRODUCT_STATUS.md') { into 'docs' }
+            from('docs/product/PRODUCT_TRUTH.json') { into 'docs/product' }
             from('docs/ARCHITECTURE.md') { into 'docs' }
             from('docs/COMPATIBILITY.md') { into 'docs' }
             from('docs/CONTROL_TERMINAL.md') { into 'docs' }

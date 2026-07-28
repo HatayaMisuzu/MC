@@ -1,5 +1,8 @@
 # ADR-002 — 纯文本 Companion 的规则、模型、Skill 与验证分层
 
+Status: Superseded / Historical. Current product truth:
+`docs/product/PRODUCT_TRUTH.json` and `docs/RC_COMPLETION_MATRIX.md`.
+
 状态：Superseded
 
 由 [../ARCHITECTURE.md](../ARCHITECTURE.md) 与

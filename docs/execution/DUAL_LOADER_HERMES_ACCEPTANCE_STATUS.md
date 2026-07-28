@@ -1,5 +1,8 @@
 # Dual-loader Hermes acceptance execution status
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Updated: 2026-07-27 16:45 +08:00
 
 This is the checkpoint log for

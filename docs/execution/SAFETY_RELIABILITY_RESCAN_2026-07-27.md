@@ -1,5 +1,8 @@
 # Safety and reliability rescan — 2026-07-27
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Scope: production Java, Gradle/PowerShell automation, Web source and current
 tests on `codex/forge-hermes-human-acceptance`. Generated outputs,
 `node_modules`, archived execution records and fixtures were excluded from

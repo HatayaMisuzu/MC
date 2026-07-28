@@ -1,5 +1,8 @@
 # Historical Minecraft AI Companion 0.3.0 terminal/release report
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 > Archived evidence from 2026-07-13. This report predates the current External Brain, typed
 > Task Graph, primitive Tool, and Skill Workspace RC requirements. It does not establish current
 > SHA readiness and must not be used as the final RC report. Current status:
@@ -51,8 +54,8 @@
 
 | 来源 | 结果 |
 |---|---|
-| `F:\wodeshijie\ceshi` | PCL2 正式版 2.13.0.1；Minecraft 26.2 Vanilla；HIGH 置信度；不支持安装且未修改实例 |
-| `F:\wodeshijie\nizhuanweilai` | HMCL 3.10.3；Minecraft 1.20.1 Forge；Java 17；HIGH 置信度；因无 Bridge 显示 `LOCAL_ONLY` |
+| `<HISTORICAL_TEST_INSTANCE>` | Historical unsupported launcher fixture; personal path removed from the current tree. |
+| `<HISTORICAL_TEST_INSTANCE>` | Historical launcher fixture; personal environment details removed from the current tree. |
 
 自动化 PCL2 Fabric 1.21.1 夹具覆盖浏览器内的扫描、安装、修复、回滚和卸载；真实 Fabric Mod 与 Runtime 行为由独立 GameTest E2E 覆盖。测试不读取第三方启动器账号，也不会替用户登录个人存档。
 
@@ -66,7 +69,8 @@
 
 ## 已知限制
 
-- Forge 1.20.1 与 NeoForge 1.21.1 尚无 Runtime Bridge，只能 `LOCAL_ONLY`，界面不会显示完整连接成功。
+- This historical report predates the Forge Full Runtime Bridge and must not be used for the current
+  Loader support matrix.
 - OpenAI-compatible Provider 的真实付费端点需要用户通过环境变量或 Windows Credential Manager 提供 Key；仓库和普通配置不保存 Key。
 - 第三方启动器账号登录和个人存档进入依赖用户已有会话；自动化不接触账号凭据。
 - Companion 使用安全局部移动、卡住检测和有限重规划，不提供 Baritone 式全局寻路。

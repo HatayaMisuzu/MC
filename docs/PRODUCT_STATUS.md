@@ -1,9 +1,11 @@
 # MCAC product status
 
-Updated: 2026-07-27
+Updated: 2026-07-28
 
-MCAC 0.3.0 has reached the automated productization baseline. Exact module evidence is maintained
-only in
+MCAC 0.3.1 is the repair release candidate for the frozen automated productization baseline.
+Its readiness is `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`; this does not constitute Live-provider
+or human-play evidence. Machine-readable product facts are in
+[PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json), while exact module evidence is maintained only in
 [RC_COMPLETION_MATRIX.md](RC_COMPLETION_MATRIX.md).
 
 ## Current support
@@ -24,11 +26,9 @@ its fixtures do not establish arbitrary version, Loader, Mod or modpack compatib
 - Compatibility Host lifecycle and bilingual Terminal management are locally verified.
 - The `zh-CN` and `en-US` critical product paths pass in Chromium against the real packaged Java
   backend and an isolated test launcher instance.
-- Repository documentation, cleanup, full candidate gates, exact candidate release integrity,
-  remote CI, and the ordinary merge to `main` are complete.
-- The exact-main Release integrity and remote gates passed before the final documentation-only
-  closure commit; that commit is accepted only after its own exact-SHA gates and immutable
-  annotated baseline tag are complete.
+- The 0.3.0 automated baseline is frozen and its tag remains immutable.
+- The 0.3.1 repair candidate must pass its own local gates, exact-candidate CI, ordinary merge,
+  exact-main rebuild and validation before its new baseline tag is created.
 - Live Hermes and subjective human play are explicitly deferred until after the automated baseline.
 
 The only permitted external follow-up labels are:

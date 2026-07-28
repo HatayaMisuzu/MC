@@ -1,18 +1,27 @@
-# Alpha 0.1 兼容性
+# MCAC 0.3.1 compatibility
 
-| 目标 | Java | 最低验收 | Runtime 离线 |
-|---|---:|---|---|
-| Fabric 1.21.1 | 21 | 生命周期、行为、重启恢复、Runtime E2E | 支持，含外部控制 |
-| NeoForge 1.21.1 | 21 | JAR、Dedicated Server、世界、身体/背包/死亡 GameTest | 支持，仅本地控制 |
-| Forge 1.20.1 | 17 | Runtime E2E、Registry/Tool、导航、重启恢复、Installer/Doctor | 支持，含外部控制 |
+The machine-readable support source is
+[`product/PRODUCT_TRUTH.json`](product/PRODUCT_TRUTH.json). “Full Bridge” means the authenticated
+Runtime/body/Tool path is an automated release gate; it does not mean Live-provider or human-play
+verification has occurred.
 
-本 Alpha 没有发布 Create、AE2、Mekanism adapter，也不直接引用这些可选 Mod 的类；因此它们缺失时不会影响主 Mod 加载。深度自动化不标记为支持。未经真实启动测试的整合包组合一律记为“未验证”。
+| Minecraft | Loader | Java | Product mode | Current automated boundary |
+|---|---|---:|---|---|
+| 1.21.1 | Fabric | 21 | `FULL_RUNTIME_BRIDGE` | Loader lifecycle, GameTest, Runtime E2E, persistence recovery, Registry/Observation and bounded primitive Tools |
+| 1.20.1 | Forge | 17 | `FULL_RUNTIME_BRIDGE` | Loader lifecycle, GameTest, Runtime E2E, persistence recovery, Registry/Observation and bounded primitive Tools |
+| 1.21.1 | NeoForge | 21 | `LOCAL_ONLY` | Local body/commands, packaging and diagnosis; no Full Runtime Bridge claim |
 
-## 已实际启动的生产 JAR 组合
+Other versions, Loaders and modpacks may be detected and diagnosed, but are not claimed as Full
+Bridge targets. Unknown Mod content is handled as connected Registry/recipe/Observation data and
+generic interaction; MCAC does not promise support for every third-party screen or mechanic and
+does not create one Java Handler per Mod.
 
-| 环境 | 结果 | 验证内容 |
-|---|---|---|
-| 全新 Fabric Server 1.21.1 + Fabric API 0.116.13 | PASS | Loader 安装、生产 JAR 加载、世界 Ready、保存、正常停止 |
-| 上述环境 + Lithium（Modrinth 返回的最新 1.21.1 Fabric release） | PASS | 两个 Mod 同时加载、世界 Ready、保存、正常停止 |
+Compatibility-pack fixtures prove the declaration-only Compatibility Host lifecycle, not arbitrary
+Create, AE2, Mekanism or modpack compatibility. Exact row-level evidence and remaining gaps are in
+[`RC_COMPLETION_MATRIX.md`](RC_COMPLETION_MATRIX.md).
 
-这两项使用 `tools/fabric-clean-install.ps1` 创建全新实例，而非 Loom 开发类路径。GUI 玩家客户端需要微软账号和人工视觉操作，本自动验收环境未执行，因此不标记为已验证。
+External Brain adapter capabilities are not identical. Hermes `mcac-brain/1` has structured
+semantic state and completion-claim fields. The OpenAI-compatible adapter supports bounded tool
+calling and `ASK_USER`, but its final response is currently natural-language content without those
+Hermes-specific structured fields. Replay is deterministic test evidence, never Live-provider
+evidence.

@@ -680,7 +680,7 @@ public final class CompanionLifecycleForgeGameTests {
                 "defend-owner failed to start");
         for (int tick = 0; tick < 20; tick++) registry.tick();
         helper.assertTrue(!threat.isAlive(), "defend-owner did not defeat the bounded hostile");
-        BlockPos retreatOrigin = body.blockPosition();
+        BlockPos retreatOrigin = moveToSealedArena(helper, owner, body, 17);
         for (int x = -2; x <= 10; x++) {
             for (int z = -2; z <= 2; z++) {
                 body.serverLevel().setBlockAndUpdate(
@@ -1541,7 +1541,7 @@ public final class CompanionLifecycleForgeGameTests {
                         "navigation displaced or harmed the observed entity blocker");
                 blocker.discard();
 
-                BlockPos verticalOrigin = body.blockPosition();
+                BlockPos verticalOrigin = moveToSealedArena(helper, owner, body, 65);
                 for (int x = -1; x <= 12; x++) {
                     for (int z = -1; z <= 1; z++) {
                         for (int y = -1; y <= 3; y++) {
@@ -1597,7 +1597,7 @@ public final class CompanionLifecycleForgeGameTests {
             ServerPlayer owner,
             CompanionPlayer body,
             FakeConnection ownerConnection) {
-        BlockPos swimOrigin = body.blockPosition();
+        BlockPos swimOrigin = moveToSealedArena(helper, owner, body, 97);
         for (int x = -1; x <= 8; x++) {
             for (int z = -1; z <= 1; z++) {
                 for (int y = -1; y <= 4; y++) {
@@ -1654,7 +1654,7 @@ public final class CompanionLifecycleForgeGameTests {
             ServerPlayer owner,
             CompanionPlayer body,
             FakeConnection ownerConnection) {
-        BlockPos climbOrigin = body.blockPosition();
+        BlockPos climbOrigin = moveToSealedArena(helper, owner, body, 129);
         // Clear beyond the prior swim volume so delayed water updates cannot
         // make the ladder approach nondeterministically unreachable.
         for (int x = -5; x <= 4; x++) {
@@ -1705,12 +1705,16 @@ public final class CompanionLifecycleForgeGameTests {
             ServerPlayer owner,
             CompanionPlayer body,
             FakeConnection ownerConnection) {
-        BlockPos origin = body.blockPosition();
-        for (int x = -1; x <= 11; x++) {
+        // Earlier navigation stages intentionally accumulate horizontal and vertical movement.
+        // Start hazard/follow in a second sealed corridor so that chain cannot leave the first
+        // arena and admit generated-world fluids or adjacent GameTest fixtures.
+        BlockPos origin = moveToSealedArena(helper, owner, body, 161);
+        for (int x = -1; x <= 13; x++) {
             for (int z = -2; z <= 2; z++) {
                 body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
-                body.serverLevel().setBlockAndUpdate(origin.offset(x, 0, z), Blocks.AIR.defaultBlockState());
-                body.serverLevel().setBlockAndUpdate(origin.offset(x, 1, z), Blocks.AIR.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
             }
         }
         for (int x = 2; x <= 3; x++) {
@@ -1726,7 +1730,18 @@ public final class CompanionLifecycleForgeGameTests {
                 "Forge hazard-aware navigation failed to start: " + hazardRun.code());
         awaitNavigationPosition(helper, body, safeTarget, 260, () -> {
             helper.assertTrue(body.getHealth() == healthBefore,
-                    "Forge hazard-aware navigation damaged the companion");
+                    "Forge hazard-aware navigation damaged the companion: before=" + healthBefore
+                            + " after=" + body.getHealth()
+                            + " position=" + body.position()
+                            + " source=" + (body.getLastDamageSource() == null
+                                    ? "none"
+                                    : body.getLastDamageSource().getMsgId())
+                            + " feetBlock=" + body.serverLevel().getBlockState(body.blockPosition())
+                            + " headBlock=" + body.serverLevel().getBlockState(body.blockPosition().above())
+                            + " eyeBlock=" + body.serverLevel().getBlockState(
+                                    BlockPos.containing(body.getEyePosition()))
+                            + " origin=" + origin
+                            + " status=" + registry.status(owner));
             for (int x = 2; x <= 3; x++) {
                 helper.assertTrue(body.serverLevel().getBlockState(origin.offset(x, -1, 0))
                                 .is(Blocks.MAGMA_BLOCK),
@@ -1764,6 +1779,15 @@ public final class CompanionLifecycleForgeGameTests {
             ServerPlayer owner,
             CompanionPlayer body,
             FakeConnection ownerConnection) {
+        // Forge GameTest retires non-player entity fixtures outside its managed structure.
+        // Return only this entity-backed combination to the test origin; Forge batches are serial.
+        Vec3 managedSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(managedSpawn.x, managedSpawn.y, managedSpawn.z, 0.0F, 0.0F);
+        body.moveTo(managedSpawn.x, managedSpawn.y, managedSpawn.z, 0.0F, 0.0F);
+        body.setDeltaMovement(Vec3.ZERO);
+        body.fallDistance = 0.0F;
+        body.setAirSupply(body.getMaxAirSupply());
+        body.clearFire();
         BlockPos work = body.blockPosition();
         for (int x = -5; x <= 5; x++) {
             for (int z = -3; z <= 3; z++) {
@@ -1796,60 +1820,56 @@ public final class CompanionLifecycleForgeGameTests {
                                 "", null, null, "", null))
                         .success(),
                 "Forge post-navigation collection failed to start");
-        for (int tick = 0; tick < 180
-                && registry.runtimeSnapshots(true).stream()
-                        .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
-                                && !snapshot.behaviorState().equals("IDLE")); tick++) {
-            registry.tick();
-        }
-        helper.assertTrue(body.getInventory().countItem(Items.COAL) == coalBefore + 1,
-                "Forge post-navigation collection inventory delta was incorrect");
+        awaitRuntimeBehaviorIdle(helper, registry, companionId, 180, () -> {
+            helper.assertTrue(body.getInventory().countItem(Items.COAL) == coalBefore + 1,
+                    "Forge post-navigation collection inventory delta was incorrect");
 
-        BlockPos dirt = body.blockPosition().offset(2, 0, 1);
-        body.serverLevel().setBlockAndUpdate(dirt, Blocks.DIRT.defaultBlockState());
-        int dirtBefore = body.getInventory().countItem(Items.DIRT);
-        helper.assertTrue(registry.runtimeStart(
-                        companionId, lease, 3L, "forge-navigation-combo-mine", "skill",
-                        null, null, null,
-                        new SkillParameters("MineResourceVein", "minecraft:dirt", 1, false,
-                                body.serverLevel().dimension().location().toString(),
-                                dirt.getX(), dirt.getY(), dirt.getZ(), "", "UP", "MAIN_HAND",
-                                "", null, null, "", null))
-                        .success(),
-                "Forge post-navigation mining failed to start");
-        for (int tick = 0; tick < 180
-                && registry.runtimeSnapshots(true).stream()
-                        .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
-                                && !snapshot.behaviorState().equals("IDLE")); tick++) {
-            registry.tick();
-        }
-        helper.assertTrue(body.serverLevel().getBlockState(dirt).isAir(),
-                "Forge post-navigation mining did not change the exact world target");
-        helper.assertTrue(body.getInventory().countItem(Items.DIRT) == dirtBefore + 1,
-                "Forge post-navigation mining inventory delta was incorrect");
+            BlockPos dirt = body.blockPosition().offset(2, 0, 1);
+            body.serverLevel().setBlockAndUpdate(dirt, Blocks.DIRT.defaultBlockState());
+            int dirtBefore = body.getInventory().countItem(Items.DIRT);
+            helper.assertTrue(registry.runtimeStart(
+                            companionId, lease, 3L, "forge-navigation-combo-mine", "skill",
+                            null, null, null,
+                            new SkillParameters("MineResourceVein", "minecraft:dirt", 1, false,
+                                    body.serverLevel().dimension().location().toString(),
+                                    dirt.getX(), dirt.getY(), dirt.getZ(), "", "UP", "MAIN_HAND",
+                                    "", null, null, "", null))
+                            .success(),
+                    "Forge post-navigation mining failed to start");
+            for (int tick = 0; tick < 180
+                    && registry.runtimeSnapshots(true).stream()
+                            .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
+                                    && !snapshot.behaviorState().equals("IDLE")); tick++) {
+                registry.tick();
+            }
+            helper.assertTrue(body.serverLevel().getBlockState(dirt).isAir(),
+                    "Forge post-navigation mining did not change the exact world target");
+            helper.assertTrue(body.getInventory().countItem(Items.DIRT) == dirtBefore + 1,
+                    "Forge post-navigation mining inventory delta was incorrect");
 
-        BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
-        body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
-        Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
-        chest.setItem(0, new ItemStack(Items.IRON_INGOT));
-        int ironBefore = body.getInventory().countItem(Items.IRON_INGOT);
-        helper.assertTrue(registry.runtimeStart(
-                        companionId, lease, 3L, "forge-navigation-combo-container", "skill",
-                        null, null, null,
-                        new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
-                                body.serverLevel().dimension().location().toString(),
-                                chestPos.getX(), chestPos.getY(), chestPos.getZ(), "", "UP", "MAIN_HAND",
-                                "", null, null, "", null))
-                        .success(),
-                "Forge post-navigation container withdrawal failed to start");
-        for (int tick = 0; tick < 20; tick++) registry.tick();
-        helper.assertTrue(body.getInventory().countItem(Items.IRON_INGOT) == ironBefore + 1,
-                "Forge post-navigation container inventory delta was incorrect");
-        helper.assertTrue(chest.isEmpty(),
-                "Forge post-navigation container source delta was incorrect");
-        helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 3L).success(),
-                "Forge navigation combination lease release failed");
-        runNavigationBoundaryAcceptance(helper, registry, owner, body, ownerConnection);
+            BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
+            body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+            Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+            chest.setItem(0, new ItemStack(Items.IRON_INGOT));
+            int ironBefore = body.getInventory().countItem(Items.IRON_INGOT);
+            helper.assertTrue(registry.runtimeStart(
+                            companionId, lease, 3L, "forge-navigation-combo-container", "skill",
+                            null, null, null,
+                            new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
+                                    body.serverLevel().dimension().location().toString(),
+                                    chestPos.getX(), chestPos.getY(), chestPos.getZ(), "", "UP", "MAIN_HAND",
+                                    "", null, null, "", null))
+                            .success(),
+                    "Forge post-navigation container withdrawal failed to start");
+            for (int tick = 0; tick < 20; tick++) registry.tick();
+            helper.assertTrue(body.getInventory().countItem(Items.IRON_INGOT) == ironBefore + 1,
+                    "Forge post-navigation container inventory delta was incorrect");
+            helper.assertTrue(chest.isEmpty(),
+                    "Forge post-navigation container source delta was incorrect");
+            helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 3L).success(),
+                    "Forge navigation combination lease release failed");
+            runNavigationBoundaryAcceptance(helper, registry, owner, body, ownerConnection);
+        });
     }
 
     private static void runNavigationBoundaryAcceptance(
@@ -1898,6 +1918,84 @@ public final class CompanionLifecycleForgeGameTests {
             }
         }
         return null;
+    }
+
+    private static BlockPos moveToSealedArena(
+            GameTestHelper helper,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            int relativeZ) {
+        Vec3 spawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, relativeZ));
+        owner.moveTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        body.moveTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        body.setDeltaMovement(Vec3.ZERO);
+        body.fallDistance = 0.0F;
+        body.setAirSupply(body.getMaxAirSupply());
+        body.clearFire();
+        BlockPos origin = body.blockPosition();
+        int chunkX = origin.getX() >> 4;
+        int chunkZ = origin.getZ() >> 4;
+        for (int offsetX = -1; offsetX <= 1; offsetX++) {
+            for (int offsetZ = -1; offsetZ <= 1; offsetZ++) {
+                body.serverLevel().setChunkForced(chunkX + offsetX, chunkZ + offsetZ, true);
+            }
+        }
+        for (int x = -6; x <= 16; x++) {
+            for (int z = -4; z <= 4; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, -2, z), Blocks.COBBLESTONE.defaultBlockState());
+                for (int y = -1; y <= 5; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, 6, z), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        for (int x = -6; x <= 16; x++) {
+            for (int z : new int[] {-4, 4}) {
+                for (int y = -1; y <= 5; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-6, 16}) {
+            for (int z = -4; z <= 4; z++) {
+                for (int y = -1; y <= 5; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        return origin;
+    }
+
+    private static void awaitRuntimeBehaviorIdle(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            String companionId,
+            int ticksRemaining,
+            Runnable completed) {
+        var snapshot = registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId))
+                .findFirst()
+                .orElseThrow();
+        if (snapshot.behaviorState().equals("IDLE")) {
+            completed.run();
+            return;
+        }
+        helper.assertTrue(snapshot.behaviorState().equals("RUNNING"),
+                "Forge behavior stopped before completion: state=" + snapshot.behaviorState()
+                        + " failure=" + (snapshot.behaviorObservation() == null
+                                ? "none"
+                                : snapshot.behaviorObservation().failureCode())
+                        + " evidence=" + snapshot.evidenceSummary());
+        helper.assertTrue(ticksRemaining > 0,
+                "Forge behavior did not complete within its original tick budget: behavior="
+                        + snapshot.behaviorId() + " evidence=" + snapshot.evidenceSummary());
+        helper.runAfterDelay(1, () -> awaitRuntimeBehaviorIdle(
+                helper, registry, companionId, ticksRemaining - 1, completed));
     }
 
     private static void awaitNavigationPosition(

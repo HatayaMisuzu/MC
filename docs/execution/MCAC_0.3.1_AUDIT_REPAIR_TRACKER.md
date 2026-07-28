@@ -52,6 +52,14 @@ position rather than meaningless decompilation.
 | 9 | PR, exact candidate CI, ordinary merge, exact-main rebuild/CI, immutable tag and Release | `NOT_STARTED` | Target version/tag are `0.3.1` / `mcac-productization-baseline-0.3.1`; the 0.3.0 tag must remain unchanged. |
 | 10 | Final full-audit report and item-by-item acceptance | `NOT_STARTED` | Produce `docs/product/MCAC_0.3.1_FULL_AUDIT_AND_REPAIR_REPORT.md`. |
 
+Phase 8 Forge reconstruction additionally found that one long lifecycle GameTest accumulated its
+retreat, navigation, water, climb and follow coordinates beyond the initially sealed corridor.
+Recorded failures included generated-world `ENVIRONMENT_HAZARD` death, follow `STUCK`, transient
+`inWall` damage under a redundant low inner roof, and a remote coal entity excluded from the
+GameTest-managed index. Each long movement stage now uses a separate forced high-clearance sealed
+arena with unchanged targets and budgets; entity-backed collection returns to the managed origin
+and waits on real server ticks. The corrected Forge 4/4 suite passes twice consecutively.
+
 ## Evidence rules
 
 - Replay, Fake, Mock, Fixture, GameTest, dedicated-server automation, and real-backend browser

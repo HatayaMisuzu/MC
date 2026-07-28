@@ -243,6 +243,18 @@ tasks.register('gameTestFixtureCheck') {
             throw new GradleException(
                     'GameTest menu fixtures must not share a mutable static container across batches.')
         }
+        if (fabricTests.contains('owner.setUUID(')) {
+            throw new GradleException(
+                    'Fabric GameTests must not mutate mock-player identity after PlayerList registration.')
+        }
+        def miningStage = fabricTests.substring(
+                fabricTests.indexOf('void mineResourceVeinUsesHardnessToolDurabilityDropsAndPickup'),
+                fabricTests.indexOf('void smeltItemUsesRealFurnaceFuelTimeAndMenuResultPickup'))
+        if (!miningStage.contains('moveToIsolatedArena(owner, body, 640, 640, 1)')
+                || !miningStage.contains('miningArena.getX() - 8.5D')) {
+            throw new GradleException(
+                    'The Fabric mining fixture must isolate its arena and keep Owner outside ItemEntity pickup range.')
+        }
         def dropStage = fabricTests.substring(
                 fabricTests.indexOf('void inventoryDropUsesVanillaPlayerDropAndVerifiesWorldEntities'),
                 fabricTests.indexOf('void entityInteractUsesVisibleReachableVanillaPlayerAction'))

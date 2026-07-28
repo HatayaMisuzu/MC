@@ -1069,11 +1069,16 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
         ServerPlayer owner = helper.makeMockServerPlayerInLevel();
-        owner.setUUID(java.util.UUID.randomUUID());
         helper.assertTrue(registry.create(owner, "Miner").success(), "mine test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "mine test created no live body");
-        BlockPos origin = body.blockPosition().offset(2, 0, 0);
+        BlockPos miningArena = moveToIsolatedArena(owner, body, 640, 640, 1);
+        // Both participants initially share the same spawn. Keep the real Owner outside the
+        // ItemEntity pickup radius so only the declared Companion can satisfy the inventory delta.
+        owner.teleportTo(owner.serverLevel(),
+                miningArena.getX() - 8.5D, miningArena.getY(), miningArena.getZ() + 0.5D,
+                owner.getYRot(), owner.getXRot());
+        BlockPos origin = miningArena.offset(2, 0, 0);
         BlockPos second = origin.offset(1, 0, 0);
         // Vanilla ore drops have randomized horizontal velocity. Keep a bounded landing
         // platform around the vein so this test exercises pickup, not an accidental fall
@@ -1086,8 +1091,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         body.serverLevel().setBlockAndUpdate(origin, Blocks.DIAMOND_ORE.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(second, Blocks.DIAMOND_ORE.defaultBlockState());
-        // Mock player data can survive another concurrently scheduled fixture. This isolated
-        // mining acceptance case owns only the pickaxe and the two vanilla ore drops below.
+        // This isolated mining acceptance case owns only the pickaxe and the two vanilla ore
+        // drops below.
         body.getInventory().clearContent();
         ItemStack pickaxe = new ItemStack(Items.IRON_PICKAXE);
         body.getInventory().setItem(0, pickaxe);

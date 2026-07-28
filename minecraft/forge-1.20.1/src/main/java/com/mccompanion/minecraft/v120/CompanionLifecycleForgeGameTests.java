@@ -1808,7 +1808,7 @@ public final class CompanionLifecycleForgeGameTests {
 
         int coalBefore = body.getInventory().countItem(Items.COAL);
         ItemEntity coal = new ItemEntity(body.serverLevel(),
-                work.getX() + 4.5D, work.getY(), work.getZ() + 0.5D,
+                work.getX() + 2.5D, work.getY(), work.getZ() + 0.5D,
                 new ItemStack(Items.COAL));
         body.serverLevel().addFreshEntity(coal);
         helper.assertTrue(registry.runtimeStart(

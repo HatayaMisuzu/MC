@@ -162,7 +162,7 @@ public final class RuntimeApplication implements AutoCloseable {
             database.initialize();
             McpReplayRepository mcpReplay = new McpReplayRepository(database);
             int interruptedMcpRequests = mcpReplay.quarantineInterrupted();
-            McpSessionRepository mcpSessions = new McpSessionRepository(database);
+            McpSessionRepository mcpSessions = new McpSessionRepository(database, pairingToken);
             int expiredMcpSessions = mcpSessions.expire();
             McpEventRepository mcpEvents = new McpEventRepository(database);
             int prunedMcpEvents = mcpEvents.pruneInactiveSessions();

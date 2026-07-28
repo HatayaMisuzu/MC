@@ -28,6 +28,11 @@ stopped, use the terminal's pairing flow for the selected profile, then start Ru
 Minecraft server. `/companion runtime` (Fabric) or `/mcac runtime` (Forge) reports
 `runtime=ONLINE` after the authenticated handshake.
 
+Token and browser bootstrap-state files are written atomically and verified as current-user-only:
+Windows uses an explicit owner-only ACL and POSIX uses mode `0600`. Unsupported or unverifiable
+permissions fail closed. A successful Terminal token rotation restarts Runtime and the Mod
+connection; old pairing bearers and MCP sessions bound to the old token generation then fail.
+
 Fabric 1.21.1 and Forge 1.20.1 both support the Full Runtime Bridge. NeoForge 1.21.1 remains
 `LOCAL_ONLY`.
 

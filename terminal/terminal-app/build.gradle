@@ -3,6 +3,7 @@ java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 tasks.withType(JavaCompile).configureEach { options.release = 21; options.encoding = 'UTF-8' }
 application { mainClass = 'com.mccompanion.terminal.ControlTerminalMain'; applicationName = 'mcac' }
 dependencies {
+    implementation project(':protocol:protocol-model')
     implementation project(':compatibility:compatibility-host')
     implementation project(':terminal:launcher-api')
     implementation project(':terminal:launcher-generic')

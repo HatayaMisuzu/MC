@@ -51,7 +51,7 @@ class McpEventRepositoryTest {
             assertEquals(McpEventRepository.MAX_EVENTS_PER_SESSION, events.deleteSession(session));
             assertThrows(IllegalArgumentException.class, () -> events.after(session, cursor.eventId()));
 
-            McpSessionRepository sessions = new McpSessionRepository(database);
+            McpSessionRepository sessions = new McpSessionRepository(database, "pairing-a");
             ToolContext owner = new ToolContext("hermes", "brain", "companion");
             String activeSession = sessions.create(owner, "2025-06-18");
             events.append(activeSession, "active", Json.object().put("state", "active"), false);

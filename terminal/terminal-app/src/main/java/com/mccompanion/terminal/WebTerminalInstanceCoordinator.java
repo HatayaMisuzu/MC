@@ -1,6 +1,7 @@
 package com.mccompanion.terminal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -27,6 +28,7 @@ final class WebTerminalInstanceCoordinator {
     Path currentPath = home.resolve("html-terminal-current.json");
     try (FileChannel channel =
         FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+      OwnerOnlyFile.secure(lockPath);
       FileLock lock = tryLock(channel);
       if (lock == null) {
         var current = awaitCurrent(currentPath);
@@ -68,6 +70,7 @@ final class WebTerminalInstanceCoordinator {
     while (System.nanoTime() < deadline) {
       if (Files.isRegularFile(current)) {
         try {
+          OwnerOnlyFile.secure(current);
           return JSON.readTree(current.toFile());
         } catch (IOException incompleteWrite) {
           // The owning process may be between atomic replace steps.
@@ -78,26 +81,32 @@ final class WebTerminalInstanceCoordinator {
     throw new IOException("Existing HTML terminal did not publish a reopen URL");
   }
 
-  private static void writeCurrent(Path current, WebTerminalServer server) throws IOException {
+  static void writeCurrent(Path current, WebTerminalServer server) throws IOException {
     Path temporary = Files.createTempFile(current.getParent(), ".html-terminal-", ".tmp");
-    JSON.writerWithDefaultPrettyPrinter()
-        .writeValue(
-            temporary.toFile(),
-            JSON.createObjectNode()
-                .put("bind", "127.0.0.1")
-                .put("port", server.port())
-                .put("ownerPid", ProcessHandle.current().pid())
-                .put("serverInstanceId", server.serverInstanceId())
-                .put("reopenSecret", server.reopenSecret())
-                .put("startedAt", Instant.now().toString()));
     try {
-      Files.move(
-          temporary,
-          current,
-          java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-          java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-    } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-      Files.move(temporary, current, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      OwnerOnlyFile.secure(temporary);
+      JSON.writerWithDefaultPrettyPrinter()
+          .writeValue(
+              temporary.toFile(),
+              JSON.createObjectNode()
+                  .put("bind", "127.0.0.1")
+                  .put("port", server.port())
+                  .put("ownerPid", ProcessHandle.current().pid())
+                  .put("serverInstanceId", server.serverInstanceId())
+                  .put("reopenSecret", server.reopenSecret())
+                  .put("startedAt", Instant.now().toString()));
+      try {
+        Files.move(
+            temporary,
+            current,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+        Files.move(temporary, current, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      }
+      OwnerOnlyFile.secure(current);
+    } finally {
+      Files.deleteIfExists(temporary);
     }
   }
 

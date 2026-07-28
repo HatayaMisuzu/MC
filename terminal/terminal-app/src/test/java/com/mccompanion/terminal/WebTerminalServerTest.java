@@ -1,5 +1,6 @@
 package com.mccompanion.terminal;
 
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.URI;
@@ -121,6 +122,7 @@ class WebTerminalServerTest {
     try (WebTerminalServer server = new WebTerminalServer(root, web, 0, false, state)) {
       server.start();
       String raw = Files.readString(state);
+      assertTrue(OwnerOnlyFile.isOwnerOnly(state));
       var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw);
       assertFalse(raw.contains("MCAC_SESSION"));
       assertFalse(raw.contains("csrf"));
@@ -133,5 +135,23 @@ class WebTerminalServerTest {
           HttpResponse.BodyHandlers.ofString()).statusCode());
     }
     assertFalse(Files.exists(state));
+  }
+
+  @Test
+  void coordinatorReopenStateIsOwnerOnly() throws Exception {
+    Path web = temporary.resolve("coordinator-web");
+    Files.createDirectories(web);
+    Files.writeString(web.resolve("index.html"), "<!doctype html><title>MCAC</title>");
+    Path current = temporary.resolve("control-home").resolve("html-terminal-current.json");
+    Files.createDirectories(current.getParent());
+    try (WebTerminalServer server =
+        new WebTerminalServer(new ControlTerminalMain(), web, 0, false, null)) {
+      server.start();
+      WebTerminalInstanceCoordinator.writeCurrent(current, server);
+      assertTrue(OwnerOnlyFile.isOwnerOnly(current));
+      var state = new com.fasterxml.jackson.databind.ObjectMapper().readTree(current.toFile());
+      assertEquals(server.port(), state.path("port").asInt());
+      assertEquals(server.reopenSecret(), state.path("reopenSecret").asText());
+    }
   }
 }

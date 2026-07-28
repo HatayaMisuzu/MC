@@ -3,6 +3,7 @@ package com.mccompanion.terminal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.awt.Desktop;
@@ -444,7 +445,20 @@ final class WebTerminalServer implements AutoCloseable {
             .put("serverInstanceId", serverInstanceId)
             .put("bootstrapUrl", bootstrapUri().toString())
             .put("startedAt", Instant.now().toString());
-    JSON.writerWithDefaultPrettyPrinter().writeValue(target.toFile(), state);
+    Path temporary = Files.createTempFile(target.getParent(), ".terminal-state-", ".tmp");
+    try {
+      OwnerOnlyFile.secure(temporary);
+      JSON.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), state);
+      try {
+        Files.move(temporary, target, java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+        Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      }
+      OwnerOnlyFile.secure(target);
+    } finally {
+      Files.deleteIfExists(temporary);
+    }
   }
 
   private static void writeSse(HttpExchange exchange, ObjectNode event) throws IOException {
@@ -529,7 +543,9 @@ final class WebTerminalServer implements AutoCloseable {
     if (stateFile != null) {
       try {
         Files.deleteIfExists(stateFile.toAbsolutePath().normalize());
-      } catch (IOException ignored) {
+      } catch (IOException failure) {
+        stateFile.toAbsolutePath().normalize().toFile().deleteOnExit();
+        System.err.println("MCAC_STATE_DELETE_FAILED");
       }
     }
     stopped.countDown();

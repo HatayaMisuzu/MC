@@ -3,6 +3,7 @@ package com.mccompanion.terminal.runtime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -114,23 +115,18 @@ public final class PairingService {
                 profile.profileDirectory().resolve("profile.json"));
     }
     private static String newToken() { byte[] bytes = new byte[32]; RANDOM.nextBytes(bytes); return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes); }
-    private static String readToken(Path file) throws IOException { if (!Files.isRegularFile(file)) return null; String value=Files.readString(file,StandardCharsets.US_ASCII).trim(); return value.isBlank()?null:value; }
-    private static void restore(Path file, byte[] value) throws IOException { if(value==null) Files.deleteIfExists(file); else Files.write(file,value); }
+    private static String readToken(Path file) throws IOException { if (!Files.isRegularFile(file)) return null; OwnerOnlyFile.secure(file); String value=Files.readString(file,StandardCharsets.US_ASCII).trim(); return value.isBlank()?null:value; }
+    private static void restore(Path file, byte[] value) throws IOException { if(value==null) Files.deleteIfExists(file); else { Files.write(file,value); if (file.getFileName().toString().endsWith(".token")) OwnerOnlyFile.secure(file); } }
     private static void writePrivateAtomic(Path file, String value) throws IOException {
         Files.createDirectories(file.getParent());
         Path temporary = Files.createTempFile(file.getParent(), ".mcac-token-", ".tmp");
-        Files.writeString(temporary, value + System.lineSeparator(), StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
-        try { Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING); }
-        catch(java.nio.file.AtomicMoveNotSupportedException ignored){Files.move(temporary,file,StandardCopyOption.REPLACE_EXISTING);}
         try {
-            var acl = Files.getFileAttributeView(file, java.nio.file.attribute.AclFileAttributeView.class);
-            if (acl != null) {
-                var owner = Files.getOwner(file);
-                var entry = java.nio.file.attribute.AclEntry.newBuilder().setType(java.nio.file.attribute.AclEntryType.ALLOW)
-                        .setPrincipal(owner).setPermissions(java.util.EnumSet.allOf(java.nio.file.attribute.AclEntryPermission.class)).build();
-                acl.setAcl(java.util.List.of(entry));
-            }
-        } catch (UnsupportedOperationException ignored) { }
+            OwnerOnlyFile.secure(temporary);
+            Files.writeString(temporary, value + System.lineSeparator(), StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
+            try { Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING); }
+            catch(java.nio.file.AtomicMoveNotSupportedException ignored){Files.move(temporary,file,StandardCopyOption.REPLACE_EXISTING);}
+            OwnerOnlyFile.secure(file);
+        } finally { Files.deleteIfExists(temporary); }
     }
     public record Snapshot(Map<Path, byte[]> files) {
         public Snapshot {

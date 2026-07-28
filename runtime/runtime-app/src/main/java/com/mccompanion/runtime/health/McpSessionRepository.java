@@ -19,16 +19,22 @@ public final class McpSessionRepository {
     private final Clock clock;
     private final Duration ttl;
     private final SecureRandom random;
+    private final String pairingContextHash;
 
-    public McpSessionRepository(RuntimeDatabase database) {
-        this(database, Clock.systemUTC(), DEFAULT_TTL, new SecureRandom());
+    public McpSessionRepository(RuntimeDatabase database, String pairingToken) {
+        this(database, Clock.systemUTC(), DEFAULT_TTL, new SecureRandom(), pairingToken);
     }
 
-    McpSessionRepository(RuntimeDatabase database, Clock clock, Duration ttl, SecureRandom random) {
+    McpSessionRepository(RuntimeDatabase database, Clock clock, Duration ttl, SecureRandom random,
+                         String pairingToken) {
         this.database = java.util.Objects.requireNonNull(database, "database");
         this.clock = java.util.Objects.requireNonNull(clock, "clock");
         this.ttl = java.util.Objects.requireNonNull(ttl, "ttl");
         this.random = java.util.Objects.requireNonNull(random, "random");
+        if (pairingToken == null || pairingToken.isBlank()) {
+            throw new IllegalArgumentException("pairingToken is required");
+        }
+        this.pairingContextHash = Digests.sha256("mcac-pairing-context\u0000" + pairingToken);
         if (ttl.isZero() || ttl.isNegative() || ttl.compareTo(Duration.ofDays(1)) > 0) {
             throw new IllegalArgumentException("MCP session ttl must be 1ns..24h");
         }
@@ -43,8 +49,8 @@ public final class McpSessionRepository {
             try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                     INSERT OR IGNORE INTO mcp_session(
                       session_hash,controller_id,brain_session_id,companion_id,protocol_version,
-                      state,expires_at,created_at,updated_at)
-                    VALUES(?,?,?,?,?,'ACTIVE',?,?,?)
+                      state,expires_at,created_at,updated_at,pairing_context_hash)
+                    VALUES(?,?,?,?,?,'ACTIVE',?,?,?,?)
                     """)) {
                 statement.setString(1, hash(token));
                 statement.setString(2, context.controllerId());
@@ -54,6 +60,7 @@ public final class McpSessionRepository {
                 statement.setLong(6, now + ttl.toMillis());
                 statement.setLong(7, now);
                 statement.setLong(8, now);
+                statement.setString(9, pairingContextHash);
                 if (statement.executeUpdate() == 1) return token;
             }
         }
@@ -65,7 +72,8 @@ public final class McpSessionRepository {
         if (!validToken(token)) return Status.NOT_FOUND;
         long now = clock.millis();
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
-                SELECT controller_id,brain_session_id,companion_id,protocol_version,state,expires_at
+                SELECT controller_id,brain_session_id,companion_id,protocol_version,state,expires_at,
+                       pairing_context_hash
                 FROM mcp_session WHERE session_hash=?
                 """)) {
             statement.setString(1, hash(token));
@@ -75,7 +83,8 @@ public final class McpSessionRepository {
                 if (!row.getString("controller_id").equals(context.controllerId())
                         || !row.getString("brain_session_id").equals(context.brainSessionId())
                         || !row.getString("companion_id").equals(context.companionId())
-                        || !row.getString("protocol_version").equals(protocolVersion)) {
+                        || !row.getString("protocol_version").equals(protocolVersion)
+                        || !pairingContextHash.equals(row.getString("pairing_context_hash"))) {
                     return Status.NOT_FOUND;
                 }
             }

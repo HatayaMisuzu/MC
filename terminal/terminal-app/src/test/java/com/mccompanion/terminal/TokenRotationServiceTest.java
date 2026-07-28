@@ -1,5 +1,6 @@
 package com.mccompanion.terminal;
 
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import com.mccompanion.terminal.launcher.*;
 import com.mccompanion.terminal.runtime.*;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,30 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class TokenRotationServiceTest {
     @TempDir Path temp;
+
+    @Test void successfulRotationReplacesBearerAndRestartsRuntimeBoundary() throws Exception {
+        Fixture fixture = fixture();
+        FakeRuntime runtime = new FakeRuntime();
+        TokenRotationService service = new TokenRotationService(fixture.pairing, runtime, new FakeConnections(true, true));
+
+        TokenRotationService.Report report =
+                service.rotate(fixture.instance, fixture.profile, Duration.ofMillis(50));
+        Path runtimeToken = fixture.profile.profileDirectory().resolve("pairing.token");
+        Path modToken = fixture.instance.gameDirectory().resolve(".mccompanion").resolve("runtime.token");
+        String replacement = Files.readString(runtimeToken).trim();
+
+        assertTrue(report.committed());
+        assertTrue(report.runtimeRestarted());
+        assertTrue(report.modReconnected());
+        assertNotEquals(fixture.oldToken, replacement);
+        assertEquals(replacement, Files.readString(modToken).trim());
+        assertTrue(OwnerOnlyFile.isOwnerOnly(runtimeToken));
+        assertTrue(OwnerOnlyFile.isOwnerOnly(modToken));
+        assertEquals(1, runtime.stopCount);
+        assertEquals(1, runtime.startCount);
+        assertFalse(runtime.acceptsGeneration(0), "pre-rotation process sessions must not survive restart");
+        assertTrue(runtime.acceptsGeneration(1));
+    }
 
     @Test void runtimeStartFailureRestoresPreviousToken() throws Exception {
         Fixture fixture = fixture();
@@ -58,18 +83,24 @@ class TokenRotationServiceTest {
     private static final class FakeRuntime implements TokenRotationService.RuntimeControl {
         boolean running = true;
         boolean failNextStart;
+        int generation;
+        int stopCount;
+        int startCount;
         public WindowsRuntimeSupervisor.RuntimeHealth status(RuntimeProfile profile) {
             return running ? healthy() : new WindowsRuntimeSupervisor.RuntimeHealth(null, false, false, false,
                     false, null, null, 0, false, "stopped");
         }
-        public void stop(RuntimeProfile profile) { running = false; }
+        public void stop(RuntimeProfile profile) { running = false; stopCount++; }
         public void start(RuntimeProfile profile) throws IOException {
             if (failNextStart) { failNextStart = false; throw new IOException("injected start failure"); }
+            generation++;
+            startCount++;
             running = true;
         }
         public WindowsRuntimeSupervisor.RuntimeHealth awaitHealthy(RuntimeProfile profile, Duration timeout) {
             return status(profile);
         }
+        boolean acceptsGeneration(int candidate) { return running && generation == candidate; }
     }
 
     private record FakeConnections(boolean connected, boolean awaitResult)

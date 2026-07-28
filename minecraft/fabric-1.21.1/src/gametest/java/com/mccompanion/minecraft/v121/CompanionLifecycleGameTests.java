@@ -249,9 +249,12 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "MenuOperator").success(), "menu test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "menu test created no live body");
-        // Keep the menu fixture inside this empty GameTest cell. Offset two can cross the
-        // parallel structure boundary and make an otherwise real chest interaction occluded.
-        BlockPos target = body.blockPosition().offset(1, 0, 0);
+        // This asynchronous menu chain remains active while other batches create real item drops.
+        // Give it a private loaded arena so vanilla pickup cannot alter its exact inventory delta.
+        BlockPos menuOrigin = moveToIsolatedArena(owner, body, 576, 576, 1);
+        helper.assertValueEqual(body.getInventory().countItem(Items.STONE), 0,
+                "menu test did not start with an isolated empty stone inventory");
+        BlockPos target = menuOrigin.offset(1, 0, 0);
         body.serverLevel().setBlockAndUpdate(target, Blocks.CHEST.defaultBlockState());
         helper.assertTrue(body.serverLevel().getBlockEntity(target) instanceof Container,
                 "menu test chest has no container");

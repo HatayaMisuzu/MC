@@ -17,7 +17,7 @@ import picocli.CommandLine.*;
 @Command(
     name = "mcac",
     mixinStandardHelpOptions = true,
-    version = "mcac 0.3.0",
+    version = "mcac 0.3.1",
     description = "Minecraft AI Companion automation CLI (the default entry opens the HTML terminal)",
     subcommands = {
       ControlTerminalMain.LauncherCmd.class,

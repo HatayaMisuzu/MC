@@ -243,7 +243,6 @@ public final class RuntimeApplication implements AutoCloseable {
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
             kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
                     capabilityVisibility, memories, conversations);
-            commands.setTaskLifecycleListener(kernel);
             sessions.setListener(commands);
 
             int staleSessions = sessions.recoverStaleSessions();

@@ -23,6 +23,12 @@ Hermes / DeepSeek / another external LLM or Agent
 
 The external Brain is the only high-level decision-maker.
 
+The former internal `/agent` planning route is closed with stable
+`INTERNAL_AGENT_REMOVED`; game chat fails with `EXTERNAL_BRAIN_UNAVAILABLE` when no external Brain
+is configured, and the local CLI exposes only explicit deterministic controls. Historical
+`AgentKernel`/short-plan classes remain migration-only code with no HTTP, game-chat, CLI, or task
+lifecycle binding and cannot acquire production decision authority.
+
 ```text
 Task Graph Runtime = deterministic orchestration
 External Brain = reasoning and planning

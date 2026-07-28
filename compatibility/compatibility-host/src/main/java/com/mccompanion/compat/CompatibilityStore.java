@@ -76,6 +76,7 @@ public final class CompatibilityStore {
                 "quarantined", "superseded", "revoked", "rollback", "cache", "metadata",
                 "index", "journal")) Files.createDirectories(this.root.resolve(directory));
         Files.createDirectories(objects);
+        verifyStoreBoundary();
         signingKey = loadOrCreateKey();
         locked(() -> {
             recoverLocked();
@@ -463,12 +464,37 @@ public final class CompatibilityStore {
 
     private <T> T locked(IoOperation<T> operation) throws IOException {
         localLock.lock();
+        try {
+            verifyStoreBoundary();
+        } catch (IOException failure) {
+            localLock.unlock();
+            throw failure;
+        }
         try (FileChannel channel = FileChannel.open(lockFile,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
              FileLock ignored = channel.lock()) {
-            return operation.run();
+            T result = operation.run();
+            verifyStoreBoundary();
+            return result;
         } finally {
             localLock.unlock();
+        }
+    }
+
+    private void verifyStoreBoundary() throws IOException {
+        Path realRoot = root.toRealPath();
+        for (String relative : List.of("", "staging", "tested", "verified", "active", "disabled",
+                "quarantined", "superseded", "revoked", "rollback", "cache", "cache/objects",
+                "metadata", "index", "journal")) {
+            Path path = relative.isEmpty() ? root : root.resolve(relative);
+            if (Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) continue;
+            var attributes = Files.readAttributes(path,
+                    java.nio.file.attribute.BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            if (Files.isSymbolicLink(path) || attributes.isOther()
+                    || !path.toRealPath(LinkOption.NOFOLLOW_LINKS).equals(path.toRealPath())
+                    || !path.toRealPath().startsWith(realRoot)) {
+                throw new IOException("COMPAT_STORE_REPARSE_REJECTED");
+            }
         }
     }
 

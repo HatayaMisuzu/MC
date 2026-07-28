@@ -32,7 +32,7 @@ final class McpProtocolDoctor {
             ObjectNode initialize = JSON.createObjectNode().put("jsonrpc", "2.0").put("id", "doctor-init")
                     .put("method", "initialize");
             initialize.set("params", JSON.createObjectNode().put("protocolVersion", VERSION)
-                    .set("clientInfo", JSON.createObjectNode().put("name", "mcac-doctor").put("version", "0.3.0")));
+                    .set("clientInfo", JSON.createObjectNode().put("name", "mcac-doctor").put("version", "0.3.1")));
             Response initializedResponse = post(http, endpoint, token, initialize, null);
             JsonNode initialized = initializedResponse.body();
             String version = initialized.path("result").path("protocolVersion").asText("");

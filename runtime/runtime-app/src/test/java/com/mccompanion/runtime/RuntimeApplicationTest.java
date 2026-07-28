@@ -269,6 +269,15 @@ class RuntimeApplicationTest {
             assertEquals("wal", new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath())
                     .journalMode().toLowerCase());
             String token = Files.readString(config.tokenPath()).trim();
+            var legacyAgent = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(URI.create("http://127.0.0.1:"
+                                    + config.server.managementPort + "/agent"))
+                            .header("Authorization", "Bearer " + token)
+                            .POST(HttpRequest.BodyPublishers.ofString("{}")).build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(410, legacyAgent.statusCode());
+            assertEquals("INTERNAL_AGENT_REMOVED",
+                    Json.parse(legacyAgent.body()).path("code").asText());
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
@@ -299,8 +308,10 @@ class RuntimeApplicationTest {
                       "text":"状态"}}
                     """.formatted(sessionId));
             JsonNode playerReply = client.awaitType("player_reply", 5);
-            assertTrue(playerReply.path("payload").path("accepted").asBoolean());
-            assertEquals("RESPOND", playerReply.path("payload").path("decision").asText());
+            assertFalse(playerReply.path("payload").path("accepted").asBoolean());
+            assertEquals("EXTERNAL_BRAIN_UNAVAILABLE",
+                    playerReply.path("payload").path("code").asText());
+            assertEquals("external-brain", playerReply.path("payload").path("source").asText());
             assertFalse(playerReply.path("payload").path("reply").asText().isBlank());
             assertEquals("AVAILABLE_NOW", playerReply.path("payload").path("capabilityStates")
                     .path("NavigateTo").path("state").asText());
@@ -313,16 +324,9 @@ class RuntimeApplicationTest {
             var conversationDatabase = new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath());
             var conversationRepository = new com.mccompanion.runtime.conversation.ConversationRepository(conversationDatabase);
             var transcript = conversationRepository.list("companion-1", 10);
-            assertEquals(List.of("MESSAGE", "CHAT"), transcript.stream()
+            assertEquals(List.of("MESSAGE"), transcript.stream()
                     .map(com.mccompanion.runtime.conversation.ConversationEvent::kind).toList());
             assertEquals("USER", transcript.getFirst().direction());
-            assertEquals("ASSISTANT", transcript.getLast().direction());
-            long deliveryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-            while (!transcript.getLast().gameDelivered() && System.nanoTime() < deliveryDeadline) {
-                Thread.sleep(10);
-                transcript = conversationRepository.list("companion-1", 10);
-            }
-            assertTrue(transcript.getLast().gameDelivered(), "game delivery audit should follow the async WebSocket send");
             client.closeBlocking();
         }
         assertTrue(Files.isRegularFile(config.databasePath()));

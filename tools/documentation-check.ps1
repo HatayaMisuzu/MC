@@ -201,6 +201,33 @@ foreach ($file in $markdown) {
 $changelog = Read-Repo 'CHANGELOG.md'
 if ($changelog -notmatch '(?m)^## 0\.3\.1\s*$') { Add-Error 'CHANGELOG lacks a 0.3.1 section' }
 
+foreach ($versionFile in @(
+    'minecraft/fabric-1.21.1/gradle.properties',
+    'minecraft/forge-1.20.1/gradle.properties',
+    'minecraft/neoforge-1.21.1/gradle.properties'
+)) {
+    if ((Read-Repo $versionFile) -notmatch '(?m)^mod_version=0\.3\.1\s*$') {
+        Add-Error "$versionFile does not declare mod_version=0.3.1"
+    }
+}
+foreach ($productionFile in @(
+    'tools/runtime-launcher.properties',
+    'minecraft/fabric-1.21.1/src/gametest/resources/fabric.mod.json',
+    'minecraft/fabric-1.21.1/src/main/java/com/mccompanion/minecraft/fabric/MinecraftAiCompanionFabric.java',
+    'minecraft/forge-1.20.1/src/main/java/com/mccompanion/minecraft/forge/MinecraftAiCompanionForge.java',
+    'minecraft/neoforge-1.21.1/src/main/java/com/mccompanion/minecraft/neoforge/MinecraftAiCompanionNeoForge.java',
+    'runtime/runtime-app/src/main/java/com/mccompanion/runtime/health/RuntimeHealthServer.java',
+    'runtime/runtime-app/src/main/java/com/mccompanion/runtime/websocket/RuntimeWebSocketServer.java',
+    'terminal/terminal-app/src/main/java/com/mccompanion/terminal/ControlTerminalMain.java',
+    'terminal/terminal-app/src/main/java/com/mccompanion/terminal/McpProtocolDoctor.java',
+    'terminal/terminal-app/src/main/java/com/mccompanion/terminal/WebTerminalApi.java',
+    'terminal/web-ui/src/components/AppShell.tsx'
+)) {
+    if ((Read-Repo $productionFile).Contains('0.3.0')) {
+        Add-Error "$productionFile still contains the superseded product version 0.3.0"
+    }
+}
+
 $buildFile = Read-Repo 'build.gradle'
 if ($buildFile -match 'INSTANCE_AUDIT\.md') { Add-Error 'release packaging includes a personal instance audit' }
 foreach ($releaseDoc in @('README.md', 'KNOWN_LIMITATIONS.md', 'docs/PRODUCT_STATUS.md',

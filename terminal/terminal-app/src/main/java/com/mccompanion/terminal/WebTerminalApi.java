@@ -142,7 +142,7 @@ final class WebTerminalApi {
     List<MinecraftInstance> instances = root.context.instances(root.roots());
     ObjectNode value =
         JSON.createObjectNode()
-            .put("version", "0.3.0")
+            .put("version", "0.3.1")
             .put("backend", "CONNECTED")
             .put("loopbackOnly", true)
             .put("controlHome", ControlTerminalMain.controlHome().toString())

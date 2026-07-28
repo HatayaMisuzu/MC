@@ -59,6 +59,7 @@ public final class InstallTransaction {
         Files.createDirectories(plan.instance().modsDirectory());
         assertNoReparseEscape(game, plan.instance().modsDirectory());
         Files.createDirectories(backup);
+        assertNoReparseEscape(game, backup);
         Path temporary = plan.destination().resolveSibling(plan.destination().getFileName() + ".mcac.tmp");
         Path manifest = state.resolve("install-manifest.json");
         Path previousManifest = state.resolve("transaction-previous-manifest.json");
@@ -110,6 +111,7 @@ public final class InstallTransaction {
             recoverInterrupted(game, state);
             Path backup = state.resolve("backups").resolve(rollbackId).normalize();
             requireInside(backup, state.resolve("backups"), "Unknown rollback point");
+            assertNoReparseEscape(game, backup);
             if (!Files.isDirectory(backup)) throw new IOException("Unknown rollback point");
             deleteManagedArtifact(game, state.resolve("install-manifest.json"), false);
             Path mods = game.resolve("mods");
@@ -248,14 +250,19 @@ public final class InstallTransaction {
 
     private static Path state(Path game) throws IOException {
         Path state = game.resolve(".mccompanion");
-        if (Files.exists(state)) assertNoReparseEscape(game, state);
+        if (Files.exists(state, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            assertNoReparseEscape(game, state);
+        }
         Files.createDirectories(state);
         return state;
     }
 
     private static void assertNoReparseEscape(Path game, Path path) throws IOException {
         Path existing = path;
-        while (existing != null && !Files.exists(existing)) existing = existing.getParent();
+        while (existing != null
+                && !Files.exists(existing, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            existing = existing.getParent();
+        }
         if (existing == null || !existing.toRealPath().startsWith(game.toRealPath())) {
             throw new IOException("Managed path escapes game directory through a link, junction or reparse point");
         }
@@ -263,8 +270,12 @@ public final class InstallTransaction {
         Path relative = game.relativize(path.toAbsolutePath().normalize());
         for (Path component : relative) {
             current = current.resolve(component);
-            if (Files.exists(current) && (Files.isSymbolicLink(current)
-                    || Files.readAttributes(current, java.nio.file.attribute.BasicFileAttributes.class).isOther())) {
+            if (Files.exists(current, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    && (Files.isSymbolicLink(current)
+                    || Files.readAttributes(current, java.nio.file.attribute.BasicFileAttributes.class,
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS).isOther()
+                    || !current.toRealPath(java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                            .equals(current.toRealPath()))) {
                 throw new IOException("Managed path contains a link, junction or reparse point: " + component);
             }
         }

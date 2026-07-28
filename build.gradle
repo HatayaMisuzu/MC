@@ -259,6 +259,18 @@ tasks.register('documentationCheck') {
     }
 }
 
+tasks.register('localizationCheck') {
+    group = 'verification'
+    description = 'Verifies bilingual Minecraft translation key parity and source references.'
+    doLast {
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/localization-check.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
+    }
+}
+
 tasks.register('dependencyPinningCheck') {
     group = 'verification'
     description = 'Rejects dynamic top-level dependencies and mutable GitHub Action references.'
@@ -358,7 +370,7 @@ tasks.register('gradle9CompatibilityProbe', Exec) {
 
 tasks.named('check') {
     dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck',
-            'documentationCheck', 'dependencyPinningCheck'
+            'documentationCheck', 'localizationCheck', 'dependencyPinningCheck'
 }
 
 def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')

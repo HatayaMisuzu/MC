@@ -275,7 +275,8 @@ final class RuntimeBridge implements AutoCloseable {
         server.execute(() -> {
             ServerPlayer owner = server.getPlayerList().getPlayer(ownerId);
             if (owner != null) {
-                owner.sendSystemMessage(Component.literal("[Companion] " + finalReply));
+                owner.sendSystemMessage(Component.translatable("mcac.chat.prefix")
+                        .append(Component.literal(finalReply)));
             }
         });
     }
@@ -611,7 +612,8 @@ final class RuntimeBridge implements AutoCloseable {
                         ServerPlayer owner =
                                 server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
                         if (owner != null) {
-                            owner.sendSystemMessage(Component.literal("[Companion] " + finalReply));
+                            owner.sendSystemMessage(Component.translatable("mcac.chat.prefix")
+                                    .append(Component.literal(finalReply)));
                             sendEnvelope("conversation_delivery_ack", JSON.createObjectNode()
                                     .put("eventId", eventId)
                                     .put("companionId", companionId));

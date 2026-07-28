@@ -1459,6 +1459,20 @@ public final class CompanionLifecycleForgeGameTests {
                                 Blocks.COBBLESTONE.defaultBlockState());
                     }
                 }
+                for (int z = -3; z <= 3; z++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            pathOrigin.offset(x, 3, z),
+                            Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+            for (int x : new int[] {-1, 15}) {
+                for (int z = -3; z <= 3; z++) {
+                    for (int y = 0; y <= 2; y++) {
+                        body.serverLevel().setBlockAndUpdate(
+                                pathOrigin.offset(x, y, z),
+                                Blocks.COBBLESTONE.defaultBlockState());
+                    }
+                }
             }
             for (int z = -2; z <= 2; z++) {
                 for (int y = 0; y <= 2; y++) {

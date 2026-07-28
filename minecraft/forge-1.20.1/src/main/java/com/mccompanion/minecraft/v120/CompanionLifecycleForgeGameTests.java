@@ -738,7 +738,7 @@ public final class CompanionLifecycleForgeGameTests {
                 companionId,
                 retreatStart,
                 retreatThreat,
-                480);
+                body.serverLevel().getServer().getTickCount() + 480);
     }
 
     private static void awaitRetreatAcceptance(
@@ -750,7 +750,7 @@ public final class CompanionLifecycleForgeGameTests {
             String companionId,
             Vec3 retreatStart,
             Zombie retreatThreat,
-            int ticksRemaining) {
+            int deadlineTick) {
         if (body.position().distanceToSqr(retreatStart) >= 9.0D
                 && body.distanceToSqr(retreatThreat) >= 36.0D) {
             continueAfterRetreat(
@@ -765,7 +765,7 @@ public final class CompanionLifecycleForgeGameTests {
             return;
         }
         helper.assertTrue(
-                ticksRemaining > 0,
+                body.serverLevel().getServer().getTickCount() <= deadlineTick,
                 "retreat did not reach the bounded displacement and clearance before timeout: start="
                         + retreatStart
                         + " end="
@@ -785,7 +785,7 @@ public final class CompanionLifecycleForgeGameTests {
                         companionId,
                         retreatStart,
                         retreatThreat,
-                        ticksRemaining - 1));
+                        deadlineTick));
     }
 
     @GameTest(

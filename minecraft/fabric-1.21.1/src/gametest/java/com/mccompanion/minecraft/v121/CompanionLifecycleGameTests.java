@@ -422,18 +422,16 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "item-use test created no live body");
         BlockPos itemUseOrigin = body.blockPosition();
-        for (int x = -4; x <= 4; x++) {
-            for (int y = 0; y <= 5; y++) {
-                for (int z = -4; z <= 4; z++) {
-                    body.serverLevel().setBlockAndUpdate(
-                            itemUseOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
-                }
-            }
+        // Keep the projectile in this GameTest's vertical column. Clearing a broad cube can
+        // overwrite adjacent concurrently scheduled structures.
+        for (int y = 0; y <= 5; y++) {
+            body.serverLevel().setBlockAndUpdate(
+                    itemUseOrigin.offset(0, y, 0), Blocks.AIR.defaultBlockState());
         }
         body.getInventory().setItem(0, new ItemStack(Items.SNOWBALL, 2));
         body.getInventory().selected = 0;
-        body.setXRot(-30.0F);
-        body.xRotO = -30.0F;
+        body.setXRot(-80.0F);
+        body.xRotO = -80.0F;
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-item-use";
         helper.assertTrue(registry.runtimeAcquireLease(
@@ -445,18 +443,26 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         null, null, null, "", "UP", "MAIN_HAND",
                         "", null, null, "", 0)).success(),
                 "item-use skill failed to start");
-        awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
+        awaitBehaviorIdleForChain(helper, registry, companionId, 20, snapshot -> {
             helper.assertValueEqual(body.getInventory().countItem(Items.SNOWBALL), 1,
                     "vanilla item use did not consume one snowball");
-            helper.assertTrue(!body.serverLevel().getEntitiesOfClass(
-                            net.minecraft.world.entity.projectile.Snowball.class,
-                            body.getBoundingBox().inflate(8.0D)).isEmpty(),
-                    "vanilla item use did not create a snowball projectile");
-            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "ITEM_USE_COMPLETE",
-                    "item-use observation code mismatch");
-            helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
-                    "item-use evidence did not identify ServerPlayerGameMode");
-            helper.assertTrue(registry.remove(owner).success(), "item-use test cleanup failed");
+            // The action completes during entity ticking, so its projectile becomes queryable
+            // after the current tick flushes pending additions.
+            helper.runAfterDelay(1, () -> {
+                var projectiles = body.serverLevel().getEntitiesOfClass(
+                        net.minecraft.world.entity.projectile.Snowball.class,
+                        body.getBoundingBox().inflate(8.0D),
+                        projectile -> projectile.getOwner() == body);
+                helper.assertValueEqual(projectiles.size(), 1,
+                        "vanilla item use did not create exactly one owned snowball projectile");
+                helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "ITEM_USE_COMPLETE",
+                        "item-use observation code mismatch");
+                helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_GAME_MODE"),
+                        "item-use evidence did not identify ServerPlayerGameMode");
+                projectiles.getFirst().discard();
+                helper.assertTrue(registry.remove(owner).success(), "item-use test cleanup failed");
+                helper.succeed();
+            });
         });
     }
 

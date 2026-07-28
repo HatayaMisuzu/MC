@@ -86,6 +86,15 @@ final unloaded-target boundary removes the fixture. The corrected run passes 31/
 `gameTestFixtureCheck` now makes these ownership/timing/terminal-boundary rules part of ordinary
 `check`, so the repair is not based on increasing retries.
 
+The first standalone Web E2E after the otherwise successful release Golden Path then failed at the
+installer's single atomic journal primitive, moving a fully written `.mcac-json-*.tmp` to
+`transaction.json` on Windows. The primitive now closes and forces the same-directory temporary
+file before replacement, retries only Windows file-system sharing failures inside one bounded
+20–640 ms window, preserves the original exception, and removes the temporary file on every path.
+This does not rerun an operation or E2E. A focused test completes 20 sequential journal
+replacements with exact artifact checks and no temporary residue; the corrected full bilingual
+real-backend Chromium flow passes.
+
 ## Evidence rules
 
 - Replay, Fake, Mock, Fixture, GameTest, dedicated-server automation, and real-backend browser

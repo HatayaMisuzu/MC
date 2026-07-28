@@ -124,6 +124,30 @@ class InstallTransactionTest {
         assertTrue(Files.exists(world));assertTrue(Files.exists(unrelated));
     }
 
+    @Test void repeatedJournalReplacementLeavesNoTemporaryFiles() throws Exception {
+        MinecraftInstance instance = instance();
+        Files.createDirectories(instance.modsDirectory());
+        Path managed = instance.modsDirectory().resolve("mcac.jar");
+        InstallTransaction transaction = new InstallTransaction();
+        for (int revision = 0; revision < 20; revision++) {
+            Path artifact = temp.resolve("atomic-" + revision + ".jar");
+            Files.writeString(artifact, "revision-" + revision);
+            transaction.execute(new InstallPlan(
+                    instance,
+                    artifact,
+                    managed,
+                    revision == 0 ? List.of() : List.of(managed),
+                    false,
+                    "atomic-" + revision));
+            assertEquals("revision-" + revision, Files.readString(managed));
+        }
+        Path state = instance.gameDirectory().resolve(".mccompanion");
+        assertFalse(Files.exists(state.resolve("transaction.json")));
+        try (var files = Files.list(state)) {
+            assertTrue(files.noneMatch(path -> path.getFileName().toString().startsWith(".mcac-json-")));
+        }
+    }
+
     @Test void rejectsWindowsJunctionsForInstallAndBackupBoundaries() throws Exception {
         org.junit.jupiter.api.Assumptions.assumeTrue(
                 System.getProperty("os.name").startsWith("Windows"));

@@ -59,6 +59,9 @@ jobs:
           ./gradlew.bat verifyTerminalPackage tuiIntegrationTest rootLauncherTest
           releaseStarterTest htmlTerminalStartTest runtimeMultiProfileTest
           runtimeDisabledLaunchTest releaseGoldenPathTest --stacktrace
+      - name: Probe shared release gates with Gradle 9
+        shell: pwsh
+        run: ./gradlew.bat gradle9CompatibilityProbe --stacktrace
       - name: Upload verified RC candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

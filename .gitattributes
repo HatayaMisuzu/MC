@@ -1,0 +1,2 @@
+*.lockfile text eol=lf
+**/verification-metadata.xml text eol=lf

@@ -23,6 +23,16 @@ repositories {
     mavenCentral()
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+tasks.register('resolveAndLockAll') {
+    doLast {
+        configurations.matching { it.canBeResolved }.each { it.resolve() }
+    }
+}
+
 neoForge {
     version = project.neo_version
 

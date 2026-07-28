@@ -1,5 +1,15 @@
 # MCAC developer documentation
 
+## Reproducible dependency updates
+
+All production npm declarations are exact and `package-lock.json` is authoritative. The shared
+Gradle build and all three isolated Loader builds use dependency lock state, SHA-256 dependency
+verification metadata, and wrapper distribution checksums. After an intentional reviewed
+dependency change, regenerate only the affected lock/verification files with `--write-locks` and
+`--write-verification-metadata sha256`, inspect the coordinate and checksum diff, then run
+`dependencyPinningCheck`, the affected build and the Gradle 9 compatibility probe. Do not disable
+verification globally to make an unreviewed artifact resolve.
+
 MCAC is a deterministic Minecraft runtime beneath an external high-level Brain. Development-time
 tools may build this repository; the runtime Brain never receives shell, Git, compiler, arbitrary
 filesystem, secrets or direct world mutation.

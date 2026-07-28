@@ -31,6 +31,16 @@ repositories {
     mavenCentral()
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+tasks.register('resolveAndLockAll') {
+    doLast {
+        configurations.matching { it.canBeResolved }.each { it.resolve() }
+    }
+}
+
 legacyForge {
     version = "${project.minecraft_version}-${project.forge_version}"
     addModdingDependenciesTo sourceSets.gameTestMod

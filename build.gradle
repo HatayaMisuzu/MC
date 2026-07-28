@@ -375,6 +375,11 @@ tasks.register('dependencyPinningCheck') {
                 throw new GradleException("Missing dependency verification metadata: ${relative}")
             }
         }
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/dependency-verification-trust-check.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
         def lockFiles = [
                 'compatibility/compatibility-host/gradle.lockfile',
                 'core/pure-core/gradle.lockfile',

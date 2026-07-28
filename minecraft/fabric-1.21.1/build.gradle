@@ -123,6 +123,7 @@ publishing {
 }
 
 apply from: rootProject.file('../gradle/launch-test.gradle')
+apply from: rootProject.file('gradle/canonical-fabric-verification.gradle')
 
 tasks.named('runGameTest').configure {
     doFirst {

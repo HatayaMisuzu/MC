@@ -26,6 +26,19 @@ accepted only when its own release manifest and the same three GitHub workflows 
 commit; those immutable post-commit Run IDs are recorded in the final delivery report rather than
 predicted inside the commit that causes them.
 
+The final pre-merge cold-cache slice keeps strict Gradle dependency verification enabled while
+handling Fabric/Loom ZIP timestamp variability without accumulating whole-file hashes. Trust is
+limited to 99 exact group/name/version/file coordinates: 52 Loom-generated artifacts and 47 pinned
+Fabric API JARs. Every trusted remote Fabric JAR is additionally verified before compilation by a
+checked-in timestamp-independent entry-content hash manifest and the pinned Fabric signing
+certificate; duplicate and case-folded duplicate ZIP entries fail closed. `dependencyPinningCheck`
+rejects `also-trust` accumulation, group/regex expansion, unexpected attributes, and arbitrary
+external-artifact trust. Two isolated Gradle caches produced different raw JAR SHA-256 values but
+identical canonical content for all 47 artifacts; the second cache passed strict recovery-path
+source remapping, Fabric build and launch preparation. Targeted Fabric 31/31 GameTest and package
+validation also pass locally. This is dependency/build evidence only and does not change Live Brain
+or human-play labels; exact repair-SHA remote CI is still required.
+
 Final-gate stability note: menu capabilities now honor their documented monotonic 60-second
 wall-clock lifetime even when GameTest ticks are accelerated, and Task Graph `await()` exposes a
 terminal result only after the idempotent terminal lifecycle event is durable. Boundary assertions,

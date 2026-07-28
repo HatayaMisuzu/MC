@@ -70,6 +70,13 @@ insertions and 635 deletions. No destructive history rewrite was performed.
 - Added deterministic tracked-tree and added-diff secret scanning plus pinned Gitleaks CI.
 - Enforced npm/Gradle/Action pins, four wrapper checksums, 16 dependency lock files, four dependency
   verification metadata sets, SBOM/package checks, and a Gradle 9 compatibility probe.
+- Closed the Fabric/Loom cold-cache checksum gap without disabling verification or accumulating
+  retry hashes: 52 exact locally generated coordinates are narrowly trusted, while 47 exact remote
+  Fabric API JARs must also match a checked-in timestamp-independent entry-content manifest and the
+  pinned Fabric signing certificate before compilation. Static validation rejects `also-trust`,
+  group/regex expansion, unexpected trust attributes, and unrelated external artifacts. Independent
+  Cold A/Cold B caches matched all 47 canonical hashes, and strict Cold B build/launch preparation
+  passed through Loom cache-recovery source remapping.
 - Removed project-owned internal/deprecated Gradle API use while preserving documented third-party
   Loader-plugin warning boundaries.
 
@@ -216,4 +223,3 @@ the documented preserve-world and full-managed-removal policies.
 - Phase 8 frozen implementation candidate: locally verified.
 - Phase 9 remote/merge/tag/Release: pending.
 - Final report: created; final remote identities remain pending rather than predicted.
-

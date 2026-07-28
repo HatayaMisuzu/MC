@@ -3,6 +3,107 @@
    <configuration>
       <verify-metadata>true</verify-metadata>
       <verify-signatures>false</verify-signatures>
+      <trusted-artifacts>
+         <trust group="loom" name="mappings" version="layered+hash.2198" file="mappings-layered+hash.2198.jar" reason="Loom 1.17.17 locally generates this exact mapping JAR with variable ZIP timestamps; mappings.tiny content is stable"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-api-base" version="0.4.42+6573ed8c19" file="fabric-api-base-0.4.42+6573ed8c19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-api-lookup-api-v1" version="1.6.72+7b3d111d19" file="fabric-api-lookup-api-v1-1.6.72+7b3d111d19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-biome-api-v1" version="13.0.31+d527f9fd19" file="fabric-biome-api-v1-13.0.31+d527f9fd19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-block-api-v1" version="1.1.0+0bc3503219" file="fabric-block-api-v1-1.1.0+0bc3503219.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-block-view-api-v2" version="1.0.11+ebb2264e19" file="fabric-block-view-api-v2-1.0.11+ebb2264e19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-blockrenderlayer-v1" version="1.1.52+0af3f5a719" file="fabric-blockrenderlayer-v1-1.1.52+0af3f5a719.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-command-api-v1" version="1.2.49+f71b366f19" file="fabric-command-api-v1-1.2.49+f71b366f19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-command-api-v2" version="2.2.28+6ced4dd919" file="fabric-command-api-v2-2.2.28+6ced4dd919.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-commands-v0" version="0.2.66+df3654b319" file="fabric-commands-v0-0.2.66+df3654b319.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-content-registries-v0" version="8.0.19+b559734419" file="fabric-content-registries-v0-8.0.19+b559734419.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-convention-tags-v1" version="2.1.7+7f945d5b19" file="fabric-convention-tags-v1-2.1.7+7f945d5b19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-convention-tags-v2" version="2.12.0+c3656daa19" file="fabric-convention-tags-v2-2.12.0+c3656daa19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-crash-report-info-v1" version="0.2.29+0af3f5a719" file="fabric-crash-report-info-v1-0.2.29+0af3f5a719.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-data-attachment-api-v1" version="1.4.7+5b36e0f719" file="fabric-data-attachment-api-v1-1.4.7+5b36e0f719.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-dimensions-v1" version="4.0.1+65213ef819" file="fabric-dimensions-v1-4.0.1+65213ef819.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-entity-events-v1" version="1.8.0+2b27e0a419" file="fabric-entity-events-v1-1.8.0+2b27e0a419.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-events-interaction-v0" version="0.7.14+ba9dae0619" file="fabric-events-interaction-v0-0.7.14+ba9dae0619.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-game-rule-api-v1" version="1.0.53+6ced4dd919" file="fabric-game-rule-api-v1-1.0.53+6ced4dd919.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-gametest-api-v1" version="2.0.5+6fc22b9919" file="fabric-gametest-api-v1-2.0.5+6fc22b9919.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-item-api-v1" version="11.2.0+3b3cb2e819" file="fabric-item-api-v1-11.2.0+3b3cb2e819.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-item-group-api-v1" version="4.1.7+def88e3a19" file="fabric-item-group-api-v1-4.1.7+def88e3a19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-key-binding-api-v1" version="1.0.47+0af3f5a719" file="fabric-key-binding-api-v1-1.0.47+0af3f5a719.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-keybindings-v0" version="0.2.45+df3654b319" file="fabric-keybindings-v0-0.2.45+df3654b319.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-lifecycle-events-v1" version="2.6.0+0865547519" file="fabric-lifecycle-events-v1-2.6.0+0865547519.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-loot-api-v2" version="3.0.15+3f89f5a519" file="fabric-loot-api-v2-3.0.15+3f89f5a519.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-loot-api-v3" version="1.0.3+3f89f5a519" file="fabric-loot-api-v3-1.0.3+3f89f5a519.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-message-api-v1" version="6.0.14+8aaf3aca19" file="fabric-message-api-v1-6.0.14+8aaf3aca19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-model-loading-api-v1" version="2.1.0+b4d813fc19" file="fabric-model-loading-api-v1-2.1.0+b4d813fc19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-networking-api-v1" version="4.3.1+d30f6a7919" file="fabric-networking-api-v1-4.3.1+d30f6a7919.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-object-builder-api-v1" version="15.2.1+40875a9319" file="fabric-object-builder-api-v1-15.2.1+40875a9319.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-particles-v1" version="4.0.2+6573ed8c19" file="fabric-particles-v1-4.0.2+6573ed8c19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-recipe-api-v1" version="5.0.16+2475392c19" file="fabric-recipe-api-v1-5.0.16+2475392c19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-registry-sync-v0" version="5.3.2+e3eddc2119" file="fabric-registry-sync-v0-5.3.2+e3eddc2119.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-renderer-api-v1" version="3.4.1+b4d813fc19" file="fabric-renderer-api-v1-3.4.1+b4d813fc19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-renderer-indigo" version="1.7.1+c705a49c19" file="fabric-renderer-indigo-1.7.1+c705a49c19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-renderer-registries-v1" version="3.2.69+df3654b319" file="fabric-renderer-registries-v1-3.2.69+df3654b319.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-rendering-data-attachment-v1" version="0.3.49+73761d2e19" file="fabric-rendering-data-attachment-v1-0.3.49+73761d2e19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-rendering-fluids-v1" version="3.1.6+1daea21519" file="fabric-rendering-fluids-v1-3.1.6+1daea21519.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-rendering-v0" version="1.1.72+df3654b319" file="fabric-rendering-v0-1.1.72+df3654b319.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-rendering-v1" version="5.1.0+ab4c25a019" file="fabric-rendering-v1-5.1.0+ab4c25a019.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-resource-conditions-api-v1" version="4.3.0+8dc279b119" file="fabric-resource-conditions-api-v1-4.3.0+8dc279b119.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-resource-loader-v0" version="1.3.1+5b5275af19" file="fabric-resource-loader-v0-1.3.1+5b5275af19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-screen-api-v1" version="2.0.26+639b4c0719" file="fabric-screen-api-v1-2.0.26+639b4c0719.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-screen-handler-api-v1" version="1.3.91+b559734419" file="fabric-screen-handler-api-v1-1.3.91+b559734419.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-sound-api-v1" version="1.0.23+6573ed8c19" file="fabric-sound-api-v1-1.0.23+6573ed8c19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-transfer-api-v1" version="5.4.4+7b3d111d19" file="fabric-transfer-api-v1-5.4.4+7b3d111d19.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.fabricmc.fabric-api" name="fabric-transitive-access-wideners-v1" version="6.2.0+45b9699719" file="fabric-transitive-access-wideners-v1-6.2.0+45b9699719.jar" reason="Exact signed Fabric API JAR uses pinned canonical entry content because repository ZIP timestamps vary"/>
+         <trust group="net.minecraft" name="minecraft-merged-48f5f74c97" version="1.21.1-loom.mappings.1_21_1.layered+hash.2198-v2" file="minecraft-merged-48f5f74c97-1.21.1-loom.mappings.1_21_1.layered+hash.2198-v2.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-api-37f46004" version="0.116.13+1.21.1" file="fabric-api-37f46004-0.116.13+1.21.1.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-api-base-37f46004" version="0.4.42+6573ed8c19" file="fabric-api-base-37f46004-0.4.42+6573ed8c19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-api-lookup-api-v1-37f46004" version="1.6.72+7b3d111d19" file="fabric-api-lookup-api-v1-37f46004-1.6.72+7b3d111d19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-biome-api-v1-37f46004" version="13.0.31+d527f9fd19" file="fabric-biome-api-v1-37f46004-13.0.31+d527f9fd19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-block-api-v1-37f46004" version="1.1.0+0bc3503219" file="fabric-block-api-v1-37f46004-1.1.0+0bc3503219.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-block-view-api-v2-37f46004" version="1.0.11+ebb2264e19" file="fabric-block-view-api-v2-37f46004-1.0.11+ebb2264e19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-blockrenderlayer-v1-37f46004" version="1.1.52+0af3f5a719" file="fabric-blockrenderlayer-v1-37f46004-1.1.52+0af3f5a719.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-client-tags-api-v1-37f46004" version="1.1.15+6573ed8c19" file="fabric-client-tags-api-v1-37f46004-1.1.15+6573ed8c19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-command-api-v1-37f46004" version="1.2.49+f71b366f19" file="fabric-command-api-v1-37f46004-1.2.49+f71b366f19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-command-api-v2-37f46004" version="2.2.28+6ced4dd919" file="fabric-command-api-v2-37f46004-2.2.28+6ced4dd919.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-commands-v0-37f46004" version="0.2.66+df3654b319" file="fabric-commands-v0-37f46004-0.2.66+df3654b319.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-content-registries-v0-37f46004" version="8.0.19+b559734419" file="fabric-content-registries-v0-37f46004-8.0.19+b559734419.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-convention-tags-v1-37f46004" version="2.1.7+7f945d5b19" file="fabric-convention-tags-v1-37f46004-2.1.7+7f945d5b19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-convention-tags-v2-37f46004" version="2.12.0+c3656daa19" file="fabric-convention-tags-v2-37f46004-2.12.0+c3656daa19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-crash-report-info-v1-37f46004" version="0.2.29+0af3f5a719" file="fabric-crash-report-info-v1-37f46004-0.2.29+0af3f5a719.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-data-attachment-api-v1-37f46004" version="1.4.7+5b36e0f719" file="fabric-data-attachment-api-v1-37f46004-1.4.7+5b36e0f719.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-data-generation-api-v1-37f46004" version="20.2.38+60a6976219" file="fabric-data-generation-api-v1-37f46004-20.2.38+60a6976219.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-dimensions-v1-37f46004" version="4.0.1+65213ef819" file="fabric-dimensions-v1-37f46004-4.0.1+65213ef819.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-entity-events-v1-37f46004" version="1.8.0+2b27e0a419" file="fabric-entity-events-v1-37f46004-1.8.0+2b27e0a419.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-events-interaction-v0-37f46004" version="0.7.14+ba9dae0619" file="fabric-events-interaction-v0-37f46004-0.7.14+ba9dae0619.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-game-rule-api-v1-37f46004" version="1.0.53+6ced4dd919" file="fabric-game-rule-api-v1-37f46004-1.0.53+6ced4dd919.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-gametest-api-v1-37f46004" version="2.0.5+6fc22b9919" file="fabric-gametest-api-v1-37f46004-2.0.5+6fc22b9919.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-item-api-v1-37f46004" version="11.2.0+3b3cb2e819" file="fabric-item-api-v1-37f46004-11.2.0+3b3cb2e819.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-item-group-api-v1-37f46004" version="4.1.7+def88e3a19" file="fabric-item-group-api-v1-37f46004-4.1.7+def88e3a19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-key-binding-api-v1-37f46004" version="1.0.47+0af3f5a719" file="fabric-key-binding-api-v1-37f46004-1.0.47+0af3f5a719.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-keybindings-v0-37f46004" version="0.2.45+df3654b319" file="fabric-keybindings-v0-37f46004-0.2.45+df3654b319.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-lifecycle-events-v1-37f46004" version="2.6.0+0865547519" file="fabric-lifecycle-events-v1-37f46004-2.6.0+0865547519.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-loot-api-v2-37f46004" version="3.0.15+3f89f5a519" file="fabric-loot-api-v2-37f46004-3.0.15+3f89f5a519.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-loot-api-v3-37f46004" version="1.0.3+3f89f5a519" file="fabric-loot-api-v3-37f46004-1.0.3+3f89f5a519.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-message-api-v1-37f46004" version="6.0.14+8aaf3aca19" file="fabric-message-api-v1-37f46004-6.0.14+8aaf3aca19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-model-loading-api-v1-37f46004" version="2.1.0+b4d813fc19" file="fabric-model-loading-api-v1-37f46004-2.1.0+b4d813fc19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-networking-api-v1-37f46004" version="4.3.1+d30f6a7919" file="fabric-networking-api-v1-37f46004-4.3.1+d30f6a7919.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-object-builder-api-v1-37f46004" version="15.2.1+40875a9319" file="fabric-object-builder-api-v1-37f46004-15.2.1+40875a9319.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-particles-v1-37f46004" version="4.0.2+6573ed8c19" file="fabric-particles-v1-37f46004-4.0.2+6573ed8c19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-recipe-api-v1-37f46004" version="5.0.16+2475392c19" file="fabric-recipe-api-v1-37f46004-5.0.16+2475392c19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-registry-sync-v0-37f46004" version="5.3.2+e3eddc2119" file="fabric-registry-sync-v0-37f46004-5.3.2+e3eddc2119.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-renderer-api-v1-37f46004" version="3.4.1+b4d813fc19" file="fabric-renderer-api-v1-37f46004-3.4.1+b4d813fc19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-renderer-indigo-37f46004" version="1.7.1+c705a49c19" file="fabric-renderer-indigo-37f46004-1.7.1+c705a49c19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-renderer-registries-v1-37f46004" version="3.2.69+df3654b319" file="fabric-renderer-registries-v1-37f46004-3.2.69+df3654b319.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-rendering-data-attachment-v1-37f46004" version="0.3.49+73761d2e19" file="fabric-rendering-data-attachment-v1-37f46004-0.3.49+73761d2e19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-rendering-fluids-v1-37f46004" version="3.1.6+1daea21519" file="fabric-rendering-fluids-v1-37f46004-3.1.6+1daea21519.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-rendering-v0-37f46004" version="1.1.72+df3654b319" file="fabric-rendering-v0-37f46004-1.1.72+df3654b319.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-rendering-v1-37f46004" version="5.1.0+ab4c25a019" file="fabric-rendering-v1-37f46004-5.1.0+ab4c25a019.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-resource-conditions-api-v1-37f46004" version="4.3.0+8dc279b119" file="fabric-resource-conditions-api-v1-37f46004-4.3.0+8dc279b119.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-resource-loader-v0-37f46004" version="1.3.1+5b5275af19" file="fabric-resource-loader-v0-37f46004-1.3.1+5b5275af19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-screen-api-v1-37f46004" version="2.0.26+639b4c0719" file="fabric-screen-api-v1-37f46004-2.0.26+639b4c0719.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-screen-handler-api-v1-37f46004" version="1.3.91+b559734419" file="fabric-screen-handler-api-v1-37f46004-1.3.91+b559734419.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-sound-api-v1-37f46004" version="1.0.23+6573ed8c19" file="fabric-sound-api-v1-37f46004-1.0.23+6573ed8c19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-transfer-api-v1-37f46004" version="5.4.4+7b3d111d19" file="fabric-transfer-api-v1-37f46004-5.4.4+7b3d111d19.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+         <trust group="remapped.net.fabricmc.fabric-api" name="fabric-transitive-access-wideners-v1-37f46004" version="6.2.0+45b9699719" file="fabric-transitive-access-wideners-v1-37f46004-6.2.0+45b9699719.jar" reason="Loom 1.17.17 locally remaps this exact pinned Fabric artifact; ZIP timestamps vary"/>
+      </trusted-artifacts>
    </configuration>
    <components>
       <component group="ca.weblite" name="java-objc-bridge" version="1.1">
@@ -21,6 +122,11 @@
       <component group="com.fasterxml" name="oss-parent" version="61">
          <artifact name="oss-parent-61.pom">
             <sha256 value="3649513cf597e9186da0855986a8c543e12bdbd805edeef9c124db56dd036544" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="com.fasterxml.jackson" name="jackson-base" version="2.18.3">
+         <artifact name="jackson-base-2.18.3.pom">
+            <sha256 value="d5bbfd3c8445230e498b6092de809afd65cf504d013932dab7b3dfd6e9f3a4fd" origin="Generated by Gradle"/>
          </artifact>
       </component>
       <component group="com.fasterxml.jackson" name="jackson-bom" version="2.16.0">
@@ -75,12 +181,22 @@
             <sha256 value="bf6023ad2b605720ac6da27a2b5e98edb1a326cd0bf637c3a40b621fe8e093cd" origin="Generated by Gradle"/>
          </artifact>
       </component>
+      <component group="com.fasterxml.jackson.dataformat" name="jackson-dataformats-text" version="2.18.3">
+         <artifact name="jackson-dataformats-text-2.18.3.pom">
+            <sha256 value="5673daacc6e855976decedeb46dc63395a6b1ac9a483e672f0831cf46fe06e25" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
       <component group="com.fasterxml.jackson.datatype" name="jackson-datatype-jsr310" version="2.18.3">
          <artifact name="jackson-datatype-jsr310-2.18.3.jar">
             <sha256 value="2e1df2feb93683d379969ceaf78b76a0ac115c67d04671958fddf4eed6e6401d" origin="Generated by Gradle"/>
          </artifact>
          <artifact name="jackson-datatype-jsr310-2.18.3.module">
             <sha256 value="2addfb9038a8e60f0e9563992c2dec758a50c43bc7f040959d85db6e9d68d38c" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="com.fasterxml.jackson.module" name="jackson-modules-java8" version="2.18.3">
+         <artifact name="jackson-modules-java8-2.18.3.pom">
+            <sha256 value="ade85ecdbc63c36d97c9072735f41f79418ef8ad0403be7982dafff41c5faee3" origin="Generated by Gradle"/>
          </artifact>
       </component>
       <component group="com.github.oshi" name="oshi-core" version="6.4.10">
@@ -419,9 +535,6 @@
          </artifact>
       </component>
       <component group="loom" name="mappings" version="layered+hash.2198">
-         <artifact name="mappings-layered+hash.2198.jar">
-            <sha256 value="c4e0aa46af2f51f67e3a07a7b8567f8253c184d69337170744c4cfa40a6f35fd" origin="Generated by Gradle"/>
-         </artifact>
          <artifact name="mappings-layered+hash.2198.pom">
             <sha256 value="b23b60cf890246e42926cb6e8e30e647b86aac8bafaa66124538297d73fa854e" origin="Generated by Gradle"/>
          </artifact>
@@ -483,6 +596,14 @@
          </artifact>
          <artifact name="fabric-loom-native-0.2.0.pom">
             <sha256 value="8370853dca591385d934a560aac0993f121286877893ada50553d3260b46a05d" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="net.fabricmc" name="intermediary" version="1.21.1">
+         <artifact name="intermediary-1.21.1-v2.jar">
+            <sha256 value="e8bd6a4c39e235ee2dc73063558610775c72a2572fa0c6b32915b149074012a6" origin="Generated by Gradle"/>
+         </artifact>
+         <artifact name="intermediary-1.21.1.pom">
+            <sha256 value="b6ec5f03e95bea232b6960ed077dd0a765a3aabfd74732ee600eb77d2651adf4" origin="Generated by Gradle"/>
          </artifact>
       </component>
       <component group="net.fabricmc" name="lorenz-tiny" version="4.0.2">
@@ -1410,21 +1531,41 @@
          </artifact>
       </component>
       <component group="org.junit" name="junit-bom" version="5.10.0">
+         <artifact name="junit-bom-5.10.0.module">
+            <sha256 value="eb3ee6127608010694a898056e7407d117296003aba5f5db801df430b9887fcf" origin="Generated by Gradle"/>
+         </artifact>
          <artifact name="junit-bom-5.10.0.pom">
             <sha256 value="e006dd8894f9fc7b75fc32bb12fe5ed8be65667d5b454f99e2e0b8c5bb8d30b3" origin="Generated by Gradle"/>
          </artifact>
       </component>
       <component group="org.junit" name="junit-bom" version="5.10.1">
+         <artifact name="junit-bom-5.10.1.module">
+            <sha256 value="21b0afcfffe2ecb3770f5eb00ae7a19feaee94e771fa3918173850dae78067b7" origin="Generated by Gradle"/>
+         </artifact>
          <artifact name="junit-bom-5.10.1.pom">
             <sha256 value="21c4b0286f4b20069577ff4b20978a85c100ac8a46b6f1c8672fbaab337bc3f2" origin="Generated by Gradle"/>
+         </artifact>
+      </component>
+      <component group="org.junit" name="junit-bom" version="5.10.2">
+         <artifact name="junit-bom-5.10.2.module">
+            <sha256 value="de23b114b3e4119a8fe6eb17bed5a3852816698bace67071579d6d927ebb080a" origin="Generated by Gradle"/>
+         </artifact>
+         <artifact name="junit-bom-5.10.2.pom">
+            <sha256 value="169dd904a4b0f6520cffe658cc62292bfe9f3c14a989fa92120724cde43a9968" origin="Generated by Gradle"/>
          </artifact>
       </component>
       <component group="org.junit" name="junit-bom" version="5.12.1">
          <artifact name="junit-bom-5.12.1.module">
             <sha256 value="4dd2aa9e994579c630457df995b919b03545633646372eaadd1d165d0bf58c1a" origin="Generated by Gradle"/>
          </artifact>
+         <artifact name="junit-bom-5.12.1.pom">
+            <sha256 value="7c826bc72beddc817dad9263027f9012a0f55a377d38df89c42932a2501c2bf0" origin="Generated by Gradle"/>
+         </artifact>
       </component>
       <component group="org.junit" name="junit-bom" version="5.9.3">
+         <artifact name="junit-bom-5.9.3.module">
+            <sha256 value="b401fd25901e582a524aa5343c4b39e28bc56e24961c1069bf2b4bbfcee46b93" origin="Generated by Gradle"/>
+         </artifact>
          <artifact name="junit-bom-5.9.3.pom">
             <sha256 value="4d0329cd9e72f2420e5ca15724cbfe6ffa6e5fd2888361516271190fdc342ed7" origin="Generated by Gradle"/>
          </artifact>

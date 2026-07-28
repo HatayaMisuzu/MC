@@ -215,6 +215,72 @@ tasks.register('forbiddenApiCheck') {
     }
 }
 
+tasks.register('gameTestFixtureCheck') {
+    group = 'verification'
+    description = 'Rejects GameTest fixture ownership leaks, shared mutable menu state, and manual ticks in async entity stages.'
+    doLast {
+        def fabricTests = file(
+                'minecraft/fabric-1.21.1/src/gametest/java/com/mccompanion/minecraft/v121/CompanionLifecycleGameTests.java')
+                .getText('UTF-8')
+        def fabricFixture = file(
+                'minecraft/fabric-1.21.1/src/gametest/java/com/mccompanion/minecraft/v121/RegistryFixtureInitializer.java')
+                .getText('UTF-8')
+        def forgeTests = file(
+                'minecraft/forge-1.20.1/src/main/java/com/mccompanion/minecraft/v120/CompanionLifecycleForgeGameTests.java')
+                .getText('UTF-8')
+
+        int mockOwnerCount = (fabricTests =~ /makeMockServerPlayerInLevel\(\)/).count
+        int directOwnerRemovalCount = (fabricTests =~ /registry\.remove\(owner\)/).count
+        int fixtureCleanupCallCount = (fabricTests =~ /removeFixture\(/).count - 1
+        if (mockOwnerCount == 0
+                || directOwnerRemovalCount != 1
+                || fixtureCleanupCallCount < mockOwnerCount
+                || !fabricTests.contains('getPlayerList().remove(owner)')) {
+            throw new GradleException(
+                    'Fabric GameTests must release every mock owner through the shared removeFixture boundary.')
+        }
+        if (fabricFixture.contains('static final SimpleContainer')) {
+            throw new GradleException(
+                    'GameTest menu fixtures must not share a mutable static container across batches.')
+        }
+        def dropStage = fabricTests.substring(
+                fabricTests.indexOf('void inventoryDropUsesVanillaPlayerDropAndVerifiesWorldEntities'),
+                fabricTests.indexOf('void entityInteractUsesVisibleReachableVanillaPlayerAction'))
+        if (!dropStage.contains('forEach(ItemEntity::discard)')) {
+            throw new GradleException('The Fabric inventory-drop fixture must discard its owned world drops.')
+        }
+        def globalNavigationStage = fabricTests.substring(
+                fabricTests.indexOf('void globalNavigationRoutesAroundDynamicWalls'),
+                fabricTests.indexOf('private static void insertDynamicObstacleAfterDoorOpens'))
+        if (globalNavigationStage.contains('succeedWhen(')) {
+            throw new GradleException(
+                    'Fabric navigation must not start asynchronous acceptance from a succeedWhen callback.')
+        }
+        def fabricCombinationStage = fabricTests.substring(
+                fabricTests.indexOf('private static void runNavigationCombinationAcceptance'),
+                fabricTests.indexOf('private static void runNavigationBoundaryAcceptance'))
+        if (fabricCombinationStage.contains('awaitBehaviorIdle(')
+                || (fabricCombinationStage =~ /awaitBehaviorIdleForChain\(/).count < 3) {
+            throw new GradleException(
+                    'Fabric chained behaviors must not mark the GameTest complete before the final boundary.')
+        }
+
+        def combinationStage = forgeTests.substring(
+                forgeTests.indexOf('private static void runNavigationCombinationAcceptance'),
+                forgeTests.indexOf('private static void runNavigationBoundaryAcceptance'))
+        if (combinationStage.contains('registry.tick()')
+                || (combinationStage =~ /awaitRuntimeBehaviorIdle\(/).count < 3) {
+            throw new GradleException(
+                    'Forge asynchronous entity/world stages must advance on real server ticks.')
+        }
+        if (!forgeTests.contains('retreatThreat.discard()')
+                || !forgeTests.contains('ownedProjectiles.forEach(Snowball::discard)')) {
+            throw new GradleException('Forge entity fixtures must discard surviving owned entities.')
+        }
+        println "GameTest fixture check passed: ${mockOwnerCount} Fabric owners use one cleanup boundary (${fixtureCleanupCallCount} terminal branches); async Forge stages use real ticks."
+    }
+}
+
 tasks.register('packageAlpha') {
     group = 'distribution'
     dependsOn 'build', 'test', 'forbiddenApiCheck'
@@ -381,7 +447,7 @@ tasks.register('gradle9CompatibilityProbe', Exec) {
 
 tasks.named('check') {
     dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck',
-            'documentationCheck', 'localizationCheck', 'dependencyPinningCheck'
+            'documentationCheck', 'localizationCheck', 'dependencyPinningCheck', 'gameTestFixtureCheck'
 }
 
 def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')

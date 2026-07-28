@@ -69,6 +69,23 @@ external-orchestration cause unrecoverable. It is recorded as
 forwards captured stdout/stderr before enforcing normal exit, and the complete E2E passes twice
 consecutively with full child evidence.
 
+The systemic GameTest fixture audit then stopped candidate-chain reruns and classified shared-player
+ownership, mutable menu state, entity-index timing, fixture entity cleanup, generated-world sight
+geometry and manual Runtime ticking as one failure family. All 30 Fabric mock Owner fixtures now
+remove both the Companion and registered ServerPlayer through one cleanup boundary; owned drops,
+projectiles and surviving threats are discarded; unknown-Mod menus allocate per-open containers;
+and the asynchronous Forge combination chain uses real server ticks throughout. The first
+predeclared systemic Fabric run exposed one undeclared generated-world sight obstruction while
+30/31 cases passed; after declaring the observation floor/headroom/sight corridor, Fabric passes
+31/31. Log reconciliation then rejected that apparent pass because it created 30 Companions but
+removed only 29: global navigation started an asynchronous combination chain from a terminal
+`succeedWhen` callback, and each generic behavior wait could also mark the test complete before its
+next stage. The chain now uses explicit target polling and non-terminal behavior waits until the
+final unloaded-target boundary removes the fixture. The corrected run passes 31/31 with exactly
+30 created/30 removed, no `MINE_TIMEOUT`, and no mock Owner left at shutdown; Forge passes 4/4.
+`gameTestFixtureCheck` now makes these ownership/timing/terminal-boundary rules part of ordinary
+`check`, so the repair is not based on increasing retries.
+
 ## Evidence rules
 
 - Replay, Fake, Mock, Fixture, GameTest, dedicated-server automation, and real-backend browser

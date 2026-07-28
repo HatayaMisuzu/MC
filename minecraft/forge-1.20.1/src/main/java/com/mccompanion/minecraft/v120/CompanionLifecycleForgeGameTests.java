@@ -1187,7 +1187,10 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(body.addItem(new ItemStack(Items.SNOWBALL, 2)), "item-use fixture add failed");
         int snowballsBefore = body.getInventory().countItem(Items.SNOWBALL);
         int projectilesBefore = body.serverLevel()
-                .getEntitiesOfClass(Snowball.class, body.getBoundingBox().inflate(8.0D))
+                .getEntitiesOfClass(
+                        Snowball.class,
+                        body.getBoundingBox().inflate(8.0D),
+                        projectile -> projectile.getOwner() == body)
                 .size();
         body.setXRot(-30.0F);
         body.xRotO = -30.0F;
@@ -1224,12 +1227,14 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.getInventory().countItem(Items.SNOWBALL) == snowballsBefore - 1,
                 "item-use primitive did not consume one snowball");
+        var ownedProjectiles = body.serverLevel().getEntitiesOfClass(
+                Snowball.class,
+                body.getBoundingBox().inflate(8.0D),
+                projectile -> projectile.getOwner() == body);
         helper.assertTrue(
-                body.serverLevel()
-                                .getEntitiesOfClass(Snowball.class, body.getBoundingBox().inflate(8.0D))
-                                .size()
-                        > projectilesBefore,
+                ownedProjectiles.size() > projectilesBefore,
                 "item-use primitive did not create a vanilla projectile");
+        ownedProjectiles.forEach(Snowball::discard);
 
         Cow cow = EntityType.COW.create(body.serverLevel());
         helper.assertTrue(cow != null, "entity-interaction fixture creation failed");
@@ -1381,6 +1386,7 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.distanceToSqr(retreatThreat) >= 36.0D,
                 "retreat did not establish a six-block safety margin");
+        retreatThreat.discard();
         helper.assertTrue(
                 registry.runtimeReleaseLease(companionId, "forge-primitive-lease", 2L).success(),
                 "primitive lease release failed");
@@ -1836,39 +1842,36 @@ public final class CompanionLifecycleForgeGameTests {
                                     "", null, null, "", null))
                             .success(),
                     "Forge post-navigation mining failed to start");
-            for (int tick = 0; tick < 180
-                    && registry.runtimeSnapshots(true).stream()
-                            .anyMatch(snapshot -> snapshot.companionId().equals(companionId)
-                                    && !snapshot.behaviorState().equals("IDLE")); tick++) {
-                registry.tick();
-            }
-            helper.assertTrue(body.serverLevel().getBlockState(dirt).isAir(),
-                    "Forge post-navigation mining did not change the exact world target");
-            helper.assertTrue(body.getInventory().countItem(Items.DIRT) == dirtBefore + 1,
-                    "Forge post-navigation mining inventory delta was incorrect");
+            awaitRuntimeBehaviorIdle(helper, registry, companionId, 180, () -> {
+                helper.assertTrue(body.serverLevel().getBlockState(dirt).isAir(),
+                        "Forge post-navigation mining did not change the exact world target");
+                helper.assertTrue(body.getInventory().countItem(Items.DIRT) == dirtBefore + 1,
+                        "Forge post-navigation mining inventory delta was incorrect");
 
-            BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
-            body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
-            Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
-            chest.setItem(0, new ItemStack(Items.IRON_INGOT));
-            int ironBefore = body.getInventory().countItem(Items.IRON_INGOT);
-            helper.assertTrue(registry.runtimeStart(
-                            companionId, lease, 3L, "forge-navigation-combo-container", "skill",
-                            null, null, null,
-                            new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
-                                    body.serverLevel().dimension().location().toString(),
-                                    chestPos.getX(), chestPos.getY(), chestPos.getZ(), "", "UP", "MAIN_HAND",
-                                    "", null, null, "", null))
-                            .success(),
-                    "Forge post-navigation container withdrawal failed to start");
-            for (int tick = 0; tick < 20; tick++) registry.tick();
-            helper.assertTrue(body.getInventory().countItem(Items.IRON_INGOT) == ironBefore + 1,
-                    "Forge post-navigation container inventory delta was incorrect");
-            helper.assertTrue(chest.isEmpty(),
-                    "Forge post-navigation container source delta was incorrect");
-            helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 3L).success(),
-                    "Forge navigation combination lease release failed");
-            runNavigationBoundaryAcceptance(helper, registry, owner, body, ownerConnection);
+                BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
+                body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
+                Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+                chest.setItem(0, new ItemStack(Items.IRON_INGOT));
+                int ironBefore = body.getInventory().countItem(Items.IRON_INGOT);
+                helper.assertTrue(registry.runtimeStart(
+                                companionId, lease, 3L, "forge-navigation-combo-container", "skill",
+                                null, null, null,
+                                new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
+                                        body.serverLevel().dimension().location().toString(),
+                                        chestPos.getX(), chestPos.getY(), chestPos.getZ(), "", "UP", "MAIN_HAND",
+                                        "", null, null, "", null))
+                                .success(),
+                        "Forge post-navigation container withdrawal failed to start");
+                awaitRuntimeBehaviorIdle(helper, registry, companionId, 20, () -> {
+                    helper.assertTrue(body.getInventory().countItem(Items.IRON_INGOT) == ironBefore + 1,
+                            "Forge post-navigation container inventory delta was incorrect");
+                    helper.assertTrue(chest.isEmpty(),
+                            "Forge post-navigation container source delta was incorrect");
+                    helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 3L).success(),
+                            "Forge navigation combination lease release failed");
+                    runNavigationBoundaryAcceptance(helper, registry, owner, body, ownerConnection);
+                });
+            });
         });
     }
 

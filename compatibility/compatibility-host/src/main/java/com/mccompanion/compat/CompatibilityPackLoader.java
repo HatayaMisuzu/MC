@@ -1,11 +1,16 @@
 package com.mccompanion.compat;
 
+import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.StreamReadFeature;
+import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
+import com.fasterxml.jackson.dataformat.yaml.YAMLParser;
+import org.yaml.snakeyaml.LoaderOptions;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -18,6 +23,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -26,6 +32,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 
 /** Reads a declaration-only .mcac-compat archive without extracting it. */
@@ -33,15 +40,28 @@ public final class CompatibilityPackLoader {
     public static final long MAX_ARCHIVE_BYTES = 8L * 1024 * 1024;
     public static final int MAX_ENTRIES = 256;
     public static final int MAX_ENTRY_BYTES = 1024 * 1024;
+    public static final long MAX_TOTAL_UNCOMPRESSED_BYTES = 16L * 1024 * 1024;
     private static final Set<String> ALLOWED_ROOTS = Set.of(
             "manifest.yaml", "manifest.yml", "fingerprints", "capabilities", "mappings",
             "overlays", "native", "tests", "evidence", "migrations", "LICENSES",
             "SHA256SUMS.txt");
     private static final Set<String> DOCUMENT_EXTENSIONS = Set.of(".json", ".yaml", ".yml");
-    private static final ObjectMapper JSON = JsonMapper.builder()
+    private static final StreamReadConstraints DOCUMENT_CONSTRAINTS = StreamReadConstraints.builder()
+            .maxDocumentLength(MAX_ENTRY_BYTES)
+            .maxNestingDepth(64)
+            .maxNumberLength(128)
+            .maxStringLength(64 * 1024)
+            .maxNameLength(256)
+            .maxTokenCount(100_000)
+            .build();
+    private static final ObjectMapper JSON = JsonMapper.builder(JsonFactory.builder()
+                    .streamReadConstraints(DOCUMENT_CONSTRAINTS).build())
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build()
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
-    private static final ObjectMapper YAML = YAMLMapper.builder()
+    private static final ObjectMapper YAML = YAMLMapper.builder(YAMLFactory.builder()
+                    .streamReadConstraints(DOCUMENT_CONSTRAINTS)
+                    .enable(YAMLParser.Feature.EMPTY_STRING_AS_NULL)
+                    .loaderOptions(yamlLoaderOptions()).build())
             .enable(StreamReadFeature.STRICT_DUPLICATE_DETECTION).build()
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
@@ -55,22 +75,26 @@ public final class CompatibilityPackLoader {
         if (size < 1 || size > MAX_ARCHIVE_BYTES) throw failure("PACK_SIZE_LIMIT");
         String archiveHash = sha256(source);
         Map<String, byte[]> entries = new LinkedHashMap<>();
+        long[] totalUncompressed = {0L};
         try (ZipFile zip = new ZipFile(source.toFile(), StandardCharsets.UTF_8)) {
             var values = zip.entries();
             while (values.hasMoreElements()) {
                 ZipEntry entry = values.nextElement();
                 if (entry.isDirectory()) continue;
                 String name = safeEntryName(entry.getName());
-                if (entries.size() >= MAX_ENTRIES || entries.putIfAbsent(name,
-                        readBounded(zip.getInputStream(entry), MAX_ENTRY_BYTES)) != null) {
+                if (entries.size() >= MAX_ENTRIES || entries.containsKey(name)) {
                     throw failure("PACK_ENTRY_LIMIT_OR_DUPLICATE");
                 }
+                entries.put(name, readBounded(zip.getInputStream(entry), MAX_ENTRY_BYTES,
+                        totalUncompressed, MAX_TOTAL_UNCOMPRESSED_BYTES));
             }
-        } catch (IllegalArgumentException invalidZip) {
+        } catch (ZipException | IllegalArgumentException invalidZip) {
             throw failure("PACK_ZIP_INVALID", invalidZip);
         }
-        byte[] manifestBytes = entries.getOrDefault("manifest.yaml", entries.get("manifest.yml"));
-        if (manifestBytes == null) throw failure("MANIFEST_MISSING");
+        boolean yamlManifest = entries.containsKey("manifest.yaml");
+        boolean ymlManifest = entries.containsKey("manifest.yml");
+        if (yamlManifest && ymlManifest) throw failure("MANIFEST_AMBIGUOUS");
+        if (!yamlManifest && !ymlManifest) throw failure("MANIFEST_MISSING");
         byte[] sumsBytes = entries.get("SHA256SUMS.txt");
         if (sumsBytes == null) throw failure("HASH_MANIFEST_MISSING");
         Map<String, String> declaredHashes = parseHashes(sumsBytes);
@@ -89,7 +113,9 @@ public final class CompatibilityPackLoader {
                 ObjectMapper mapper = entry.getKey().endsWith(".json") ? JSON : YAML;
                 JsonNode value;
                 try {
+                    if (mapper == YAML) rejectYamlAliases(entry.getValue());
                     value = mapper.readTree(entry.getValue());
+                    validateDocumentShape(value);
                 } catch (Exception malformed) {
                     throw failure("DOCUMENT_INVALID:" + entry.getKey(), malformed);
                 }
@@ -251,17 +277,75 @@ public final class CompatibilityPackLoader {
         return name;
     }
 
-    private static byte[] readBounded(InputStream input, int maximum) throws IOException {
+    private static byte[] readBounded(InputStream input, int maximum, long[] aggregate,
+                                      long aggregateMaximum) throws IOException {
         try (input; ByteArrayOutputStream output = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[8192];
             int total = 0;
             int read;
-            while ((read = input.read(buffer)) >= 0) {
+            while ((read = input.read(buffer)) != -1) {
+                if (read == 0) {
+                    int single = input.read();
+                    if (single == -1) break;
+                    buffer[0] = (byte) single;
+                    read = 1;
+                }
                 total += read;
                 if (total > maximum) throw failure("PACK_ENTRY_SIZE_LIMIT");
+                if (aggregate[0] > aggregateMaximum - read) {
+                    throw failure("PACK_TOTAL_UNCOMPRESSED_LIMIT");
+                }
+                aggregate[0] += read;
                 output.write(buffer, 0, read);
             }
             return output.toByteArray();
+        }
+    }
+
+    private static LoaderOptions yamlLoaderOptions() {
+        LoaderOptions options = new LoaderOptions();
+        options.setAllowDuplicateKeys(false);
+        options.setAllowRecursiveKeys(false);
+        options.setMaxAliasesForCollections(16);
+        options.setNestingDepthLimit(64);
+        options.setCodePointLimit(MAX_ENTRY_BYTES);
+        return options;
+    }
+
+    private static void validateDocumentShape(JsonNode root) throws IOException {
+        ArrayDeque<NodeDepth> pending = new ArrayDeque<>();
+        pending.add(new NodeDepth(root, 1));
+        int tokens = 0;
+        while (!pending.isEmpty()) {
+            NodeDepth current = pending.removeFirst();
+            if (current.depth() > 64) throw failure("DOCUMENT_DEPTH_LIMIT");
+            if (++tokens > 100_000) throw failure("DOCUMENT_TOKEN_LIMIT");
+            JsonNode node = current.node();
+            if (node.isTextual() && node.textValue().length() > 64 * 1024) {
+                throw failure("DOCUMENT_STRING_LIMIT");
+            }
+            if (node.isNumber() && node.asText().length() > 128) {
+                throw failure("DOCUMENT_NUMBER_LIMIT");
+            }
+            if (node.isObject()) {
+                var fields = node.fields();
+                while (fields.hasNext()) {
+                    var field = fields.next();
+                    if (field.getKey().length() > 256) throw failure("DOCUMENT_NAME_LIMIT");
+                    pending.addLast(new NodeDepth(field.getValue(), current.depth() + 1));
+                }
+            } else if (node.isArray()) {
+                node.forEach(child -> pending.addLast(new NodeDepth(child, current.depth() + 1)));
+            }
+        }
+    }
+
+    private record NodeDepth(JsonNode node, int depth) {}
+
+    private static void rejectYamlAliases(byte[] bytes) throws IOException {
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        if (text.matches("(?s).*(?:^|[\\s\\[{,])[&*][A-Za-z0-9_-]+.*")) {
+            throw failure("DOCUMENT_YAML_ALIAS_FORBIDDEN");
         }
     }
 

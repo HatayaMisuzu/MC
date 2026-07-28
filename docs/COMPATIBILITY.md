@@ -20,6 +20,12 @@ Compatibility-pack fixtures prove the declaration-only Compatibility Host lifecy
 Create, AE2, Mekanism or modpack compatibility. Exact row-level evidence and remaining gaps are in
 [`RC_COMPLETION_MATRIX.md`](RC_COMPLETION_MATRIX.md).
 
+Pack loading is no-extraction and fail-closed: an archive is limited to 8 MiB compressed, 256 files,
+1 MiB per file and 16 MiB of bytes actually inflated across the whole archive. Exactly one of
+`manifest.yaml` and `manifest.yml` is required. JSON/YAML input rejects duplicate keys, trailing or
+multiple documents, excessive depth/name/number/string/token sizes, and YAML anchors/aliases.
+Declared ZIP sizes are not trusted for the byte budget.
+
 External Brain adapter capabilities are not identical. Hermes `mcac-brain/1` has structured
 semantic state and completion-claim fields. The OpenAI-compatible adapter supports bounded tool
 calling and `ASK_USER`, but its final response is currently natural-language content without those

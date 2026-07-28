@@ -1,6 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -50,6 +51,7 @@ public final class RegistryFixtureInitializer implements ModInitializer {
         Registry.register(BuiltInRegistries.ITEM, BLUE_ITEM_ID, BLUE_ITEM);
         Registry.register(BuiltInRegistries.ITEM, CHARGED_ITEM_ID, CHARGED_ITEM);
         Registry.register(BuiltInRegistries.ENTITY_TYPE, WATCHER_ENTITY_ID, WATCHER_ENTITY);
+        FabricDefaultAttributeRegistry.register(WATCHER_ENTITY, ArmorStand.createAttributes());
         CONTAINER.setItem(0, new net.minecraft.world.item.ItemStack(BLUE_ITEM, 2));
     }
 

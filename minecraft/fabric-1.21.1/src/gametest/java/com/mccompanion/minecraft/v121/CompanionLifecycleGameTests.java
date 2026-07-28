@@ -94,16 +94,13 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "Observer").success(), "observation test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "observation test created no live body");
-        BlockPos blockPosition = body.blockPosition().offset(2, 0, 0);
+        // Keep entity fixtures inside the GameTest-managed area. Use the dedicated unknown-
+        // namespace watcher type so concurrently running cow/pig/hostile tests cannot contaminate
+        // the typed observation.
+        BlockPos observationOrigin = body.blockPosition();
+        BlockPos blockPosition = observationOrigin.offset(2, 0, 0);
         body.serverLevel().setBlockAndUpdate(blockPosition, RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
         body.getInventory().add(new ItemStack(RegistryFixtureInitializer.BLUE_ITEM, 3));
-        var cow = EntityType.COW.create(body.serverLevel());
-        helper.assertTrue(cow != null, "observation test could not create entity");
-        cow.setNoAi(true);
-        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
-        helper.assertTrue(body.serverLevel().addFreshEntity(cow),
-                "observation test could not add entity");
-
         var block = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
                 com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
                         .put("tool", "block.inspect")
@@ -124,19 +121,41 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertValueEqual(item.observation().path("totalCount").asInt(), 3,
                 "live item inspection did not read inventory state");
 
-        var entity = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
-                com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
-                        .put("tool", "entity.inspect").put("radius", 8).put("limit", 4)
-                        .put("type", "minecraft:cow"));
-        helper.assertTrue(entity.success(), "live entity inspection failed: " + entity.code());
-        helper.assertValueEqual(entity.observation().path("totalMatches").asInt(), 1,
-                "live entity inspection did not return the visible cow");
-        helper.assertValueEqual(entity.observation().path("entities").path(0).path("entityId").asText(),
-                cow.getUUID().toString(), "live entity inspection returned the wrong entity");
+        helper.runAfterDelay(1, () -> {
+            var watcher = RegistryFixtureInitializer.WATCHER_ENTITY.create(body.serverLevel());
+            helper.assertTrue(watcher != null, "observation test could not create entity");
+            // Keep the entity on an independent sight line; the inspected block is deliberately
+            // two blocks east and must not occlude the entity observation behind it.
+            watcher.moveTo(body.getX(), body.getY(), body.getZ() + 1.5D, 0.0F, 0.0F);
+            helper.assertTrue(body.serverLevel().addFreshEntity(watcher),
+                    "observation test could not add entity");
+            // GameTest callbacks execute while the server is ticking entities. addFreshEntity
+            // therefore becomes queryable only after the current tick flushes pending additions.
+            helper.runAfterDelay(1, () -> {
+                var indexedWatchers = body.serverLevel().getEntitiesOfClass(
+                        net.minecraft.world.entity.decoration.ArmorStand.class,
+                        body.getBoundingBox().inflate(8.0D),
+                        candidate -> candidate.isAlive());
+                helper.assertValueEqual(indexedWatchers.size(), 1,
+                        "live entity index did not contain exactly the isolated watcher");
+                helper.assertTrue(body.hasLineOfSight(watcher),
+                        "isolated watcher was indexed but not visible: body=" + body.position()
+                                + " watcher=" + watcher.position());
+                var entity = PrimitiveObservationService.inspect(registry, body.getUUID().toString(),
+                        com.fasterxml.jackson.databind.node.JsonNodeFactory.instance.objectNode()
+                                .put("tool", "entity.inspect").put("radius", 8).put("limit", 4)
+                                .put("type", RegistryFixtureInitializer.WATCHER_ENTITY_ID.toString()));
+                helper.assertTrue(entity.success(), "live entity inspection failed: " + entity.code());
+                helper.assertValueEqual(entity.observation().path("totalMatches").asInt(), 1,
+                        "live entity inspection did not return the visible watcher");
+                helper.assertValueEqual(entity.observation().path("entities").path(0).path("entityId").asText(),
+                        watcher.getUUID().toString(), "live entity inspection returned the wrong entity");
 
-        cow.discard();
-        helper.assertTrue(registry.remove(owner).success(), "observation test cleanup failed");
-        helper.succeed();
+                watcher.discard();
+                helper.assertTrue(registry.remove(owner).success(), "observation test cleanup failed");
+                helper.succeed();
+            });
+        });
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "look")
@@ -592,16 +611,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "block-place test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "block-place test created no live body");
-        Vec3 placementArena = new Vec3(192.5D, body.getY(), 192.5D);
-        owner.moveTo(placementArena.x, placementArena.y, placementArena.z,
-                owner.getYRot(), owner.getXRot());
-        body.moveTo(placementArena.x, placementArena.y, placementArena.z,
-                body.getYRot(), body.getXRot());
-        body.setDeltaMovement(Vec3.ZERO);
+        BlockPos placementOrigin = moveToIsolatedArena(owner, body, 192, 192, 1);
         // Put the support at foot level so its top face remains unambiguously visible from the
         // player's eye even if vanilla gravity settles the newly spawned body before the next tick.
-        BlockPos target = body.blockPosition().offset(2, 1, 0);
-        body.serverLevel().setChunkForced(target.getX() >> 4, target.getZ() >> 4, true);
+        BlockPos target = placementOrigin.offset(2, 1, 0);
         BlockPos support = target.below();
         body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
@@ -650,14 +663,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "creative block-place test created no live body");
         body.setGameMode(GameType.CREATIVE);
-        Vec3 placementArena = new Vec3(224.5D, body.getY(), 224.5D);
-        owner.moveTo(placementArena.x, placementArena.y, placementArena.z,
-                owner.getYRot(), owner.getXRot());
-        body.moveTo(placementArena.x, placementArena.y, placementArena.z,
-                body.getYRot(), body.getXRot());
-        body.setDeltaMovement(Vec3.ZERO);
-        BlockPos target = body.blockPosition().offset(2, 1, 0);
-        body.serverLevel().setChunkForced(target.getX() >> 4, target.getZ() >> 4, true);
+        BlockPos placementOrigin = moveToIsolatedArena(owner, body, 224, 224, 1);
+        BlockPos target = placementOrigin.offset(2, 1, 0);
         BlockPos support = target.below();
         body.serverLevel().setBlockAndUpdate(support, Blocks.BEDROCK.defaultBlockState());
         body.serverLevel().setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
@@ -1634,7 +1641,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "PathCompanion").success(), "path test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "path test created no live body");
-        BlockPos origin = body.blockPosition();
+        BlockPos origin = moveToIsolatedArena(owner, body, 320, 320, 1);
         for (int x = -1; x <= 11; x++) {
             for (int z = -4; z <= 4; z++) {
                 body.serverLevel().setBlockAndUpdate(
@@ -1761,7 +1768,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "vertical path test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "vertical path test created no live body");
-        BlockPos origin = body.blockPosition();
+        BlockPos origin = moveToIsolatedArena(owner, body, 384, 384, 1);
         for (int x = -1; x <= 8; x++) {
             for (int z = -1; z <= 1; z++) {
                 for (int y = -1; y <= 3; y++) {
@@ -1813,7 +1820,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "swim path test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "swim path test created no live body");
-        BlockPos origin = body.blockPosition();
+        BlockPos origin = moveToIsolatedArena(owner, body, 448, 448, 1);
         for (int x = -1; x <= 8; x++) {
             for (int z = -1; z <= 1; z++) {
                 for (int y = -1; y <= 4; y++) {
@@ -1875,7 +1882,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "climb path test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "climb path test created no live body");
-        BlockPos origin = body.blockPosition();
+        BlockPos origin = moveToIsolatedArena(owner, body, 512, 512, 1);
         for (int x = -1; x <= 4; x++) {
             for (int z = -1; z <= 1; z++) {
                 for (int y = -1; y <= 5; y++) {
@@ -2164,6 +2171,41 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 () -> awaitFollowPosition(helper, body, target, ticksRemaining - 1, reached));
     }
 
+    private static BlockPos moveToIsolatedArena(
+            ServerPlayer owner,
+            CompanionPlayer body,
+            int x,
+            int z,
+            int forcedChunkRadius) {
+        Vec3 spawn = new Vec3(x + 0.5D, 100.0D, z + 0.5D);
+        // ServerPlayer teleportation updates the chunk-source ticket and entity section. A raw
+        // Entity.moveTo only changes coordinates and leaves remote fixture entities non-ticking.
+        owner.teleportTo(owner.serverLevel(), spawn.x, spawn.y, spawn.z,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), spawn.x, spawn.y, spawn.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        BlockPos origin = body.blockPosition();
+        int chunkX = origin.getX() >> 4;
+        int chunkZ = origin.getZ() >> 4;
+        for (int offsetX = -forcedChunkRadius; offsetX <= forcedChunkRadius; offsetX++) {
+            for (int offsetZ = -forcedChunkRadius; offsetZ <= forcedChunkRadius; offsetZ++) {
+                body.serverLevel().setChunkForced(chunkX + offsetX, chunkZ + offsetZ, true);
+            }
+        }
+        for (int offsetX = -4; offsetX <= 15; offsetX++) {
+            for (int offsetZ = -4; offsetZ <= 15; offsetZ++) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(offsetX, -1, offsetZ), Blocks.STONE.defaultBlockState());
+                for (int offsetY = 0; offsetY <= 3; offsetY++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(offsetX, offsetY, offsetZ), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        return origin;
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300000, batch = "companion_lifecycle")
     public void createMoveStopSleepAndWake(GameTestHelper helper) {
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
@@ -2240,15 +2282,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         // Fabric schedules the independent batches concurrently, so a transformed structure-local
         // offset can still overlap a neighboring test. Use a fixed remote arena outside the packed
         // GameTest grid; the two real player bodies keep its chunk active for the lifecycle.
-        Vec3 isolatedLifecycleSpawn = new Vec3(128.5D, body.getY(), 128.5D);
-        owner.moveTo(isolatedLifecycleSpawn.x, isolatedLifecycleSpawn.y, isolatedLifecycleSpawn.z,
-                owner.getYRot(), owner.getXRot());
-        body.moveTo(isolatedLifecycleSpawn.x, isolatedLifecycleSpawn.y, isolatedLifecycleSpawn.z,
-                body.getYRot(), body.getXRot());
-        body.setDeltaMovement(Vec3.ZERO);
-        BlockPos movementOrigin = body.blockPosition();
-        body.serverLevel().setChunkForced(
-                movementOrigin.getX() >> 4, movementOrigin.getZ() >> 4, true);
+        BlockPos movementOrigin = moveToIsolatedArena(owner, body, 128, 128, 1);
         for (int x = -2; x <= 8; x++) {
             for (int z = -2; z <= 14; z++) {
                 body.serverLevel().setBlockAndUpdate(

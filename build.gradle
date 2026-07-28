@@ -9,7 +9,13 @@ def powershellExecutable = System.getProperty('os.name').toLowerCase().contains(
         ? 'powershell' : 'pwsh'
 def isWindowsHost = System.getProperty('os.name').toLowerCase().contains('windows')
 def runProcess = { Closure configuration ->
-    providers.exec(configuration).result.get().assertNormalExitValue()
+    def execution = providers.exec(configuration)
+    def result = execution.result.get()
+    def stdout = execution.standardOutput.asText.get()
+    def stderr = execution.standardError.asText.get()
+    if (!stdout.isBlank()) logger.lifecycle(stdout.stripTrailing())
+    if (!stderr.isBlank()) logger.error(stderr.stripTrailing())
+    result.assertNormalExitValue()
 }
 def runProcessOutput = { Closure configuration ->
     def execution = providers.exec(configuration)

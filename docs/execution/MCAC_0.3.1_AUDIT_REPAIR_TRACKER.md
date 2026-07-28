@@ -62,6 +62,13 @@ and budgets; entity-backed collection returns to the managed origin, remains 2.5
 real movement is required, and waits on real server ticks. The corrected Forge 4/4 suite passes
 twice consecutively.
 
+The first exact-candidate Runtime/Fabric E2E returned a nonzero child exit after the earlier Gradle
+Provider migration, but the shared helper had suppressed both child streams, making the original
+external-orchestration cause unrecoverable. It is recorded as
+`UNDIAGNOSABLE_DUE_SUPPRESSED_CHILD_OUTPUT`, not assigned a fabricated cause. The helper now
+forwards captured stdout/stderr before enforcing normal exit, and the complete E2E passes twice
+consecutively with full child evidence.
+
 ## Evidence rules
 
 - Replay, Fake, Mock, Fixture, GameTest, dedicated-server automation, and real-backend browser

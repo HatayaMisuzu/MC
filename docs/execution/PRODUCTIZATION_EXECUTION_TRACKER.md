@@ -1,5 +1,8 @@
 # Productization execution tracker
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Updated: 2026-07-28
 Branch: `main`
 PR: `#3`

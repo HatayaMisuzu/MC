@@ -1,5 +1,8 @@
 # MCAC 0.3.0 productization closeout report
 
+Status: Superseded / Historical. This file is not the 0.3.1 audit report. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Prepared: 2026-07-28 (Asia/Shanghai)
 
 ## Outcome

@@ -1,0 +1,7 @@
+title = "MCAC secret scanning"
+
+[allowlist]
+description = "One exact repository fixture used to prove the deterministic negative gate"
+paths = [
+  '''^tools/test-fixtures/secrets/intentional-secret-shapes\.txt$'''
+]

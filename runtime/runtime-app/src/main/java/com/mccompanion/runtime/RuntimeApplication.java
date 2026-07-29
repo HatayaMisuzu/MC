@@ -162,7 +162,7 @@ public final class RuntimeApplication implements AutoCloseable {
             database.initialize();
             McpReplayRepository mcpReplay = new McpReplayRepository(database);
             int interruptedMcpRequests = mcpReplay.quarantineInterrupted();
-            McpSessionRepository mcpSessions = new McpSessionRepository(database);
+            McpSessionRepository mcpSessions = new McpSessionRepository(database, pairingToken);
             int expiredMcpSessions = mcpSessions.expire();
             McpEventRepository mcpEvents = new McpEventRepository(database);
             int prunedMcpEvents = mcpEvents.pruneInactiveSessions();
@@ -243,7 +243,6 @@ public final class RuntimeApplication implements AutoCloseable {
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
             kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
                     capabilityVisibility, memories, conversations);
-            commands.setTaskLifecycleListener(kernel);
             sessions.setListener(commands);
 
             int staleSessions = sessions.recoverStaleSessions();

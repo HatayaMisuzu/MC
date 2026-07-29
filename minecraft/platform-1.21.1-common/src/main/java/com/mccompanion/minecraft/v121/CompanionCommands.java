@@ -28,7 +28,8 @@ public final class CompanionCommands {
                 .then(Commands.literal("runtime")
                         .executes(context -> runtimeStatus(context, registryLookup)))
                 .then(Commands.literal("help")
-                        .executes(context -> success(context.getSource(), helpText())))
+                        .executes(context -> success(context.getSource(),
+                                Component.translatable("mcac.command.help"))))
                 .then(Commands.literal("create")
                         .executes(context -> ownerCommand(context, registryLookup, (registry, owner) ->
                                 registry.create(owner, null)))
@@ -71,7 +72,7 @@ public final class CompanionCommands {
         ServerPlayer owner = context.getSource().getPlayerOrException();
         String text = StringArgumentType.getString(context, "request").strip();
         if (text.isEmpty() || text.length() > 512) {
-            context.getSource().sendFailure(Component.literal("请输入 1..512 字符的伙伴请求。"));
+            context.getSource().sendFailure(Component.translatable("mcac.command.request.invalid"));
             return 0;
         }
         TextRequestResult result = gateway.submit(owner, text);
@@ -88,7 +89,7 @@ public final class CompanionCommands {
             Function<CommandSourceStack, CompanionRegistry> registryLookup) {
         CompanionRegistry registry = registryLookup.apply(context.getSource());
         if (registry == null) {
-            context.getSource().sendFailure(Component.literal("SERVER_NOT_READY: companion registry is not initialized."));
+            context.getSource().sendFailure(serverNotReady());
             return 0;
         }
         ServerPlayer player = context.getSource().getPlayer();
@@ -111,7 +112,7 @@ public final class CompanionCommands {
         ServerPlayer owner = context.getSource().getPlayerOrException();
         CompanionRegistry registry = registryLookup.apply(context.getSource());
         if (registry == null) {
-            context.getSource().sendFailure(Component.literal("SERVER_NOT_READY: companion registry is not initialized."));
+            context.getSource().sendFailure(serverNotReady());
             return 0;
         }
         CompanionRegistry.Result result = operation.apply(registry, owner);
@@ -128,9 +129,14 @@ public final class CompanionCommands {
         return 1;
     }
 
-    private static String helpText() {
-        return "/companion create [name] | spawn | despawn | remove | follow | come | goto <x> <y> <z> | "
-                + "stop | pause | resume | status | runtime | capabilities. Mutating commands control only your own companion.";
+    private static int success(CommandSourceStack source, Component message) {
+        source.sendSuccess(() -> message, false);
+        return 1;
+    }
+
+    private static Component serverNotReady() {
+        return Component.literal("SERVER_NOT_READY: ")
+                .append(Component.translatable("mcac.error.server_not_ready"));
     }
 
     @FunctionalInterface

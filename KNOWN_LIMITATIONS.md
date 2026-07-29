@@ -1,4 +1,4 @@
-# Known limitations — 0.3.0 RC
+# Known limitations — 0.3.1 RC
 
 The authoritative completion evidence is in `docs/RC_COMPLETION_MATRIX.md`. These limitations are
 kept explicit so Replay, local automation, and external verification are not confused.

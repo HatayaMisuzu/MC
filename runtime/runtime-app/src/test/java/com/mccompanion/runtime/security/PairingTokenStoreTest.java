@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.security;
 
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -20,6 +21,7 @@ class PairingTokenStoreTest {
         assertEquals(first, second);
         assertTrue(first.matches("[A-Za-z0-9_-]{32,128}"));
         assertEquals(first, Files.readString(path).trim());
+        assertTrue(OwnerOnlyFile.isOwnerOnly(path));
         assertTrue(PairingTokenStore.matches(first, second));
         assertFalse(PairingTokenStore.matches(first, second + "x"));
         assertFalse(PairingTokenStore.matches(first, null));
@@ -32,4 +34,3 @@ class PairingTokenStoreTest {
         assertThrows(java.io.IOException.class, () -> new PairingTokenStore(path).loadOrCreate());
     }
 }
-

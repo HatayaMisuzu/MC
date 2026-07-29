@@ -1,5 +1,8 @@
 # Repository productization audit
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Updated: 2026-07-27  
 Scope: current productization candidate before final clean-tree gates
 

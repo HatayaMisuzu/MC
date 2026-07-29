@@ -9,6 +9,10 @@ current candidate.
 ## Current authority
 
 - [Product status](PRODUCT_STATUS.md): reader-facing phase and support matrix.
+- [Machine-readable product truth](product/PRODUCT_TRUTH.json): version, readiness, Loader modes
+  and managed Runtime port range used by documentation validation.
+- [Brain Adapter capability matrix](product/BRAIN_ADAPTER_CAPABILITIES.json): machine-readable
+  Hermes, OpenAI-compatible and Replay differences.
 - [RC completion matrix](RC_COMPLETION_MATRIX.md): the only completion/evidence matrix.
 - [Productization baseline](product/PRODUCTIZATION_BASELINE.md): automated freeze identity,
   support boundary and immutable hotfix policy.
@@ -35,11 +39,12 @@ current candidate.
 - [MCP protocol](MCP_PROTOCOL.md)
 - [Primitive Tools](PRIMITIVE_TOOLS.md)
 - [Agent Workspace](AGENT_WORKSPACE.md)
+- [Built-in Skill scope](product/BUILTIN_SKILL_SCOPE.md)
+- [First real Compatibility Pack acceptance](compatibility/FIRST_REAL_PACK_ACCEPTANCE.md)
 
 ## Execution and history
 
-- [Current resumable execution tracker](execution/PRODUCTIZATION_EXECUTION_TRACKER.md)
-- [Compatibility/UI freeze checkpoint](execution/COMPAT_UI_PRODUCTIZATION_FREEZE_STATUS.md)
+- [0.3.1 repair execution tracker](execution/MCAC_0.3.1_AUDIT_REPAIR_TRACKER.md)
 - [Archive index](archive/INDEX.md)
 
-Execution checkpoints describe work in progress but do not replace the RC matrix.
+Older execution checkpoints are historical evidence and do not replace the RC matrix.

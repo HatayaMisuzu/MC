@@ -3,6 +3,7 @@ package com.mccompanion.terminal.runtime;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -39,6 +40,7 @@ public final class PairingService {
         Path providerFile=profile.profileDirectory().resolve("provider.json");
         var provider=Files.isRegularFile(providerFile)?JSON.readTree(providerFile.toFile()):JSON.createObjectNode().put("mode","rules");
         String mode=safe(provider.path("mode").asText("rules")),base=safe(provider.path("baseUrl").asText("https://api.openai.com")),env=safe(provider.path("apiKeyEnv").asText("MC_COMPANION_API_KEY")),model=safe(provider.path("model").asText("disabled"));
+        int providerTimeout = Math.max(1, Math.min(300, provider.path("timeoutSeconds").asInt(15)));
         Path searchFile = profile.profileDirectory().resolve("search.json");
         var search = Files.isRegularFile(searchFile) ? JSON.readTree(searchFile.toFile())
                 : JSON.createObjectNode().put("mode", "disabled");
@@ -51,7 +53,14 @@ public final class PairingService {
                 + "\n  profile_id: \"" + safe(profile.instanceId()) + "\""
                 + "\n  instance_id: \"" + safe(instance.instanceId()) + "\""
                 + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
-                + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: 60\n"
+                + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: "+providerTimeout+"\n"
+                + "brain:\n  mode: " + ("openai-compatible".equals(mode) ? "openai-compatible" : "disabled")
+                + "\n  endpoint: \"" + base + "\"\n  token_env: " + env
+                + "\n  model: \"" + model + "\"\n  timeout_seconds: " + providerTimeout
+                + "\n  max_output_tokens: 1400\n  max_tool_calls_per_turn: 8"
+                + "\n  max_requests: 24\n  max_input_tokens: 30000"
+                + "\n  max_total_output_tokens: 8000\n  max_wall_clock_minutes: 15"
+                + "\n  max_retries: 2\n"
                 + "search:\n  mode: " + searchMode + "\n  endpoint: \"" + searchEndpoint
                 + "\"\n  token_env: " + searchEnv + "\n  timeout_seconds: " + searchTimeout
                 + "\n  allowed_domains: " + yamlList(search.path("allowedDomains"))
@@ -114,23 +123,17 @@ public final class PairingService {
                 profile.profileDirectory().resolve("profile.json"));
     }
     private static String newToken() { byte[] bytes = new byte[32]; RANDOM.nextBytes(bytes); return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes); }
-    private static String readToken(Path file) throws IOException { if (!Files.isRegularFile(file)) return null; String value=Files.readString(file,StandardCharsets.US_ASCII).trim(); return value.isBlank()?null:value; }
-    private static void restore(Path file, byte[] value) throws IOException { if(value==null) Files.deleteIfExists(file); else Files.write(file,value); }
+    private static String readToken(Path file) throws IOException { if (!Files.isRegularFile(file)) return null; OwnerOnlyFile.secure(file); String value=Files.readString(file,StandardCharsets.US_ASCII).trim(); return value.isBlank()?null:value; }
+    private static void restore(Path file, byte[] value) throws IOException { if(value==null) Files.deleteIfExists(file); else { Files.write(file,value); if (file.getFileName().toString().endsWith(".token")) OwnerOnlyFile.secure(file); } }
     private static void writePrivateAtomic(Path file, String value) throws IOException {
         Files.createDirectories(file.getParent());
-        Path temporary = Files.createTempFile(file.getParent(), ".mcac-token-", ".tmp");
-        Files.writeString(temporary, value + System.lineSeparator(), StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
-        try { Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING); }
-        catch(java.nio.file.AtomicMoveNotSupportedException ignored){Files.move(temporary,file,StandardCopyOption.REPLACE_EXISTING);}
+        Path temporary = OwnerOnlyFile.createTempFile(file.getParent(), ".mcac-token-", ".tmp");
         try {
-            var acl = Files.getFileAttributeView(file, java.nio.file.attribute.AclFileAttributeView.class);
-            if (acl != null) {
-                var owner = Files.getOwner(file);
-                var entry = java.nio.file.attribute.AclEntry.newBuilder().setType(java.nio.file.attribute.AclEntryType.ALLOW)
-                        .setPrincipal(owner).setPermissions(java.util.EnumSet.allOf(java.nio.file.attribute.AclEntryPermission.class)).build();
-                acl.setAcl(java.util.List.of(entry));
-            }
-        } catch (UnsupportedOperationException ignored) { }
+            Files.writeString(temporary, value + System.lineSeparator(), StandardCharsets.US_ASCII, StandardOpenOption.TRUNCATE_EXISTING);
+            try { Files.move(temporary,file,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING); }
+            catch(java.nio.file.AtomicMoveNotSupportedException ignored){Files.move(temporary,file,StandardCopyOption.REPLACE_EXISTING);}
+            OwnerOnlyFile.secure(file);
+        } finally { Files.deleteIfExists(temporary); }
     }
     public record Snapshot(Map<Path, byte[]> files) {
         public Snapshot {

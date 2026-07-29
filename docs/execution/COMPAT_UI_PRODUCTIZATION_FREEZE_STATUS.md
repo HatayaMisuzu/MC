@@ -1,5 +1,8 @@
 # Compatibility/UI productization freeze status
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Updated: 2026-07-27
 
 This resumable checkpoint follows `MCAC_CODEX_产品化固定前主执行文件_v1.md`. It records

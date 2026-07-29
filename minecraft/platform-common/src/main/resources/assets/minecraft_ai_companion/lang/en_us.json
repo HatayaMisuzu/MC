@@ -1,0 +1,6 @@
+{
+  "mcac.chat.prefix": "[Companion] ",
+  "mcac.command.help": "/companion create [name] | spawn | despawn | remove | follow | come | goto <x> <y> <z> | stop | pause | resume | status | runtime | capabilities. Mutating commands control only your own companion.",
+  "mcac.command.request.invalid": "Enter a companion request containing 1 to 512 characters.",
+  "mcac.error.server_not_ready": "The companion registry is not initialized."
+}

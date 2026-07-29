@@ -1,6 +1,6 @@
 # MCAC user guide (English)
 
-Applies to: 0.3.0 productization candidate
+Applies to: 0.3.1 productization repair candidate
 
 ## Get started
 

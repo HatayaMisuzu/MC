@@ -124,5 +124,63 @@ class InstallTransactionTest {
         assertTrue(Files.exists(world));assertTrue(Files.exists(unrelated));
     }
 
+    @Test void repeatedJournalReplacementLeavesNoTemporaryFiles() throws Exception {
+        MinecraftInstance instance = instance();
+        Files.createDirectories(instance.modsDirectory());
+        Path managed = instance.modsDirectory().resolve("mcac.jar");
+        InstallTransaction transaction = new InstallTransaction();
+        for (int revision = 0; revision < 20; revision++) {
+            Path artifact = temp.resolve("atomic-" + revision + ".jar");
+            Files.writeString(artifact, "revision-" + revision);
+            transaction.execute(new InstallPlan(
+                    instance,
+                    artifact,
+                    managed,
+                    revision == 0 ? List.of() : List.of(managed),
+                    false,
+                    "atomic-" + revision));
+            assertEquals("revision-" + revision, Files.readString(managed));
+        }
+        Path state = instance.gameDirectory().resolve(".mccompanion");
+        assertFalse(Files.exists(state.resolve("transaction.json")));
+        try (var files = Files.list(state)) {
+            assertTrue(files.noneMatch(path -> path.getFileName().toString().startsWith(".mcac-json-")));
+        }
+    }
+
+    @Test void rejectsWindowsJunctionsForInstallAndBackupBoundaries() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(
+                System.getProperty("os.name").startsWith("Windows"));
+        MinecraftInstance instance = instance();
+        Files.createDirectories(instance.gameDirectory());
+        Path outsideMods = Files.createDirectories(temp.resolve("outside-mods"));
+        createJunction(instance.modsDirectory(), outsideMods);
+        Path artifact = temp.resolve("linked-install.jar");
+        Files.writeString(artifact, "managed");
+        InstallPlan linkedMods = new InstallPlan(instance, artifact,
+                instance.modsDirectory().resolve("mcac.jar"), List.of(), false, "linked-mods");
+        assertThrows(java.io.IOException.class, () -> new InstallTransaction().execute(linkedMods));
+        assertTrue(Files.list(outsideMods).findAny().isEmpty());
+
+        Files.delete(instance.modsDirectory());
+        Files.createDirectories(instance.modsDirectory());
+        Path outsideBackup = Files.createDirectories(temp.resolve("outside-backup"));
+        Path backup = instance.gameDirectory().resolve(".mccompanion/backups/linked-backup");
+        Files.createDirectories(backup.getParent());
+        createJunction(backup, outsideBackup);
+        InstallPlan linkedBackup = new InstallPlan(instance, artifact,
+                instance.modsDirectory().resolve("mcac.jar"), List.of(), false, "linked-backup");
+        assertThrows(java.io.IOException.class, () -> new InstallTransaction().execute(linkedBackup));
+        assertTrue(Files.list(outsideBackup).findAny().isEmpty());
+    }
+
+    private static void createJunction(Path link, Path target) throws Exception {
+        Process process = new ProcessBuilder("cmd.exe", "/c", "mklink", "/J",
+                link.toString(), target.toString()).redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes(),
+                java.nio.charset.Charset.defaultCharset());
+        assertEquals(0, process.waitFor(), "BLOCKED_BY_RUNNER_CAPABILITY: " + output);
+    }
+
     private static final class SimulatedCrash extends Error { }
 }

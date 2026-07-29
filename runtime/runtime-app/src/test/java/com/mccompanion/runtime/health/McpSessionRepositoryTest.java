@@ -23,7 +23,7 @@ class McpSessionRepositoryTest {
             database.initialize();
             Clock initial = Clock.fixed(Instant.parse("2026-07-18T00:00:00Z"), ZoneOffset.UTC);
             McpSessionRepository sessions = new McpSessionRepository(
-                    database, initial, Duration.ofHours(1), new SecureRandom());
+                    database, initial, Duration.ofHours(1), new SecureRandom(), "pairing-a");
             ToolContext owner = new ToolContext("hermes", "brain-a", "companion-a");
             String token = sessions.create(owner, "2025-06-18");
 
@@ -48,10 +48,29 @@ class McpSessionRepositoryTest {
             String expiring = sessions.create(owner, "2025-06-18");
             Clock later = Clock.fixed(Instant.parse("2026-07-18T02:00:00Z"), ZoneOffset.UTC);
             McpSessionRepository restarted = new McpSessionRepository(
-                    database, later, Duration.ofHours(1), new SecureRandom());
+                    database, later, Duration.ofHours(1), new SecureRandom(), "pairing-a");
             assertEquals(McpSessionRepository.Status.NOT_FOUND,
                     restarted.validate(expiring, owner, "2025-06-18"));
             assertEquals(1, restarted.expire());
+        }
+    }
+
+    @Test
+    void tokenRotationInvalidatesEveryPreviousPairingContextSession() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("rotation.db"))) {
+            database.initialize();
+            ToolContext owner = new ToolContext("hermes", "brain-a", "companion-a");
+            McpSessionRepository before =
+                    new McpSessionRepository(database, "old-pairing-token");
+            String oldSession = before.create(owner, "2025-06-18");
+
+            McpSessionRepository after =
+                    new McpSessionRepository(database, "replacement-pairing-token");
+            assertEquals(McpSessionRepository.Status.NOT_FOUND,
+                    after.validate(oldSession, owner, "2025-06-18"));
+            String newSession = after.create(owner, "2025-06-18");
+            assertEquals(McpSessionRepository.Status.ACTIVE,
+                    after.validate(newSession, owner, "2025-06-18"));
         }
     }
 }

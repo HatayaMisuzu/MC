@@ -30,6 +30,23 @@ pack corpus, stronger conformance evidence and, only after a separately reviewed
 bounded native extension isolation. Unknown mechanisms may remain unsupported. One fixture never
 proves universal compatibility, and Runtime Brains cannot inject code.
 
+## P0-D: Independent Controller identity and user authorization
+
+Design a separately provisioned Controller identity system with credential enrollment, rotation,
+revocation, recovery and audit, then define explicit user-to-Companion authorization policy. The
+design must preserve nondifferentiating denial, least privilege and local recovery without treating
+caller-supplied identity headers as authentication. This is a separate reviewed architecture item;
+0.3.1 keeps the pairing-token and exact session-scope boundary honestly `PARTIAL`.
+
+## P0-E: Brain-selected route construction
+
+Design opt-in route construction for digging, bridging and pillaring without placing strategy in
+the navigator. The external Brain must select the route-construction strategy and exact targets;
+deterministic primitive executors enforce block allow/deny policy, inventory and distance budgets,
+hazard checks, ownership, cancellation and verified world deltas. Acceptance requires both Full
+Bridge Loader suites, obstruction/valuable-block/unknown-Mod denial, restart reconciliation and no
+fabricated arrival. Until then navigation does not break or place blocks to invent a route.
+
 ## Activation gate
 
 Implementation of these directions begins only when all of the following are true:

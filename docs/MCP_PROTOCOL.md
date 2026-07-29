@@ -39,7 +39,8 @@ X-MCAC-Companion-Id: <connected companion UUID>
 The controller header is optional and defaults to `mcp`; Brain-session and companion headers
 are mandatory. These headers are routing claims, not sufficient proof of identity by themselves.
 Runtime binds the opaque session to their exact values, the negotiated version, the authenticated
-pairing context, an eight-hour absolute expiry, and durable session/task state. Cross-scope,
+pairing-token generation (stored only as a domain-separated SHA-256 hash), an eight-hour absolute
+expiry, and durable session/task state. Cross-scope,
 expired, terminated, and unknown bearers return HTTP 404 without revealing which field differed.
 A client must not reuse one Brain-session ID across independent users or tasks.
 
@@ -114,7 +115,9 @@ result-persistence failure for reconciliation.
 
 Clients can explicitly end the scoped session with HTTP `DELETE /mcp`, carrying the same
 authorization, identity, version, and session headers. Runtime returns 204 and rejects later use
-of that bearer. Session rows survive Runtime restart until termination or absolute expiry.
+of that bearer. Session rows survive an ordinary Runtime restart with the same pairing token until
+termination or absolute expiry. Pairing-token rotation changes the pairing context, so every older
+MCP session bearer is rejected as not found even if presented with the replacement pairing token.
 
 Tool calls, progress, terminal results, task/behavior revisions, and delivery state use the
 existing durable MCAC audit path. The authenticated `/brain/audit` endpoint is the current audit

@@ -1,6 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
 import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.object.builder.v1.entity.FabricDefaultAttributeRegistry;
 import net.minecraft.core.Registry;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -34,7 +35,6 @@ public final class RegistryFixtureInitializer implements ModInitializer {
             ResourceLocation.fromNamespaceAndPath("mcac_unknown_fixture", "charged_blue_item");
     public static final ResourceLocation WATCHER_ENTITY_ID =
             ResourceLocation.fromNamespaceAndPath("mcac_unknown_fixture", "watcher");
-    public static final SimpleContainer CONTAINER = new SimpleContainer(9);
     public static final Block BLUE_BLOCK = new UnknownContainerBlock(BlockBehaviour.Properties.of()
             .strength(2.0F).requiresCorrectToolForDrops());
     public static final Item BLUE_ITEM = new Item(new Item.Properties().food(new FoodProperties.Builder()
@@ -50,7 +50,13 @@ public final class RegistryFixtureInitializer implements ModInitializer {
         Registry.register(BuiltInRegistries.ITEM, BLUE_ITEM_ID, BLUE_ITEM);
         Registry.register(BuiltInRegistries.ITEM, CHARGED_ITEM_ID, CHARGED_ITEM);
         Registry.register(BuiltInRegistries.ENTITY_TYPE, WATCHER_ENTITY_ID, WATCHER_ENTITY);
-        CONTAINER.setItem(0, new net.minecraft.world.item.ItemStack(BLUE_ITEM, 2));
+        FabricDefaultAttributeRegistry.register(WATCHER_ENTITY, ArmorStand.createAttributes());
+    }
+
+    private static SimpleContainer createContainer() {
+        SimpleContainer container = new SimpleContainer(9);
+        container.setItem(0, new net.minecraft.world.item.ItemStack(BLUE_ITEM, 2));
+        return container;
     }
 
     private static final class UnknownContainerBlock extends Block {
@@ -60,7 +66,7 @@ public final class RegistryFixtureInitializer implements ModInitializer {
                                                                Player player, BlockHitResult hit) {
             if (!level.isClientSide()) player.openMenu(new SimpleMenuProvider(
                     (containerId, inventory, owner) -> new ChestMenu(MenuType.GENERIC_9x1, containerId,
-                            inventory, CONTAINER, 1), Component.literal("Unknown Fixture Container")));
+                            inventory, createContainer(), 1), Component.literal("Unknown Fixture Container")));
             return InteractionResult.sidedSuccess(level.isClientSide());
         }
     }

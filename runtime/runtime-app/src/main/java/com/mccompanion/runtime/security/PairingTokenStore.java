@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.security;
 
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -8,12 +9,9 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.Base64;
-import java.util.EnumSet;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 public final class PairingTokenStore {
@@ -41,9 +39,8 @@ public final class PairingTokenStore {
         byte[] bytes = new byte[32];
         random.nextBytes(bytes);
         String token = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        Path temporary = Files.createTempFile(parent, ".pairing-", ".token");
+        Path temporary = OwnerOnlyFile.createTempFile(parent, ".pairing-", ".token");
         try {
-            applyOwnerOnlyPermissions(temporary);
             Files.writeString(temporary, token + System.lineSeparator(), StandardCharsets.US_ASCII,
                     StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
             try {
@@ -54,7 +51,7 @@ public final class PairingTokenStore {
                 Files.deleteIfExists(temporary);
                 return readExisting();
             }
-            applyOwnerOnlyPermissions(tokenPath);
+            OwnerOnlyFile.secure(tokenPath);
             return token;
         } finally {
             Files.deleteIfExists(temporary);
@@ -68,27 +65,12 @@ public final class PairingTokenStore {
         if (!Files.isRegularFile(tokenPath, LinkOption.NOFOLLOW_LINKS)) {
             throw new IOException("Pairing token path is not a regular file");
         }
-        applyOwnerOnlyPermissions(tokenPath);
+        OwnerOnlyFile.secure(tokenPath);
         String token = Files.readString(tokenPath, StandardCharsets.US_ASCII).trim();
         if (!VALID_TOKEN.matcher(token).matches()) {
             throw new IOException("Pairing token file has an invalid format");
         }
         return token;
-    }
-
-    private static void applyOwnerOnlyPermissions(Path path) throws IOException {
-        try {
-            Set<PosixFilePermission> permissions = EnumSet.of(
-                    PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
-            Files.setPosixFilePermissions(path, permissions);
-        } catch (UnsupportedOperationException ignored) {
-            java.io.File file = path.toFile();
-            if ((!file.setReadable(false, false) || !file.setWritable(false, false)
-                    || !file.setReadable(true, true) || !file.setWritable(true, true)
-                    || !file.setExecutable(false, false)) && !Files.isReadable(path)) {
-                throw new IOException("Unable to restrict pairing token file permissions");
-            }
-        }
     }
 
     public static boolean matches(String expected, String candidate) {

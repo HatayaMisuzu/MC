@@ -1,0 +1,160 @@
+import groovy.json.JsonSlurper
+import org.gradle.api.artifacts.component.ModuleComponentIdentifier
+
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.util.jar.JarFile
+import java.util.zip.ZipFile
+
+def hex = { byte[] bytes ->
+    bytes.collect { String.format('%02x', it & 0xff) }.join()
+}
+
+def canonicalJarSha256 = { File artifact ->
+    def entryRecordHashes = []
+    new ZipFile(artifact).withCloseable { zip ->
+        def entries = Collections.list(zip.entries())
+                .findAll { !it.directory }
+        def names = new HashSet<String>()
+        def caseFoldedNames = new HashSet<String>()
+        entries.each { entry ->
+            if (!names.add(entry.name)) {
+                throw new GradleException("Duplicate ZIP entry in ${artifact.name}: ${entry.name}")
+            }
+            if (!caseFoldedNames.add(entry.name.toLowerCase(Locale.ROOT))) {
+                throw new GradleException(
+                        "Case-folded duplicate ZIP entry in ${artifact.name}: ${entry.name}")
+            }
+            def recordDigest = MessageDigest.getInstance('SHA-256')
+            byte[] name = entry.name.getBytes(StandardCharsets.UTF_8)
+            recordDigest.update(ByteBuffer.allocate(4).putInt(name.length).array())
+            recordDigest.update(name)
+            recordDigest.update(ByteBuffer.allocate(8).putLong(entry.size).array())
+            zip.getInputStream(entry).withCloseable { input ->
+                byte[] buffer = new byte[65536]
+                int count
+                while ((count = input.read(buffer)) != -1) {
+                    recordDigest.update(buffer, 0, count)
+                }
+            }
+            entryRecordHashes.add(hex(recordDigest.digest()))
+        }
+    }
+    def digest = MessageDigest.getInstance('SHA-256')
+    entryRecordHashes.sort().each {
+        digest.update(it.getBytes(StandardCharsets.US_ASCII))
+    }
+    hex(digest.digest())
+}
+
+def verifyJarSignature = { File artifact, String expectedCertificateSha256 ->
+    new JarFile(artifact, true).withCloseable { jar ->
+        def entries = Collections.list(jar.entries()).findAll { !it.directory }
+        entries.each { entry ->
+            jar.getInputStream(entry).withCloseable { input ->
+                byte[] buffer = new byte[65536]
+                while (input.read(buffer) != -1) {
+                    // Reading every byte makes JarFile perform signature verification.
+                }
+            }
+            if (!entry.name.toUpperCase(Locale.ROOT).startsWith('META-INF/')) {
+                def certificates = entry.certificates ?: []
+                def fingerprints = certificates.collect {
+                    hex(MessageDigest.getInstance('SHA-256').digest(it.encoded))
+                }
+                if (!fingerprints.contains(expectedCertificateSha256)) {
+                    throw new GradleException(
+                            "Fabric artifact entry is not signed by the pinned certificate: " +
+                                    "${artifact.name}!/${entry.name}")
+                }
+            }
+        }
+    }
+}
+
+def canonicalManifestFile = layout.projectDirectory.file('gradle/fabric-canonical-artifacts.json')
+
+def canonicalFabricVerification = tasks.register('verifyCanonicalFabricArtifacts') {
+    group = 'verification'
+    description = 'Verifies timestamp-independent hashes and the pinned Fabric signing certificate for exact trusted Fabric API JARs.'
+    inputs.file(canonicalManifestFile)
+    doLast {
+        def manifest = new JsonSlurper().parse(canonicalManifestFile.asFile)
+        if (manifest.schemaVersion != 1 ||
+                manifest.canonicalization != 'sorted-entry-record-sha256-v1' ||
+                !(manifest.fabricCertificateSha256 ==~ /[a-f0-9]{64}/)) {
+            throw new GradleException('Invalid canonical Fabric artifact manifest header')
+        }
+        if (!(manifest.artifacts instanceof List) || manifest.artifacts.size() != 47) {
+            throw new GradleException(
+                    "Expected 47 canonical Fabric artifacts, found ${manifest.artifacts?.size()}")
+        }
+
+        def expected = [:]
+        manifest.artifacts.each { item ->
+            def required = ['group', 'name', 'version', 'file', 'canonicalSha256'] as Set
+            if (item.keySet() as Set != required ||
+                    item.group != 'net.fabricmc.fabric-api' ||
+                    !(item.canonicalSha256 ==~ /[a-f0-9]{64}/)) {
+                throw new GradleException("Invalid canonical Fabric artifact row: ${item}")
+            }
+            def expectedFile = "${item.name}-${item.version}.jar"
+            if (item.file != expectedFile) {
+                throw new GradleException("Unexpected canonical Fabric artifact filename: ${item.file}")
+            }
+            def key = "${item.group}:${item.name}:${item.version}:${item.file}".toString()
+            if (expected.put(key, item) != null) {
+                throw new GradleException("Duplicate canonical Fabric artifact row: ${key}")
+            }
+        }
+
+        def resolved = [:]
+        configurations.modImplementation.incoming.artifacts.artifacts.each { artifact ->
+            if (artifact.id.componentIdentifier instanceof ModuleComponentIdentifier) {
+                def component = artifact.id.componentIdentifier as ModuleComponentIdentifier
+                def key = "${component.group}:${component.module}:${component.version}:${artifact.file.name}".toString()
+                if (expected.containsKey(key)) {
+                    File resolvedFile = artifact.file
+                    if (resolvedFile == null) {
+                        throw new GradleException("Resolved Fabric artifact has no file: ${key}")
+                    }
+                    if (resolved.put(key, resolvedFile) != null) {
+                        throw new GradleException("Duplicate resolved canonical Fabric artifact: ${key}")
+                    }
+                }
+            }
+        }
+
+        def missing = (expected.keySet() - resolved.keySet()).sort()
+        if (!missing.empty) {
+            throw new GradleException("Missing canonical Fabric artifacts: ${missing.join(';')}")
+        }
+
+        expected.keySet().sort().each { key ->
+            def item = expected[key]
+            File artifact = resolved.get(key)
+            verifyJarSignature(artifact, manifest.fabricCertificateSha256)
+            def actual = canonicalJarSha256(artifact)
+            if (actual != item.canonicalSha256) {
+                throw new GradleException(
+                        "Canonical Fabric artifact checksum mismatch for ${key}: " +
+                                "expected=${item.canonicalSha256} actual=${actual} file=${artifact}")
+            }
+        }
+        println "Canonical Fabric artifact verification passed: ${expected.size()} exact signed JARs."
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    dependsOn canonicalFabricVerification
+}
+tasks.named('build').configure {
+    dependsOn canonicalFabricVerification
+}
+tasks.named('runGameTest').configure {
+    dependsOn canonicalFabricVerification
+}
+tasks.matching { it.name == 'configureLaunch' }.configureEach {
+    dependsOn canonicalFabricVerification
+}

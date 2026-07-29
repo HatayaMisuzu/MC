@@ -1,5 +1,8 @@
 # Compatibility Host vertical slice — 2026-07-27
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 ## Outcome
 
 The first runnable compatibility-layer loop is implemented in the existing MCAC product. It does

@@ -857,6 +857,9 @@ public final class RuntimeDatabase implements AutoCloseable {
                 CREATE INDEX proactive_message_admission_scope_idx
                 ON proactive_message_admission(companion_id,created_at DESC)
                 """);
+        List<String> mcpPairingContext = List.of(
+                "ALTER TABLE mcp_session ADD COLUMN pairing_context_hash TEXT NOT NULL DEFAULT ''",
+                "CREATE INDEX mcp_session_pairing_idx ON mcp_session(pairing_context_hash,state,expires_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -887,6 +890,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(27, "persist Memory settings and user-visible history", memoryManagement),
                 new Migration(28, "persist bounded one-time generated Skill trial leases", skillTrialLease),
                 new Migration(29, "rate-limit and deduplicate evidence-bound proactive messages",
-                        proactiveMessageAdmission));
+                        proactiveMessageAdmission),
+                new Migration(30, "bind MCP sessions to pairing-token generation", mcpPairingContext));
     }
 }

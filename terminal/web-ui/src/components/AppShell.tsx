@@ -70,7 +70,7 @@ export function AppShell({ route, navigate, children }: {
       <ActionButton icon={<RefreshCw size={15} />} loading={loading} onClick={() => void refresh()}>
         {t('shell.refresh')}
       </ActionButton>
-      <span className="version">{t('shell.version', { version: status?.version ?? '0.3.0' })}</span>
+      <span className="version">{t('shell.version', { version: status?.version ?? '0.3.1' })}</span>
     </aside>
     <div className="workspace">
       <header className="topbar">

@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory;
 @Mod(MinecraftAiCompanionForge.MOD_ID)
 public final class MinecraftAiCompanionForge {
     public static final String MOD_ID = "minecraft_ai_companion";
-    public static final String MOD_VERSION = "0.3.0";
+    public static final String MOD_VERSION = "0.3.1";
     private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     private static final BootstrapCapabilityReport CAPABILITIES = new BootstrapCapabilityReport(
             MOD_VERSION,

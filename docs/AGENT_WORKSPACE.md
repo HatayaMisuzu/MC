@@ -10,11 +10,14 @@ Current Tool surface:
 skill.list
 skill.read
 skill.save_draft
+skill.restore_draft
 skill.validate
 skill.request_promotion
+skill.request_trial
 skill.disable
 skill.rollback
 skill.execute
+skill.execute_trial
 ```
 
 `skill.save_draft` accepts only a bounded declarative JSON/YAML Task Graph document and stores it
@@ -22,6 +25,12 @@ as `QUARANTINED`. `skill.validate` parses the stored document with the real Task
 validates it against the current Runtime node set, Tool definitions, permissions, and input
 schemas. A successful validation reports `GENERATED_VALIDATED`; it does not promote or execute the
 draft and does not grant additional permissions.
+
+`skill.restore_draft` restores an integrity-checked retained version as a new monotonic
+`QUARANTINED` draft. `skill.request_trial` can create a one-use, short-lived, exact-scope lease for
+a validated draft that uses only the documented low-risk permissions; `skill.execute_trial`
+consumes that lease through the same persistent Task Graph Runtime. Trials do not approve or
+promote a Skill and the local management user can revoke them.
 
 `skill.request_promotion` persists a numbered `PENDING_REVIEW` version with the controller and
 Brain session, graph provenance, declared permissions, complete validation result, and document

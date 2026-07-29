@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -24,6 +25,9 @@ import java.util.List;
 public final class InstallTransaction {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final Object[] JVM_LOCKS = new Object[64];
+    private static final boolean WINDOWS =
+            System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows");
+    private static final int WINDOWS_ATOMIC_MOVE_ATTEMPTS = 6;
     static {
         java.util.Arrays.setAll(JVM_LOCKS, ignored -> new Object());
     }
@@ -59,6 +63,7 @@ public final class InstallTransaction {
         Files.createDirectories(plan.instance().modsDirectory());
         assertNoReparseEscape(game, plan.instance().modsDirectory());
         Files.createDirectories(backup);
+        assertNoReparseEscape(game, backup);
         Path temporary = plan.destination().resolveSibling(plan.destination().getFileName() + ".mcac.tmp");
         Path manifest = state.resolve("install-manifest.json");
         Path previousManifest = state.resolve("transaction-previous-manifest.json");
@@ -110,6 +115,7 @@ public final class InstallTransaction {
             recoverInterrupted(game, state);
             Path backup = state.resolve("backups").resolve(rollbackId).normalize();
             requireInside(backup, state.resolve("backups"), "Unknown rollback point");
+            assertNoReparseEscape(game, backup);
             if (!Files.isDirectory(backup)) throw new IOException("Unknown rollback point");
             deleteManagedArtifact(game, state.resolve("install-manifest.json"), false);
             Path mods = game.resolve("mods");
@@ -248,14 +254,19 @@ public final class InstallTransaction {
 
     private static Path state(Path game) throws IOException {
         Path state = game.resolve(".mccompanion");
-        if (Files.exists(state)) assertNoReparseEscape(game, state);
+        if (Files.exists(state, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            assertNoReparseEscape(game, state);
+        }
         Files.createDirectories(state);
         return state;
     }
 
     private static void assertNoReparseEscape(Path game, Path path) throws IOException {
         Path existing = path;
-        while (existing != null && !Files.exists(existing)) existing = existing.getParent();
+        while (existing != null
+                && !Files.exists(existing, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            existing = existing.getParent();
+        }
         if (existing == null || !existing.toRealPath().startsWith(game.toRealPath())) {
             throw new IOException("Managed path escapes game directory through a link, junction or reparse point");
         }
@@ -263,8 +274,12 @@ public final class InstallTransaction {
         Path relative = game.relativize(path.toAbsolutePath().normalize());
         for (Path component : relative) {
             current = current.resolve(component);
-            if (Files.exists(current) && (Files.isSymbolicLink(current)
-                    || Files.readAttributes(current, java.nio.file.attribute.BasicFileAttributes.class).isOther())) {
+            if (Files.exists(current, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                    && (Files.isSymbolicLink(current)
+                    || Files.readAttributes(current, java.nio.file.attribute.BasicFileAttributes.class,
+                            java.nio.file.LinkOption.NOFOLLOW_LINKS).isOther()
+                    || !current.toRealPath(java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                            .equals(current.toRealPath()))) {
                 throw new IOException("Managed path contains a link, junction or reparse point: " + component);
             }
         }
@@ -293,13 +308,47 @@ public final class InstallTransaction {
 
     private static void atomicJson(JsonNode node, Path destination) throws IOException {
         Path temporary = Files.createTempFile(destination.getParent(), ".mcac-json-", ".tmp");
-        JSON.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), node);
-        atomicMove(temporary, destination);
+        IOException pending = null;
+        try {
+            Files.write(temporary, JSON.writerWithDefaultPrettyPrinter().writeValueAsBytes(node),
+                    StandardOpenOption.TRUNCATE_EXISTING);
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                channel.force(true);
+            }
+            atomicMove(temporary, destination);
+        } catch (IOException failure) {
+            pending = failure;
+            throw failure;
+        } finally {
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (IOException cleanupFailure) {
+                if (pending == null) throw cleanupFailure;
+                pending.addSuppressed(cleanupFailure);
+            }
+        }
     }
 
     private static void atomicMove(Path from, Path to) throws IOException {
-        try { Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-        catch (AtomicMoveNotSupportedException ignored) { Files.move(from, to, StandardCopyOption.REPLACE_EXISTING); }
+        int attempts = WINDOWS ? WINDOWS_ATOMIC_MOVE_ATTEMPTS : 1;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            try {
+                Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                return;
+            } catch (AtomicMoveNotSupportedException ignored) {
+                Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+                return;
+            } catch (FileSystemException failure) {
+                if (!WINDOWS || attempt + 1 >= attempts || !Files.exists(from)) throw failure;
+                try {
+                    Thread.sleep(20L << attempt);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    failure.addSuppressed(interrupted);
+                    throw failure;
+                }
+            }
+        }
     }
 
     private static <T> T locked(Path game, IoSupplier<T> operation) throws IOException {

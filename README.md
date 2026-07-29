@@ -1,4 +1,4 @@
-# Minecraft AI Companion 0.3.0
+# Minecraft AI Companion 0.3.1
 
 Minecraft AI Companion（MCAC）是面向 PCL2/HMCL 的 Windows 本地 Minecraft 身体与控制中心。
 Hermes、DeepSeek 或其他外部 LLM/Agent 是唯一高层决策者；MCAC 提供通用 Minecraft
@@ -8,7 +8,8 @@ MCAC 不是内置高层 Agent，也不是隐藏 Planner。
 本版本以 Fabric 1.21.1 与 Forge 1.20.1 双 Full Runtime Bridge 为自动化产品目标；
 NeoForge 1.21.1 保持 `LOCAL_ONLY`。自动化验证负责安装、Runtime、Task Graph、Skill
 Workspace、兼容层、诊断和恢复边界；Live Brain 验证与真人启动器/游玩测试明确留到
-产品化冻结基线建立后执行。
+产品化冻结基线建立后执行。机器可读的当前产品事实位于
+[PRODUCT_TRUTH.json](docs/product/PRODUCT_TRUTH.json)。
 自动化证据与外部待验证项以 [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md) 为准。
 
 ## 使用发布包

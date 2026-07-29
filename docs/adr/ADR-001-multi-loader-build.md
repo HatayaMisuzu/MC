@@ -1,5 +1,8 @@
 # ADR-001: Isolated loader builds with a shared semantic core
 
+Status: Historical accepted decision. Current product truth:
+`docs/product/PRODUCT_TRUTH.json` and `docs/RC_COMPLETION_MATRIX.md`.
+
 ## Status
 
 Accepted for Alpha 0.1.
@@ -21,4 +24,3 @@ root Gradle entry points.
 
 Numen and Baritone are research references only. They are not dependencies,
 metadata requirements, reflected runtime types, or installation prerequisites.
-

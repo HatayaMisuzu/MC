@@ -55,7 +55,14 @@ $env:MCAC_LIVE_BRAIN_MAX_WALL_CLOCK_MINUTES = '15'
 $env:MCAC_LIVE_BRAIN_MAX_RETRIES = '2'
 ```
 
-Rerun Doctor. `brain.provider`, `brain.live_credentials`, `brain.validation_budget`, `mcp.protocol`,
+Apply the provider reference to the managed Runtime profile, then rerun Doctor:
+
+```powershell
+.\mcac.exe runtime restart <instance-id>
+.\mcac.exe doctor <instance-id>
+```
+
+`brain.provider`, `brain.live_credentials`, `brain.validation_budget`, `mcp.protocol`,
 `registry.generic_tools`, `memory.episode_capsules`, and `memory.candidate_review` must be reviewed.
 An absent credential must remain an honest `BLOCKED_BY_CREDENTIALS`, never a simulated pass.
 

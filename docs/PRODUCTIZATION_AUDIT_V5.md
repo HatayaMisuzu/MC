@@ -1,5 +1,8 @@
 # Productization closure v5 audit
 
+Status: Superseded / Historical. This file is not current status. Current truth:
+`docs/PRODUCT_STATUS.md` and `docs/RC_COMPLETION_MATRIX.md`.
+
 Updated: 2026-07-22
 Audited source baseline: `1a3fab4a022fbd5380041e992e7baf82bd8d4581`
 Execution contract: `MCAC_CODEX_PRODUCTIZATION_CLOSURE_v5.md` (external execution contract)

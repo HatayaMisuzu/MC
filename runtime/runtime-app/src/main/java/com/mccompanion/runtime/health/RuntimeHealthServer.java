@@ -177,7 +177,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server = HttpServer.create(new InetSocketAddress(config.server.bind, config.server.managementPort), 8);
         server.createContext("/health", this::health);
         server.createContext("/commands", this::commands);
-        server.createContext("/agent", exchange -> dispatchPlanning(exchange, this::agent));
+        server.createContext("/agent", this::legacyAgentClosed);
         server.createContext("/brain", this::brainDispatch);
         server.createContext("/tasks", this::tasks);
         server.createContext("/plans", this::plans);
@@ -326,7 +326,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ObjectNode capabilities = Json.object();
         capabilities.set("tools", Json.object().put("listChanged", false));
         result.set("capabilities", capabilities);
-        result.set("serverInfo", Json.object().put("name", "mcac-runtime").put("version", "0.3.0"));
+        result.set("serverInfo", Json.object().put("name", "mcac-runtime").put("version", "0.3.1"));
         return result;
     }
 
@@ -1117,6 +1117,17 @@ public final class RuntimeHealthServer implements AutoCloseable {
         }
     }
 
+    private void legacyAgentClosed(HttpExchange exchange) throws IOException {
+        try (exchange) {
+            if (!authenticated(exchange)) return;
+            sendJson(exchange, 410, Json.object().put("accepted", false)
+                    .put("code", "INTERNAL_AGENT_REMOVED")
+                    .put("message", "Use the configured external Brain through /brain or bounded MCP tools."));
+        }
+    }
+
+    /** Historical migration implementation; no HTTP context or production caller is bound to it. */
+    @Deprecated(forRemoval = true)
     private void agent(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;

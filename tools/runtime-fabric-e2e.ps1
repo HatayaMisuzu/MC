@@ -172,16 +172,22 @@ function Wait-RuntimeTaskState([string]$pairingToken, [string]$taskId, [string]$
     throw "Runtime task did not reach $expected in time (last=$lastState$transport)."
 }
 
-function Invoke-AgentRequest([string]$pairingToken, [string]$companionId, [string]$text) {
+function Assert-InternalAgentRemoved([string]$pairingToken, [string]$companionId) {
     $body = @{
-        commandId = "e2e-agent-$([Guid]::NewGuid())"
+        commandId = "e2e-removed-agent-$([Guid]::NewGuid())"
         companionId = $companionId
-        text = $text
+        text = 'This retired endpoint must not plan.'
         execute = $true
     } | ConvertTo-Json -Compress -Depth 10
-    return Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:18766/agent' -Headers @{
-        Authorization = "Bearer $pairingToken"
-    } -ContentType 'application/json' -Body $body -TimeoutSec 15
+    try {
+        $null = Invoke-WebRequest -Method Post -Uri 'http://127.0.0.1:18766/agent' -Headers @{
+            Authorization = "Bearer $pairingToken"
+        } -ContentType 'application/json' -Body $body -TimeoutSec 15
+        throw 'Retired internal Agent endpoint unexpectedly accepted a request.'
+    } catch {
+        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        if ($status -ne 410) { throw }
+    }
 }
 
 function Invoke-ExternalBrainRequest([string]$pairingToken, [string]$companionId, [string]$text) {
@@ -430,39 +436,6 @@ function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
     throw "Runtime did not persist a waiting question after the verified shortage.$transport"
 }
 
-function Wait-AgentPlan(
-    [string]$pairingToken,
-    [string]$planId,
-    [string]$expectedState,
-    [int]$minimumPlanningRevision,
-    [string]$expectedCapability
-) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(15)
-    $snapshot = $null
-    $lastInspectionError = $null
-    do {
-        try {
-            $snapshot = Invoke-RestMethod -Uri "http://127.0.0.1:18766/plans/$planId" -Headers @{
-                Authorization = "Bearer $pairingToken"
-            } -TimeoutSec 3
-            $lastInspectionError = $null
-            $plan = $snapshot.plan
-            $current = @($plan.steps | Where-Object { $_.index -eq $plan.currentStep })[0]
-            if ($plan.state -eq $expectedState -and $plan.planningRevision -ge $minimumPlanningRevision -and
-                ($expectedState -ne 'RUNNING' -or $current.taskId) -and
-                (-not $expectedCapability -or $current.definition.capability -eq $expectedCapability)) {
-                return $snapshot
-            }
-        } catch {
-            $lastInspectionError = $_.Exception.Message
-        }
-        Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $deadline)
-    $lastState = if ($snapshot) { $snapshot.plan.state } else { 'unavailable' }
-    $transport = if ($lastInspectionError) { "; lastInspectionError=$lastInspectionError" } else { '' }
-    throw "Plan $planId did not reach state=$expectedState revision>=$minimumPlanningRevision capability=$expectedCapability (last=$lastState$transport)."
-}
-
 $runtime = $null
 $game = $null
 $provider = $null
@@ -478,7 +451,6 @@ $brainProviderOut = $null
 $brainProviderErr = $null
 $commandEvidence = @()
 $conversationEvidence = $null
-$goalModificationEvidence = $null
 $externalBrainEvidence = $null
 $representativeTaskGraphEvidence = $null
 $primitiveEquivalenceEvidence = $null
@@ -1453,30 +1425,8 @@ try {
     $providerErr = $provider.StandardError.ReadToEndAsync()
     Wait-TestTcpListener $provider 18767 'Replay provider'
 
-    Write-Output '[runtime-e2e] exercising in-flight owner goal modification'
-    $probePlan = Invoke-AgentRequest $pairingToken $companionId 'Start the modification probe target'
-    if (-not $probePlan.accepted -or -not $probePlan.planId) { throw 'Goal-modification probe plan was rejected.' }
-    $probeRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 0 'FollowOwner'
-    $probeTaskId = @($probeRunning.plan.steps | Where-Object { $_.index -eq $probeRunning.plan.currentStep })[0].taskId
-    $null = Wait-RuntimeTaskState $pairingToken $probeTaskId 'RUNNING'
-    # Freeze the unfinished probe through the real control path. This removes the accelerated
-    # GameTest tick rate from the goal-modification race while preserving an active original task.
-    $pauseProbe = Invoke-RuntimeCommand $pairingToken $companionId 'STOP' @{ action = 'pause' } 'pause modification probe'
-    if (-not $pauseProbe.accepted) { throw "Goal-modification probe could not be paused: $($pauseProbe.code)" }
-    $probePaused = Wait-RuntimeTaskState $pairingToken $probeTaskId 'PAUSED'
-    $modified = Invoke-AgentRequest $pairingToken $companionId 'Change goal and follow owner instead'
-    if (-not $modified.accepted -or -not $modified.goalModified -or $modified.planId -ne $probePlan.planId) {
-        throw 'Owner goal modification did not revise the original plan id.'
-    }
-    $modifiedRunning = Wait-AgentPlan $pairingToken $probePlan.planId 'RUNNING' 1 'FollowOwner'
-    $cancelModified = Invoke-RuntimeCommand $pairingToken $companionId 'STOP' @{ action = 'cancel' } 'cancel modified probe'
-    if (-not $cancelModified.accepted) { throw 'Modified follow plan could not be cancelled before Brain scenario.' }
-    $modifiedCancelled = Wait-AgentPlan $pairingToken $probePlan.planId 'CANCELLED' 1 ''
-    $goalModificationEvidence = [pscustomobject]@{
-        initial = $probePlan; paused = $probePaused; modification = $modified
-        running = $modifiedRunning; cancelled = $modifiedCancelled
-    }
-    Write-Output '[runtime-e2e] same-plan target modification activated and cancelled safely'
+    Assert-InternalAgentRemoved $pairingToken $companionId
+    Write-Output '[runtime-e2e] retired internal Agent endpoint remained closed'
 
     Write-Output '[runtime-e2e] starting Hermes replay and exercising asynchronous External Brain chain'
     $brainScript = Join-Path $root 'tools\hermes-replay-server.ps1'
@@ -1562,8 +1512,6 @@ try {
         ($commandEvidence | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\external-brain-chain.json'),
         ($externalBrainEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\goal-modification.json'),
-        ($goalModificationEvidence | ConvertTo-Json -Depth 30), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\representative-task-graph.json'),
         ($representativeTaskGraphEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\primitive-equivalence.json'),
@@ -1621,11 +1569,6 @@ try {
         }).Count -ne 0 -or
         $primitiveEquivalenceEvidence.liveModel) {
         throw 'Primitive equivalence evidence is missing or has an invalid verification classification.'
-    }
-    if (-not $goalModificationEvidence -or
-        $goalModificationEvidence.modification.planId -ne $goalModificationEvidence.initial.planId -or
-        $goalModificationEvidence.running.plan.steps[$goalModificationEvidence.running.plan.currentStep].definition.capability -ne 'FollowOwner') {
-        throw 'Goal modification evidence did not activate the revised capability on the original plan.'
     }
     if ($runtimeStderr -match 'Invalid CompanionStatus payload' -or $runtimeStdout -match 'Invalid CompanionStatus payload') {
         throw 'Runtime rejected a CompanionStatus payload during E2E.'

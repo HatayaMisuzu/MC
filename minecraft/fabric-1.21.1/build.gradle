@@ -14,6 +14,16 @@ repositories {
     mavenCentral()
 }
 
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+tasks.register('resolveAndLockAll') {
+    doLast {
+        configurations.matching { it.canBeResolved }.each { it.resolve() }
+    }
+}
+
 sourceSets {
     gametest {
         compileClasspath += main.output + main.compileClasspath
@@ -54,6 +64,7 @@ loom {
 sourceSets.main.java.srcDir('../platform-bootstrap-common/src/main/java')
 sourceSets.main.java.srcDir('../platform-1.21.1-common/src/main/java')
 sourceSets.main.java.srcDir('../navigation-common/src/main/java')
+sourceSets.main.resources.srcDir('../platform-common/src/main/resources')
 
 dependencies {
     minecraft "com.mojang:minecraft:${minecraft_version}"
@@ -112,6 +123,7 @@ publishing {
 }
 
 apply from: rootProject.file('../gradle/launch-test.gradle')
+apply from: rootProject.file('gradle/canonical-fabric-verification.gradle')
 
 tasks.named('runGameTest').configure {
     doFirst {

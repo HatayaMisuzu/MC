@@ -158,18 +158,7 @@ public final class RuntimeCli implements AutoCloseable {
         if (words.length < 3 || words[2].isBlank()) {
             throw new IllegalArgumentException("ask requires: ask <companion> <request>");
         }
-        String companionId = resolveCompanionId(words[1]);
-        AgentContext context = agentContext(companionId);
-        var planning = providers.plan(words[2], context);
-        if (!planning.accepted()) {
-            output.println(planning.errorCode() + ": " + planning.userMessage());
-            return true;
-        }
-        if (planning.executableIntent().isPresent()) {
-            printReply(commands.execute(commandId(), companionId, planning.executableIntent().get()));
-        } else {
-            output.println(Json.write(Json.MAPPER.valueToTree(planning.decision())));
-        }
+        output.println("EXTERNAL_BRAIN_REQUIRED: use the /brain or MCP integration.");
         return true;
     }
 

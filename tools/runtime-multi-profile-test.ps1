@@ -1,8 +1,19 @@
-[CmdletBinding()]param([Parameter(Mandatory=$true)][string]$ReleaseDir)
-$ErrorActionPreference='Stop';$testHome=Join-Path (Split-Path $ReleaseDir -Parent) 'runtime-multi-profile-test'
+[CmdletBinding()]
+param([Parameter(Mandatory=$true)][string]$ReleaseDir)
+
+$ErrorActionPreference='Stop'
+$testHome=Join-Path (Split-Path $ReleaseDir -Parent) 'runtime-multi-profile-test'
 Add-Type -AssemblyName System.Net.Http
-if(Test-Path $testHome){Remove-Item -LiteralPath $testHome -Recurse -Force};New-Item -ItemType Directory -Path $testHome|Out-Null
-function New-Profile([string]$id,[int]$port){$dir=Join-Path $testHome $id;New-Item -ItemType Directory -Path $dir|Out-Null;$bytes=New-Object byte[] 32;$rng=[Security.Cryptography.RandomNumberGenerator]::Create();try{$rng.GetBytes($bytes)}finally{$rng.Dispose()};$token=[Convert]::ToBase64String($bytes).Replace('+','-').Replace('/','_').TrimEnd('=');Set-Content -LiteralPath (Join-Path $dir 'pairing.token') -Value $token -Encoding ascii;@"
+
+if(Test-Path -LiteralPath $testHome){
+    Remove-Item -LiteralPath $testHome -Recurse -Force
+}
+New-Item -ItemType Directory -Path $testHome | Out-Null
+
+function New-Profile([string]$id,[int]$port){
+    $dir=Join-Path $testHome $id
+    New-Item -ItemType Directory -Path $dir | Out-Null
+@"
 server:
   bind: 127.0.0.1
   port: $port
@@ -23,24 +34,93 @@ provider:
 logging:
   file: ./runtime.log
   console: false
-"@|Set-Content -LiteralPath (Join-Path $dir 'runtime.yml') -Encoding utf8;return @{Dir=$dir;Token=$token;Id=$id;Port=$port}}
-function Port([int]$p){$c=[Net.Sockets.TcpClient]::new();try{$c.Connect('127.0.0.1',$p);return $true}catch{return $false}finally{$c.Dispose()}}
+"@ | Set-Content -LiteralPath (Join-Path $dir 'runtime.yml') -Encoding utf8
+
+    return @{
+        Dir=$dir
+        Token=$null
+        TokenPath=Join-Path $dir 'pairing.token'
+        Id=$id
+        Port=$port
+        Stdout=Join-Path $dir 'runtime.stdout.log'
+        Stderr=Join-Path $dir 'runtime.stderr.log'
+    }
+}
+
+function Tail([string]$path){
+    if(Test-Path -LiteralPath $path){
+        return (Get-Content -LiteralPath $path -Tail 100 -ErrorAction SilentlyContinue) -join [Environment]::NewLine
+    }
+    return '<missing>'
+}
+
+function Assert-Alive($process,$profile){
+    if($process -and $process.HasExited){
+        throw "Runtime profile '$($profile.Id)' exited before acceptance. Exit=$($process.ExitCode)`nSTDOUT:`n$(Tail $profile.Stdout)`nSTDERR:`n$(Tail $profile.Stderr)`nRUNTIME:`n$(Tail (Join-Path $profile.Dir 'runtime.log'))"
+    }
+}
+
+function Try-LoadRuntimeGeneratedToken($profile){
+    if($profile.Token){return $true}
+    if(-not (Test-Path -LiteralPath $profile.TokenPath -PathType Leaf)){return $false}
+
+    $token=[IO.File]::ReadAllText($profile.TokenPath,[Text.Encoding]::ASCII).Trim()
+    if($token -notmatch '^[A-Za-z0-9_-]{32,128}$'){
+        throw "Runtime generated an invalid pairing token for profile '$($profile.Id)'"
+    }
+    $profile.Token=$token
+    return $true
+}
+
 function Health-Snapshot($profile){
-    $headers=@{Authorization="Bearer $($profile.Token)"}
-    return Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 -Headers $headers `
+    if(-not $profile.Token){throw "Profile '$($profile.Id)' has no generated token yet"}
+    Invoke-RestMethod -UseBasicParsing -TimeoutSec 2 `
+        -Headers @{Authorization="Bearer $($profile.Token)"} `
         -Uri "http://127.0.0.1:$($profile.Port + 10000)/health"
 }
+
 function Health($profile){
-    try {
+    if(-not $profile.Token){return $false}
+    try{
         $result=Health-Snapshot $profile
-        return $result.profileId -eq $profile.Id -and $result.instanceId -eq $profile.Id -and
-            $result.protocolVersion -eq 'mc-companion/1' -and $result.port -eq $profile.Port -and
+        return $result.profileId -eq $profile.Id -and
+            $result.instanceId -eq $profile.Id -and
+            $result.protocolVersion -eq 'mc-companion/1' -and
+            $result.port -eq $profile.Port -and
             $result.taskGraph.status -eq 'READY'
-    } catch { return $false }
+    }catch{
+        return $false
+    }
 }
+
+function Write-FailureSummary($a,$b,$pa,$pb,[string]$reason){
+    $summary=[ordered]@{
+        reason=$reason
+        generatedAt=[DateTimeOffset]::UtcNow.ToString('o')
+        profiles=@()
+    }
+    foreach($pair in @(@($a,$pa),@($b,$pb))){
+        $profile=$pair[0]
+        $process=$pair[1]
+        $summary.profiles += [ordered]@{
+            id=$profile.Id
+            port=$profile.Port
+            tokenFileCreated=(Test-Path -LiteralPath $profile.TokenPath -PathType Leaf)
+            processId=if($process){$process.Id}else{$null}
+            exited=if($process){$process.HasExited}else{$null}
+            exitCode=if($process -and $process.HasExited){$process.ExitCode}else{$null}
+            stdout=$profile.Stdout
+            stderr=$profile.Stderr
+            runtimeLog=(Join-Path $profile.Dir 'runtime.log')
+        }
+    }
+    $summary | ConvertTo-Json -Depth 6 |
+        Set-Content -LiteralPath (Join-Path $testHome 'failure-summary.json') -Encoding utf8
+}
+
 function New-McpSession($profile){
     $client=[Net.Http.HttpClient]::new()
-    try {
+    try{
         $request=[Net.Http.HttpRequestMessage]::new(
             [Net.Http.HttpMethod]::Post,
             "http://127.0.0.1:$($profile.Port + 10000)/mcp")
@@ -48,22 +128,31 @@ function New-McpSession($profile){
         $request.Headers.Add('X-MCAC-Companion-Id',"telemetry-$($profile.Id)")
         $request.Headers.Add('X-MCAC-Brain-Session-Id',"telemetry-$($profile.Id)")
         $body=@{
-            jsonrpc='2.0';id="init-$($profile.Id)";method='initialize'
+            jsonrpc='2.0'
+            id="init-$($profile.Id)"
+            method='initialize'
             params=@{
-                protocolVersion='2025-06-18';capabilities=@{}
+                protocolVersion='2025-06-18'
+                capabilities=@{}
                 clientInfo=@{name='mcac-multi-profile-test';version='test'}
             }
-        }|ConvertTo-Json -Depth 8 -Compress
+        } | ConvertTo-Json -Depth 8 -Compress
         $request.Content=[Net.Http.StringContent]::new($body,[Text.Encoding]::UTF8,'application/json')
         $response=$client.SendAsync($request).GetAwaiter().GetResult()
-        try {
+        try{
             $content=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
             if(-not $response.IsSuccessStatusCode){throw "MCP initialize failed: $content"}
-            return [string]($response.Headers.GetValues('Mcp-Session-Id')|Select-Object -First 1)
-        } finally {$response.Dispose()}
-    } finally {$client.Dispose()}
+            return [string]($response.Headers.GetValues('Mcp-Session-Id') | Select-Object -First 1)
+        }finally{
+            $response.Dispose()
+            $request.Dispose()
+        }
+    }finally{
+        $client.Dispose()
+    }
 }
-function Start-Graph-Wait($profile){
+
+function Start-Wait($profile){
     $client=[Net.Http.HttpClient]::new()
     $request=[Net.Http.HttpRequestMessage]::new(
         [Net.Http.HttpMethod]::Post,
@@ -89,52 +178,82 @@ function Start-Graph-Wait($profile){
                 provenance=@{source='LOCAL_MULTI_PROFILE_TELEMETRY_TEST';liveModel=$false}
             }
         }
-    }|ConvertTo-Json -Depth 12 -Compress
+    } | ConvertTo-Json -Depth 12 -Compress
     $request.Content=[Net.Http.StringContent]::new($body,[Text.Encoding]::UTF8,'application/json')
     return @{Client=$client;Request=$request;Task=$client.SendAsync($request)}
 }
-function Complete-Graph-Wait($pending){
-    try {
+
+function Complete-Wait($pending){
+    try{
         $response=$pending.Task.GetAwaiter().GetResult()
-        $json=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult()|ConvertFrom-Json
-        $result=$json.result.structuredContent
-        if(-not $response.IsSuccessStatusCode -or $result.observation.state -ne 'SUCCEEDED'){
-            throw "Multi-profile Task Graph wait failed: $($json|ConvertTo-Json -Depth 12 -Compress)"
+        try{
+            $json=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
+            if(-not $response.IsSuccessStatusCode -or
+                $json.result.structuredContent.observation.state -ne 'SUCCEEDED'){
+                throw "Task Graph wait failed: $($json | ConvertTo-Json -Depth 12 -Compress)"
+            }
+        }finally{
+            $response.Dispose()
         }
-    } finally {
+    }finally{
         $pending.Request.Dispose()
         $pending.Client.Dispose()
     }
 }
-$a=New-Profile a 8766;$b=New-Profile b 8767;$pa=$null;$pb=$null
+
+$a=New-Profile a 8766
+$b=New-Profile b 8767
+$pa=$null
+$pb=$null
+
 try{
     $pa=Start-Process -FilePath (Join-Path $ReleaseDir 'runtime-app.exe') `
-        -ArgumentList '--config runtime.yml --no-cli' -WorkingDirectory $a.Dir -WindowStyle Hidden -PassThru
+        -ArgumentList '--config runtime.yml --no-cli' `
+        -WorkingDirectory $a.Dir -WindowStyle Hidden `
+        -RedirectStandardOutput $a.Stdout -RedirectStandardError $a.Stderr -PassThru
     $pb=Start-Process -FilePath (Join-Path $ReleaseDir 'runtime-app.exe') `
-        -ArgumentList '--config runtime.yml --no-cli' -WorkingDirectory $b.Dir -WindowStyle Hidden -PassThru
+        -ArgumentList '--config runtime.yml --no-cli' `
+        -WorkingDirectory $b.Dir -WindowStyle Hidden `
+        -RedirectStandardOutput $b.Stdout -RedirectStandardError $b.Stderr -PassThru
+
     $limit=[DateTime]::UtcNow.AddSeconds(20)
-    while(((-not (Health $a)) -or (-not (Health $b))) -and [DateTime]::UtcNow -lt $limit){
+    $healthy=$false
+    while([DateTime]::UtcNow -lt $limit){
+        Assert-Alive $pa $a
+        Assert-Alive $pb $b
+        [void](Try-LoadRuntimeGeneratedToken $a)
+        [void](Try-LoadRuntimeGeneratedToken $b)
+        if((Health $a) -and (Health $b)){
+            $healthy=$true
+            break
+        }
         Start-Sleep -Milliseconds 200
     }
-    if((-not (Health $a)) -or (-not (Health $b))){
-        throw 'Two Runtime profiles did not report matching authenticated health and Task Graph telemetry'
+
+    Assert-Alive $pa $a
+    Assert-Alive $pb $b
+    if(-not $healthy){
+        throw 'Two Runtime profiles did not create secure tokens and report matching authenticated health within the bounded startup window'
     }
 
-    $waitA=Start-Graph-Wait $a
-    $waitB=Start-Graph-Wait $b
+    $waitA=Start-Wait $a
+    $waitB=Start-Wait $b
     $telemetryLimit=[DateTime]::UtcNow.AddSeconds(5)
+    $visible=$false
     do{
         Start-Sleep -Milliseconds 100
         $healthA=Health-Snapshot $a
         $healthB=Health-Snapshot $b
-        $waitingVisible=$healthA.taskGraph.timedWaits -eq 1 -and
+        $visible=$healthA.taskGraph.timedWaits -eq 1 -and
             $healthB.taskGraph.timedWaits -eq 1 -and
             $healthA.taskGraph.durable.states.WAITING -eq 1 -and
             $healthB.taskGraph.durable.states.WAITING -eq 1
-    }while(-not $waitingVisible -and [DateTime]::UtcNow -lt $telemetryLimit)
-    if(-not $waitingVisible){throw 'Both profile-local Task Graph waits were not visible in telemetry'}
-    Complete-Graph-Wait $waitA
-    Complete-Graph-Wait $waitB
+    }while(-not $visible -and [DateTime]::UtcNow -lt $telemetryLimit)
+
+    if(-not $visible){throw 'Both profile-local Task Graph waits were not visible in telemetry'}
+    Complete-Wait $waitA
+    Complete-Wait $waitB
+
     $healthA=Health-Snapshot $a
     $healthB=Health-Snapshot $b
     if($healthA.taskGraph.durable.totalExecutions -ne 1 -or
@@ -151,9 +270,15 @@ try{
     if(-not (Health $b) -or $survivor.taskGraph.durable.totalExecutions -ne 1){
         throw 'Stopping profile A affected profile B or its Task Graph telemetry'
     }
-    Write-Output 'Runtime multi-profile test passed: isolated authenticated identity and Task Graph telemetry; stop A left B healthy.'
+
+    Write-Output 'Runtime multi-profile test passed: Runtime-created owner-only tokens, isolated authenticated identity and Task Graph telemetry; stop A left B healthy.'
+}catch{
+    Write-FailureSummary $a $b $pa $pb $_.Exception.Message
+    throw
 }finally{
-    foreach($p in @($pa,$pb)){
-        if($p -and (-not $p.HasExited)){Stop-Process -Id $p.Id -Force}
+    foreach($process in @($pa,$pb)){
+        if($process -and -not $process.HasExited){
+            Stop-Process -Id $process.Id -Force
+        }
     }
 }

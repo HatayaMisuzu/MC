@@ -57,7 +57,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 
 public final class RuntimeWebSocketServer extends WebSocketServer implements AutoCloseable {
     public static final String PROTOCOL = "mc-companion/1";
-    public static final String VERSION = "0.3.0";
+    public static final String VERSION = "0.3.1";
     private static final int MAX_MESSAGE_CHARS = 1_048_576;
     private final String pairingToken;
     private final SessionRegistry sessions;
@@ -401,6 +401,16 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         memories.verifiedLandmarkKeys(companionId),
                         visible.availableNames(), memories.preferenceContext(companionId, 24),
                         memories.latestCapsuleContext(companionId), 5);
+                if (externalBrain == null) {
+                    reply.put("accepted", false).put("source", "external-brain")
+                            .put("code", "EXTERNAL_BRAIN_UNAVAILABLE")
+                            .put("reply", "The external Brain is not configured.");
+                    reply.set("capabilityStates", visible.toJson());
+                    ObjectNode unavailable = envelope(session, "player_reply");
+                    unavailable.set("payload", reply);
+                    if (session.peer().isOpen()) session.peer().send(Json.write(unavailable));
+                    return;
+                }
                 if (externalBrain != null) {
                     if (incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION) {
                         externalBrain.pauseActiveForUserInstruction(

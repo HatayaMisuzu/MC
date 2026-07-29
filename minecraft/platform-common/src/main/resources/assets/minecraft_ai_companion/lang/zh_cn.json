@@ -1,0 +1,6 @@
+{
+  "mcac.chat.prefix": "[伙伴] ",
+  "mcac.command.help": "/companion create [名称] | spawn | despawn | remove | follow | come | goto <x> <y> <z> | stop | pause | resume | status | runtime | capabilities。会改变状态的命令只能控制你自己的伙伴。",
+  "mcac.command.request.invalid": "请输入 1 至 512 个字符的伙伴请求。",
+  "mcac.error.server_not_ready": "伙伴注册表尚未初始化。"
+}

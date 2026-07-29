@@ -116,15 +116,68 @@ class AgentWorkspaceTest {
                 .resolve(Digests.sha256("c1").substring(0, 32)).resolve("resources");
         Path outside = Files.createDirectories(temporary.resolve("outside"));
         Path link = resources.resolve("skills");
-        try {
-            Files.createSymbolicLink(link, outside);
-        } catch (IOException | UnsupportedOperationException | SecurityException unavailable) {
-            Assumptions.abort("symbolic links are unavailable on this runner");
-        }
+        createSymbolicLinkOrAbort(link, outside);
         IOException failure = assertThrows(IOException.class,
                 () -> workspace.save("c1", "skills/escape/draft.yaml", "safe"));
         assertTrue(failure.getMessage().contains("links") || failure.getMessage().contains("scope"));
         assertTrue(Files.list(outside).findAny().isEmpty());
+    }
+
+    @Test
+    void rejectsFileAndBackupLinksIntroducedAfterPriorValidation() throws Exception {
+        AgentWorkspace workspace = workspace("profile-links");
+        String logical = "skills/linked/draft.yaml";
+        workspace.save("c1", logical, "one");
+        workspace.save("c1", logical, "two");
+        Path scope = temporary.resolve("workspace")
+                .resolve(Digests.sha256("profile-links").substring(0, 32))
+                .resolve(Digests.sha256("c1").substring(0, 32));
+        Path outside = temporary.resolve("outside-file.yaml");
+        Files.writeString(outside, "outside");
+
+        Path resource = scope.resolve("resources/skills/linked/draft.yaml");
+        Files.delete(resource);
+        createSymbolicLinkOrAbort(resource, outside);
+        assertThrows(IOException.class, () -> workspace.read("c1", logical));
+        assertEquals("outside", Files.readString(outside));
+
+        Path backup = scope.resolve(".mcac-backups").resolve(Digests.sha256(logical)).resolve("1.bak");
+        Files.delete(backup);
+        createSymbolicLinkOrAbort(backup, outside);
+        assertThrows(IOException.class, () -> workspace.restore("c1", logical, 1));
+        assertEquals("outside", Files.readString(outside));
+    }
+
+    @Test
+    void rejectsWindowsJunctionWorkspaceEscape() throws Exception {
+        Assumptions.assumeTrue(System.getProperty("os.name").startsWith("Windows"));
+        Path root = temporary.resolve("junction-workspace");
+        AgentWorkspace workspace = new AgentWorkspace(root, "profile",
+                AgentWorkspace.DEFAULT_QUOTA, CLOCK);
+        workspace.list("c1", "");
+        Path resources = root.resolve(Digests.sha256("profile").substring(0, 32))
+                .resolve(Digests.sha256("c1").substring(0, 32)).resolve("resources");
+        Path outside = Files.createDirectories(temporary.resolve("junction-outside"));
+        Files.delete(resources);
+        Process process = new ProcessBuilder("cmd.exe", "/c", "mklink", "/J",
+                resources.toString(), outside.toString()).redirectErrorStream(true).start();
+        String output = new String(process.getInputStream().readAllBytes(),
+                java.nio.charset.Charset.defaultCharset());
+        assertEquals(0, process.waitFor(), "BLOCKED_BY_RUNNER_CAPABILITY: " + output);
+        assertThrows(IOException.class,
+                () -> workspace.save("c1", "skills/escape/draft.yaml", "safe"));
+        assertTrue(Files.list(outside).findAny().isEmpty());
+    }
+
+    private static void createSymbolicLinkOrAbort(Path link, Path target) throws Exception {
+        try {
+            Files.createSymbolicLink(link, target);
+        } catch (IOException | UnsupportedOperationException | SecurityException unavailable) {
+            if ("1".equals(System.getenv("MCAC_REQUIRE_WINDOWS_LINK_TESTS"))) {
+                fail("BLOCKED_BY_RUNNER_CAPABILITY: symbolic links are unavailable", unavailable);
+            }
+            Assumptions.abort("symbolic links are unavailable on this runner");
+        }
     }
 
     private AgentWorkspace workspace(String profile) {

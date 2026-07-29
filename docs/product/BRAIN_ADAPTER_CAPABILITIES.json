@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "productVersion": "0.3.1",
+  "evidenceVocabulary": ["SUPPORTED", "PARTIAL", "NOT_SUPPORTED", "TEST_ONLY", "PENDING_EXTERNAL"],
+  "adapters": [
+    {
+      "id": "hermes",
+      "protocol": "mcac-brain/1",
+      "toolCalling": "SUPPORTED",
+      "semanticState": "SUPPORTED",
+      "completionClaim": "SUPPORTED",
+      "askUser": "SUPPORTED",
+      "reconnectResume": "SUPPORTED",
+      "initiativePersonality": "SUPPORTED",
+      "mcpNativeConfiguration": "PENDING_EXTERNAL",
+      "liveEvidence": "PENDING_EXTERNAL",
+      "notes": "Strict HTTP contract and automated fixture coverage exist; no real Hermes process or credentials were used."
+    },
+    {
+      "id": "openai-compatible",
+      "protocol": "chat-completions-tool-calling",
+      "toolCalling": "SUPPORTED",
+      "semanticState": "NOT_SUPPORTED",
+      "completionClaim": "NOT_SUPPORTED",
+      "askUser": "SUPPORTED",
+      "reconnectResume": "NOT_SUPPORTED",
+      "initiativePersonality": "PARTIAL",
+      "mcpNativeConfiguration": "NOT_SUPPORTED",
+      "liveEvidence": "PENDING_EXTERNAL",
+      "notes": "Uses bounded function calling and an ask_user function; sessions are in-memory and it does not author MCAC semantic snapshots or evidence-bound completion claims."
+    },
+    {
+      "id": "replay",
+      "protocol": "in-process-scripted-fixture",
+      "toolCalling": "TEST_ONLY",
+      "semanticState": "TEST_ONLY",
+      "completionClaim": "TEST_ONLY",
+      "askUser": "TEST_ONLY",
+      "reconnectResume": "TEST_ONLY",
+      "initiativePersonality": "TEST_ONLY",
+      "mcpNativeConfiguration": "NOT_SUPPORTED",
+      "liveEvidence": "NOT_SUPPORTED",
+      "notes": "Deterministic automation only. Replay evidence is never Live-provider or human-play evidence."
+    }
+  ]
+}

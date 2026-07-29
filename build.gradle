@@ -7,14 +7,43 @@ import groovy.json.JsonSlurper
 
 def powershellExecutable = System.getProperty('os.name').toLowerCase().contains('windows')
         ? 'powershell' : 'pwsh'
+def isWindowsHost = System.getProperty('os.name').toLowerCase().contains('windows')
+def runProcess = { Closure configuration ->
+    def execution = providers.exec(configuration)
+    def result = execution.result.get()
+    def stdout = execution.standardOutput.asText.get()
+    def stderr = execution.standardError.asText.get()
+    if (!stdout.isBlank()) logger.lifecycle(stdout.stripTrailing())
+    if (!stderr.isBlank()) logger.error(stderr.stripTrailing())
+    result.assertNormalExitValue()
+}
+def runProcessOutput = { Closure configuration ->
+    def execution = providers.exec(configuration)
+    execution.result.get().assertNormalExitValue()
+    execution.standardOutput.asText.get()
+}
 
 allprojects {
     group = providers.gradleProperty('group').get()
     version = providers.gradleProperty('version').get()
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+    tasks.register('resolveAndLockAll') {
+        group = 'verification'
+        description = 'Resolves every resolvable configuration so Gradle can write complete lock state.'
+        doLast {
+            configurations.matching { it.canBeResolved }.each { it.resolve() }
+        }
+    }
 }
 
 subprojects {
     repositories { mavenCentral() }
+}
+
+tasks.named('resolveAndLockAll') {
+    dependsOn subprojects.collect { it.tasks.named('resolveAndLockAll') }
 }
 
 def platformBuilds = [
@@ -28,7 +57,7 @@ platformBuilds.each { target, directory ->
         group = 'build'
         description = "Builds ${target} in its isolated loader workspace."
         workingDir = directory
-        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        if (isWindowsHost) {
             commandLine 'cmd', '/c', 'gradlew.bat', 'clean', 'build', "-PsharedVersion=${project.version}"
         } else {
             commandLine './gradlew', 'clean', 'build', "-PsharedVersion=${project.version}"
@@ -64,7 +93,7 @@ def platformLaunchTasks = platformBuilds.collectEntries { target, directory ->
     [(target): tasks.register("launchTest-${target}", Exec) {
         group = 'verification'
         workingDir = directory
-        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        if (isWindowsHost) {
             commandLine 'cmd', '/c', 'gradlew.bat', 'launchTest'
         } else {
             commandLine './gradlew', 'launchTest'
@@ -86,7 +115,7 @@ def platformGameTests = [
     [(target): tasks.register("gameTest-${target}", Exec) {
         group = 'verification'
         workingDir = platformBuilds[target]
-        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        if (isWindowsHost) {
             commandLine 'cmd', '/c', 'gradlew.bat', taskName, '--no-daemon'
         } else {
             commandLine './gradlew', taskName, '--no-daemon'
@@ -104,7 +133,7 @@ tasks.register('runtimeFabricE2E') {
     group = 'verification'
     dependsOn ':runtime:runtime-app:installDist'
     doLast {
-        exec {
+        runProcess {
             environment 'MCAC_TEST_JAVA_HOME', System.getProperty('java.home')
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/runtime-fabric-e2e.ps1').absolutePath
@@ -117,7 +146,7 @@ tasks.register('runtimeForgeE2E') {
     description = 'Runs authenticated Runtime control against a real Forge 1.20.1 GameTest server.'
     dependsOn ':runtime:runtime-app:installDist'
     doLast {
-        exec {
+        runProcess {
             environment 'MCAC_TEST_JAVA_HOME', System.getProperty('java.home')
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/runtime-forge-e2e.ps1').absolutePath
@@ -159,7 +188,7 @@ tasks.register('realPlaySoakTest') {
 tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/fabric-persistence-restart.ps1').absolutePath
         }
@@ -169,7 +198,7 @@ tasks.register('persistenceRestartTest') {
 tasks.register('forgePersistenceRestartTest') {
     group = 'verification'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/forge-persistence-restart.ps1').absolutePath
         }
@@ -179,10 +208,88 @@ tasks.register('forgePersistenceRestartTest') {
 tasks.register('forbiddenApiCheck') {
     group = 'verification'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/forbidden-api-check.ps1').absolutePath
         }
+    }
+}
+
+tasks.register('gameTestFixtureCheck') {
+    group = 'verification'
+    description = 'Rejects GameTest fixture ownership leaks, shared mutable menu state, and manual ticks in async entity stages.'
+    doLast {
+        def fabricTests = file(
+                'minecraft/fabric-1.21.1/src/gametest/java/com/mccompanion/minecraft/v121/CompanionLifecycleGameTests.java')
+                .getText('UTF-8')
+        def fabricFixture = file(
+                'minecraft/fabric-1.21.1/src/gametest/java/com/mccompanion/minecraft/v121/RegistryFixtureInitializer.java')
+                .getText('UTF-8')
+        def forgeTests = file(
+                'minecraft/forge-1.20.1/src/main/java/com/mccompanion/minecraft/v120/CompanionLifecycleForgeGameTests.java')
+                .getText('UTF-8')
+
+        int mockOwnerCount = (fabricTests =~ /makeMockServerPlayerInLevel\(\)/).count
+        int directOwnerRemovalCount = (fabricTests =~ /registry\.remove\(owner\)/).count
+        int fixtureCleanupCallCount = (fabricTests =~ /removeFixture\(/).count - 1
+        if (mockOwnerCount == 0
+                || directOwnerRemovalCount != 1
+                || fixtureCleanupCallCount < mockOwnerCount
+                || !fabricTests.contains('getPlayerList().remove(owner)')) {
+            throw new GradleException(
+                    'Fabric GameTests must release every mock owner through the shared removeFixture boundary.')
+        }
+        if (fabricFixture.contains('static final SimpleContainer')) {
+            throw new GradleException(
+                    'GameTest menu fixtures must not share a mutable static container across batches.')
+        }
+        if (fabricTests.contains('owner.setUUID(')) {
+            throw new GradleException(
+                    'Fabric GameTests must not mutate mock-player identity after PlayerList registration.')
+        }
+        def miningStage = fabricTests.substring(
+                fabricTests.indexOf('void mineResourceVeinUsesHardnessToolDurabilityDropsAndPickup'),
+                fabricTests.indexOf('void smeltItemUsesRealFurnaceFuelTimeAndMenuResultPickup'))
+        if (!miningStage.contains('moveToIsolatedArena(owner, body, 640, 640, 1)')
+                || !miningStage.contains('miningArena.getX() - 8.5D')) {
+            throw new GradleException(
+                    'The Fabric mining fixture must isolate its arena and keep Owner outside ItemEntity pickup range.')
+        }
+        def dropStage = fabricTests.substring(
+                fabricTests.indexOf('void inventoryDropUsesVanillaPlayerDropAndVerifiesWorldEntities'),
+                fabricTests.indexOf('void entityInteractUsesVisibleReachableVanillaPlayerAction'))
+        if (!dropStage.contains('forEach(ItemEntity::discard)')) {
+            throw new GradleException('The Fabric inventory-drop fixture must discard its owned world drops.')
+        }
+        def globalNavigationStage = fabricTests.substring(
+                fabricTests.indexOf('void globalNavigationRoutesAroundDynamicWalls'),
+                fabricTests.indexOf('private static void insertDynamicObstacleAfterDoorOpens'))
+        if (globalNavigationStage.contains('succeedWhen(')) {
+            throw new GradleException(
+                    'Fabric navigation must not start asynchronous acceptance from a succeedWhen callback.')
+        }
+        def fabricCombinationStage = fabricTests.substring(
+                fabricTests.indexOf('private static void runNavigationCombinationAcceptance'),
+                fabricTests.indexOf('private static void runNavigationBoundaryAcceptance'))
+        if (fabricCombinationStage.contains('awaitBehaviorIdle(')
+                || (fabricCombinationStage =~ /awaitBehaviorIdleForChain\(/).count < 3) {
+            throw new GradleException(
+                    'Fabric chained behaviors must not mark the GameTest complete before the final boundary.')
+        }
+
+        def combinationStage = forgeTests.substring(
+                forgeTests.indexOf('private static void runNavigationCombinationAcceptance'),
+                forgeTests.indexOf('private static void runNavigationBoundaryAcceptance'))
+        if (combinationStage.contains('registry.tick()')
+                || (combinationStage =~ /awaitRuntimeBehaviorIdle\(/).count < 3) {
+            throw new GradleException(
+                    'Forge asynchronous entity/world stages must advance on real server ticks.')
+        }
+        if (!forgeTests.contains('retreatThreat.discard()')
+                || !forgeTests.contains('ownedProjectiles.forEach(Snowball::discard)')) {
+            throw new GradleException('Forge entity fixtures must discard surviving owned entities.')
+        }
+        println "GameTest fixture check passed: ${mockOwnerCount} Fabric owners use one cleanup boundary (${fixtureCleanupCallCount} terminal branches); async Forge stages use real ticks."
     }
 }
 
@@ -190,7 +297,7 @@ tasks.register('packageAlpha') {
     group = 'distribution'
     dependsOn 'build', 'test', 'forbiddenApiCheck'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/package-alpha.ps1').absolutePath
         }
@@ -201,7 +308,7 @@ tasks.register('independenceCheck') {
     group = 'verification'
     description = 'Verifies that production source, metadata, and dependency declarations do not depend on Numen or Baritone.'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/independence-check.ps1').absolutePath
         }
@@ -212,9 +319,14 @@ tasks.register('secretCheck') {
     group = 'verification'
     description = 'Fails when key-shaped secret material is present in source files.'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 file('tools/secret-check.ps1').absolutePath
+        }
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/secret-check-negative.ps1').absolutePath,
+                '-RepositoryRoot', projectDir.absolutePath
         }
     }
 }
@@ -223,9 +335,26 @@ tasks.register('documentationCheck') {
     group = 'verification'
     description = 'Verifies Markdown links, documented paths/commands, and current readiness labels.'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/documentation-check.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/documentation-check-negative.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
+    }
+}
+
+tasks.register('localizationCheck') {
+    group = 'verification'
+    description = 'Verifies bilingual Minecraft translation key parity and source references.'
+    doLast {
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/localization-check.ps1').absolutePath,
                     '-RepositoryRoot', projectDir.absolutePath
         }
     }
@@ -235,6 +364,55 @@ tasks.register('dependencyPinningCheck') {
     group = 'verification'
     description = 'Rejects dynamic top-level dependencies and mutable GitHub Action references.'
     doLast {
+        def verificationFiles = [
+                'gradle/verification-metadata.xml',
+                'minecraft/fabric-1.21.1/gradle/verification-metadata.xml',
+                'minecraft/forge-1.20.1/gradle/verification-metadata.xml',
+                'minecraft/neoforge-1.21.1/gradle/verification-metadata.xml'
+        ]
+        verificationFiles.each { relative ->
+            if (!file(relative).isFile()) {
+                throw new GradleException("Missing dependency verification metadata: ${relative}")
+            }
+        }
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/dependency-verification-trust-check.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
+        def lockFiles = [
+                'compatibility/compatibility-host/gradle.lockfile',
+                'core/pure-core/gradle.lockfile',
+                'protocol/protocol-model/gradle.lockfile',
+                'runtime/runtime-app/gradle.lockfile',
+                'terminal/diagnostics/gradle.lockfile',
+                'terminal/installer/gradle.lockfile',
+                'terminal/instance-probe/gradle.lockfile',
+                'terminal/launcher-api/gradle.lockfile',
+                'terminal/launcher-generic/gradle.lockfile',
+                'terminal/launcher-hmcl/gradle.lockfile',
+                'terminal/launcher-pcl2/gradle.lockfile',
+                'terminal/runtime-supervisor/gradle.lockfile',
+                'terminal/terminal-app/gradle.lockfile',
+                'minecraft/fabric-1.21.1/gradle.lockfile',
+                'minecraft/forge-1.20.1/gradle.lockfile',
+                'minecraft/neoforge-1.21.1/gradle.lockfile'
+        ]
+        lockFiles.each { relative ->
+            if (!file(relative).isFile()) {
+                throw new GradleException("Missing dependency lock state: ${relative}")
+            }
+        }
+        [
+                'gradle/wrapper/gradle-wrapper.properties',
+                'minecraft/fabric-1.21.1/gradle/wrapper/gradle-wrapper.properties',
+                'minecraft/forge-1.20.1/gradle/wrapper/gradle-wrapper.properties',
+                'minecraft/neoforge-1.21.1/gradle/wrapper/gradle-wrapper.properties'
+        ].each { relative ->
+            if (!(file(relative).getText('UTF-8') =~ /(?m)^distributionSha256Sum=[a-f0-9]{64}$/)) {
+                throw new GradleException("Gradle wrapper lacks a pinned distribution SHA-256: ${relative}")
+            }
+        }
         def packageFile=file('terminal/web-ui/package.json')
         def lockFile=file('terminal/web-ui/package-lock.json')
         def packageJson=new JsonSlurper().parse(packageFile)
@@ -272,20 +450,28 @@ tasks.register('dependencyPinningCheck') {
                 }
             }
         }
-        println 'Dependency pinning check passed: npm roots, Gradle declarations, and Actions are immutable.'
+        println 'Dependency pinning check passed: npm roots, Gradle locks/verification/wrappers, and Actions are immutable.'
     }
+}
+
+tasks.register('gradle9CompatibilityProbe', Exec) {
+    group = 'verification'
+    description = 'Runs the shared release checks with the SHA-verified Gradle 9 probe distribution.'
+    commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            file('tools/gradle9-compatibility-probe.ps1').absolutePath,
+            '-RepositoryRoot', projectDir.absolutePath
 }
 
 tasks.named('check') {
     dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck',
-            'documentationCheck', 'dependencyPinningCheck'
+            'documentationCheck', 'localizationCheck', 'dependencyPinningCheck', 'gameTestFixtureCheck'
 }
 
 def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')
 def terminalInput = layout.buildDirectory.dir('tmp/jpackage-terminal-input')
 def terminalJpackage = layout.buildDirectory.dir('tmp/jpackage-terminal-output')
 
-def npmCommand = org.gradle.internal.os.OperatingSystem.current().isWindows() ? 'npm.cmd' : 'npm'
+def npmCommand = isWindowsHost ? 'npm.cmd' : 'npm'
 
 tasks.register('webInstall', Exec) {
     group = 'build'
@@ -362,6 +548,9 @@ tasks.register('stageTerminal') {
             from('CODEX_EXECUTION.md')
             from('docs/INDEX.md') { into 'docs' }
             from('docs/PRODUCT_STATUS.md') { into 'docs' }
+            from('docs/product/PRODUCT_TRUTH.json') { into 'docs/product' }
+            from('docs/product/BRAIN_ADAPTER_CAPABILITIES.json') { into 'docs/product' }
+            from('docs/product/BUILTIN_SKILL_SCOPE.md') { into 'docs/product' }
             from('docs/ARCHITECTURE.md') { into 'docs' }
             from('docs/COMPATIBILITY.md') { into 'docs' }
             from('docs/CONTROL_TERMINAL.md') { into 'docs' }
@@ -379,12 +568,10 @@ tasks.register('stageTerminal') {
         def root=terminalImage.get().asFile
         def sha256={f->java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()}
         def relative={f->root.toPath().relativize(f.toPath()).toString().replace('\\','/')}
-        def stdout=new ByteArrayOutputStream()
-        exec { commandLine 'git','rev-parse','HEAD'; standardOutput=stdout }
-        def sourceCommit=stdout.toString('UTF-8').trim()
-        def timestampOutput=new ByteArrayOutputStream()
-        exec { commandLine 'git','show','-s','--format=%cI',sourceCommit; standardOutput=timestampOutput }
-        def sourceTimestamp=java.time.OffsetDateTime.parse(timestampOutput.toString('UTF-8').trim()).toInstant().toString()
+        def sourceCommit=runProcessOutput { commandLine 'git','rev-parse','HEAD' }.trim()
+        def sourceTimestamp=java.time.OffsetDateTime.parse(
+                runProcessOutput { commandLine 'git','show','-s','--format=%cI',sourceCommit }.trim())
+                .toInstant().toString()
         def payload=fileTree(root).matching { include '**/*'; exclude 'SHA256SUMS.txt','release-manifest.json','sbom.spdx.json' }
                 .files.findAll { it.isFile() }.sort { relative(it) }
         def manifest=[schemaVersion:1,product:'Minecraft AI Companion',version:project.version.toString(),
@@ -539,7 +726,7 @@ tasks.register('releaseGoldenPathTest') {
     group='verification'
     dependsOn 'packageTerminalZip'
     doLast {
-        exec {
+        runProcess {
             commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',
                     file('tools/release-golden-path.ps1').absolutePath,
                     '-ReleaseZip',layout.buildDirectory.file('distributions/mcac-release.zip').get().asFile.absolutePath,

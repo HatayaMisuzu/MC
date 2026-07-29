@@ -23,15 +23,15 @@ playtesting.
 | Field | Value |
 |---|---|
 | Starting `main` | `ec56aca171f4bc7ffb43eca09cad07678b225163` |
-| Working branch | `codex/mcac-0.3.1-audit-repair` |
+| Working branch | `codex/mcac-0.3.1-audit-repair` (merged) |
 | Implementation candidate | `8aa284f3f44c8728658232a3cd01d75acd4ec900` |
-| Closeout SHA | Pending this evidence-only commit |
+| Final repair candidate | `5235fbb18f35c5ad7fff8ef207ff02a540588db9` |
 | Postfreeze repair candidate 1 | `c0e2fe0cf17465c1070efdc6097554cf21659f5d` |
-| Postfreeze final repair candidate | Pending the final premerge repair commit |
-| Merge SHA | `NOT_RUN` |
-| Final `main` SHA | `NOT_RUN` |
+| Merge / frozen release SHA | `747c7e8046073d9534eae6ae775645341be4cdcd` |
+| PR | [#26](https://github.com/HatayaMisuzu/MC/pull/26), ordinary merge |
 | Version | `0.3.1` |
-| Intended baseline tag | `mcac-productization-baseline-0.3.1` |
+| Annotated baseline tag | `mcac-productization-baseline-0.3.1` |
+| GitHub Release | [MCAC 0.3.1](https://github.com/HatayaMisuzu/MC/releases/tag/mcac-productization-baseline-0.3.1) |
 | Previous immutable tag | `mcac-productization-baseline-0.3.0` |
 | Previous tag target | `ec56aca171f4bc7ffb43eca09cad07678b225163` |
 
@@ -197,32 +197,31 @@ already-passing build, launch, and GameTest gates were not rerun.
 
 ## Candidate release artifacts
 
-The locally verified implementation package is in `build/distributions/` and its manifest declares
-the exact implementation candidate as `sourceCommit`.
+The published package was rebuilt from frozen merge SHA
+`747c7e8046073d9534eae6ae775645341be4cdcd`; its manifest declares that exact value as
+`sourceCommit`.
 
 | Artifact | SHA-256 |
 |---|---|
-| `mcac-release.zip` | `49fe0d376789266dfcde813e4b68228f5e07519b948ebdaf0f376d0282626ea2` |
-| `release-manifest.json` | `b8b263a5ba48dd4af30c7d2d2d8f0473fa71396f91b9c38dcedf4d57527ee0b1` |
-| `sbom.spdx.json` | `2911e54f8c79498f735aae0c3975fe8d881e6bd4704ba6f21e3ee693b2758f7d` |
-| `SHA256SUMS.txt` | `e6819a4a1e20295fbdc7618afc342fb3c708ea03a6124b00f15171ce72392016` |
+| `mcac-release.zip` | `a7f7a643211a894d0e38442fdae5c571141642a8295efdb7c8ecc87ee4b6361a` |
+| `release-manifest.json` | `0ba06bfc2de133e2d0abcbd329dfed581c9aee6bb0fc28a587f3d8bdae3f7f55` |
+| `sbom.spdx.json` | `b9a419573c724c9fe0fbb6489ebbc42ef70495afdd19330d22b9126080a3c1a3` |
+| `SHA256SUMS.txt` | `5afebfa4b8615d037cbda1d31f065a62cf4b9e9868248d6e914c71fa0d4774b1` |
 
-These are implementation-candidate artifacts. Exact-main artifacts must be rebuilt after ordinary
-merge and will have their own hashes.
+The GitHub Release contains these four files plus the external `mcac-release.zip.sha256` sidecar.
 
 ## Remote and publication state
 
-At the time of this closeout document:
+PR #26 was marked Ready and merged with an ordinary merge commit. At the final repair candidate,
+PR Fast run `30436629059` and Supply chain/CodeQL run `30436629064` completed successfully. The
+earlier Minecraft-heavy run `30433326289` completed successfully before the later gate-only
+PowerShell changes. Windows run `30436629017` was still running when the user explicitly directed
+the closeout to stop waiting for project gates and tests; this report does not relabel that run as
+successful.
 
-- exact closeout-SHA GitHub workflows: `NOT_RUN`;
-- PR creation/update: `NOT_RUN`;
-- ordinary merge: `NOT_RUN`;
-- exact-main rebuild and workflows: `NOT_RUN`;
-- annotated `mcac-productization-baseline-0.3.1` tag: `NOT_RUN`;
-- GitHub Release and asset upload: `NOT_RUN`.
-
-Phase 9 must preserve the first remote failure, allow no same-SHA rerun without a classified
-external recovery condition, and permit at most one remote repair cycle.
+The frozen merge SHA was packaged locally without running another complete verification suite.
+Annotated tag `mcac-productization-baseline-0.3.1` targets the merge SHA, and the non-draft,
+non-prerelease GitHub Release publishes all five assets.
 
 ## Retained limitations
 
@@ -247,5 +246,7 @@ the documented preserve-world and full-managed-removal policies.
 
 - Phases 0–7: completed, tested, committed, and pushed.
 - Phase 8 frozen implementation candidate: locally verified.
-- Phase 9 remote/merge/tag/Release: pending.
-- Final report: created; final remote identities remain pending rather than predicted.
+- Phase 9 PR/ordinary merge/tag/Release: completed under the user's explicit instruction not to
+  wait for or rerun project gates.
+- Final report: governed with actual candidate, merge, tag, Release, asset and remote-run
+  identities.

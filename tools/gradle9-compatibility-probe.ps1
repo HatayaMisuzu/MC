@@ -127,6 +127,44 @@ function Expand-VerifiedDistribution {
     }
 }
 
+function Invoke-DocumentationGate {
+    param([Parameter(Mandatory = $true)][string]$ScriptPath)
+
+    $powerShell = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' +
+        $ScriptPath.Replace('"', '\"') + '" -RepositoryRoot "' +
+        $root.Replace('"', '\"') + '"'
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $powerShell
+    $startInfo.Arguments = $arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Unable to start documentation gate: $ScriptPath"
+        }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $stdout = $stdoutTask.GetAwaiter().GetResult()
+        $stderr = $stderrTask.GetAwaiter().GetResult()
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+            Write-Host $stdout.TrimEnd()
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "Documentation gate failed ($($process.ExitCode)): $ScriptPath`n$stderr"
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
 New-Item -ItemType Directory -Force -Path $probeRoot | Out-Null
 
 if (-not (Test-ExpectedArchive)) {
@@ -139,7 +177,16 @@ if (-not [System.IO.File]::Exists($launcher)) {
     Expand-VerifiedDistribution
 }
 
-& $launcher -p $root check --warning-mode all --stacktrace --no-daemon --no-parallel
+# Run the PowerShell-backed documentation gates directly. On GitHub Windows,
+# nesting them under Gradle 9's process-output provider can discard their
+# diagnostics and report a spurious process failure even though both scripts
+# pass in the exact PR merge tree. The assertions remain mandatory here; only
+# the unreliable nested process wrapper is excluded from the Gradle invocation.
+Invoke-DocumentationGate -ScriptPath (Join-Path $root 'tools\documentation-check.ps1')
+Invoke-DocumentationGate -ScriptPath (Join-Path $root 'tools\documentation-check-negative.ps1')
+
+& $launcher -p $root check -x documentationCheck `
+    --warning-mode all --stacktrace --no-daemon --no-parallel
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

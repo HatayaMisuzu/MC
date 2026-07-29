@@ -63,7 +63,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
-      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
         with:
           languages: ${{ matrix.language }}
@@ -93,7 +93,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
-      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: Probe shared gates with Gradle 9
         run: >-
           ./gradlew.bat gradle9CompatibilityProbe
@@ -116,7 +116,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
-      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Build all supported Loader artifacts
         timeout-minutes: 20
@@ -202,7 +202,7 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
-      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
 
       - name: Install Chromium
         timeout-minutes: 10

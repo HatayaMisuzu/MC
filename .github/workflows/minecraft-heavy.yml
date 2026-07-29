@@ -61,39 +61,39 @@ jobs:
       - name: Build all supported Loader artifacts
         timeout-minutes: 20
         shell: pwsh
-        run: ./gradlew.bat buildPlatforms --stacktrace
+        run: ./gradlew.bat buildPlatforms --no-daemon --no-parallel --stacktrace
       - name: Launch dedicated servers
         timeout-minutes: 20
         shell: pwsh
-        run: ./gradlew.bat launchTest --stacktrace
+        run: ./gradlew.bat launchTest --no-daemon --no-parallel --stacktrace
       - name: Run all Loader GameTests
         timeout-minutes: 35
         shell: pwsh
-        run: ./gradlew.bat gameTest --stacktrace
+        run: ./gradlew.bat gameTest --no-daemon --no-parallel --stacktrace
       - name: Run Runtime/Fabric end-to-end test
         timeout-minutes: 10
         shell: pwsh
-        run: ./gradlew.bat runtimeFabricE2E --stacktrace
+        run: ./gradlew.bat runtimeFabricE2E --no-daemon --no-parallel --stacktrace
       - name: Run Runtime/Forge end-to-end test
         timeout-minutes: 10
         shell: pwsh
-        run: ./gradlew.bat runtimeForgeE2E --stacktrace
+        run: ./gradlew.bat runtimeForgeE2E --no-daemon --no-parallel --stacktrace
       - name: Run Fabric persistence restart test
         timeout-minutes: 15
         shell: pwsh
-        run: ./gradlew.bat persistenceRestartTest --stacktrace
+        run: ./gradlew.bat persistenceRestartTest --no-daemon --no-parallel --stacktrace
       - name: Run Forge persistence restart test
         timeout-minutes: 15
         shell: pwsh
-        run: ./gradlew.bat forgePersistenceRestartTest --stacktrace
+        run: ./gradlew.bat forgePersistenceRestartTest --no-daemon --no-parallel --stacktrace
       - name: Run Runtime multi-profile test
         timeout-minutes: 5
         shell: pwsh
-        run: ./gradlew.bat runtimeMultiProfileTest --stacktrace
+        run: ./gradlew.bat runtimeMultiProfileTest --no-daemon --no-parallel --stacktrace
       - name: Run Runtime-disabled Fabric launch
         timeout-minutes: 10
         shell: pwsh
-        run: ./gradlew.bat runtimeDisabledLaunchTest --stacktrace
+        run: ./gradlew.bat runtimeDisabledLaunchTest --no-daemon --no-parallel --stacktrace
       - name: Upload safe test reports and logs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -107,5 +107,7 @@ jobs:
             minecraft/*/build/launch-test/server/logs/
             minecraft/*/build/gametest/logs/
             build/e2e-runtime/evidence/
+            build/e2e-runtime-forge/*.log
+            build/e2e-runtime-forge/logs/
             build/terminal-package/runtime-multi-profile-test/
             build/reports/problems/

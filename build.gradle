@@ -9,7 +9,15 @@ def powershellExecutable = System.getProperty('os.name').toLowerCase().contains(
         ? 'powershell' : 'pwsh'
 def isWindowsHost = System.getProperty('os.name').toLowerCase().contains('windows')
 def runProcess = { Closure configuration ->
-    def execution = providers.exec(configuration)
+    def execution = providers.exec { spec ->
+        // ProviderFactory.exec throws while resolving a non-zero result unless the
+        // child is explicitly allowed to finish. Capture and publish both streams
+        // first so CI reports the actionable script failure rather than only exit 1.
+        spec.ignoreExitValue = true
+        configuration.delegate = spec
+        configuration.resolveStrategy = Closure.DELEGATE_FIRST
+        configuration.call()
+    }
     def result = execution.result.get()
     def stdout = execution.standardOutput.asText.get()
     def stderr = execution.standardError.asText.get()

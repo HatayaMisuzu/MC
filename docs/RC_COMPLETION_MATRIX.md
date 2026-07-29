@@ -20,13 +20,14 @@ Historical candidate SHAs and workflow run IDs below apply only to their named r
 |---|---|---|
 | PR fast | One serialized Gradle `check`; superseded runs on the same PR/ref are cancelled | `ACTIVE` |
 | Windows terminal/package | Relevant PR paths and every `main` push; named bounded phases for real link checks, browser E2E, package verification, launcher checks, HTML first start, clean-extraction Golden Path, and Gradle 9 | `REWORKED_PENDING_REMOTE` |
-| Minecraft heavy | Relevant `main` changes plus schedule/manual runs; bounded Loader build/launch/GameTest, dual Runtime E2E, restart recovery, multi-profile, and Runtime-disabled launch | `ACTIVE` |
+| Minecraft heavy | Relevant `main` changes plus schedule/manual runs; isolated nonparallel Gradle phases for Loader build/launch/GameTest, dual Runtime E2E, restart recovery, multi-profile, and Runtime-disabled launch; child failures publish their real output and Forge log tails | `REPAIRED_PENDING_REMOTE` |
 | Supply chain/CodeQL | Secret scan, dependency review, and both CodeQL languages; matrix jobs finish independently | `ACTIVE` |
 
 The Windows rework removes the former opaque eight-task step, moves Runtime/Loader-owned checks to
 Minecraft heavy, bounds subprocesses, and avoids full Windows jobs for Loader-only dependency PRs.
-It does not weaken any product assertion. Exact remote run IDs are reported after the commit exists
-instead of being predicted inside this matrix.
+The Heavy repair removes cross-phase Gradle daemon/parallel coupling and preserves Forge diagnostics
+both in the job log and failure artifact. Neither change weakens a product assertion. Exact remote
+run IDs are reported after the commit exists instead of being predicted inside this matrix.
 
 Final-gate stability note: menu capabilities now honor their documented monotonic 60-second
 wall-clock lifetime even when GameTest ticks are accelerated, and Task Graph `await()` exposes a

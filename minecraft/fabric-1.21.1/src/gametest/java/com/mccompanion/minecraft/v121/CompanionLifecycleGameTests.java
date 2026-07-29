@@ -1596,8 +1596,13 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     helper, registry, companionId, ticksRemaining - 1, terminalAssertions, completeTest));
             return;
         }
+        String terminalObservation = snapshot.behaviorObservation() == null
+                ? "<none>"
+                : snapshot.behaviorObservation().failureCode();
         helper.assertValueEqual(snapshot.behaviorState(), "IDLE",
-                "behavior reached an unexpected terminal state");
+                "behavior reached an unexpected terminal state: behavior=" + snapshot.behaviorId()
+                        + ", observation=" + terminalObservation
+                        + ", evidence=" + snapshot.evidenceSummary());
         terminalAssertions.accept(snapshot);
         if (completeTest) helper.succeed();
     }
@@ -2095,26 +2100,55 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         "post-navigation mining did not change the exact world target");
                 helper.assertValueEqual(count(body, Items.DIRT), dirtBefore + 1,
                         "post-navigation mining inventory delta was incorrect");
-                BlockPos chestPos = body.blockPosition().offset(1, 0, -1);
+                BlockPos storageOrigin = body.blockPosition();
+                for (int x = 0; x <= 3; x++) {
+                    for (int z = -1; z <= 1; z++) {
+                        body.serverLevel().setBlockAndUpdate(
+                                storageOrigin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                        for (int y = 0; y <= 2; y++) {
+                            body.serverLevel().setBlockAndUpdate(
+                                    storageOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                        }
+                    }
+                }
+                if (body.containerMenu != body.inventoryMenu) body.closeContainer();
+                int emptyHotbarSlot = java.util.stream.IntStream.range(0, 9)
+                        .filter(slot -> body.getInventory().getItem(slot).isEmpty())
+                        .findFirst()
+                        .orElse(-1);
+                helper.assertTrue(emptyHotbarSlot >= 0,
+                        "post-navigation storage fixture had no empty hand slot");
+                int selectedBeforeStorage = body.getInventory().selected;
+                body.getInventory().selected = emptyHotbarSlot;
+                BlockPos chestPos = storageOrigin.offset(2, 0, 0);
+                body.serverLevel().setBlockAndUpdate(chestPos.below(), Blocks.STONE.defaultBlockState());
+                body.serverLevel().setBlockAndUpdate(chestPos.above(), Blocks.AIR.defaultBlockState());
                 body.serverLevel().setBlockAndUpdate(chestPos, Blocks.CHEST.defaultBlockState());
-                Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
-                chest.setItem(0, new ItemStack(Items.IRON_INGOT));
-                int ironBefore = count(body, Items.IRON_INGOT);
-                helper.assertTrue(registry.runtimeStart(
-                                companionId, lease, 1L, "navigation-combo-container", "skill",
-                                null, null, null,
-                                new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
-                                        body.serverLevel().dimension().location().toString(),
-                                        chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
-                        "post-navigation container withdrawal failed to start");
-                awaitBehaviorIdleForChain(helper, registry, companionId, 40, withdrawn -> {
-                    helper.assertValueEqual(count(body, Items.IRON_INGOT), ironBefore + 1,
-                            "post-navigation container inventory delta was incorrect");
-                    helper.assertTrue(chest.isEmpty(),
-                            "post-navigation container source delta was incorrect");
-                    helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
-                            "navigation combination lease release failed");
-                    runNavigationBoundaryAcceptance(helper, registry, owner, body);
+                helper.runAfterDelay(1, () -> {
+                    helper.assertTrue(body.serverLevel().getBlockEntity(chestPos) instanceof Container,
+                            "post-navigation storage fixture did not create a live container");
+                    helper.assertTrue(body.distanceToSqr(Vec3.atCenterOf(chestPos)) <= 25.0D,
+                            "post-navigation storage fixture was outside interaction reach");
+                    Container chest = (Container) body.serverLevel().getBlockEntity(chestPos);
+                    chest.setItem(0, new ItemStack(Items.IRON_INGOT));
+                    int ironBefore = count(body, Items.IRON_INGOT);
+                    helper.assertTrue(registry.runtimeStart(
+                                    companionId, lease, 1L, "navigation-combo-container", "skill",
+                                    null, null, null,
+                                    new SkillParameters("WithdrawFromStorage", "minecraft:iron_ingot", 1, false,
+                                            body.serverLevel().dimension().location().toString(),
+                                            chestPos.getX(), chestPos.getY(), chestPos.getZ())).success(),
+                            "post-navigation container withdrawal failed to start");
+                    awaitBehaviorIdleForChain(helper, registry, companionId, 40, withdrawn -> {
+                        helper.assertValueEqual(count(body, Items.IRON_INGOT), ironBefore + 1,
+                                "post-navigation container inventory delta was incorrect");
+                        helper.assertTrue(chest.isEmpty(),
+                                "post-navigation container source delta was incorrect");
+                        body.getInventory().selected = selectedBeforeStorage;
+                        helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                                "navigation combination lease release failed");
+                        runNavigationBoundaryAcceptance(helper, registry, owner, body);
+                    });
                 });
             });
         });

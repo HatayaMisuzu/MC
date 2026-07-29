@@ -120,6 +120,7 @@ function Write-FailureSummary($a,$b,$pa,$pb,[string]$reason){
 
 function New-McpSession($profile){
     $client=[Net.Http.HttpClient]::new()
+    $client.Timeout=[TimeSpan]::FromSeconds(10)
     try{
         $request=[Net.Http.HttpRequestMessage]::new(
             [Net.Http.HttpMethod]::Post,
@@ -154,6 +155,7 @@ function New-McpSession($profile){
 
 function Start-Wait($profile){
     $client=[Net.Http.HttpClient]::new()
+    $client.Timeout=[TimeSpan]::FromSeconds(10)
     $request=[Net.Http.HttpRequestMessage]::new(
         [Net.Http.HttpMethod]::Post,
         "http://127.0.0.1:$($profile.Port + 10000)/mcp")
@@ -264,7 +266,9 @@ try{
     }
 
     Stop-Process -Id $pa.Id -Force
-    $pa.WaitForExit()
+    if(-not $pa.WaitForExit(5000)){
+        throw 'Runtime profile A did not exit within the five-second cleanup boundary'
+    }
     Start-Sleep -Milliseconds 300
     $survivor=Health-Snapshot $b
     if(-not (Health $b) -or $survivor.taskGraph.durable.totalExecutions -ne 1){
@@ -279,6 +283,8 @@ try{
     foreach($process in @($pa,$pb)){
         if($process -and -not $process.HasExited){
             Stop-Process -Id $process.Id -Force
+            [void]$process.WaitForExit(5000)
         }
+        if($process){$process.Dispose()}
     }
 }

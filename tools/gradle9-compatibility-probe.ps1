@@ -61,11 +61,14 @@ function Download-VerifiedArchive {
         $handler = [System.Net.Http.HttpClientHandler]::new()
         $handler.AllowAutoRedirect = $true
         $client = [System.Net.Http.HttpClient]::new($handler)
+        $downloadCancellation = [System.Threading.CancellationTokenSource]::new(
+            [System.TimeSpan]::FromMinutes(10))
         try {
             $client.Timeout = [System.TimeSpan]::FromMinutes(10)
             $response = $client.GetAsync(
                 $distributionUri,
-                [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+                [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead,
+                $downloadCancellation.Token
             ).GetAwaiter().GetResult()
             try {
                 [void]$response.EnsureSuccessStatusCode()
@@ -77,7 +80,11 @@ function Download-VerifiedArchive {
                         [System.IO.FileAccess]::Write,
                         [System.IO.FileShare]::None)
                     try {
-                        $input.CopyTo($output)
+                        $input.CopyToAsync(
+                            $output,
+                            81920,
+                            $downloadCancellation.Token
+                        ).GetAwaiter().GetResult()
                         $output.Flush()
                     }
                     finally {
@@ -93,6 +100,7 @@ function Download-VerifiedArchive {
             }
         }
         finally {
+            $downloadCancellation.Dispose()
             $client.Dispose()
             $handler.Dispose()
         }
@@ -127,16 +135,44 @@ function Expand-VerifiedDistribution {
     }
 }
 
-function Invoke-DocumentationGate {
-    param([Parameter(Mandatory = $true)][string]$ScriptPath)
+function Stop-ProcessTree {
+    param([Parameter(Mandatory = $true)][System.Diagnostics.Process]$Process)
 
-    $powerShell = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
-    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' +
-        $ScriptPath.Replace('"', '\"') + '" -RepositoryRoot "' +
-        $root.Replace('"', '\"') + '"'
+    if ($Process.HasExited) {
+        return
+    }
+    if ($env:OS -eq 'Windows_NT') {
+        $killInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $killInfo.FileName = 'taskkill.exe'
+        $killInfo.Arguments = "/PID $($Process.Id) /T /F"
+        $killInfo.UseShellExecute = $false
+        $killInfo.CreateNoWindow = $true
+        $killInfo.RedirectStandardOutput = $true
+        $killInfo.RedirectStandardError = $true
+        $killer = [System.Diagnostics.Process]::Start($killInfo)
+        if ($null -ne $killer) {
+            [void]$killer.WaitForExit(5000)
+            $killer.Dispose()
+        }
+    }
+    else {
+        $Process.Kill()
+    }
+    [void]$Process.WaitForExit(5000)
+}
+
+function Invoke-BoundedProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [Parameter(Mandatory = $true)][string]$Arguments,
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][int]$TimeoutSeconds
+    )
+
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $startInfo.FileName = $powerShell
-    $startInfo.Arguments = $arguments
+    $startInfo.FileName = $FileName
+    $startInfo.Arguments = $Arguments
+    $startInfo.WorkingDirectory = $root
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -146,23 +182,43 @@ function Invoke-DocumentationGate {
     $process.StartInfo = $startInfo
     try {
         if (-not $process.Start()) {
-            throw "Unable to start documentation gate: $ScriptPath"
+            throw "Unable to start $DisplayName"
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        $process.WaitForExit()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-ProcessTree -Process $process
+            throw "$DisplayName exceeded its $TimeoutSeconds-second process boundary"
+        }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
         if (-not [string]::IsNullOrWhiteSpace($stdout)) {
             Write-Host $stdout.TrimEnd()
         }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+            Write-Host $stderr.TrimEnd()
+        }
         if ($process.ExitCode -ne 0) {
-            throw "Documentation gate failed ($($process.ExitCode)): $ScriptPath`n$stderr"
+            throw "$DisplayName failed with exit code $($process.ExitCode)"
         }
     }
     finally {
+        if (-not $process.HasExited) {
+            Stop-ProcessTree -Process $process
+        }
         $process.Dispose()
     }
+}
+
+function Invoke-DocumentationGate {
+    param([Parameter(Mandatory = $true)][string]$ScriptPath)
+
+    $powerShell = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' +
+        $ScriptPath.Replace('"', '\"') + '" -RepositoryRoot "' +
+        $root.Replace('"', '\"') + '"'
+    Invoke-BoundedProcess -FileName $powerShell -Arguments $arguments `
+        -DisplayName "documentation gate $ScriptPath" -TimeoutSeconds 120
 }
 
 New-Item -ItemType Directory -Force -Path $probeRoot | Out-Null
@@ -185,10 +241,9 @@ if (-not [System.IO.File]::Exists($launcher)) {
 Invoke-DocumentationGate -ScriptPath (Join-Path $root 'tools\documentation-check.ps1')
 Invoke-DocumentationGate -ScriptPath (Join-Path $root 'tools\documentation-check-negative.ps1')
 
-& $launcher -p $root check -x documentationCheck `
-    --warning-mode all --stacktrace --no-daemon --no-parallel
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
+$gradleArguments = '-p "' + $root.Replace('"', '\"') +
+    '" check -x documentationCheck --warning-mode all --stacktrace --no-daemon --no-parallel'
+Invoke-BoundedProcess -FileName $launcher -Arguments $gradleArguments `
+    -DisplayName "Gradle $version shared check" -TimeoutSeconds 900
 
 Write-Host "Gradle $version compatibility probe passed with verified distribution SHA-256 $expectedSha256."

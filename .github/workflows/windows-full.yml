@@ -2,12 +2,55 @@ name: Windows terminal validation
 
 on:
   pull_request:
+    paths:
+      - '.github/workflows/windows-full.yml'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'core/**'
+      - 'protocol/**'
+      - 'runtime/**'
+      - 'terminal/**'
+      - 'compatibility/**'
+      - 'tools/gradle9-compatibility-probe.ps1'
+      - 'tools/documentation-check*.ps1'
+      - 'tools/terminal-entrypoint-test.ps1'
+      - 'tools/html-terminal-start-test.ps1'
+      - 'tools/release-golden-path.ps1'
+      - 'tools/verify-terminal-package.ps1'
+      - 'mcac.cmd'
+      - 'mcac.ps1'
+      - '启动终端.cmd'
+      - 'README.md'
+      - 'KNOWN_LIMITATIONS.md'
+      - 'CODEX_EXECUTION.md'
+      - 'LICENSE'
+      - 'NOTICE'
+      - 'docs/INDEX.md'
+      - 'docs/PRODUCT_STATUS.md'
+      - 'docs/ARCHITECTURE.md'
+      - 'docs/COMPATIBILITY.md'
+      - 'docs/CONTROL_TERMINAL.md'
+      - 'docs/MCP_PROTOCOL.md'
+      - 'docs/TASK_GRAPH_DSL.md'
+      - 'docs/RC_COMPLETION_MATRIX.md'
+      - 'docs/LIVE_BRAIN_HUMAN_PLAYTEST.md'
+      - 'docs/POST_PRODUCTIZATION_P0.md'
+      - 'docs/product/**'
+      - 'docs/user/**'
+      - 'docs/developer/**'
+      - 'docs/compatibility/**'
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: windows-terminal-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   terminal-package:
@@ -26,6 +69,7 @@ jobs:
           cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
       - name: Warm Gradle wrapper with network retry
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $exitCode = 1
@@ -37,17 +81,21 @@ jobs:
           }
           if ($exitCode -ne 0) { exit $exitCode }
       - name: Install Chromium for browser end-to-end tests
+        timeout-minutes: 10
         shell: pwsh
         working-directory: terminal/web-ui
         run: |
           npm ci --no-audit --no-fund
           npx playwright install chromium
       - name: Build browser end-to-end backend and Fabric artifact
+        timeout-minutes: 15
         shell: pwsh
         run: >-
           ./gradlew.bat webBuild :terminal:terminal-app:installDist
-          :runtime:runtime-app:installDist build-fabric-1.21.1 --stacktrace
+          :runtime:runtime-app:installDist build-fabric-1.21.1
+          --no-daemon --no-parallel --stacktrace
       - name: Enforce real Windows symlink and junction boundaries
+        timeout-minutes: 10
         shell: pwsh
         env:
           MCAC_REQUIRE_WINDOWS_LINK_TESTS: '1'
@@ -57,23 +105,37 @@ jobs:
           :compatibility:compatibility-host:test
           --tests com.mccompanion.compat.CompatibilityStoreLinkSecurityTest
           :terminal:installer:test
-          --tests com.mccompanion.terminal.install.InstallTransactionTest
-          --rerun-tasks --stacktrace
+          --tests com.mccompanion.terminal.install.InstallTransactionTest --rerun-tasks
+          --no-daemon --no-parallel --stacktrace
       - name: Run the full browser product path
+        timeout-minutes: 10
         shell: pwsh
         working-directory: terminal/web-ui
         env:
           MCAC_E2E_PREBUILT: '1'
         run: npm run e2e
-      - name: Build and execute clean HTML terminal package
+      - name: Build and verify the release package
+        timeout-minutes: 20
+        shell: pwsh
+        run: ./gradlew.bat verifyTerminalPackage --no-daemon --no-parallel --stacktrace
+      - name: Verify packaged launcher entry points
+        timeout-minutes: 5
         shell: pwsh
         run: >-
-          ./gradlew.bat verifyTerminalPackage tuiIntegrationTest rootLauncherTest
-          releaseStarterTest htmlTerminalStartTest runtimeMultiProfileTest
-          runtimeDisabledLaunchTest releaseGoldenPathTest --stacktrace
-      - name: Probe shared release gates with Gradle 9
+          ./gradlew.bat tuiIntegrationTest rootLauncherTest releaseStarterTest
+          --no-daemon --no-parallel --stacktrace
+      - name: Verify packaged HTML first start and single-instance reuse
+        timeout-minutes: 5
         shell: pwsh
-        run: ./gradlew.bat gradle9CompatibilityProbe --stacktrace
+        run: ./gradlew.bat htmlTerminalStartTest --no-daemon --no-parallel --stacktrace
+      - name: Verify the clean-extraction release Golden Path
+        timeout-minutes: 15
+        shell: pwsh
+        run: ./gradlew.bat releaseGoldenPathTest --no-daemon --no-parallel --stacktrace
+      - name: Probe shared release gates with Gradle 9
+        timeout-minutes: 15
+        shell: pwsh
+        run: ./gradlew.bat gradle9CompatibilityProbe --no-daemon --no-parallel --stacktrace
       - name: Upload verified RC candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -97,4 +159,6 @@ jobs:
             **/build/reports/tests/
             **/build/test-results/
             minecraft/*/build/launch-test/server/logs/
+            build/release-golden-path/
+            build/terminal-package/runtime-multi-profile-test/
             build/reports/problems/

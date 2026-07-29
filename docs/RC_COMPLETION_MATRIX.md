@@ -1,43 +1,32 @@
 # RC completion matrix
 
-Updated: 2026-07-28
+Updated: 2026-07-29
 Overall status: `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`
 Automated productization baseline: `FROZEN`
 Product version: `0.3.1`
 Previous immutable baseline: `mcac-productization-baseline-0.3.0`
-Current baseline tag: created only after exact-main validation
+Current baseline tag: `mcac-productization-baseline-0.3.1`
 External follow-up:
 
 - `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`
 - `HUMAN_PLAYTEST_PENDING`
 
 Machine-readable current product facts: [product/PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json).
-Historical candidate SHAs and workflow run IDs below are evidence for their named revisions only;
-they do not establish the final identity of this repair release.
+Historical candidate SHAs and workflow run IDs below apply only to their named revisions.
 
-Closure-only documentation, packaging, and verification changes after this audited baseline are
-bound to their exact source SHA by `release-manifest.json` and final remote CI; they do not upgrade
-unfinished implementation rows.
+## Current operational gates
 
-Last completed closure proof: source/package SHA
-`2bdb030d65425c20113ab260eeacfa7fdb9f72d9`; PR fast `29896989946`, Windows terminal/package
-`29896989922`, Minecraft heavy `29896989911`, all `success`. A later evidence-only matrix commit is
-accepted only when its own release manifest and the same three GitHub workflows bind to that exact
-commit; those immutable post-commit Run IDs are recorded in the final delivery report rather than
-predicted inside the commit that causes them.
+| Gate | Current contract | State |
+|---|---|---|
+| PR fast | One serialized Gradle `check`; superseded runs on the same PR/ref are cancelled | `ACTIVE` |
+| Windows terminal/package | Relevant PR paths and every `main` push; named bounded phases for real link checks, browser E2E, package verification, launcher checks, HTML first start, clean-extraction Golden Path, and Gradle 9 | `REWORKED_PENDING_REMOTE` |
+| Minecraft heavy | Relevant `main` changes plus schedule/manual runs; bounded Loader build/launch/GameTest, dual Runtime E2E, restart recovery, multi-profile, and Runtime-disabled launch | `ACTIVE` |
+| Supply chain/CodeQL | Secret scan, dependency review, and both CodeQL languages; matrix jobs finish independently | `ACTIVE` |
 
-The final pre-merge cold-cache slice keeps strict Gradle dependency verification enabled while
-handling Fabric/Loom ZIP timestamp variability without accumulating whole-file hashes. Trust is
-limited to 99 exact group/name/version/file coordinates: 52 Loom-generated artifacts and 47 pinned
-Fabric API JARs. Every trusted remote Fabric JAR is additionally verified before compilation by a
-checked-in timestamp-independent entry-content hash manifest and the pinned Fabric signing
-certificate; duplicate and case-folded duplicate ZIP entries fail closed. `dependencyPinningCheck`
-rejects `also-trust` accumulation, group/regex expansion, unexpected attributes, and arbitrary
-external-artifact trust. Two isolated Gradle caches produced different raw JAR SHA-256 values but
-identical canonical content for all 47 artifacts; the second cache passed strict recovery-path
-source remapping, Fabric build and launch preparation. Targeted Fabric 31/31 GameTest and package
-validation also pass locally. This is dependency/build evidence only and does not change Live Brain
-or human-play labels; exact repair-SHA remote CI is still required.
+The Windows rework removes the former opaque eight-task step, moves Runtime/Loader-owned checks to
+Minecraft heavy, bounds subprocesses, and avoids full Windows jobs for Loader-only dependency PRs.
+It does not weaken any product assertion. Exact remote run IDs are reported after the commit exists
+instead of being predicted inside this matrix.
 
 Final-gate stability note: menu capabilities now honor their documented monotonic 60-second
 wall-clock lifetime even when GameTest ticks are accelerated, and Task Graph `await()` exposes a

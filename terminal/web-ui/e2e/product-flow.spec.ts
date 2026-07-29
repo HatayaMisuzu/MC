@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { Socket } from 'node:net'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 
 type Locale = 'zh-CN' | 'en-US'
@@ -212,30 +213,13 @@ async function verifyCompatibilityLifecycle(page: Page) {
   await archive.fill(v1Path)
   await clickPlan(page, 'zh-CN', '审阅安装计划')
   await expect(row('1.0.0')).toContainText('STAGING')
-  await row('1.0.0').getByRole('button', { name: '记录 Fixture 证据', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await expect(row('1.0.0')).toContainText('TESTED')
-  await row('1.0.0').getByRole('button', { name: '验证并建立索引', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await expect(row('1.0.0')).toContainText('VERIFIED')
-  await row('1.0.0').getByRole('button', { name: '激活', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await expect(row('1.0.0')).toContainText('ACTIVE')
+  await expect(row('1.0.0')).toContainText('等待系统生成的测试证据')
+  await expect(row('1.0.0').getByRole('button', { name: '记录 Fixture 证据', exact: true })).toHaveCount(0)
 
   await archive.fill(v2Path)
   await clickPlan(page, 'zh-CN', '审阅更新计划')
   await expect(row('2.0.0')).toContainText('STAGING')
-  await row('2.0.0').getByRole('button', { name: '记录 Fixture 证据', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await row('2.0.0').getByRole('button', { name: '验证并建立索引', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await row('2.0.0').getByRole('button', { name: '激活', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await expect(row('2.0.0')).toContainText('ACTIVE')
-
-  await row('2.0.0').getByRole('button', { name: '回滚', exact: true }).click()
-  await confirmAndWait(page, 'zh-CN')
-  await expect(row('1.0.0')).toContainText('ACTIVE')
+  await expect(row('2.0.0')).toContainText('等待系统生成的测试证据')
   await row('2.0.0').getByRole('button', { name: '隔离', exact: true }).click()
   await confirmAndWait(page, 'zh-CN')
   await expect(row('2.0.0')).toContainText('QUARANTINED')
@@ -243,9 +227,9 @@ async function verifyCompatibilityLifecycle(page: Page) {
   await confirmAndWait(page, 'zh-CN')
   await expect(row('2.0.0')).toHaveCount(0)
 
-  await row('1.0.0').getByRole('button', { name: '禁用', exact: true }).click()
+  await row('1.0.0').getByRole('button', { name: '隔离', exact: true }).click()
   await confirmAndWait(page, 'zh-CN')
-  await expect(row('1.0.0')).toContainText('DISABLED')
+  await expect(row('1.0.0')).toContainText('QUARANTINED')
   await row('1.0.0').getByRole('button', { name: '移除', exact: true }).click()
   await confirmAndWait(page, 'zh-CN')
   await expect(row('1.0.0')).toHaveCount(0)
@@ -261,7 +245,7 @@ test('packaged Terminal completes bilingual real-backend product paths', async (
     if (message.type() === 'error' && !expectedUnavailableResource) consoleErrors.push(text)
   })
   const state = JSON.parse(
-    readFileSync(resolve('..', '..', 'build', 'playwright-server.json'), 'utf8'),
+    readFileSync(resolve(tmpdir(), 'mcac-playwright-server.json'), 'utf8'),
   ) as { bootstrapUrl: string }
 
   await page.goto(state.bootstrapUrl)

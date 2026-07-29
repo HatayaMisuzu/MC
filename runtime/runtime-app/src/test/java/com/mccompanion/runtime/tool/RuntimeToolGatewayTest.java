@@ -295,6 +295,8 @@ class RuntimeToolGatewayTest {
                                 .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
                 ToolDefinition collect = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("resource.collect")).findFirst().orElseThrow();
+                assertEquals(Duration.ofMinutes(5), collect.timeout(),
+                        "durable body execution must not inherit the short request-ack deadline");
                 assertEquals(List.of("item", "quantity"), java.util.stream.StreamSupport.stream(
                         collect.inputSchema().path("required").spliterator(), false)
                         .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());
@@ -310,6 +312,7 @@ class RuntimeToolGatewayTest {
                 assertEquals("INVALID_TOOL_ARGUMENTS", invalidMine.code());
                 ToolDefinition smelt = gateway.definitions(context).stream()
                         .filter(value -> value.name().equals("item.smelt")).findFirst().orElseThrow();
+                assertEquals(Duration.ofMinutes(5), smelt.timeout());
                 assertEquals(List.of("item", "quantity", "station"), java.util.stream.StreamSupport.stream(
                         smelt.inputSchema().path("required").spliterator(), false)
                         .map(com.fasterxml.jackson.databind.JsonNode::asText).toList());

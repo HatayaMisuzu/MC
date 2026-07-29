@@ -77,12 +77,12 @@ final class SupportBundleService {
         return output;
     }
     private static String configurationSummary(RuntimeProfile profile) throws IOException {
-        var brain = new ProviderConfigurationService().status(profile);
+        var brain = new BrainConfigurationService().status(profile);
         var search = new SearchConfigurationService().status(profile);
-        String brainEnvironment = brain.path("apiKeyEnv").asText("");
+        String brainEnvironment = brain.path("tokenEnv").asText("");
         String searchEnvironment = search.path("tokenEnv").asText("");
-        return "BrainMode=" + brain.path("mode").asText("rules") + '\n'
-                + "BrainModel=" + brain.path("model").asText("rules") + '\n'
+        return "BrainMode=" + brain.path("mode").asText("disabled") + '\n'
+                + "BrainModel=" + brain.path("model").asText("disabled") + '\n'
                 + "BrainCredentialReference=" + (brainEnvironment.isBlank() ? "not-required" : brainEnvironment) + '\n'
                 + "BrainCredentialPresent=" + (!brainEnvironment.isBlank() && present(brainEnvironment)) + '\n'
                 + "SearchMode=" + search.path("mode").asText("disabled") + '\n'

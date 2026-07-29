@@ -45,6 +45,19 @@ class ProtocolModelTest {
     }
 
     @Test
+    void conversationDeliveryWindowDeduplicatesReconnectResendsAndStaysBounded() {
+        ConversationDeliveryWindow window = new ConversationDeliveryWindow(2);
+
+        assertTrue(window.firstDelivery("event-1"));
+        assertFalse(window.firstDelivery("event-1"));
+        assertTrue(window.firstDelivery("event-2"));
+        assertTrue(window.firstDelivery("event-3"));
+        assertEquals(2, window.size());
+        assertTrue(window.firstDelivery("event-1"), "oldest event should be eligible after eviction");
+        assertThrows(IllegalArgumentException.class, () -> window.firstDelivery(""));
+    }
+
+    @Test
     void behaviorEventsRequireEventAndStateToAgree() {
         BehaviorEvent completed = event(BehaviorEventType.COMPLETED, ProtocolBehaviorState.COMPLETED,
                 null, null);

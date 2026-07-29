@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Adapter for a separately running Hermes controller using the bounded MCAC Brain Bridge protocol. */
 public final class HermesBrainAdapter implements ExternalBrainAdapter {
@@ -25,6 +26,8 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
     private final String bearerToken;
     private final Duration timeout;
     private final HttpClient client;
+    private final AtomicReference<BrainHealth> health = new AtomicReference<>(
+            new BrainHealth("CONFIGURED", "hermes", "Live protocol not checked", Instant.now()));
 
     public HermesBrainAdapter(String baseUrl, String bearerToken, Duration timeout) {
         this.base = validateBase(baseUrl);
@@ -45,6 +48,8 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         JsonNode response = post("sessions", body);
         String sessionId = required(response, "sessionId");
         if (!sessionId.matches("[A-Za-z0-9_-]{8,128}")) throw new IllegalStateException("HERMES_INVALID_SESSION_ID");
+        health.set(new BrainHealth("PROTOCOL_COMPATIBLE", "hermes",
+                "mcac-brain/1 session verified", Instant.now()));
         return new BrainSession(sessionId, request.controllerId(), request.companionId(), Instant.now());
     }
 
@@ -88,6 +93,8 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
             for (JsonNode call : calls) {
                 values.add(new ToolCall(required(call, "callId"), required(call, "name"), call.path("arguments")));
             }
+            health.set(new BrainHealth("TOOL_CALL_VERIFIED", "hermes",
+                    "mcac-brain/1 Tool call received", Instant.now()));
             return BrainTurnResult.tools(values).withSemanticState(semanticState);
         }
         if (kind == BrainTurnResult.Kind.ASK_USER) {
@@ -124,9 +131,7 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         catch (RuntimeException ignored) { /* local cancellation still wins; remote cleanup is best effort */ }
     }
 
-    @Override public BrainHealth health() {
-        return new BrainHealth("CONFIGURED", "hermes", "live health not yet checked", Instant.now());
-    }
+    @Override public BrainHealth health() { return health.get(); }
 
     @Override public void close() { client.close(); }
 
@@ -142,11 +147,17 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
                 byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
                 if (bytes.length > MAX_RESPONSE_BYTES) throw new IllegalStateException("HERMES_RESPONSE_TOO_LARGE");
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    health.set(new BrainHealth("UNAVAILABLE", "hermes",
+                            "HTTP " + response.statusCode(), Instant.now()));
                     throw new IllegalStateException("HERMES_HTTP_" + response.statusCode());
                 }
+                health.set(new BrainHealth("REACHABLE", "hermes",
+                        "Endpoint accepted a Brain request", Instant.now()));
                 return Json.parse(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
             }
         } catch (IOException failure) {
+            health.set(new BrainHealth("UNAVAILABLE", "hermes",
+                    "I/O failure", Instant.now()));
             throw new IllegalStateException("HERMES_IO_ERROR", failure);
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();

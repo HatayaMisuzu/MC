@@ -10,8 +10,9 @@ observed on a connected body; and contain no Java, script, native library, crede
 Required evidence:
 
 1. Capture the Mod artifact hash and sanitized Registry/recipe/tag/menu observations.
-2. Install into an isolated Compatibility Store, record evidence, index and activate it through the
-   normal scoped grant flow.
+2. Install into an isolated Compatibility Store, run the declared Fixture/GameTest externally, and
+   let the trusted test runner record evidence before index/activation through the scoped Host flow.
+   A local Terminal user must not submit `passed=true` or choose `EXACT_VERIFIED`.
 3. Show the Compatibility UI source pack, hash, state, risk and any suppression reason.
 4. Execute one bounded generic task through existing primitive Tools and verify the final world or
    inventory observation. Unsupported special mechanics must return a stable unsupported result.

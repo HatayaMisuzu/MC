@@ -380,14 +380,14 @@
       "exclusionReason": ""
     },
     {
-      "id": "compat.install-index-activate",
+      "id": "compat.install-await-evidence",
       "page": "Compatibility",
-      "control": "Review install plan, record fixture evidence, index and activate",
-      "zhCN": "审阅安装计划 / 记录 Fixture 证据 / 验证并建立索引 / 激活",
-      "enUS": "Review install plan / Record fixture evidence / Index as verified / Activate",
+      "control": "Review install plan and await system-generated evidence",
+      "zhCN": "审阅安装计划 / 等待系统生成的测试证据",
+      "enUS": "Review install plan / Await system-generated test evidence",
       "risk": "HIGH",
       "backend": "Confirmed compatibility lifecycle plans",
-      "expectedState": "Archive is immutable and bounded; evidence level is EXACT_VERIFIED; signed index switches atomically; exact fingerprint activates",
+      "expectedState": "Archive is immutable and bounded; pack remains STAGING; no local user control can mint passed or EXACT_VERIFIED evidence",
       "testType": ["UNIT", "BROWSER_WITH_REAL_BACKEND"],
       "result": "PASS",
       "exclusionReason": ""

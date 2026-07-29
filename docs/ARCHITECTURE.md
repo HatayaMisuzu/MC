@@ -106,6 +106,13 @@ persisted as `WAITING` and drains the owning worker before stopping that schedul
 backoff deadlines use the same mechanism, while both validation and execution reject automatic retry
 around a Tool currently declared non-idempotent.
 
+Minecraft action Tools acknowledge a durable asynchronous start with `taskId`/`behaviorId`; this
+receipt explicitly has `completionVerified=false`. The Brain observes later state through
+`task.inspect`. Task Graph start uses the same pattern with `executionId` and
+`task_graph.inspect`. A request/transport timeout therefore does not cancel healthy background
+work. Task Graph nodes may wait up to the connected body's five-minute bounded behavior limit,
+while the graph's own persistent duration and recovery policy remain separate.
+
 Episode Capsules are deterministic Runtime projections of durable verified records, not model
 summaries and not formal Memory. They contain bounded task/change/location/decision/failure metadata
 and Evidence references, never full chat, prompts, Search pages, Tool arguments, or arbitrary

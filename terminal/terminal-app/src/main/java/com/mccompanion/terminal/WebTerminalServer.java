@@ -17,6 +17,7 @@ import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.Base64;
 import java.util.Map;
 import java.util.UUID;
@@ -228,11 +229,23 @@ final class WebTerminalServer implements AutoCloseable {
     exchange.getResponseHeaders().set("Cache-Control", "no-store");
     exchange.getResponseHeaders().set("Connection", "keep-alive");
     exchange.sendResponseHeaders(200, 0);
+    long offset = -1;
+    ArrayDeque<String> visible = new ArrayDeque<>(500);
     try (exchange) {
       while (!closed) {
         ObjectNode event = JSON.createObjectNode().put("type", "LOG_SNAPSHOT");
         try {
-          event.set("data", api.logSnapshot(exchange));
+          ObjectNode delta = api.logSnapshot(exchange, offset);
+          if (delta.path("reset").asBoolean()) visible.clear();
+          delta.path("lines").forEach(line -> {
+            visible.addLast(line.asText());
+            if (visible.size() > 500) visible.removeFirst();
+          });
+          offset = delta.path("nextOffset").asLong(offset);
+          var lines = JSON.createArrayNode();
+          visible.forEach(lines::add);
+          delta.set("lines", lines);
+          event.set("data", delta);
         } catch (Exception failure) {
           event
               .put("type", "LOG_UNAVAILABLE")

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
 import com.mccompanion.minecraft.v121.SkillParameters;
+import com.mccompanion.protocol.ConversationDeliveryWindow;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,7 +18,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -56,12 +56,8 @@ final class RuntimeBridge implements AutoCloseable {
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
     private final Map<UUID, Long> playerRequestTimes = new HashMap<>();
     private final Map<String, Long> ownerActivityTimes = new HashMap<>();
-    private final Map<String, Boolean> deliveredConversationEvents = java.util.Collections.synchronizedMap(
-            new LinkedHashMap<>() {
-                @Override protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
-                    return size() > 512;
-                }
-            });
+    private final ConversationDeliveryWindow deliveredConversationEvents =
+            new ConversationDeliveryWindow(512);
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -283,7 +279,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .filter(value -> value.companionId().equals(companionId)).findFirst().ifPresent(snapshot -> {
                     ServerPlayer owner = server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
                     if (owner != null) {
-                        if (deliveredConversationEvents.containsKey(eventId)) {
+                        if (!deliveredConversationEvents.firstDelivery(eventId)) {
                             sendConversationDeliveryAck(eventId, companionId);
                             return;
                         }
@@ -291,7 +287,6 @@ final class RuntimeBridge implements AutoCloseable {
                                 .append(Component.literal(finalReply)));
                         logger.info("conversation_delivered_to_game event={} kind={} companion={}",
                                 payload.path("eventId").asText("unknown"), payload.path("kind").asText("MESSAGE"), companionId);
-                        deliveredConversationEvents.put(eventId, true);
                         sendConversationDeliveryAck(eventId, companionId);
                     }
                 }));

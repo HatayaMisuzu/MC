@@ -22,15 +22,16 @@ class TerminalDiagnosticServiceTest {
                 "0.16",21,Optional.empty(),InstanceIsolation.VERSION_DIRECTORY,DetectionConfidence.HIGH);
         Path profileDir=temp.resolve("control/profiles/one");Files.createDirectories(profileDir);
         RuntimeProfile profile=new RuntimeProfile("one",profileDir,temp.resolve("runtime.cmd"),8766,18766);
-        new ProviderConfigurationService().disable(profile);
+        new BrainConfigurationService().disable(profile);
         new SearchConfigurationService().disable(profile);
         LauncherInstallation launcher=new LauncherInstallation("launcher",LauncherType.PCL2,"test",
                 temp.resolve("PCL2.exe"),temp,List.of(temp),DetectionConfidence.HIGH,Map.of());
 
         var results=new TerminalDiagnosticService().run(instance,profile,launcher,temp.resolve("control"));
-        var brain=results.stream().filter(value->value.code().equals("brain.provider")).findFirst().orElseThrow();
+        var brain=results.stream().filter(value->value.code().equals("brain.protocol")).findFirst().orElseThrow();
         var search=results.stream().filter(value->value.code().equals("search.protocol")).findFirst().orElseThrow();
-        assertEquals(com.mccompanion.terminal.diagnostics.DiagnosticResult.Severity.PASS,brain.severity());
+        assertEquals(com.mccompanion.terminal.diagnostics.DiagnosticResult.Severity.WARNING,brain.severity());
+        assertEquals("DISABLED", brain.evidence().get("status"));
         assertEquals(com.mccompanion.terminal.diagnostics.DiagnosticResult.Severity.PASS,search.severity());
         assertEquals("false",search.evidence().get("networkAttempted"));
     }
@@ -48,6 +49,7 @@ class TerminalDiagnosticServiceTest {
         RuntimeProfile profile = new RuntimeProfile(
                 "forge-one", profileDir, temp.resolve("runtime.cmd"), 8767, 18767);
         new ProviderConfigurationService().disable(profile);
+        new BrainConfigurationService().disable(profile);
         new SearchConfigurationService().disable(profile);
         LauncherInstallation launcher = new LauncherInstallation(
                 "launcher", LauncherType.PCL2, "test", temp.resolve("PCL2.exe"),
@@ -65,6 +67,6 @@ class TerminalDiagnosticServiceTest {
         var codes = results.stream().map(value -> value.code()).collect(java.util.stream.Collectors.toSet());
         assertTrue(codes.containsAll(java.util.Set.of(
                 "runtime.profile", "runtime.health", "mcp.protocol",
-                "registry.generic_tools", "navigation.global_tool", "brain.provider")));
+                "registry.generic_tools", "navigation.global_tool", "brain.protocol")));
     }
 }

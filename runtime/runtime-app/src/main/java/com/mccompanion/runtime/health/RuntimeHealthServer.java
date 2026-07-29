@@ -1131,6 +1131,12 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private void agent(HttpExchange exchange) throws IOException {
         try (exchange) {
             if (!authenticated(exchange)) return;
+            if (providers == null || kernel == null) {
+                sendJson(exchange, 410, Json.object().put("accepted", false)
+                        .put("code", "LEGACY_INTERNAL_AGENT_DISABLED")
+                        .put("message", "Use the bounded /brain endpoint with an external Brain."));
+                return;
+            }
             if (!"POST".equals(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(405, -1);
                 return;

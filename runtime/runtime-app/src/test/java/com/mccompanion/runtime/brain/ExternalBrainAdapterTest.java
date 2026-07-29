@@ -18,6 +18,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -85,7 +88,9 @@ class ExternalBrainAdapterTest {
                 respond(exchange, 200, """
                         {"kind":"FINAL_RESPONSE","response":"状态正常。",
                         "completionClaim":{"claim":"Current state was observed","certainty":"VERIFIED",
-                        "observationCallId":"observe_1","taskId":"","explanation":""}}
+                        "observationCallId":"observe_1","taskId":"",
+                        "conditions":[{"pointer":"/health","operator":"EQUALS","expected":18}],
+                        "explanation":""}}
                         """);
             } else {
                 respond(exchange, 200, "{}");
@@ -128,6 +133,35 @@ class ExternalBrainAdapterTest {
             assertEquals("RESOURCE_SHORTAGE", result.question().reason());
             assertEquals(List.of("deliver_partial", "collect_missing"), result.question().options().stream()
                     .map(com.mccompanion.runtime.conversation.ConversationOption::id).toList());
+        }
+    }
+
+    @Test
+    void openAiCompatibleSessionsDoNotSerializeUnrelatedCompanions() throws Exception {
+        CountDownLatch entered = new CountDownLatch(2);
+        try (TestServer server = new TestServer(exchange -> {
+            entered.countDown();
+            try {
+                if (!entered.await(2, TimeUnit.SECONDS)) {
+                    throw new IOException("adapter serialized unrelated sessions");
+                }
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new IOException(failure);
+            }
+            respond(exchange, 200,
+                    "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"done\"}}]}");
+        }); OpenAiCompatibleBrainAdapter adapter = new OpenAiCompatibleBrainAdapter(
+                server.baseUrl(), "fixture-token", "replay-model", Duration.ofSeconds(5), 512);
+             var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            BrainSession first = adapter.openSession(sessionRequest("c1"));
+            BrainSession second = adapter.openSession(sessionRequest("c2"));
+            var a = executor.submit(() -> adapter.continueTurn(new BrainTurnRequest(
+                    first.sessionId(), "one", AgentContext.empty("c1", List.of()), List.of(), 1)));
+            var b = executor.submit(() -> adapter.continueTurn(new BrainTurnRequest(
+                    second.sessionId(), "two", AgentContext.empty("c2", List.of()), List.of(), 1)));
+            assertEquals("done", a.get(3, TimeUnit.SECONDS).response());
+            assertEquals("done", b.get(3, TimeUnit.SECONDS).response());
         }
     }
 
@@ -207,8 +241,13 @@ class ExternalBrainAdapterTest {
     }
 
     private static BrainSessionRequest sessionRequest() {
-        return new BrainSessionRequest("controller", "c1", context(), new ObserveGateway().definitions(
-                new ToolContext("controller", "opening", "c1")));
+        return sessionRequest("c1");
+    }
+
+    private static BrainSessionRequest sessionRequest(String companionId) {
+        return new BrainSessionRequest("controller", companionId,
+                AgentContext.empty(companionId, List.of("FollowOwner")), new ObserveGateway().definitions(
+                new ToolContext("controller", "opening", companionId)));
     }
 
     private static AgentContext context() {
@@ -231,16 +270,18 @@ class ExternalBrainAdapterTest {
 
     private static final class TestServer implements AutoCloseable {
         private final HttpServer server;
+        private final java.util.concurrent.ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         private TestServer(Handler handler) throws IOException {
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.createContext("/", exchange -> {
                 try { handler.handle(exchange); }
                 catch (Exception failure) { respond(exchange, 500, "{\"error\":\"fixture failed\"}"); }
             });
+            server.setExecutor(executor);
             server.start();
         }
         private String baseUrl() { return "http://127.0.0.1:" + server.getAddress().getPort(); }
-        @Override public void close() { server.stop(0); }
+        @Override public void close() { server.stop(0); executor.close(); }
     }
 
     private static void respond(HttpExchange exchange, int status, String body) throws IOException {

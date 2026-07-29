@@ -110,11 +110,7 @@ export function CompatibilityPage() {
             <td><StatusBadge value={pack.state} /> {match?.stale && <StatusBadge value="STALE" />}</td>
             <td>{match ? t('compat.active') : t('compat.inactive')}</td>
             <td><div className="inline-actions">
-              {pack.state === 'STAGING' && <ActionButton onClick={() => void plan('record-evidence', pack, {
-                evidenceId: `fixture-${Date.now()}`, kind: 'FIXTURE', matchLevel: 'EXACT_VERIFIED',
-                passed: true, summary: 'Fixture evidence recorded by authenticated local user',
-                artifactHash: pack.contentHash,
-              })}>{t('compat.evidenceFixture')}</ActionButton>}
+              {pack.state === 'STAGING' && <span>{t('compat.awaitingEvidence')}</span>}
               {pack.state === 'TESTED' && <ActionButton onClick={() => void plan('index', pack)}>{t('compat.index')}</ActionButton>}
               {pack.state === 'VERIFIED' && <ActionButton tone="primary" onClick={() => void plan('activate', pack)}>{t('compat.activate')}</ActionButton>}
               {pack.state === 'ACTIVE' && <ActionButton onClick={() => void plan('deactivate', pack)}>{t('compat.deactivate')}</ActionButton>}

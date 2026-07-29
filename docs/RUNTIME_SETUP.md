@@ -38,22 +38,31 @@ Fabric 1.21.1 and Forge 1.20.1 both support the Full Runtime Bridge. NeoForge 1.
 
 ## External Brain
 
-An OpenAI-compatible configuration stores only public endpoint/model information and the name of
-an environment variable:
+The Brain page stores independent public adapter settings and the name of an environment variable
+in the selected Runtime profile. It supports `disabled`, `hermes`, and `openai-compatible`;
+legacy Provider settings never derive or overwrite this block:
 
 ```yaml
-provider:
-  mode: openai-compatible
-  base_url: https://api.example.invalid
-  api_key_env: MC_COMPANION_API_KEY
-  model: <MODEL_ID>
+brain:
+  mode: hermes
+  endpoint: https://hermes.example.invalid/mcac/
+  token_env: MCAC_BRAIN_TOKEN
+  model: hermes
   timeout_seconds: 60
+  max_output_tokens: 1400
+  max_tool_calls_per_turn: 8
+  max_requests: 24
+  max_input_tokens: 30000
+  max_total_output_tokens: 8000
+  max_wall_clock_minutes: 15
+  max_retries: 2
 ```
 
 Set the named variable only in the Runtime process environment or an approved local credential
-store. Provider failure returns a bounded failure and preserves recoverable state; Runtime does not
-replace it with an internal Planner. The Runtime external Brain has no Shell, Git, Gradle, arbitrary
-filesystem, production-source or arbitrary-network authority.
+store. The Brain page's protocol probe requires an actual MCAC Tool call; a plain-text completion
+does not count as healthy. Brain failure returns a bounded failure and preserves recoverable state;
+Runtime does not replace it with an internal Planner. The Runtime external Brain has no Shell, Git,
+Gradle, arbitrary filesystem, production-source or arbitrary-network authority.
 
 The OpenAI-compatible adapter supports tool calling and `ASK_USER`, but it does not currently emit
 the Hermes protocol's structured semantic state and completion claim. See

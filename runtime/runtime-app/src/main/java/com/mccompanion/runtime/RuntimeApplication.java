@@ -20,7 +20,6 @@ import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.db.RuntimeDatabase;
-import com.mccompanion.runtime.intent.RuleIntentParser;
 import com.mccompanion.runtime.health.RuntimeHealthServer;
 import com.mccompanion.runtime.health.McpReplayRepository;
 import com.mccompanion.runtime.health.McpSessionRepository;
@@ -33,9 +32,7 @@ import com.mccompanion.runtime.memory.MemoryToolGateway;
 import com.mccompanion.runtime.conversation.ConversationRepository;
 import com.mccompanion.runtime.conversation.ConversationService;
 import com.mccompanion.runtime.provider.IntentProvider;
-import com.mccompanion.runtime.provider.OpenAiCompatibleProvider;
 import com.mccompanion.runtime.provider.ProviderRouter;
-import com.mccompanion.runtime.provider.BudgetedProvider;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.search.DisabledSearchProvider;
 import com.mccompanion.runtime.search.HttpSearchProvider;
@@ -189,8 +186,10 @@ public final class RuntimeApplication implements AutoCloseable {
                     new IdempotencyStore(database),
                     commandSender,
                     log);
-            provider = createProvider(config, redactor, log);
-            ProviderRouter providerRouter = new ProviderRouter(new RuleIntentParser(), provider, log);
+            // The legacy internal Agent/Provider path is intentionally not constructed in production.
+            // External Brain is the only high-level decision-maker; these null compatibility references
+            // keep old test-only constructors source-compatible until the classes are deleted separately.
+            ProviderRouter providerRouter = null;
             CapabilityRegistry capabilityRegistry = CapabilityRegistry.standard();
             CapabilityVisibility capabilityVisibility = new CapabilityVisibility(capabilityRegistry);
             SessionRegistry activeSessionRegistry = sessions;
@@ -241,8 +240,9 @@ public final class RuntimeApplication implements AutoCloseable {
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
-            kernel = new AgentKernel(plans, commands, log, providerRouter, companions, sessions,
-                    capabilityVisibility, memories, conversations);
+            // Production does not construct the legacy high-level Agent. External Brain is the
+            // sole author of plans; the Runtime only validates and executes its bounded requests.
+            kernel = null;
             sessions.setListener(commands);
 
             int staleSessions = sessions.recoverStaleSessions();
@@ -328,8 +328,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     commands, plans, kernel, provider, providerRouter, externalBrain, toolGateway,
                     webSocket, healthServer, maintenance, cli);
             holder[0] = application;
-            log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, provider="
-                    + (provider == null ? "rules" : "openai-compatible")
+            log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, legacyProvider=disabled"
                     + ", externalBrain=" + (externalBrain == null ? "disabled"
                     : brainOverride == null ? config.brain.mode : "injected-replay")
                     + ", database=WAL, bind=" + config.server.bind + ':' + webSocket.getPort());
@@ -350,31 +349,6 @@ public final class RuntimeApplication implements AutoCloseable {
             closeQuietly(database);
             closeQuietly(log);
             throw failure;
-        }
-    }
-
-    private static IntentProvider createProvider(RuntimeConfig config, Redactor redactor, RuntimeLog log) {
-        if ("rules".equals(config.provider.mode)) {
-            return null;
-        }
-        String key = config.provider.resolveApiKey().orElse(null);
-        if (key == null) {
-            log.warn("Provider key environment variable is absent; Runtime is using rules fallback");
-            return null;
-        }
-        redactor.registerSecret(key);
-        try {
-            OpenAiCompatibleProvider remote = new OpenAiCompatibleProvider(
-                    config.provider.baseUrl,
-                    key,
-                    config.provider.model,
-                    config.provider.timeout(),
-                    config.provider.maxOutputTokens);
-            return new BudgetedProvider(remote, config.provider.maxConcurrent,
-                    config.provider.maxCallsPerMinute, config.provider.maxRetries);
-        } catch (RuntimeException invalidProvider) {
-            log.error("Provider configuration was rejected; Runtime is using rules fallback", invalidProvider);
-            return null;
         }
     }
 

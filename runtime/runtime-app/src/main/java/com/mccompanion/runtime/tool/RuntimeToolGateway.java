@@ -441,6 +441,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             ToolResult result = new ToolResult(call.callId(), call.name(), reply.accepted(), reply.code(),
                     reply.toJson(), !reply.accepted());
             if (reply.accepted() && reply.taskId() != null) {
+                String sessionPrefix = context.brainSessionId() + ':';
+                activeTasks.keySet().removeIf(candidate -> candidate.startsWith(sessionPrefix));
                 activeTasks.put(key(context, call.callId()), reply.taskId());
             }
             return result;
@@ -455,7 +457,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     @Override public void cancel(ToolContext context, String callId, String reason) {
         if (taskGraphRuntime != null) taskGraphRuntime.cancel(context, callId, reason);
-        if (activeTasks.containsKey(key(context, callId))) {
+        if (activeTasks.remove(key(context, callId)) != null) {
             commands.execute("brain-cancel-" + context.brainSessionId() + '-' + callId,
                     context.companionId(), stop("cancel"));
         }
@@ -953,7 +955,23 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("executionId").add("label");
         }
         return new ToolDefinition(name, "1.0", description, root, risk, permission,
-                Duration.ofSeconds(30), idempotent);
+                timeoutFor(name), idempotent);
+    }
+
+    private static Duration timeoutFor(String name) {
+        if (name.equals("world.observe") || name.equals("task_graph.validate")
+                || name.equals("task_graph.execute") || name.startsWith("task_graph.")
+                || name.startsWith("task.")) {
+            return Duration.ofSeconds(5);
+        }
+        if (name.startsWith("movement.") || name.startsWith("resource.")
+                || name.startsWith("inventory.") || name.startsWith("combat.")
+                || name.startsWith("safety.") || name.equals("entity.collect")
+                || name.equals("item.smelt") || name.equals("item.craft")
+                || name.equals("item.eat_and_recover")) {
+            return Duration.ofMinutes(5);
+        }
+        return Duration.ofSeconds(30);
     }
 
     private static ObjectNode coordinateSchema() {

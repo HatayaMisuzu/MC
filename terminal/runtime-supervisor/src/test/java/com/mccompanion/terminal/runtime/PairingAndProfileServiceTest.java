@@ -67,22 +67,32 @@ class PairingAndProfileServiceTest {
   }
 
   @Test
-  void providerConfigurationEnablesTheExternalBrainWithoutPersistingItsToken() throws Exception {
+  void independentBrainConfigurationIsNotDerivedFromLegacyProvider() throws Exception {
     var i = instance("brain");
     var p = new RuntimeProfileService(temp.resolve("home"), temp.resolve("runtime.exe")).ensure("brain");
     Files.writeString(p.profileDirectory().resolve("provider.json"), """
         {"mode":"openai-compatible","baseUrl":"https://provider.example/v1",
          "apiKeyEnv":"MC_COMPANION_BRAIN_TOKEN","model":"test-model","timeoutSeconds":30}
         """);
+    Files.writeString(p.profileDirectory().resolve("brain.json"), """
+        {"mode":"hermes","endpoint":"https://hermes.example/mcac/",
+         "tokenEnv":"HERMES_TOKEN","model":"hermes","timeoutSeconds":90,
+         "maxOutputTokens":1536,"maxToolCallsPerTurn":10,"maxRequests":40,
+         "maxInputTokens":50000,"maxTotalOutputTokens":10000,
+         "maxWallClockMinutes":20,"maxRetries":3}
+        """);
 
     new PairingService().ensureConfigured(i, p);
 
     String yaml = Files.readString(p.configFile());
-    assertTrue(yaml.contains("brain:\n  mode: openai-compatible"));
-    assertTrue(yaml.contains("endpoint: \"https://provider.example/v1\""));
-    assertTrue(yaml.contains("token_env: MC_COMPANION_BRAIN_TOKEN"));
-    assertTrue(yaml.contains("model: \"test-model\""));
-    assertTrue(yaml.contains("timeout_seconds: 30"));
+    assertTrue(yaml.contains("provider:\n  mode: openai-compatible"));
+    assertTrue(yaml.contains("brain:\n  mode: hermes"));
+    assertTrue(yaml.contains("endpoint: \"https://hermes.example/mcac/\""));
+    assertTrue(yaml.contains("token_env: HERMES_TOKEN"));
+    assertTrue(yaml.contains("model: \"hermes\""));
+    assertTrue(yaml.contains("timeout_seconds: 90"));
+    assertTrue(yaml.contains("max_requests: 40"));
+    assertTrue(yaml.contains("max_wall_clock_minutes: 20"));
     assertFalse(yaml.contains("Bearer"));
   }
 

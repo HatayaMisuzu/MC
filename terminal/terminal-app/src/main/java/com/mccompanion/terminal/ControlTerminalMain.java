@@ -997,8 +997,7 @@ public final class ControlTerminalMain implements Runnable {
       return WARNING;
     }
     try {
-      var lines = Files.readAllLines(file);
-      lines.subList(Math.max(0, lines.size() - 100), lines.size()).forEach(System.out::println);
+      BoundedLogReader.read(file, -1, 100).lines().forEach(System.out::println);
       return PASS;
     } catch (IOException e) {
       throw new UncheckedIOException(e);

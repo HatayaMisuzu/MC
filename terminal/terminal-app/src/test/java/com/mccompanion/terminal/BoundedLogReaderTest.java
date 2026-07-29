@@ -1,0 +1,40 @@
+package com.mccompanion.terminal;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class BoundedLogReaderTest {
+    @TempDir Path temporary;
+
+    @Test
+    void readsBoundedTailThenOnlyAppendedCompleteLines() throws Exception {
+        Path log = temporary.resolve("latest.log");
+        StringBuilder large = new StringBuilder();
+        for (int index = 0; index < 40_000; index++) {
+            large.append("line-").append(index).append("-xxxxxxxx\n");
+        }
+        Files.writeString(log, large, StandardCharsets.UTF_8);
+
+        BoundedLogReader.Result tail = BoundedLogReader.read(log, -1, 500);
+        assertEquals(500, tail.lines().size());
+        assertEquals("line-39999-xxxxxxxx", tail.lines().getLast());
+        assertTrue(tail.reset());
+
+        Files.writeString(log, "partial", StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+        BoundedLogReader.Result partial = BoundedLogReader.read(log, tail.nextOffset(), 500);
+        assertTrue(partial.lines().isEmpty());
+        assertEquals(tail.nextOffset(), partial.nextOffset());
+
+        Files.writeString(log, "-done\nnext\n", StandardCharsets.UTF_8,
+                java.nio.file.StandardOpenOption.APPEND);
+        BoundedLogReader.Result delta = BoundedLogReader.read(log, partial.nextOffset(), 500);
+        assertEquals(java.util.List.of("partial-done", "next"), delta.lines());
+        assertFalse(delta.reset());
+    }
+}

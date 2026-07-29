@@ -44,8 +44,9 @@ play. `docs/RC_COMPLETION_MATRIX.md` remains the only completion matrix.
 - Mojibake scan over non-test Web source: clean.
 - Bilingual packaged-backend Chromium path: pass against the real Java Terminal and Runtime with an
   isolated PCL2 fixture and no `fetch` mocks.
-- Compatibility pack lifecycle buttons: install, evidence, index, activate, update, rollback,
-  quarantine, disable and remove all pass for isolated v1/v2 archives.
+- Historical freeze evidence covered install, evidence, index, activate, update, rollback,
+  quarantine, disable and remove. The 2026-07-29 corrective audit supersedes that UI: manual
+  evidence authoring is removed and current browser coverage proves honest `STAGING`.
 - Fresh `zh-CN` and `en-US` screenshots: visually checked for overflow, stale Loader metadata and
   leaked `undefined` values.
 - Current focused revalidation: Web lint, 10 test files / 15 tests, Web production build,

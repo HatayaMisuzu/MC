@@ -83,15 +83,15 @@ final class TerminalDiagnosticService {
                         "brainReviewTool", "false"), "Start or update Runtime and inspect the Brain page"));
 
         try {
-            var status = new ProviderConfigurationService().status(profile);
-            boolean configured = !"rules".equals(status.path("mode").asText("rules"));
-            String credentialEnv = status.path("apiKeyEnv").asText("");
+            var status = new BrainConfigurationService().status(profile);
+            boolean configured = !"disabled".equals(status.path("mode").asText("disabled"));
+            String credentialEnv = status.path("tokenEnv").asText("");
             boolean credentialPresent = configured && !credentialEnv.isBlank()
                     && System.getenv(credentialEnv) != null && !System.getenv(credentialEnv).isBlank();
             results.add(result(credentialPresent, "brain.live_credentials",
                     credentialPresent ? "Live Brain credential environment is present"
                             : "Live Brain run is blocked until a configured credential environment is present",
-                    Map.of("providerConfigured", Boolean.toString(configured),
+                    Map.of("brainConfigured", Boolean.toString(configured),
                             "credentialPresent", Boolean.toString(credentialPresent), "credentialStored", "false"),
                     "Configure a real external Brain and set its named environment variable"));
             int requests = budget("MCAC_LIVE_BRAIN_MAX_REQUESTS", 24);
@@ -112,13 +112,14 @@ final class TerminalDiagnosticService {
                     Map.of("present", Boolean.toString(Files.isRegularFile(evidence)),
                             "threeScenariosPassed", Boolean.toString(liveEvidence)),
                     "Run the Live Brain guide and save the sanitized report under the profile validation directory"));
-            var brain = new ProviderConfigurationService().test(profile);
-            results.add(result(brain.success(), "brain.provider", brain.message(),
-                    Map.of("model", brain.model(), "latencyMillis", Long.toString(brain.latencyMillis())),
-                    "Review Brain provider settings and its credential environment variable"));
+            var brain = new BrainConfigurationService().test(profile);
+            results.add(result(brain.success(), "brain.protocol", brain.message(),
+                    Map.of("status", brain.status(), "adapter", brain.adapter(),
+                            "latencyMillis", Long.toString(brain.latencyMillis())),
+                    "Review independent Brain settings and its credential environment variable"));
         } catch (Exception failure) {
-            results.add(result(false, "brain.provider", "Brain provider could not be tested",
-                    Map.of("error", failure.getClass().getSimpleName()), "Review Brain provider settings"));
+            results.add(result(false, "brain.protocol", "Brain protocol could not be tested",
+                    Map.of("error", failure.getClass().getSimpleName()), "Review independent Brain settings"));
         }
 
         try {

@@ -16,6 +16,8 @@ vi.mock('../hooks/useResource', () => ({
   useResource: () => {
     const values = [
       { instanceId: 'instance-1', mode: 'SAFE_IDLE', companions: [{ id: 'c1', displayName: 'Misuzu' }], tasks: [], events: [], conversations: [], waitingQuestions: [] },
+      { mode: 'hermes', endpoint: 'http://127.0.0.1:8080', tokenEnv: 'MCAC_BRAIN_TOKEN',
+        model: 'hermes', timeoutSeconds: 60, maxToolCallsPerTurn: 12, maxOutputTokens: 1024 },
       { activeControllerId: 'runtime-primary', health: { status: 'CONFIGURED', adapter: 'hermes', detail: '', checkedAt: '' },
         contextBudget: { totalChars: 40000, worldChars: 12000, conversationChars: 10000, taskChars: 8000,
           approvedMemoryChars: 6000, episodeCapsuleChars: 6000, fullGraphIncluded: false,
@@ -28,7 +30,9 @@ vi.mock('../hooks/useResource', () => ({
           playerExplicitlyAway: false, latestRealWorldObservationAt: '2026-07-15T00:00:00Z',
           staleAssumptions: ['old chest count'] },
         completionClaims: [{ sequence: 1, certainty: 'VERIFIED', claim: 'Base state checked',
-          observationCallId: 't1', taskId: 'task-1', explanation: '', createdAt: '2026-07-15T00:00:01Z' }],
+          observationCallId: 't1', taskId: 'task-1',
+          conditions: [{ pointer: '/health', operator: 'AT_LEAST', expected: 18 }],
+          explanation: '', createdAt: '2026-07-15T00:00:01Z' }],
         toolCalls: [{ callId: 't1', toolName: 'search.query', success: true, code: 'OK', terminal: true, observation: { sources: 1 } }] }],
       { companionId: 'c1', initiativeMode: 'NORMAL', personalityMode: 'COMPANION', revision: 1,
         updatedBy: 'LOCAL_MANAGEMENT_USER', updatedAt: '2026-07-15T00:00:00Z',

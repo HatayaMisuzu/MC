@@ -155,6 +155,10 @@ public final class RuntimeCli implements AutoCloseable {
     }
 
     private boolean executeNatural(String[] words) {
+        if (providers == null) {
+            output.println("LEGACY_INTERNAL_AGENT_DISABLED: use the external Brain endpoint");
+            return true;
+        }
         if (words.length < 3 || words[2].isBlank()) {
             throw new IllegalArgumentException("ask requires: ask <companion> <request>");
         }

@@ -158,7 +158,9 @@ export interface BrainToolAudit {
   }
   export interface BrainCompletionClaimAudit {
     sequence: number; certainty: 'VERIFIED' | 'UNVERIFIED' | 'NOT_APPLICABLE'
-    claim: string; observationCallId: string; taskId: string; explanation: string; createdAt: string
+    claim: string; observationCallId: string; taskId: string
+    conditions: Array<{ pointer: string; operator: 'EQUALS' | 'AT_LEAST' | 'AT_MOST' | 'CONTAINS'; expected: unknown }>
+    explanation: string; createdAt: string
   }
   export interface BrainSemanticState {
     schemaVersion: number; conversationContext: string; immediateInstruction: string

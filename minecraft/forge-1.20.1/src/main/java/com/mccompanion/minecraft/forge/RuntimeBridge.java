@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
 import com.mccompanion.minecraft.v120.SkillParameters;
+import com.mccompanion.protocol.ConversationDeliveryWindow;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -54,6 +55,8 @@ final class RuntimeBridge implements AutoCloseable {
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
     private final Map<UUID, Long> playerRequestTimes = new ConcurrentHashMap<>();
     private final Map<String, Long> ownerActivityTimes = new ConcurrentHashMap<>();
+    private final ConversationDeliveryWindow deliveredConversationEvents =
+            new ConversationDeliveryWindow(512);
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -609,22 +612,29 @@ final class RuntimeBridge implements AutoCloseable {
                 .findFirst()
                 .ifPresent(snapshot -> {
                     try {
-                        ServerPlayer owner =
-                                server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
-                        if (owner != null) {
-                            owner.sendSystemMessage(Component.translatable("mcac.chat.prefix")
-                                    .append(Component.literal(finalReply)));
-                            sendEnvelope("conversation_delivery_ack", JSON.createObjectNode()
-                                    .put("eventId", eventId)
-                                    .put("companionId", companionId));
-                        }
+                          ServerPlayer owner =
+                                  server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
+                          if (owner != null) {
+                              if (!deliveredConversationEvents.firstDelivery(eventId)) {
+                                  sendConversationDeliveryAck(eventId, companionId);
+                                  return;
+                              }
+                              owner.sendSystemMessage(Component.translatable("mcac.chat.prefix")
+                                      .append(Component.literal(finalReply)));
+                              sendConversationDeliveryAck(eventId, companionId);
+                          }
                     } catch (IllegalArgumentException ignored) {
                         logger.warn("Runtime sent an invalid owner identity for companion {}", companionId);
                     }
                 }));
-    }
+      }
 
-    private void sendEnvelope(String type, JsonNode payload) {
+      private void sendConversationDeliveryAck(String eventId, String companionId) {
+          sendEnvelope("conversation_delivery_ack", JSON.createObjectNode()
+                  .put("eventId", eventId).put("companionId", companionId));
+      }
+
+      private void sendEnvelope(String type, JsonNode payload) {
         WebSocket current = socket;
         String currentSession = sessionId;
         if (current == null || currentSession == null || current.isOutputClosed()) return;

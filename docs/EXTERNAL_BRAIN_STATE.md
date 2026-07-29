@@ -193,13 +193,16 @@ must not be interpreted as current. Use the matrix for evidence and
 
 ## Asynchronous Tool to Fabric loop slice
 
-- Minecraft action tools now return `ACCEPTED` only to the Runtime coordinator. They are not
-  returned to the Brain until the bound durable Task reaches `SUCCEEDED`, `FAILED`, `BLOCKED`,
-  `CANCELLED`, or `INTERRUPTED`; `RUNNING` progress is persisted for audit.
+- Minecraft action tools return a durable asynchronous `ACCEPTED` receipt to the Brain with the
+  bound `taskId`/`behaviorId`, `completionVerified=false`, and `statusTool=task.inspect`.
+  `task_graph.execute` likewise returns its persistent `executionId` for later
+  `task_graph.inspect`. A Brain request no longer waits for the whole behavior or cancels it after
+  a generic 30-second transport deadline.
 - The binding uses one stable `brainSessionId + callId + taskId + behaviorId`. Stable command
   IDs and the existing command idempotency store prevent duplicate Fabric execution.
-- Tool timeout dispatches a real cancellation; concurrent controller cancellation reaches the
-  active Tool Gateway without waiting for the Brain turn lock.
+- Explicit controller cancellation still reaches the active Tool Gateway without waiting for the
+  Brain turn lock. Task Graph child actions use their declared execution duration (up to the
+  connected body's bounded five-minute behavior limit) rather than a universal 30 seconds.
 - Tool timeout waits briefly for durable Fabric cancellation confirmation. A confirmed stop is
   returned as `TOOL_TIMEOUT_CANCELLED`; an unconfirmed or undispatchable stop is durably moved to
   `RECONCILIATION_REQUIRED` and returned as `TOOL_TIMEOUT_RECONCILIATION_REQUIRED`.
@@ -223,6 +226,13 @@ must not be interpreted as current. Use the matrix for evidence and
   HTTP ingress. The Replay integration verifies that the game reply is sourced from
   `external-brain` and that no internal plan or task is created.
 - The Web Terminal's companion request route now calls Runtime `/brain`, not `/agent`.
+- Production does not construct the legacy internal Agent/Provider planner. Missing external-Brain
+  configuration returns `EXTERNAL_BRAIN_UNAVAILABLE`; the migration-only `/agent` route returns
+  `LEGACY_INTERNAL_AGENT_DISABLED`.
+- The Brain page owns independent `disabled`/`hermes`/`openai-compatible` configuration. Runtime
+  startup reads `brain.json` directly and never derives or overwrites it from legacy Provider mode.
+  The live configuration probe requires an actual MCAC Tool call and distinguishes
+  `CREDENTIAL_MISSING`, `PROTOCOL_INCOMPATIBLE`, `TOOL_CALL_VERIFIED`, and `UNAVAILABLE`.
 - Added an External Brain page showing adapter health, active controller, durable tool
   observations, typed-memory provenance, and the companion chat entry point.
 - Web UI tests cover tool-audit rendering, memory provenance, and chat submission.
@@ -344,16 +354,18 @@ Example response extension:
   uses `NOT_APPLICABLE`; a task result uses either `VERIFIED` or `UNVERIFIED`.
 - Hermes chooses the final observation Tool. For `VERIFIED`, it must cite that Tool call ID.
   Runtime accepts only a successful terminal world/inventory/safety/task/block/item/entity/menu
-  observation from the same Brain session and rejects missing, failed, nonterminal, or unrelated
-  calls.
+  observation from the same Brain session. It must also provide one to sixteen structured
+  postconditions over that observation using bounded JSON Pointers and `EQUALS`, `AT_LEAST`,
+  `AT_MOST`, or `CONTAINS`. Missing fields, type mismatches, failed comparisons, and a mismatched
+  optional task ID reject the `VERIFIED` claim.
 - `UNVERIFIED` cannot cite an observation and must explain why verification was unavailable.
   This permits an honest response but does not create verified evidence.
-- Migration 26 stores the claim, certainty, optional task ID, explanation, and foreign-key link to
-  the exact audited Tool call. `/brain/audit` and the Brain page show what was checked immediately
-  before the external Brain claimed completion.
-- Runtime does not select the observation, run a task-specific acceptance script, or rewrite the
-  Brain's natural-language answer. Local Replay tests are protocol/evidence tests, not proof of
-  Live Hermes judgment.
+- Migration 26 stores the claim and foreign-key link to the exact audited Tool call; migration 31
+  adds its structured evidence conditions. `/brain/audit` and the Brain page show both the cited
+  observation and the deterministic comparisons.
+- Runtime does not interpret the natural-language claim or invent acceptance criteria. It only
+  evaluates the Brain-authored typed postconditions against the cited observation. Local Replay
+  tests are protocol/evidence tests, not proof of Live Hermes judgment.
 
 ## Deposit to storage slice
 

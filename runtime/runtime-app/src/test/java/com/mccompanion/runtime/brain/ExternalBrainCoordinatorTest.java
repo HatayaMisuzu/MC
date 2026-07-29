@@ -146,12 +146,7 @@ class ExternalBrainCoordinatorTest {
             }
             @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
                                                       Duration timeout, java.util.function.Consumer<ToolResult> progress) {
-                assertFalse(accepted.terminal());
-                assertEquals("ACCEPTED", accepted.observation().path("state").asText());
-                return new ToolResult(call.callId(), call.name(), true, "OK",
-                        Json.object().put("state", "SUCCEEDED").put("taskId", "task-1")
-                                .put("behaviorId", "behavior-1")
-                                .set("fabricObservation", Json.object().put("arrived", true)), true);
+                throw new AssertionError("external Brain request must not await a durable action");
             }
         };
         ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
@@ -163,9 +158,11 @@ class ExternalBrainCoordinatorTest {
             assertEquals(1, request.toolResults().size());
             ToolResult result = request.toolResults().getFirst();
             assertTrue(result.terminal());
-            assertEquals("SUCCEEDED", result.observation().path("state").asText());
-            assertTrue(result.observation().path("fabricObservation").path("arrived").asBoolean());
-            return BrainTurnResult.finalResponse("arrived");
+            assertEquals("ACCEPTED", result.observation().path("state").asText());
+            assertEquals("ASYNCHRONOUS", result.observation().path("executionMode").asText());
+            assertFalse(result.observation().path("completionVerified").asBoolean());
+            assertEquals("task.inspect", result.observation().path("statusTool").asText());
+            return BrainTurnResult.finalResponse("navigation started");
         });
         try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
             BrainCoordinatorResult result = coordinator.continueTurn("hermes-1", "c1", "go", context());
@@ -266,6 +263,32 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void sessionMismatchIsRejectedBeforeTheWaitingAnswerIsPersisted() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("ask-session-race.db"))) {
+            database.initialize();
+            ConversationRepository conversations = new ConversationRepository(database);
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse("ready"));
+            try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                    brain, new RecordingGateway(), 4, audit, conversations)) {
+                coordinator.continueTurn("hermes-1", "c1", "open", context());
+                audit.opened(new BrainSession("different-session", "hermes-1", "c1",
+                        java.time.Instant.now()), "fixture");
+                WaitingQuestion stale = conversations.askBrain("c1", "different-session", null,
+                        "Continue?", "TEST", List.of(new ConversationOption("yes", "Yes", "")),
+                        false, Json.object(), null);
+
+                assertThrows(IllegalStateException.class, () -> coordinator.answer("hermes-1", stale,
+                        new IncomingMessageResolution(IncomingMessageKind.WAITING_ANSWER, "yes", "Yes"),
+                        context()));
+                WaitingQuestion stillWaiting = conversations.activeForCompanion("c1").orElseThrow();
+                assertEquals(stale.questionId(), stillWaiting.questionId());
+                assertEquals("WAITING", stillWaiting.state());
+            }
+        }
+    }
+
+    @Test
     void repeatedCallIdReturnsAuditedResultWithoutExecutingToolAgain() throws Exception {
         AtomicInteger turns = new AtomicInteger();
         RecordingGateway gateway = new RecordingGateway();
@@ -291,8 +314,7 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
-    void concurrentCancelDoesNotWaitForCompanionTurnLock() throws Exception {
-        CountDownLatch awaiting = new CountDownLatch(1);
+    void durableAsynchronousStartCanBeCancelledAfterBrainRequestReturns() throws Exception {
         CountDownLatch cancelled = new CountDownLatch(1);
         ToolGateway gateway = new ToolGateway() {
             @Override public List<ToolDefinition> definitions(ToolContext context) {
@@ -305,29 +327,22 @@ class ExternalBrainCoordinatorTest {
             }
             @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted,
                                                       Duration timeout, java.util.function.Consumer<ToolResult> progress) {
-                awaiting.countDown();
-                try {
-                    if (!cancelled.await(2, TimeUnit.SECONDS)) throw new AssertionError("cancel was blocked");
-                } catch (InterruptedException failure) {
-                    Thread.currentThread().interrupt();
-                    throw new AssertionError(failure);
-                }
-                return new ToolResult(call.callId(), call.name(), false, "TOOL_CANCELLED",
-                        Json.object().put("state", "CANCELLED").put("taskId", "task-1"), true);
+                throw new AssertionError("external Brain request must not await a durable action");
             }
             @Override public void cancel(ToolContext context, String callId, String reason) { cancelled.countDown(); }
         };
-        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> BrainTurnResult.tools(List.of(
-                new ToolCall("navigate-1", "movement.navigate", Json.object()))));
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> turns.getAndIncrement() == 0
+                ? BrainTurnResult.tools(List.of(new ToolCall("navigate-1", "movement.navigate", Json.object())))
+                : BrainTurnResult.finalResponse("navigation started"));
         try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
-            CompletableFuture<BrainCoordinatorResult> turn = CompletableFuture.supplyAsync(() ->
-                    coordinator.continueTurn("hermes-1", "c1", "go", context()));
-            assertTrue(awaiting.await(1, TimeUnit.SECONDS));
+            BrainCoordinatorResult turn = coordinator.continueTurn("hermes-1", "c1", "go", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, turn.kind());
             long started = System.nanoTime();
             coordinator.cancel("hermes-1", "c1", "OWNER_CANCELLED");
             assertTrue(Duration.ofNanos(System.nanoTime() - started).compareTo(Duration.ofMillis(500)) < 0,
-                    "cancel waited for the companion turn lock");
-            assertEquals(BrainTurnResult.Kind.CANCEL, turn.get(2, TimeUnit.SECONDS).kind());
+                    "cancel was unexpectedly delayed");
+            assertTrue(cancelled.await(1, TimeUnit.SECONDS));
         }
     }
 
@@ -481,7 +496,9 @@ class ExternalBrainCoordinatorTest {
                 ? BrainTurnResult.tools(List.of(new ToolCall("final-observe-1", "world.observe", Json.object())))
                 : BrainTurnResult.finalResponse("The check is complete.").withCompletionClaim(
                         new BrainCompletionClaim("Base state checked", BrainCompletionClaim.Certainty.VERIFIED,
-                                "final-observe-1", "task-1", "")));
+                                "final-observe-1", "task-1", List.of(
+                                new BrainCompletionClaim.EvidenceCondition("/health",
+                                        BrainCompletionClaim.Operator.AT_LEAST, Json.parse("18"))), "")));
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("completion-claim.db"))) {
             database.initialize();
             BrainAuditRepository audit = new BrainAuditRepository(database);
@@ -494,6 +511,7 @@ class ExternalBrainCoordinatorTest {
                 assertEquals("VERIFIED", inspected.path("certainty").asText());
                 assertEquals("final-observe-1", inspected.path("observationCallId").asText());
                 assertEquals("task-1", inspected.path("taskId").asText());
+                assertEquals("/health", inspected.path("conditions").path(0).path("pointer").asText());
             }
         }
     }
@@ -502,7 +520,9 @@ class ExternalBrainCoordinatorTest {
     void missingObservationCannotSupportVerifiedClaimButExplicitUnverifiedGapIsAllowed() throws Exception {
         ReplayBrainAdapter invalid = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse("done")
                 .withCompletionClaim(new BrainCompletionClaim("Done", BrainCompletionClaim.Certainty.VERIFIED,
-                        "missing-observation", "task-1", "")));
+                        "missing-observation", "task-1", List.of(
+                        new BrainCompletionClaim.EvidenceCondition("/state",
+                                BrainCompletionClaim.Operator.EQUALS, Json.parse("\"SUCCEEDED\""))), "")));
         try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
                 invalid, new RecordingGateway(), 4)) {
             IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
@@ -513,12 +533,32 @@ class ExternalBrainCoordinatorTest {
         ReplayBrainAdapter honest = new ReplayBrainAdapter(request -> BrainTurnResult.finalResponse(
                 "I could not verify the result.").withCompletionClaim(new BrainCompletionClaim(
                 "Result unavailable", BrainCompletionClaim.Certainty.UNVERIFIED,
-                "", "task-1", "Companion is offline")));
+                "", "task-1", List.of(), "Companion is offline")));
         try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
                 honest, new RecordingGateway(), 4)) {
             BrainCoordinatorResult result = coordinator.continueTurn(
                     "controller", "c1", "finish", context());
             assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+        }
+    }
+
+    @Test
+    void unrelatedSuccessfulObservationCannotSatisfyStructuredCompletionCondition() {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> turns.getAndIncrement() == 0
+                ? BrainTurnResult.tools(List.of(
+                new ToolCall("observe-health", "world.observe", Json.object())))
+                : BrainTurnResult.finalResponse("Ten iron were collected.").withCompletionClaim(
+                new BrainCompletionClaim("Collected ten iron", BrainCompletionClaim.Certainty.VERIFIED,
+                        "observe-health", "task-1", List.of(
+                        new BrainCompletionClaim.EvidenceCondition("/inventory/minecraft:iron_ingot",
+                                BrainCompletionClaim.Operator.AT_LEAST, Json.parse("10"))), "")));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                brain, new RecordingGateway(), 4)) {
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> coordinator.continueTurn("controller", "c1", "collect iron", context()));
+            assertEquals("BRAIN_FINAL_OBSERVATION_CONDITION_FAILED:/inventory/minecraft:iron_ingot",
+                    failure.getMessage());
         }
     }
 
@@ -537,7 +577,7 @@ class ExternalBrainCoordinatorTest {
         @Override public ToolResult execute(ToolContext context, ToolCall call) {
             calls.add(call.name());
             return new ToolResult(call.callId(), call.name(), true, "OK",
-                    Json.object().put("health", 18), true);
+                    Json.object().put("health", 18).put("taskId", "task-1"), true);
         }
     }
 

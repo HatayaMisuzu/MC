@@ -2,8 +2,10 @@ $ErrorActionPreference = 'Stop'
 $sourceWebRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $repository = (Resolve-Path (Join-Path $sourceWebRoot '..\..')).Path
 $fixtureSource = Join-Path $sourceWebRoot 'e2e\fixtures\pcl2'
-$fixture = Join-Path $repository 'build\playwright-fixture'
-$state = Join-Path $repository 'build\playwright-server.json'
+# Sensitive terminal state deliberately uses owner-only ACLs. A repository checkout can inherit
+# broad workspace ACLs on Windows, so keep the disposable runtime fixture in the user's temp area.
+$fixture = Join-Path ([System.IO.Path]::GetTempPath()) 'mcac-playwright-fixture'
+$state = Join-Path ([System.IO.Path]::GetTempPath()) 'mcac-playwright-server.json'
 $compatV1 = Join-Path $repository 'build\playwright-compat-v1.mcac-compat'
 $compatV2 = Join-Path $repository 'build\playwright-compat-v2.mcac-compat'
 

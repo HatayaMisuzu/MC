@@ -25,8 +25,9 @@ The bilingual packaged-backend path performs and verifies:
    and refresh;
 2. Compatibility Host fingerprint serialization, exact 64-hex digest, built-in capability source
    view, and absence of leaked `undefined` values;
-3. isolated v1/v2 compatibility-pack install, Fixture evidence, index, activation, update,
-   rollback, quarantine, disable and removal through the visible buttons;
+3. isolated v1/v2 compatibility-pack install/update, visible `STAGING` retention without any
+   manual evidence control, quarantine and removal; Host unit tests separately cover trusted
+   evidence, index, activation, rollback and disable;
 4. install, update, repair, rollback to a real pre-install snapshot, and recovery by reinstall;
 5. Runtime start, authenticated identity, live PID/ports, token rotation, restart, stop and closed
    ports;

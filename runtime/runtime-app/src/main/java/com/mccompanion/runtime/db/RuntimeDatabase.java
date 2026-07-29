@@ -860,6 +860,8 @@ public final class RuntimeDatabase implements AutoCloseable {
         List<String> mcpPairingContext = List.of(
                 "ALTER TABLE mcp_session ADD COLUMN pairing_context_hash TEXT NOT NULL DEFAULT ''",
                 "CREATE INDEX mcp_session_pairing_idx ON mcp_session(pairing_context_hash,state,expires_at)");
+        List<String> completionClaimConditions = List.of(
+                "ALTER TABLE brain_completion_claim ADD COLUMN conditions_json TEXT NOT NULL DEFAULT '[]'");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -891,6 +893,8 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(28, "persist bounded one-time generated Skill trial leases", skillTrialLease),
                 new Migration(29, "rate-limit and deduplicate evidence-bound proactive messages",
                         proactiveMessageAdmission),
-                new Migration(30, "bind MCP sessions to pairing-token generation", mcpPairingContext));
+                new Migration(30, "bind MCP sessions to pairing-token generation", mcpPairingContext),
+                new Migration(31, "persist structured completion-claim evidence conditions",
+                        completionClaimConditions));
     }
 }

@@ -1,5 +1,5 @@
-import { RefreshCw, Send } from 'lucide-react'
-import { useState } from 'react'
+import { FlaskConical, Power, RefreshCw, Save, Send } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { api, post } from '../api/client'
 import { ActionButton } from '../components/ActionButton'
 import { EmptyState } from '../components/EmptyState'
@@ -11,6 +11,29 @@ import { useResource } from '../hooks/useResource'
 import { useI18n } from '../i18n/I18nContext'
 import type { BrainBehaviorSettings, BrainSessionAudit, BrainStatus, CompanionSnapshot, MemorySnapshot } from '../types'
 
+interface BrainConfig {
+  mode: 'disabled' | 'hermes' | 'openai-compatible'
+  endpoint?: string
+  tokenEnv?: string
+  model?: string
+  timeoutSeconds?: number
+  maxToolCallsPerTurn?: number
+  maxOutputTokens?: number
+  maxRequests?: number
+  maxInputTokens?: number
+  maxTotalOutputTokens?: number
+  maxWallClockMinutes?: number
+  maxRetries?: number
+}
+
+interface BrainTest {
+  success: boolean
+  status: string
+  latencyMillis: number
+  adapter: string
+  message: string
+}
+
 export function BrainPage() {
   const { selected, selectedId, requestPlan } = useTerminal()
   const { t } = useI18n()
@@ -21,6 +44,46 @@ export function BrainPage() {
   const [message, setMessage] = useState('')
   const [reviewing, setReviewing] = useState('')
   const [reviewError, setReviewError] = useState('')
+  const config = useResource<BrainConfig>(() => selectedId
+    ? api<BrainConfig>(`/api/brain/config?instanceId=${encodeURIComponent(selectedId)}`)
+    : Promise.resolve({ mode: 'disabled' }), [selectedId])
+  const [brainForm, setBrainForm] = useState({
+    mode: 'hermes' as 'hermes' | 'openai-compatible',
+    endpoint: 'http://127.0.0.1:8080',
+    tokenEnv: 'MCAC_BRAIN_TOKEN',
+    model: '',
+    timeoutSeconds: 60,
+    maxToolCallsPerTurn: 12,
+    maxOutputTokens: 1024,
+    maxRequests: 24,
+    maxInputTokens: 30000,
+    maxTotalOutputTokens: 8000,
+    maxWallClockMinutes: 15,
+    maxRetries: 2,
+  })
+  const [brainTest, setBrainTest] = useState<BrainTest | null>(null)
+  const [testingBrain, setTestingBrain] = useState(false)
+  useEffect(() => {
+    const current = config.data
+    if (!current || current.mode === 'disabled') return
+    setBrainForm({
+      mode: current.mode,
+      endpoint: current.endpoint ?? '',
+      tokenEnv: current.tokenEnv ?? 'MCAC_BRAIN_TOKEN',
+      model: current.model === 'hermes' ? '' : current.model ?? '',
+      timeoutSeconds: current.timeoutSeconds ?? 60,
+      maxToolCallsPerTurn: current.maxToolCallsPerTurn ?? 12,
+      maxOutputTokens: current.maxOutputTokens ?? 1024,
+      maxRequests: current.maxRequests ?? 24,
+      maxInputTokens: current.maxInputTokens ?? 30000,
+      maxTotalOutputTokens: current.maxTotalOutputTokens ?? 8000,
+      maxWallClockMinutes: current.maxWallClockMinutes ?? 15,
+      maxRetries: current.maxRetries ?? 2,
+    })
+  }, [config.data?.mode, config.data?.endpoint, config.data?.tokenEnv, config.data?.model,
+    config.data?.timeoutSeconds, config.data?.maxToolCallsPerTurn, config.data?.maxOutputTokens,
+    config.data?.maxRequests, config.data?.maxInputTokens, config.data?.maxTotalOutputTokens,
+    config.data?.maxWallClockMinutes, config.data?.maxRetries])
   const companionId = companions.data?.companions.some((value) => value.id === selectedCompanion)
     ? selectedCompanion : companions.data?.companions[0]?.id ?? ''
   const status = useResource<BrainStatus>(() => selectedId
@@ -70,6 +133,14 @@ export function BrainPage() {
     if (action !== 'export_safe_summary') await memories.refresh()
     return result
   }
+  const testBrain = async () => {
+    setTestingBrain(true)
+    try {
+      setBrainTest(await post<BrainTest>('/api/brain/test', { instanceId: selectedId }))
+    } finally {
+      setTestingBrain(false)
+    }
+  }
   if (!selected) return <EmptyState title={t('empty.selectInstance')}>{t('brain.empty')}</EmptyState>
   const send = () => {
     const text = message.trim()
@@ -80,6 +151,59 @@ export function BrainPage() {
   return <div className="page">
     <PageHeader title={t('brain.title')} description={t('brain.description')}
       actions={<ActionButton icon={<RefreshCw size={15} />} onClick={refresh}>{t('common.refresh')}</ActionButton>} />
+    <section className="provider-layout">
+      <form className="form-panel" onSubmit={(event) => {
+        event.preventDefault()
+        void requestPlan('brain', { instanceId: selectedId, action: 'configure', ...brainForm })
+      }}>
+        <h2>Independent external Brain</h2>
+        <p>Runtime preserves this profile configuration; legacy Provider settings never overwrite it.</p>
+        <label className="field"><span>Adapter</span><select value={brainForm.mode}
+          onChange={(event) => setBrainForm((value) => ({ ...value,
+            mode: event.target.value as 'hermes' | 'openai-compatible' }))}>
+          <option value="hermes">Hermes (mcac-brain/1)</option>
+          <option value="openai-compatible">OpenAI-compatible Tool calling</option>
+        </select></label>
+        <label className="field"><span>Endpoint</span><input type="url" required value={brainForm.endpoint}
+          onChange={(event) => setBrainForm((value) => ({ ...value, endpoint: event.target.value }))} /></label>
+        {brainForm.mode === 'openai-compatible' && <label className="field"><span>Model</span><input required
+          value={brainForm.model} onChange={(event) => setBrainForm((value) => ({ ...value, model: event.target.value }))} /></label>}
+        <label className="field"><span>Token environment variable</span><input required pattern="[A-Za-z_][A-Za-z0-9_]*"
+          value={brainForm.tokenEnv} onChange={(event) => setBrainForm((value) => ({ ...value, tokenEnv: event.target.value }))} /></label>
+        <label className="field"><span>Request timeout (seconds)</span><input type="number" min="1" max="300"
+          value={brainForm.timeoutSeconds} onChange={(event) => setBrainForm((value) => ({ ...value, timeoutSeconds: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Tool calls per turn</span><input type="number" min="1" max="32"
+          value={brainForm.maxToolCallsPerTurn} onChange={(event) => setBrainForm((value) => ({ ...value, maxToolCallsPerTurn: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Output tokens per response</span><input type="number" min="128" max="4096"
+          value={brainForm.maxOutputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxOutputTokens: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Requests per live run</span><input type="number" min="1" max="1000"
+          value={brainForm.maxRequests} onChange={(event) => setBrainForm((value) => ({ ...value, maxRequests: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Total input token budget</span><input type="number" min="128" max="2000000"
+          value={brainForm.maxInputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxInputTokens: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Total output token budget</span><input type="number" min="128" max="500000"
+          value={brainForm.maxTotalOutputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxTotalOutputTokens: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Wall clock budget (minutes)</span><input type="number" min="1" max="480"
+          value={brainForm.maxWallClockMinutes} onChange={(event) => setBrainForm((value) => ({ ...value, maxWallClockMinutes: Number(event.target.value) }))} /></label>
+        <label className="field"><span>Retry budget</span><input type="number" min="0" max="5"
+          value={brainForm.maxRetries} onChange={(event) => setBrainForm((value) => ({ ...value, maxRetries: Number(event.target.value) }))} /></label>
+        <div className="form-actions">
+          <ActionButton tone="primary" icon={<Save size={16} />} type="submit">Review configuration</ActionButton>
+          <ActionButton icon={<FlaskConical size={16} />} type="button" loading={testingBrain}
+            onClick={() => void testBrain()}>Verify MCAC protocol</ActionButton>
+          <ActionButton tone="danger" icon={<Power size={16} />} type="button"
+            onClick={() => void requestPlan('brain', { instanceId: selectedId, action: 'disable' })}>Disable</ActionButton>
+        </div>
+      </form>
+      <section className="provider-test"><h2>Configuration and health</h2>
+        <p>Configured adapter: <StatusBadge value={config.data?.mode ?? 'disabled'} /></p>
+        {brainTest
+          ? <dl className="detail-list"><div><dt>Protocol state</dt><dd><StatusBadge value={brainTest.status} /></dd></div>
+            <div><dt>Adapter</dt><dd>{brainTest.adapter}</dd></div>
+            <div><dt>Latency</dt><dd>{brainTest.latencyMillis} ms</dd></div>
+            <div><dt>Detail</dt><dd>{brainTest.message}</dd></div></dl>
+          : <p>The probe requires a real MCAC Tool call; plain text is not reported as healthy.</p>}
+      </section>
+    </section>
     <section className="companion-toolbar">
       <label className="field"><span>{t('term.companion')}</span><select value={companionId} onChange={(event) => setSelectedCompanion(event.target.value)}>
         {(companions.data?.companions ?? []).map((companion) => <option key={companion.id} value={companion.id}>{companion.displayName}</option>)}
@@ -118,7 +242,8 @@ export function BrainPage() {
             <time>{new Date(claim.createdAt).toLocaleTimeString()}</time><strong>{claim.claim}</strong>
             <StatusBadge value={claim.certainty} />
             <span>{claim.observationCallId ? t('brain.finalObservation', { id: claim.observationCallId }) : t('brain.noVerifiedObservation')}</span>
-            <p>{claim.taskId ? t('brain.taskId', { id: claim.taskId }) : t('brain.noTask')}{claim.explanation ? ` · ${claim.explanation}` : ''}</p>
+            <p>{claim.taskId ? t('brain.taskId', { id: claim.taskId }) : t('brain.noTask')}{claim.explanation ? ` · ${claim.explanation}` : ''}
+              {claim.conditions?.length ? ` · ${JSON.stringify(claim.conditions)}` : ''}</p>
           </div>))}</div>
       </section>
       <section className="main-panel"><header className="panel-header"><h2>{t('brain.context')}</h2>

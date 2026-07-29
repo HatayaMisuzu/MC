@@ -313,12 +313,8 @@ class RuntimeApplicationTest {
                     playerReply.path("payload").path("code").asText());
             assertEquals("external-brain", playerReply.path("payload").path("source").asText());
             assertFalse(playerReply.path("payload").path("reply").asText().isBlank());
-            assertEquals("AVAILABLE_NOW", playerReply.path("payload").path("capabilityStates")
-                    .path("NavigateTo").path("state").asText());
-            assertEquals("AVAILABLE_NOW", playerReply.path("payload").path("capabilityStates")
-                    .path("CraftItem").path("state").asText());
             assertTrue(application.plans().activeForCompanion("companion-1").isEmpty(),
-                    "a conversational status response must not create an agent plan");
+                    "missing external Brain must not create an internal Agent plan");
             assertTrue(application.commands().activeTaskFor("companion-1").isEmpty(),
                     "a conversational status response must not start a Minecraft task");
             var conversationDatabase = new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath());

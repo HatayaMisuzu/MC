@@ -41,12 +41,44 @@ public final class PairingService {
         var provider=Files.isRegularFile(providerFile)?JSON.readTree(providerFile.toFile()):JSON.createObjectNode().put("mode","rules");
         String mode=safe(provider.path("mode").asText("rules")),base=safe(provider.path("baseUrl").asText("https://api.openai.com")),env=safe(provider.path("apiKeyEnv").asText("MC_COMPANION_API_KEY")),model=safe(provider.path("model").asText("disabled"));
         int providerTimeout = Math.max(1, Math.min(300, provider.path("timeoutSeconds").asInt(15)));
+        Path brainFile = profile.profileDirectory().resolve("brain.json");
+        var brain = Files.isRegularFile(brainFile) ? JSON.readTree(brainFile.toFile())
+                : JSON.createObjectNode().put("mode", "disabled");
+        String brainMode = safe(brain.path("mode").asText("disabled"));
+        if (!java.util.Set.of("disabled", "hermes", "openai-compatible").contains(brainMode)) {
+            throw new IOException("Unsupported Brain mode");
+        }
+        String brainEndpoint = safe(brain.path("endpoint").asText("http://127.0.0.1:8080"));
+        String brainEnv = safe(brain.path("tokenEnv").asText("MCAC_BRAIN_TOKEN"));
+        environment(brainEnv, "Brain token");
+        String brainModel = safe(brain.path("model").asText(
+                "hermes".equals(brainMode) ? "hermes" : "disabled"));
+        int brainTimeout = bounded(brain.path("timeoutSeconds").asInt(60), 1, 300,
+                "Brain timeout must be 1..300 seconds");
+        int brainOutput = bounded(brain.path("maxOutputTokens").asInt(1400), 128, 4096,
+                "Brain output budget must be 128..4096");
+        int brainTools = bounded(brain.path("maxToolCallsPerTurn").asInt(8), 1, 32,
+                "Brain Tool budget must be 1..32");
+        int brainRequests = bounded(brain.path("maxRequests").asInt(24), 1, 1000,
+                "Brain request budget must be 1..1000");
+        int brainInput = bounded(brain.path("maxInputTokens").asInt(30_000), 128, 2_000_000,
+                "Brain input budget must be 128..2000000");
+        int brainTotalOutput = bounded(brain.path("maxTotalOutputTokens").asInt(8_000), 128, 500_000,
+                "Brain total output budget must be 128..500000");
+        int brainMinutes = bounded(brain.path("maxWallClockMinutes").asInt(15), 1, 480,
+                "Brain wall clock budget must be 1..480 minutes");
+        int brainRetries = bounded(brain.path("maxRetries").asInt(2), 0, 5,
+                "Brain retry budget must be 0..5");
         Path searchFile = profile.profileDirectory().resolve("search.json");
         var search = Files.isRegularFile(searchFile) ? JSON.readTree(searchFile.toFile())
                 : JSON.createObjectNode().put("mode", "disabled");
         String searchMode = safe(search.path("mode").asText("disabled"));
+        if (!java.util.Set.of("disabled", "http").contains(searchMode)) {
+            throw new IOException("Unsupported Search mode");
+        }
         String searchEndpoint = safe(search.path("endpoint").asText("https://search-provider.invalid/v1/search"));
         String searchEnv = safe(search.path("tokenEnv").asText("MC_COMPANION_SEARCH_TOKEN"));
+        environment(searchEnv, "Search token");
         int searchTimeout = Math.max(1, Math.min(30, search.path("timeoutSeconds").asInt(15)));
         String yaml = "server:\n  bind: 127.0.0.1\n  port: " + profile.port()
                 + "\n  management_port: " + profile.healthPort()
@@ -54,13 +86,16 @@ public final class PairingService {
                 + "\n  instance_id: \"" + safe(instance.instanceId()) + "\""
                 + "\n  token_file: ./pairing.token\n  heartbeat_seconds: 15\n  allow_remote: false\n"
                 + "database:\n  path: ./companion.db\nprovider:\n  mode: "+mode+"\n  base_url: \""+base+"\"\n  api_key_env: "+env+"\n  model: \""+model+"\"\n  timeout_seconds: "+providerTimeout+"\n"
-                + "brain:\n  mode: " + ("openai-compatible".equals(mode) ? "openai-compatible" : "disabled")
-                + "\n  endpoint: \"" + base + "\"\n  token_env: " + env
-                + "\n  model: \"" + model + "\"\n  timeout_seconds: " + providerTimeout
-                + "\n  max_output_tokens: 1400\n  max_tool_calls_per_turn: 8"
-                + "\n  max_requests: 24\n  max_input_tokens: 30000"
-                + "\n  max_total_output_tokens: 8000\n  max_wall_clock_minutes: 15"
-                + "\n  max_retries: 2\n"
+                + "brain:\n  mode: " + brainMode
+                + "\n  endpoint: \"" + brainEndpoint + "\"\n  token_env: " + brainEnv
+                + "\n  model: \"" + brainModel + "\"\n  timeout_seconds: " + brainTimeout
+                + "\n  max_output_tokens: " + brainOutput
+                + "\n  max_tool_calls_per_turn: " + brainTools
+                + "\n  max_requests: " + brainRequests
+                + "\n  max_input_tokens: " + brainInput
+                + "\n  max_total_output_tokens: " + brainTotalOutput
+                + "\n  max_wall_clock_minutes: " + brainMinutes
+                + "\n  max_retries: " + brainRetries + "\n"
                 + "search:\n  mode: " + searchMode + "\n  endpoint: \"" + searchEndpoint
                 + "\"\n  token_env: " + searchEnv + "\n  timeout_seconds: " + searchTimeout
                 + "\n  allowed_domains: " + yamlList(search.path("allowedDomains"))
@@ -70,6 +105,15 @@ public final class PairingService {
         RuntimeProfileService.writeIdentity(profile);
     }
     private static String safe(String value)throws IOException{if(value==null||value.contains("\n")||value.contains("\r")||value.contains("\"")||value.isBlank())throw new IOException("Unsafe provider configuration value");return value;}
+    private static int bounded(int value, int minimum, int maximum, String message) throws IOException {
+        if (value < minimum || value > maximum) throw new IOException(message);
+        return value;
+    }
+    private static void environment(String value, String label) throws IOException {
+        if (!value.matches("[A-Za-z_][A-Za-z0-9_]{0,127}")) {
+            throw new IOException(label + " environment variable is invalid");
+        }
+    }
     private static String yamlList(com.fasterxml.jackson.databind.JsonNode values) throws IOException {
         if (!values.isArray() || values.isEmpty()) return "[]";
         java.util.List<String> entries = new java.util.ArrayList<>();

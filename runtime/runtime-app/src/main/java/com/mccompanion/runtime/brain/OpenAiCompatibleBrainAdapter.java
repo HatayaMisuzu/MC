@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** External OpenAI-compatible tool-calling Brain. MCAC validates and executes every returned tool call. */
 public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter {
@@ -34,6 +35,8 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
     private final int maxOutputTokens;
     private final HttpClient client;
     private final Map<String, State> sessions = new ConcurrentHashMap<>();
+    private final AtomicReference<BrainHealth> health = new AtomicReference<>(
+            new BrainHealth("CONFIGURED", "openai-compatible", "Live protocol not checked", Instant.now()));
 
     public OpenAiCompatibleBrainAdapter(String baseUrl, String apiKey, String model,
                                         Duration timeout, int maxOutputTokens) {
@@ -64,9 +67,10 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         return session;
     }
 
-    @Override public synchronized BrainTurnResult continueTurn(BrainTurnRequest request) {
+    @Override public BrainTurnResult continueTurn(BrainTurnRequest request) {
         State state = sessions.get(request.sessionId());
         if (state == null) throw new IllegalStateException("BRAIN_SESSION_NOT_FOUND");
+        synchronized (state) {
         for (ToolResult result : request.toolResults()) {
             ObjectNode tool = Json.object().put("role", "tool").put("tool_call_id", result.callId());
             ObjectNode clipping = Json.object();
@@ -99,8 +103,12 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         body.put("tool_choice", "auto");
         JsonNode message = request(body).path("choices").path(0).path("message");
         if (!message.isObject()) throw new IllegalStateException("BRAIN_INVALID_OUTPUT");
+        health.set(new BrainHealth("PROTOCOL_COMPATIBLE", "openai-compatible",
+                "OpenAI-compatible Brain response schema verified", Instant.now()));
         JsonNode calls = message.path("tool_calls");
         if (calls.isArray() && !calls.isEmpty()) {
+            health.set(new BrainHealth("TOOL_CALL_VERIFIED", "openai-compatible",
+                    "MCAC Tool call received", Instant.now()));
             if (calls.size() == 1 && "ask_user".equals(calls.path(0).path("function").path("name").asText())) {
                 JsonNode arguments = Json.parse(calls.path(0).path("function").path("arguments").asText("{}"));
                 BrainQuestion question = parseQuestion(arguments);
@@ -126,12 +134,11 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         if (content.isBlank()) throw new IllegalStateException("BRAIN_EMPTY_RESPONSE");
         state.history.add(Json.object().put("role", "assistant").put("content", content));
         return BrainTurnResult.finalResponse(content);
+        }
     }
 
     @Override public void cancel(String sessionId, String reason) { sessions.remove(sessionId); }
-    @Override public BrainHealth health() {
-        return new BrainHealth("CONFIGURED", "openai-compatible", "live health not yet checked", Instant.now());
-    }
+    @Override public BrainHealth health() { return health.get(); }
     @Override public void close() { sessions.clear(); client.close(); }
 
     private JsonNode request(ObjectNode body) {
@@ -145,11 +152,17 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
                 byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
                 if (bytes.length > MAX_RESPONSE_BYTES) throw new IllegalStateException("BRAIN_RESPONSE_TOO_LARGE");
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                    health.set(new BrainHealth("UNAVAILABLE", "openai-compatible",
+                            "HTTP " + response.statusCode(), Instant.now()));
                     throw new IllegalStateException("BRAIN_HTTP_" + response.statusCode());
                 }
+                health.set(new BrainHealth("REACHABLE", "openai-compatible",
+                        "Endpoint accepted a Brain request", Instant.now()));
                 return Json.parse(new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
             }
         } catch (IOException failure) {
+            health.set(new BrainHealth("UNAVAILABLE", "openai-compatible",
+                    "I/O failure", Instant.now()));
             throw new IllegalStateException("BRAIN_IO_ERROR", failure);
         } catch (InterruptedException failure) {
             Thread.currentThread().interrupt();

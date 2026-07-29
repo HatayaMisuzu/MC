@@ -54,6 +54,10 @@ tag annotation, and final delivery.
 
 ## Compatibility and UI evidence
 
+The button-lifecycle figures below describe the frozen 0.3.1 candidate. The 2026-07-29 corrective
+audit removed the local “record Fixture evidence” control; current field packs remain `STAGING`
+until trusted automation supplies evidence. See the RC completion matrix for current evidence.
+
 ```text
 COMPAT_SCHEMA_VERSION=mcac-compat/1
 COMPAT_HOST_API_VERSION=1_DECLARATION_ONLY

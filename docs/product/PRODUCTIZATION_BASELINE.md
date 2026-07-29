@@ -60,8 +60,9 @@ modpacks remain unverified.
 - Compatibility Pack schema: `mcac-compat/1`.
 - Compatibility Host API: version `1`, bounded declaration-only lifecycle surface. Dynamic
   in-process native extension execution is closed.
-- Compatibility fixture: isolated unknown-Mod v1/v2 install, evidence, index, activate, update,
-  rollback, quarantine, disable, remove, and recovery are automated.
+- Compatibility Host fixture: isolated unknown-Mod v1/v2 install, system-authored evidence, index,
+  activate, update, rollback, quarantine, disable, remove, and recovery are automated in code.
+  The packaged UI proves user-installed packs remain `STAGING` without a manual evidence button.
 - Modpack overlay fixture: deterministic overlay precedence and stale-fingerprint suppression are
   automated.
 - UI languages: `zh-CN`, `en-US`, with persistent independent switching.

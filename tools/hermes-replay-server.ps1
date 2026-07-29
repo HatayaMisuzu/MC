@@ -108,6 +108,11 @@ function New-TurnResponse([string]$sessionId, $request) {
                     certainty = 'VERIFIED'
                     observationCallId = 'verify-delivery-1'
                     taskId = ''
+                    conditions = @(@{
+                        pointer = '/verified'
+                        operator = 'EQUALS'
+                        expected = $true
+                    })
                     explanation = ''
                 }
             } }

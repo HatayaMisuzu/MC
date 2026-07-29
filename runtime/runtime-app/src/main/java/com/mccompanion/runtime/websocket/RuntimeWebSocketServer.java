@@ -375,7 +375,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         waiting = java.util.Optional.empty();
                     }
                 }
-                if (waiting.isPresent() && waiting.orElseThrow().brainSessionId() == null
+                if (kernel != null && waiting.isPresent() && waiting.orElseThrow().brainSessionId() == null
                         && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
                     var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
                     reply.put("accepted", true).put("source", "waiting-answer")
@@ -476,6 +476,15 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         if (brainResult.question() != null) conversations.repository()
                                 .markQuestionGameDelivered(brainResult.question().questionId());
                     }
+                    return;
+                }
+                if (providers == null || kernel == null) {
+                    reply.put("accepted", false).put("source", "external-brain")
+                            .put("code", "EXTERNAL_BRAIN_UNAVAILABLE")
+                            .put("reply", "External Brain is not configured; no internal planning fallback is enabled.");
+                    ObjectNode unavailable = envelope(session, "player_reply");
+                    unavailable.set("payload", reply);
+                    if (session.peer().isOpen()) session.peer().send(Json.write(unavailable));
                     return;
                 }
                 var result = providers.plan(text, context);

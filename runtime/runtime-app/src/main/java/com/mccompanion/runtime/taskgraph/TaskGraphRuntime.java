@@ -207,6 +207,10 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     // question has released admission. Exposing it earlier lets an immediate
                     // answer race that cleanup and be rejected as "already active".
                     return terminal(call, record);
+                } else if (record.state().equals("PAUSED")) {
+                    // PAUSED is a stable externally observable boundary, not an execution timeout.
+                    // Awaiters must be able to inspect/resume it without await() cancelling the graph.
+                    return terminal(call, record);
                 }
                 Thread.sleep(25);
             }

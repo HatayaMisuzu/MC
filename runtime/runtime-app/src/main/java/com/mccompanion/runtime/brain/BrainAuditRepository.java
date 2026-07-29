@@ -297,7 +297,8 @@ public final class BrainAuditRepository {
                 long createdAt = clock.millis();
                 try (PreparedStatement statement = connection.prepareStatement("""
                         INSERT INTO brain_completion_claim(session_id,claim_sequence,certainty,claim_text,
-                        observation_call_id,task_id,explanation,created_at) VALUES(?,?,?,?,?,?,?,?)
+                        observation_call_id,task_id,conditions_json,explanation,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?)
                         """)) {
                     statement.setString(1, sessionId);
                     statement.setLong(2, sequence);
@@ -307,8 +308,9 @@ public final class BrainAuditRepository {
                     else statement.setString(5, claim.observationCallId());
                     if (claim.taskId().isBlank()) statement.setNull(6, java.sql.Types.VARCHAR);
                     else statement.setString(6, claim.taskId());
-                    statement.setString(7, claim.explanation());
-                    statement.setLong(8, createdAt);
+                    statement.setString(7, claim.toJson().path("conditions").toString());
+                    statement.setString(8, claim.explanation());
+                    statement.setLong(9, createdAt);
                     statement.executeUpdate();
                 }
                 connection.commit();
@@ -349,13 +351,15 @@ public final class BrainAuditRepository {
                     }
                     var claims = session.putArray("completionClaims");
                     try (PreparedStatement claimRows = connection.prepareStatement("""
-                            SELECT claim_sequence,certainty,claim_text,observation_call_id,task_id,explanation,created_at
+                            SELECT claim_sequence,certainty,claim_text,observation_call_id,task_id,
+                                   conditions_json,explanation,created_at
                             FROM brain_completion_claim WHERE session_id=? ORDER BY claim_sequence DESC LIMIT 50
                             """)) {
                         claimRows.setString(1, rows.getString("session_id"));
                         try (var claimResult = claimRows.executeQuery()) {
                             while (claimResult.next()) {
-                                claims.addObject().put("sequence", claimResult.getLong("claim_sequence"))
+                                var claim = claims.addObject()
+                                        .put("sequence", claimResult.getLong("claim_sequence"))
                                         .put("certainty", claimResult.getString("certainty"))
                                         .put("claim", claimResult.getString("claim_text"))
                                         .put("observationCallId", nullToEmpty(claimResult.getString("observation_call_id")))
@@ -363,6 +367,8 @@ public final class BrainAuditRepository {
                                         .put("explanation", claimResult.getString("explanation"))
                                         .put("createdAt", Instant.ofEpochMilli(
                                                 claimResult.getLong("created_at")).toString());
+                                claim.set("conditions", Json.parse(
+                                        claimResult.getString("conditions_json")));
                             }
                         }
                     }

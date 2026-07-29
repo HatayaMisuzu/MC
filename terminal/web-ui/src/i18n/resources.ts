@@ -421,6 +421,7 @@ export const enUS = {
   'compat.quarantine': 'Quarantine',
   'compat.remove': 'Remove',
   'compat.evidenceFixture': 'Record fixture evidence',
+  'compat.awaitingEvidence': 'Awaiting system-generated test evidence',
   'compat.refreshError': 'Compatibility state could not be loaded.',
 } as const
 
@@ -849,6 +850,7 @@ export const zhCN: Record<TranslationKey, string> = {
   'compat.quarantine': '隔离',
   'compat.remove': '移除',
   'compat.evidenceFixture': '记录 Fixture 证据',
+  'compat.awaitingEvidence': '等待系统生成的测试证据',
   'compat.refreshError': '无法加载兼容层状态。',
 }
 

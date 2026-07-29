@@ -75,6 +75,10 @@ final class WebTerminalApi {
         send(exchange, 200, providerStatus(requiredQuery(exchange, "instanceId")));
       else if ("POST".equals(method) && "/api/provider/test".equals(path))
         send(exchange, 200, providerTest(body(exchange)));
+      else if ("GET".equals(method) && "/api/brain/config".equals(path))
+        send(exchange, 200, brainConfig(requiredQuery(exchange, "instanceId")));
+      else if ("POST".equals(method) && "/api/brain/test".equals(path))
+        send(exchange, 200, brainTest(body(exchange)));
       else if ("GET".equals(method) && "/api/search/status".equals(path))
         send(exchange, 200, searchStatus(requiredQuery(exchange, "instanceId")));
       else if ("POST".equals(method) && "/api/search/test".equals(path))
@@ -312,6 +316,22 @@ final class WebTerminalApi {
         .put("message", result.message());
   }
 
+  private JsonNode brainConfig(String instanceId) throws Exception {
+    MinecraftInstance instance = root.instance(instanceId);
+    return new BrainConfigurationService().status(root.profile(instance));
+  }
+
+  private ObjectNode brainTest(JsonNode request) throws Exception {
+    MinecraftInstance instance = root.instance(required(request, "instanceId"));
+    var result = new BrainConfigurationService().test(root.profile(instance));
+    return JSON.createObjectNode()
+        .put("success", result.success())
+        .put("status", result.status())
+        .put("latencyMillis", result.latencyMillis())
+        .put("adapter", result.adapter())
+        .put("message", result.message());
+  }
+
   private JsonNode searchStatus(String instanceId) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
     return new SearchConfigurationService().status(root.profile(instance));
@@ -443,6 +463,10 @@ final class WebTerminalApi {
   }
 
   ObjectNode logSnapshot(HttpExchange exchange) throws Exception {
+    return logSnapshot(exchange, -1);
+  }
+
+  ObjectNode logSnapshot(HttpExchange exchange, long offset) throws Exception {
     Map<String, String> query = query(exchange);
     MinecraftInstance instance = root.instance(required(query, "instanceId"));
     String kind = query.getOrDefault("kind", "minecraft");
@@ -450,14 +474,14 @@ final class WebTerminalApi {
         "runtime".equals(kind)
             ? root.profile(instance).logFile()
             : instance.logsDirectory().resolve("latest.log");
+    BoundedLogReader.Result tail = BoundedLogReader.read(file, offset, 500);
     ArrayNode lines = JSON.createArrayNode();
-    if (Files.isRegularFile(file)) {
-      List<String> all = Files.readAllLines(file, StandardCharsets.UTF_8);
-      all.subList(Math.max(0, all.size() - 500), all.size()).forEach(lines::add);
-    }
+    tail.lines().forEach(lines::add);
     return JSON.createObjectNode()
         .put("kind", kind)
         .put("available", Files.isRegularFile(file))
+        .put("nextOffset", tail.nextOffset())
+        .put("reset", tail.reset())
         .set("lines", lines);
   }
 
@@ -508,6 +532,7 @@ final class WebTerminalApi {
           case "install" -> installPlan(request);
           case "runtime" -> runtimePlan(request);
           case "provider" -> providerPlan(request);
+          case "brain" -> brainPlan(request);
           case "search" -> searchPlan(request);
           case "session" -> sessionPlan(request);
           case "companions" -> companionPlan(request);
@@ -607,7 +632,7 @@ final class WebTerminalApi {
   private OperationManager.Plan compatibilityPlan(JsonNode request) throws Exception {
     String instanceId = required(request, "instanceId");
     String action = required(request, "action").toLowerCase(java.util.Locale.ROOT);
-    if (!List.of("install", "record-evidence", "index", "activate", "deactivate",
+    if (!List.of("install", "index", "activate", "deactivate",
         "update", "patch", "rollback", "remove", "quarantine", "export").contains(action)) {
       throw new IllegalArgumentException("Compatibility action is not supported");
     }
@@ -648,11 +673,6 @@ final class WebTerminalApi {
             copy.path("source").asText("terminal"), operationId);
         case "patch" -> host.patch(grant, Path.of(required(copy, "archivePath")),
             copy.path("source").asText("terminal"), operationId);
-        case "record-evidence" -> host.recordEvidence(grant, required(copy, "coordinate"),
-            required(copy, "evidenceId"), required(copy, "kind"),
-            CompatibilityPack.MatchLevel.valueOf(required(copy, "matchLevel")),
-            copy.path("passed").asBoolean(false), required(copy, "summary"),
-            copy.path("artifactHash").asText(""), operationId);
         case "index" -> host.index(grant, required(copy, "coordinate"), operationId);
         case "activate" -> host.activate(grant, required(copy, "coordinate"),
             compatibilityFingerprint(instance), operationId);
@@ -811,6 +831,46 @@ final class WebTerminalApi {
           new PairingService().ensureConfigured(instance, profile);
           return (ObjectNode) provider.status(profile);
         });
+  }
+
+  private OperationManager.Plan brainPlan(JsonNode request) throws Exception {
+    String instanceId = required(request, "instanceId");
+    String action = required(request, "action").toLowerCase();
+    if (!List.of("configure", "disable").contains(action)) {
+      throw new IllegalArgumentException("Brain action is not supported");
+    }
+    MinecraftInstance instance = root.instance(instanceId);
+    ObjectNode details = JSON.createObjectNode()
+        .put("summary", "External Brain " + action)
+        .put("storesToken", false);
+    if ("configure".equals(action)) {
+      details.put("mode", required(request, "mode"))
+          .put("endpoint", required(request, "endpoint"))
+          .put("tokenEnv", required(request, "tokenEnv"))
+          .put("maxToolCallsPerTurn", request.path("maxToolCallsPerTurn").asInt(12))
+          .put("maxOutputTokens", request.path("maxOutputTokens").asInt(1024));
+    }
+    JsonNode copy = request.deepCopy();
+    return operations.create("brain", action, instanceId, false, details, progress -> {
+      BrainConfigurationService brain = new BrainConfigurationService();
+      RuntimeProfile profile = root.profile(instance);
+      if ("disable".equals(action)) {
+        brain.disable(profile);
+      } else {
+        brain.configure(profile, required(copy, "mode"), required(copy, "endpoint"),
+            required(copy, "tokenEnv"), copy.path("model").asText(""),
+            copy.path("timeoutSeconds").asInt(60),
+            copy.path("maxToolCallsPerTurn").asInt(12),
+            copy.path("maxOutputTokens").asInt(1024),
+            copy.path("maxRequests").asInt(24),
+            copy.path("maxInputTokens").asInt(30_000),
+            copy.path("maxTotalOutputTokens").asInt(8_000),
+            copy.path("maxWallClockMinutes").asInt(15),
+            copy.path("maxRetries").asInt(2));
+      }
+      new PairingService().ensureConfigured(instance, profile);
+      return (ObjectNode) brain.status(profile);
+    });
   }
 
   private OperationManager.Plan searchPlan(JsonNode request) throws Exception {

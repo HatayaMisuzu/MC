@@ -19,7 +19,9 @@ or human-play evidence. Machine-readable product facts are in
 Other instances may be detected and diagnosed, but MCAC does not claim a Full Runtime Bridge for
 them. The Compatibility Host foundation can install, validate, index, activate, update, roll back,
 quarantine, disable and remove bounded declaration-only compatibility packs. That foundation and
-its fixtures do not establish arbitrary version, Loader, Mod or modpack compatibility.
+its fixtures do not establish arbitrary version, Loader, Mod or modpack compatibility. The Web
+Terminal cannot author `EXACT_VERIFIED` evidence; installed field packs remain `STAGING` until a
+trusted test runner supplies evidence through the scoped Host boundary.
 
 ## Current closure state
 

@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.brain;
 
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.agent.AgentContext;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
@@ -70,18 +71,19 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             throw new IllegalArgumentException("WAITING_ANSWER resolution is required");
         }
         if (conversations == null) throw new IllegalStateException("BRAIN_QUESTION_PERSISTENCE_DISABLED");
+        Object lock = companionLocks.computeIfAbsent(question.companionId(), ignored -> new Object());
         try {
-            WaitingQuestion answered = conversations.answer(question.questionId(), resolution.text(), resolution.optionId());
-            var payload = Json.object().put("type", "user_answer")
-                    .put("questionId", answered.questionId())
-                    .put("optionId", answered.answer().path("optionId").asText(""))
-                    .put("text", answered.answer().path("text").asText(""));
-            Object lock = companionLocks.computeIfAbsent(question.companionId(), ignored -> new Object());
             synchronized (lock) {
                 BrainSession active = sessions.get(question.companionId());
                 if (active != null && !active.sessionId().equals(question.brainSessionId())) {
                     throw new IllegalStateException("BRAIN_QUESTION_SESSION_MISMATCH");
                 }
+                WaitingQuestion answered = conversations.answer(
+                        question.questionId(), resolution.text(), resolution.optionId());
+                var payload = Json.object().put("type", "user_answer")
+                        .put("questionId", answered.questionId())
+                        .put("optionId", answered.answer().path("optionId").asText(""))
+                        .put("text", answered.answer().path("text").asText(""));
                 return continueTurnLocked(controllerId, question.companionId(), Json.write(payload), context);
             }
         } catch (java.sql.SQLException failure) {
@@ -206,6 +208,15 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 ToolResult observation;
                 if (accepted.terminal()) {
                     observation = accepted;
+                } else if (isDurableAsynchronousStart(accepted)) {
+                    activeTools.put(companionId, new ActiveTool(toolContext, call));
+                    ObjectNode receipt = (ObjectNode) accepted.observation().deepCopy();
+                    receipt.put("executionMode", "ASYNCHRONOUS")
+                            .put("completionVerified", false)
+                            .put("statusTool", call.name().startsWith("task_graph.")
+                                    ? "task_graph.inspect" : "task.inspect");
+                    observation = new ToolResult(call.callId(), call.name(), accepted.success(),
+                            accepted.code(), receipt, true);
                 } else {
                     activeTools.put(companionId, new ActiveTool(toolContext, call));
                     try {
@@ -249,13 +260,19 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 .findFirst().map(value -> value.timeout()).orElse(Duration.ofSeconds(30));
     }
 
+    private static boolean isDurableAsynchronousStart(ToolResult result) {
+        if (!result.success() || result.terminal() || !result.observation().isObject()) return false;
+        return !result.observation().path("taskId").asText("").isBlank()
+                || !result.observation().path("executionId").asText("").isBlank();
+    }
+
     public void cancel(String controllerId, String companionId, String reason) {
         requireController(controllerId);
         BrainSession session = sessions.remove(companionId);
         semanticStates.remove(companionId);
         pendingInterruptions.remove(companionId);
         interruptedObservations.remove(companionId);
-        ActiveTool active = activeTools.get(companionId);
+        ActiveTool active = activeTools.remove(companionId);
         if (active != null) tools.cancel(active.context(), active.call().callId(), reason);
         if (session != null) {
             adapter.cancel(session.sessionId(), reason);
@@ -304,6 +321,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         interruptedObservations.clear();
         activeTools.values().forEach(active -> tools.cancel(active.context(), active.call().callId(),
                 "CONTROLLER_RELEASED"));
+        activeTools.clear();
         for (BrainSession session : cancelledSessions) adapter.cancel(session.sessionId(), "CONTROLLER_RELEASED");
         activeControllerId = null;
     }
@@ -354,6 +372,16 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         String toolName = observation.toolName();
         if (!isRealObservationTool(toolName)) {
             throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_TOOL_INVALID");
+        }
+        if (!claim.taskId().isBlank()
+                && !claim.taskId().equals(observation.observation().path("taskId").asText(""))) {
+            throw new IllegalArgumentException("BRAIN_FINAL_OBSERVATION_TASK_MISMATCH");
+        }
+        for (BrainCompletionClaim.EvidenceCondition condition : claim.conditions()) {
+            if (!condition.matches(observation.observation())) {
+                throw new IllegalArgumentException(
+                        "BRAIN_FINAL_OBSERVATION_CONDITION_FAILED:" + condition.pointer());
+            }
         }
     }
 

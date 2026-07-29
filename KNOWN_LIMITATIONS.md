@@ -12,6 +12,15 @@ kept explicit so Replay, local automation, and external verification are not con
 - OpenAI-compatible Brain and Search providers require user-supplied environment variables. The
   repository and support bundle contain no production API keys, and live provider calls may cost
   money when a user explicitly enables them.
+- Natural-language control has no internal Agent fallback. If the independently configured Hermes
+  or OpenAI-compatible Brain is disabled, unreachable, credential-missing, or protocol-incompatible,
+  requests fail closed. A plain text completion endpoint is not reported as Brain-compatible.
+- Action-start receipts are not completion evidence. They carry `completionVerified=false`; callers
+  must inspect the durable Task/Task Graph and use matching connected-body observations before
+  reporting an outcome.
+- Compatibility Packs remain `STAGING` until trusted automation supplies real evidence. The Web
+  Terminal cannot manufacture `passed=true` or `EXACT_VERIFIED`; broader real-pack and third-party
+  Mod evidence remains limited to the concrete Fixture/GameTest/E2E entries in the RC matrix.
 - Unknown Mod content is discovered through live Registry, recipe, Observation, and generic
   interaction primitives. Compatibility with every third-party menu or mechanic is not guaranteed.
 - Navigation is bounded, deterministic body control with re-planning, stuck detection, unloaded

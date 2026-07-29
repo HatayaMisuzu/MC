@@ -1,7 +1,8 @@
-name: Windows terminal validation
+name: Layer 2 of 3 - ready PR Windows integration
 
 on:
   pull_request:
+    types: [opened, reopened, ready_for_review]
     paths:
       - '.github/workflows/windows-full.yml'
       - 'build.gradle'
@@ -13,8 +14,7 @@ on:
       - 'runtime/**'
       - 'terminal/**'
       - 'compatibility/**'
-      - 'tools/gradle9-compatibility-probe.ps1'
-      - 'tools/documentation-check*.ps1'
+      - 'minecraft/**'
       - 'tools/terminal-entrypoint-test.ps1'
       - 'tools/html-terminal-start-test.ps1'
       - 'tools/release-golden-path.ps1'
@@ -22,40 +22,22 @@ on:
       - 'mcac.cmd'
       - 'mcac.ps1'
       - '启动终端.cmd'
-      - 'README.md'
-      - 'KNOWN_LIMITATIONS.md'
-      - 'CODEX_EXECUTION.md'
       - 'LICENSE'
       - 'NOTICE'
-      - 'docs/INDEX.md'
-      - 'docs/PRODUCT_STATUS.md'
-      - 'docs/ARCHITECTURE.md'
-      - 'docs/COMPATIBILITY.md'
-      - 'docs/CONTROL_TERMINAL.md'
-      - 'docs/MCP_PROTOCOL.md'
-      - 'docs/TASK_GRAPH_DSL.md'
-      - 'docs/RC_COMPLETION_MATRIX.md'
-      - 'docs/LIVE_BRAIN_HUMAN_PLAYTEST.md'
-      - 'docs/POST_PRODUCTIZATION_P0.md'
-      - 'docs/product/**'
-      - 'docs/user/**'
-      - 'docs/developer/**'
-      - 'docs/compatibility/**'
-  push:
-    branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-terminal-${{ github.event.pull_request.number || github.ref }}
+  group: layer-2-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
-  terminal-package:
+  windows-integration:
+    name: windows-integration
+    if: github.event.pull_request.draft == false
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
@@ -68,33 +50,24 @@ jobs:
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
-      - name: Warm Gradle wrapper with network retry
-        timeout-minutes: 5
-        shell: pwsh
-        run: |
-          $exitCode = 1
-          foreach ($attempt in 1..3) {
-            ./gradlew.bat --version
-            $exitCode = $LASTEXITCODE
-            if ($exitCode -eq 0) { break }
-            if ($attempt -lt 3) { Start-Sleep -Seconds 10 }
-          }
-          if ($exitCode -ne 0) { exit $exitCode }
-      - name: Install Chromium for browser end-to-end tests
+
+      - name: Install Chromium
         timeout-minutes: 10
         shell: pwsh
         working-directory: terminal/web-ui
         run: |
           npm ci --no-audit --no-fund
           npx playwright install chromium
-      - name: Build browser end-to-end backend and Fabric artifact
+
+      - name: Build the integration surface
         timeout-minutes: 15
         shell: pwsh
         run: >-
           ./gradlew.bat webBuild :terminal:terminal-app:installDist
           :runtime:runtime-app:installDist build-fabric-1.21.1
           --no-daemon --no-parallel --stacktrace
-      - name: Enforce real Windows symlink and junction boundaries
+
+      - name: Verify Windows link and installer boundaries
         timeout-minutes: 10
         shell: pwsh
         env:
@@ -105,54 +78,31 @@ jobs:
           :compatibility:compatibility-host:test
           --tests com.mccompanion.compat.CompatibilityStoreLinkSecurityTest
           :terminal:installer:test
-          --tests com.mccompanion.terminal.install.InstallTransactionTest --rerun-tasks
-          --no-daemon --no-parallel --stacktrace
-      - name: Run the full browser product path
+          --tests com.mccompanion.terminal.install.InstallTransactionTest
+          --rerun-tasks --no-daemon --no-parallel --stacktrace
+
+      - name: Run the browser product path
         timeout-minutes: 10
         shell: pwsh
         working-directory: terminal/web-ui
         env:
           MCAC_E2E_PREBUILT: '1'
         run: npm run e2e
-      - name: Build and verify the release package
-        timeout-minutes: 20
-        shell: pwsh
-        run: ./gradlew.bat verifyTerminalPackage --no-daemon --no-parallel --stacktrace
-      - name: Verify packaged launcher entry points
-        timeout-minutes: 5
+
+      - name: Verify package, launchers and clean extraction
+        timeout-minutes: 25
         shell: pwsh
         run: >-
-          ./gradlew.bat tuiIntegrationTest rootLauncherTest releaseStarterTest
+          ./gradlew.bat verifyTerminalPackage
+          tuiIntegrationTest rootLauncherTest releaseStarterTest
+          htmlTerminalStartTest releaseGoldenPathTest
           --no-daemon --no-parallel --stacktrace
-      - name: Verify packaged HTML first start and single-instance reuse
-        timeout-minutes: 5
-        shell: pwsh
-        run: ./gradlew.bat htmlTerminalStartTest --no-daemon --no-parallel --stacktrace
-      - name: Verify the clean-extraction release Golden Path
-        timeout-minutes: 15
-        shell: pwsh
-        run: ./gradlew.bat releaseGoldenPathTest --no-daemon --no-parallel --stacktrace
-      - name: Probe shared release gates with Gradle 9
-        timeout-minutes: 15
-        shell: pwsh
-        run: ./gradlew.bat gradle9CompatibilityProbe --no-daemon --no-parallel --stacktrace
-      - name: Upload verified RC candidate
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: mcac-rc-${{ github.sha }}
-          if-no-files-found: error
-          retention-days: 14
-          path: |
-            build/distributions/mcac-release.zip
-            build/distributions/mcac-release.zip.sha256
-            build/distributions/mcac-release/release-manifest.json
-            build/distributions/mcac-release/sbom.spdx.json
-            build/distributions/mcac-release/SHA256SUMS.txt
-      - name: Upload safe reports and launch logs on failure
+
+      - name: Upload focused failure evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: windows-terminal-failure-evidence
+          name: layer-2-windows-failure-evidence
           if-no-files-found: ignore
           retention-days: 7
           path: |
@@ -160,5 +110,4 @@ jobs:
             **/build/test-results/
             minecraft/*/build/launch-test/server/logs/
             build/release-golden-path/
-            build/terminal-package/runtime-multi-profile-test/
             build/reports/problems/

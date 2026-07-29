@@ -30,6 +30,21 @@ New behavior should compose primitive executors, declarative Skills and external
 Task Graphs. Unknown Registry content remains data and must produce verified observations or an
 honest unsupported result.
 
-Before submitting a candidate, run the applicable tasks documented in the root
-[README](../../README.md), then update the sole [RC matrix](../RC_COMPLETION_MATRIX.md). Local,
-Replay, GameTest, Live-provider and human evidence must retain their exact labels.
+## Change and release workflow
+
+Keep implementation work focused on a coherent product change and verify only the affected risk
+locally. Draft PR updates use Layer 1 fast validation. Layer 2 Windows integration runs once when a
+relevant PR is opened as non-Draft or deliberately moved to Ready; it is not a per-push loop.
+Layer 3 is weekly or manual and owns Heavy Loader/Runtime coverage, CodeQL, Gradle compatibility,
+and release candidates.
+
+Ordinary commits and merges do not create candidates. To create one release candidate, manually
+dispatch `.github/workflows/minecraft-heavy.yml` from `main` with `mode=candidate`. The workflow
+first requires every Layer 3 audit job to pass, then rebuilds and verifies the exact-main package
+before uploading the only RC artifact.
+
+Before that explicit candidate boundary, run only applicable tasks documented in the root
+[README](../../README.md) and update the sole [RC matrix](../RC_COMPLETION_MATRIX.md) when product
+truth changes. Local, Replay, GameTest, Live-provider and human evidence must retain their exact
+labels. Do not create status-only commits to copy run IDs or repeat complete suites after a focused
+fix.

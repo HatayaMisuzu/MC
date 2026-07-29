@@ -1,35 +1,106 @@
-name: Minecraft heavy validation
+name: Layer 3 of 3 - audit and release candidate
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/minecraft-heavy.yml'
-      - 'build.gradle'
-      - 'settings.gradle'
-      - 'gradle.properties'
-      - 'gradle/**'
-      - 'core/**'
-      - 'protocol/**'
-      - 'runtime/**'
-      - 'terminal/**'
-      - 'compatibility/**'
-      - 'minecraft/**'
-      - 'tools/runtime-*.ps1'
-      - 'tools/*persistence*.ps1'
   schedule:
-    - cron: '23 18 * * *'
+    - cron: '23 18 * * 3'
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Run a weekly-style audit or create the single exact-main release candidate
+        required: true
+        default: audit
+        type: choice
+        options:
+          - audit
+          - candidate
 
 permissions:
   contents: read
 
 concurrency:
-  group: minecraft-heavy-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: layer-3-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  secret-scan:
+    name: secret-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Deterministic current-tree scan
+        shell: pwsh
+        run: ./tools/secret-check.ps1
+      - name: Full-history Gitleaks scan
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  codeql:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            build-mode: manual
+          - language: javascript-typescript
+            build-mode: none
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: terminal/web-ui/package-lock.json
+      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - uses: github/codeql-action/init@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+      - name: Reproducible dependency install
+        working-directory: terminal/web-ui
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build analyzed sources
+        if: matrix.build-mode == 'manual'
+        run: >-
+          ./gradlew classes webBuild --rerun-tasks --no-build-cache
+          --no-daemon --no-parallel --stacktrace
+      - uses: github/codeql-action/analyze@4187e74d05793876e9989daffde9c3e66b4acd07 # v3
+
+  gradle-compatibility:
+    name: gradle-compatibility
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: terminal/web-ui/package-lock.json
+      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+      - name: Probe shared gates with Gradle 9
+        run: >-
+          ./gradlew.bat gradle9CompatibilityProbe
+          --no-daemon --no-parallel --stacktrace
+
   loaders-and-runtime:
+    name: loaders-and-runtime
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
@@ -46,18 +117,7 @@ jobs:
           cache: npm
           cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
-      - name: Warm Gradle wrapper with network retry
-        timeout-minutes: 5
-        shell: pwsh
-        run: |
-          $exitCode = 1
-          foreach ($attempt in 1..3) {
-            ./gradlew.bat --version
-            $exitCode = $LASTEXITCODE
-            if ($exitCode -eq 0) { break }
-            if ($attempt -lt 3) { Start-Sleep -Seconds 10 }
-          }
-          if ($exitCode -ne 0) { exit $exitCode }
+
       - name: Build all supported Loader artifacts
         timeout-minutes: 20
         shell: pwsh
@@ -94,11 +154,12 @@ jobs:
         timeout-minutes: 10
         shell: pwsh
         run: ./gradlew.bat runtimeDisabledLaunchTest --no-daemon --no-parallel --stacktrace
-      - name: Upload safe test reports and logs on failure
+
+      - name: Upload focused failure evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: minecraft-heavy-failure-evidence
+          name: layer-3-heavy-failure-evidence
           if-no-files-found: ignore
           retention-days: 7
           path: |
@@ -111,3 +172,68 @@ jobs:
             build/e2e-runtime-forge/logs/
             build/terminal-package/runtime-multi-profile-test/
             build/reports/problems/
+
+  release-candidate:
+    name: exact-main-release-candidate
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'candidate'
+    needs:
+      - secret-scan
+      - codeql
+      - gradle-compatibility
+      - loaders-and-runtime
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Require the exact main branch
+        shell: pwsh
+        run: |
+          if ('${{ github.ref }}' -ne 'refs/heads/main') {
+            throw 'Candidate mode is allowed only from refs/heads/main.'
+          }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: terminal/web-ui/package-lock.json
+      - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
+
+      - name: Install Chromium
+        timeout-minutes: 10
+        shell: pwsh
+        working-directory: terminal/web-ui
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install chromium
+      - name: Build and verify the exact-main package
+        timeout-minutes: 25
+        shell: pwsh
+        run: ./gradlew.bat verifyTerminalPackage --no-daemon --no-parallel --stacktrace
+      - name: Verify packaged launchers and HTML startup
+        timeout-minutes: 10
+        shell: pwsh
+        run: >-
+          ./gradlew.bat tuiIntegrationTest rootLauncherTest releaseStarterTest
+          htmlTerminalStartTest --no-daemon --no-parallel --stacktrace
+      - name: Verify the clean-extraction Golden Path
+        timeout-minutes: 15
+        shell: pwsh
+        run: ./gradlew.bat releaseGoldenPathTest --no-daemon --no-parallel --stacktrace
+      - name: Upload the single verified candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcac-rc-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            build/distributions/mcac-release.zip
+            build/distributions/mcac-release.zip.sha256
+            build/distributions/mcac-release/release-manifest.json
+            build/distributions/mcac-release/sbom.spdx.json
+            build/distributions/mcac-release/SHA256SUMS.txt

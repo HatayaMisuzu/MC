@@ -89,14 +89,26 @@ Runtime Hermes may not:
 ```text
 audit current code and matrix
 → implement one vertical capability
-→ unit/integration/Fabric/Replay/UI/security/performance checks as applicable
+→ run the smallest risk-proportional local verification
 → fix
 → update RC matrix
-→ commit
-→ push
-→ inspect remote CI
+→ commit related work as one coherent change
+→ use the applicable validation boundary once
 → continue the highest-value unfinished item
 ```
+
+Automation is limited to three layers:
+
+1. Every PR update receives fast shared and change-security validation.
+2. A non-Draft PR receives Windows integration when opened or deliberately moved to Ready.
+3. Heavy Loader/Runtime, CodeQL, Gradle compatibility, and release-candidate work runs only on the
+   weekly/manual audit boundary. `candidate` mode is exact-`main` only and is the sole workflow that
+   uploads an RC artifact.
+
+Keep iterative work in Draft. Do not treat branches, check counts, candidate counts, or evidence-only
+commits as product progress. A gate failure calls for root-cause diagnosis and focused revalidation,
+not an automatic full-chain restart. Ordinary merges do not duplicate PR validation; exact-main
+package rebuilding belongs to the explicit release-candidate boundary.
 
 The only final readiness labels are:
 

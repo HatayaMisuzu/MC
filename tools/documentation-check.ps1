@@ -274,8 +274,9 @@ foreach ($releaseDoc in @('README.md', 'KNOWN_LIMITATIONS.md', 'docs/PRODUCT_STA
 }
 
 $gitignore = Read-Repo '.gitignore'
-if ($gitignore -match '(?m)^data/$') { Add-Error '.gitignore still has an unscoped data/ rule' }
-if ($gitignore -notmatch '(?m)^/data/$') { Add-Error '.gitignore must ignore only repository-root /data/' }
+$gitignoreLines = $gitignore -split '\r?\n'
+if ($gitignoreLines -contains 'data/') { Add-Error '.gitignore still has an unscoped data/ rule' }
+if ($gitignoreLines -notcontains '/data/') { Add-Error '.gitignore must ignore only repository-root /data/' }
 foreach ($probe in @(
     'minecraft/fabric-1.21.1/src/gametest/resources/data/mcac-probe.txt',
     'minecraft/forge-1.20.1/src/gametest/resources/data/mcac-probe.txt',

@@ -2283,7 +2283,11 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         return origin;
     }
 
-    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 300000, batch = "companion_lifecycle")
+    // Runtime E2E is driven by bounded wall-clock HTTP/process deadlines while the
+    // GameTest server advances ticks as fast as the hosted runner allows. Keep the
+    // tick ceiling above the workflow's ten-minute wall-clock authority so a faster
+    // CPU cannot expire this test before the external client completes its graph.
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1200000, batch = "companion_lifecycle")
     public void createMoveStopSleepAndWake(GameTestHelper helper) {
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
         helper.assertTrue(registry != null, "server companion registry was not initialized");

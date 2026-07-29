@@ -1,10 +1,10 @@
-package com.mccompanion.protocol;
+package com.mccompanion.minecraft.bridge;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Bounded reconnect-stable event-id window shared by Loader bridges.
+ * Bounded reconnect-stable event-id window compiled directly into every Runtime Bridge artifact.
  *
  * <p>The bridge instance survives a WebSocket reconnect. A conversation event whose ACK was lost
  * is therefore acknowledged again without displaying the same message to the player twice.</p>

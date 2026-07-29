@@ -29,7 +29,10 @@ final class LauncherRootDiscoveryService {
           "system volume information",
           "node_modules",
           ".git",
-          ".gradle");
+          ".gradle",
+          "build",
+          "mcac-playwright-fixture",
+          "playwright-fixture");
   private static volatile Cache cache = new Cache(Instant.EPOCH, List.of());
 
   List<Path> discover() {
@@ -78,8 +81,7 @@ final class LauncherRootDiscoveryService {
               public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
                 if (Instant.now().isAfter(deadline) || visited.incrementAndGet() > 60_000)
                   return FileVisitResult.TERMINATE;
-                if (!directory.equals(start.path())
-                    && SKIP.contains(directory.getFileName().toString().toLowerCase(Locale.ROOT)))
+                if (!directory.equals(start.path()) && isSkippedDirectory(directory))
                   return FileVisitResult.SKIP_SUBTREE;
                 if (Files.isRegularFile(directory.resolve("PCL/Setup.ini"))
                     || Files.isRegularFile(directory.resolve(".hmcl/hmcl.json"))) {
@@ -114,6 +116,11 @@ final class LauncherRootDiscoveryService {
 
   private static boolean isWindows() {
     return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("windows");
+  }
+
+  static boolean isSkippedDirectory(Path directory) {
+    Path name = directory.getFileName();
+    return name != null && SKIP.contains(name.toString().toLowerCase(Locale.ROOT));
   }
 
   private record Root(Path path, int depth) {}

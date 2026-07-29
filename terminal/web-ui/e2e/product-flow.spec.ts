@@ -36,7 +36,7 @@ const copy = {
       runtimeStop: '停止',
       runtimeRestart: '重启',
       rotateToken: '安全轮换令牌',
-      attach: '附加当前会话',
+      attach: '验证当前会话',
       support: '生成支持包',
       uninstallKeep: '卸载并保留数据',
       uninstallDelete: '卸载并删除 MCAC 数据',
@@ -71,7 +71,7 @@ const copy = {
       runtimeStop: 'Stop',
       runtimeRestart: 'Restart',
       rotateToken: 'Rotate token safely',
-      attach: 'Attach current session',
+      attach: 'Verify current session',
       support: 'Create support bundle',
       uninstallKeep: 'Uninstall and keep data',
       uninstallDelete: 'Uninstall and delete MCAC data',
@@ -112,6 +112,20 @@ async function clickPlan(page: Page, locale: Locale, label: string) {
   await confirmAndWait(page, locale)
 }
 
+async function clickPlanExpectFailure(
+  page: Page,
+  locale: Locale,
+  label: string,
+  expectedCode: string,
+) {
+  await page.getByRole('button', { name: label, exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await dialog.getByRole('button', { name: copy[locale].confirm, exact: true }).click()
+  await expect(dialog.locator('.operation-meta strong')).toHaveText('FAILED', { timeout: 60_000 })
+  await expect(dialog.locator('.inline-error').last()).toContainText(expectedCode)
+  await dialog.locator('footer').getByRole('button', { name: copy[locale].close, exact: true }).click()
+}
+
 async function apiJson(page: Page, path: string) {
   return page.evaluate(async (url) => {
     const response = await fetch(url, {
@@ -149,6 +163,15 @@ async function verifyNavigationAndShell(page: Page, locale: Locale) {
 
   const currentInstance = locale === 'zh-CN' ? '当前实例' : 'Current instance'
   await expect(page.getByRole('combobox', { name: currentInstance })).toHaveValue(/.+/)
+
+  await navigate(page, locale, 'brain')
+  await expect(page.getByRole('heading', {
+    name: locale === 'zh-CN' ? '独立外部 Brain' : 'Independent external Brain',
+  })).toBeVisible()
+  await navigate(page, locale, 'provider')
+  await expect(page.getByRole('heading', {
+    name: locale === 'zh-CN' ? '旧版内部模型服务' : 'Legacy internal Provider',
+  })).toBeVisible()
 }
 
 async function verifyManagedCriticalPath(page: Page, locale: Locale) {
@@ -184,8 +207,9 @@ async function verifyManagedCriticalPath(page: Page, locale: Locale) {
   expect(runtime.detail).toContain('authenticated health identity verified')
 
   await navigate(page, locale, 'game')
-  await clickPlan(page, locale, labels.attach)
+  await clickPlanExpectFailure(page, locale, labels.attach, 'NO_ACTIVE_GAME_SESSION')
   const session = await apiJson(page, `/api/session/status?instanceId=${encodeURIComponent(instanceId)}`)
+  expect(session.connected).toBe(false)
   expect(session.mode).toBe('SAFE_IDLE')
   expect(session.runtimeHealthy).toBe(true)
 

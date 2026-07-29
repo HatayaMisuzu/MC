@@ -44,7 +44,10 @@ public final class RuntimeCli implements AutoCloseable {
         this.companions = Objects.requireNonNull(companions, "companions");
         this.sessions = Objects.requireNonNull(sessions, "sessions");
         this.commands = Objects.requireNonNull(commands, "commands");
-        this.providers = Objects.requireNonNull(providers, "providers");
+        // The legacy internal Provider path is deliberately absent in production. Keep the CLI
+        // usable for primitive controls while its `ask` command reports that an external Brain is
+        // required.
+        this.providers = providers;
         this.capabilityVisibility = Objects.requireNonNull(capabilityVisibility, "capabilityVisibility");
         this.shutdown = Objects.requireNonNull(shutdown, "shutdown");
         this.input = new BufferedReader(new InputStreamReader(Objects.requireNonNull(input, "input"),

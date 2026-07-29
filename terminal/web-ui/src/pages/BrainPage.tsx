@@ -156,52 +156,52 @@ export function BrainPage() {
         event.preventDefault()
         void requestPlan('brain', { instanceId: selectedId, action: 'configure', ...brainForm })
       }}>
-        <h2>Independent external Brain</h2>
-        <p>Runtime preserves this profile configuration; legacy Provider settings never overwrite it.</p>
-        <label className="field"><span>Adapter</span><select value={brainForm.mode}
+        <h2>{t('brain.configTitle')}</h2>
+        <p>{t('brain.configBoundary')}</p>
+        <label className="field"><span>{t('brain.adapter')}</span><select value={brainForm.mode}
           onChange={(event) => setBrainForm((value) => ({ ...value,
             mode: event.target.value as 'hermes' | 'openai-compatible' }))}>
           <option value="hermes">Hermes (mcac-brain/1)</option>
           <option value="openai-compatible">OpenAI-compatible Tool calling</option>
         </select></label>
-        <label className="field"><span>Endpoint</span><input type="url" required value={brainForm.endpoint}
+        <label className="field"><span>{t('brain.endpoint')}</span><input type="url" required value={brainForm.endpoint}
           onChange={(event) => setBrainForm((value) => ({ ...value, endpoint: event.target.value }))} /></label>
-        {brainForm.mode === 'openai-compatible' && <label className="field"><span>Model</span><input required
+        {brainForm.mode === 'openai-compatible' && <label className="field"><span>{t('brain.model')}</span><input required
           value={brainForm.model} onChange={(event) => setBrainForm((value) => ({ ...value, model: event.target.value }))} /></label>}
-        <label className="field"><span>Token environment variable</span><input required pattern="[A-Za-z_][A-Za-z0-9_]*"
+        <label className="field"><span>{t('brain.tokenEnv')}</span><input required pattern="[A-Za-z_][A-Za-z0-9_]*"
           value={brainForm.tokenEnv} onChange={(event) => setBrainForm((value) => ({ ...value, tokenEnv: event.target.value }))} /></label>
-        <label className="field"><span>Request timeout (seconds)</span><input type="number" min="1" max="300"
+        <label className="field"><span>{t('brain.requestTimeout')}</span><input type="number" min="1" max="300"
           value={brainForm.timeoutSeconds} onChange={(event) => setBrainForm((value) => ({ ...value, timeoutSeconds: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Tool calls per turn</span><input type="number" min="1" max="32"
+        <label className="field"><span>{t('brain.toolCalls')}</span><input type="number" min="1" max="32"
           value={brainForm.maxToolCallsPerTurn} onChange={(event) => setBrainForm((value) => ({ ...value, maxToolCallsPerTurn: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Output tokens per response</span><input type="number" min="128" max="4096"
+        <label className="field"><span>{t('brain.outputTokens')}</span><input type="number" min="128" max="4096"
           value={brainForm.maxOutputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxOutputTokens: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Requests per live run</span><input type="number" min="1" max="1000"
+        <label className="field"><span>{t('brain.maxRequests')}</span><input type="number" min="1" max="1000"
           value={brainForm.maxRequests} onChange={(event) => setBrainForm((value) => ({ ...value, maxRequests: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Total input token budget</span><input type="number" min="128" max="2000000"
+        <label className="field"><span>{t('brain.maxInputTokens')}</span><input type="number" min="128" max="2000000"
           value={brainForm.maxInputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxInputTokens: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Total output token budget</span><input type="number" min="128" max="500000"
+        <label className="field"><span>{t('brain.maxTotalOutputTokens')}</span><input type="number" min="128" max="500000"
           value={brainForm.maxTotalOutputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxTotalOutputTokens: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Wall clock budget (minutes)</span><input type="number" min="1" max="480"
+        <label className="field"><span>{t('brain.maxWallClock')}</span><input type="number" min="1" max="480"
           value={brainForm.maxWallClockMinutes} onChange={(event) => setBrainForm((value) => ({ ...value, maxWallClockMinutes: Number(event.target.value) }))} /></label>
-        <label className="field"><span>Retry budget</span><input type="number" min="0" max="5"
+        <label className="field"><span>{t('brain.maxRetries')}</span><input type="number" min="0" max="5"
           value={brainForm.maxRetries} onChange={(event) => setBrainForm((value) => ({ ...value, maxRetries: Number(event.target.value) }))} /></label>
         <div className="form-actions">
-          <ActionButton tone="primary" icon={<Save size={16} />} type="submit">Review configuration</ActionButton>
+          <ActionButton tone="primary" icon={<Save size={16} />} type="submit">{t('brain.reviewConfig')}</ActionButton>
           <ActionButton icon={<FlaskConical size={16} />} type="button" loading={testingBrain}
-            onClick={() => void testBrain()}>Verify MCAC protocol</ActionButton>
+            onClick={() => void testBrain()}>{t('brain.verifyProtocol')}</ActionButton>
           <ActionButton tone="danger" icon={<Power size={16} />} type="button"
-            onClick={() => void requestPlan('brain', { instanceId: selectedId, action: 'disable' })}>Disable</ActionButton>
+            onClick={() => void requestPlan('brain', { instanceId: selectedId, action: 'disable' })}>{t('brain.disable')}</ActionButton>
         </div>
       </form>
-      <section className="provider-test"><h2>Configuration and health</h2>
-        <p>Configured adapter: <StatusBadge value={config.data?.mode ?? 'disabled'} /></p>
+      <section className="provider-test"><h2>{t('brain.healthTitle')}</h2>
+        <p>{t('brain.configuredAdapter')}: <StatusBadge value={config.data?.mode ?? 'disabled'} /></p>
         {brainTest
-          ? <dl className="detail-list"><div><dt>Protocol state</dt><dd><StatusBadge value={brainTest.status} /></dd></div>
-            <div><dt>Adapter</dt><dd>{brainTest.adapter}</dd></div>
-            <div><dt>Latency</dt><dd>{brainTest.latencyMillis} ms</dd></div>
-            <div><dt>Detail</dt><dd>{brainTest.message}</dd></div></dl>
-          : <p>The probe requires a real MCAC Tool call; plain text is not reported as healthy.</p>}
+          ? <dl className="detail-list"><div><dt>{t('brain.protocolState')}</dt><dd><StatusBadge value={brainTest.status} /></dd></div>
+            <div><dt>{t('brain.adapter')}</dt><dd>{brainTest.adapter}</dd></div>
+            <div><dt>{t('brain.latency')}</dt><dd>{brainTest.latencyMillis} ms</dd></div>
+            <div><dt>{t('brain.detail')}</dt><dd>{brainTest.message}</dd></div></dl>
+          : <p>{t('brain.probeBoundary')}</p>}
       </section>
     </section>
     <section className="companion-toolbar">

@@ -179,32 +179,43 @@ final class BrainConfigurationService {
             return result(false, "PROTOCOL_INCOMPATIBLE", started, modeLabel(config),
                     "Hermes session response is invalid");
         }
-        ObjectNode turn = JSON.createObjectNode().put("protocol", "mcac-brain/1")
-                .put("userMessage", "Call mcac_health_probe exactly once")
-                .put("remainingToolCalls", 1);
-        turn.set("context", JSON.createObjectNode());
-        turn.putArray("toolResults");
-        HttpResponse<byte[]> turned = send(base.resolve("sessions/" + sessionId + "/turns"),
-                token, timeoutSeconds, turn);
-        if (turned.statusCode() / 100 != 2) {
-            return httpFailure(started, modeLabel(config), turned.statusCode());
+        try {
+            ObjectNode turn = JSON.createObjectNode().put("protocol", "mcac-brain/1")
+                    .put("userMessage", "Call mcac_health_probe exactly once")
+                    .put("remainingToolCalls", 1);
+            turn.set("context", JSON.createObjectNode());
+            turn.putArray("toolResults");
+            HttpResponse<byte[]> turned = send(base.resolve("sessions/" + sessionId + "/turns"),
+                    token, timeoutSeconds, turn);
+            if (turned.statusCode() / 100 != 2) {
+                return httpFailure(started, modeLabel(config), turned.statusCode());
+            }
+            JsonNode reply = parseBounded(turned.body());
+            boolean verified = reply.path("kind").asText().equals("TOOL_CALLS")
+                    && reply.path("toolCalls").isArray()
+                    && reply.path("toolCalls").size() == 1
+                    && reply.path("toolCalls").path(0).path("name").asText()
+                            .equals("mcac_health_probe");
+            return result(verified, verified ? "TOOL_CALL_VERIFIED" : "PROTOCOL_INCOMPATIBLE",
+                    started, modeLabel(config), verified
+                            ? "Hermes mcac-brain/1 Tool call verified"
+                            : "Hermes is reachable but did not complete the MCAC Tool-call probe");
+        } finally {
+            cancelHermesProbe(base, sessionId, token, timeoutSeconds);
         }
-        JsonNode reply = parseBounded(turned.body());
-        boolean verified = reply.path("kind").asText().equals("TOOL_CALLS")
-                && reply.path("toolCalls").isArray()
-                && reply.path("toolCalls").size() == 1
-                && reply.path("toolCalls").path(0).path("name").asText().equals("mcac_health_probe");
+    }
+
+    private static void cancelHermesProbe(
+            URI base, String sessionId, String token, int timeoutSeconds) {
         try {
             send(base.resolve("sessions/" + sessionId + "/cancel"), token, timeoutSeconds,
                     JSON.createObjectNode().put("protocol", "mcac-brain/1")
                             .put("reason", "TERMINAL_HEALTH_PROBE_COMPLETE"));
-        } catch (Exception ignored) {
-            // The protocol result remains valid; remote health-session cleanup is best effort.
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } catch (IOException ignored) {
+            // The probe result remains valid; remote health-session cleanup is best effort.
         }
-        return result(verified, verified ? "TOOL_CALL_VERIFIED" : "PROTOCOL_INCOMPATIBLE",
-                started, modeLabel(config), verified
-                        ? "Hermes mcac-brain/1 Tool call verified"
-                        : "Hermes is reachable but did not complete the MCAC Tool-call probe");
     }
 
     private static HttpResponse<byte[]> send(URI uri, String token, int timeoutSeconds, JsonNode body)

@@ -55,6 +55,8 @@ public final class ControlTerminalMain implements Runnable {
   boolean verbosePaths;
 
   final TerminalContext context = new TerminalContext();
+  private final LauncherRootDiscoveryService launcherDiscovery =
+      new LauncherRootDiscoveryService();
 
   public static void main(String[] args) {
     if (args.length == 0 || "web".equals(args[0])) {
@@ -109,9 +111,13 @@ public final class ControlTerminalMain implements Runnable {
         for (String s : Files.readAllLines(manual)) if (!s.isBlank()) v.add(Path.of(s));
       } catch (IOException ignored) {
       }
-    if (v.isEmpty()) v.addAll(new LauncherRootDiscoveryService().discover());
+    if (v.isEmpty()) v.addAll(launcherDiscovery.discover());
     if (v.isEmpty()) v.add(Path.of("."));
     return v.stream().map(p -> p.toAbsolutePath().normalize()).distinct().toList();
+  }
+
+  void invalidateLauncherDiscovery() {
+    launcherDiscovery.invalidate();
   }
 
   MinecraftInstance instance(String id) {

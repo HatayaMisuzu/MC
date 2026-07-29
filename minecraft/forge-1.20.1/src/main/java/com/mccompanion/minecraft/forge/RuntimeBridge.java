@@ -7,7 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
 import com.mccompanion.minecraft.v120.SkillParameters;
-import com.mccompanion.protocol.ConversationDeliveryWindow;
+import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;

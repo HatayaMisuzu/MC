@@ -20,6 +20,8 @@ export function CompanionsPage() {
   const [coordinates, setCoordinates] = useState({ x: '0', y: '64', z: '0' })
   const [requestText, setRequestText] = useState('')
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({})
+  const [graphControlError, setGraphControlError] = useState('')
+  const [graphControlPending, setGraphControlPending] = useState('')
   const liveSnapshot = companionSnapshot?.instanceId === selectedId ? companionSnapshot : snapshot.data
   const companions = liveSnapshot?.companions ?? []
   useEffect(() => {
@@ -30,8 +32,16 @@ export function CompanionsPage() {
     ? api<TaskGraphSnapshot>(`/api/task-graphs?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(activeId)}`)
     : Promise.resolve({ companionId: '', executions: [] }), [selectedId, activeId])
   const controlGraph = async (executionId: string, action: 'pause' | 'resume' | 'cancel') => {
-    await post('/api/task-graphs/control', { instanceId: selectedId, companionId: activeId, executionId, action })
-    await taskGraphs.refresh()
+    setGraphControlError('')
+    setGraphControlPending(`${executionId}:${action}`)
+    try {
+      await post('/api/task-graphs/control', { instanceId: selectedId, companionId: activeId, executionId, action })
+      await taskGraphs.refresh()
+    } catch (failure) {
+      setGraphControlError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setGraphControlPending('')
+    }
   }
   if (!selected) return <EmptyState title={t('empty.selectInstance')}>{t('companions.empty')}</EmptyState>
   const command = (action: string, extra: Record<string, unknown> = {}) =>
@@ -102,18 +112,23 @@ export function CompanionsPage() {
         </section>
         <section className="main-panel"><header className="panel-header"><h2>{t('companions.graphs')}</h2>
           <span>{t('companions.graphCount', { count: taskGraphs.data?.executions.length ?? 0 })}</span></header>
-          <p>{t('companions.graphBoundary')}</p><div className="table-scroll"><table className="data-table"><thead><tr>
+          <p>{t('companions.graphBoundary')}</p>
+          {graphControlError && <div className="inline-error">{t('companions.graphControlFailed')}: {graphControlError}</div>}
+          <div className="table-scroll"><table className="data-table"><thead><tr>
             <th>Graph</th><th>{t('compat.state')}</th><th>{t('companions.currentNode')}</th>
             <th>{t('companions.completedNodes')}</th><th>{t('provider.result')}</th><th>{t('companions.control')}</th>
           </tr></thead><tbody>{(taskGraphs.data?.executions ?? []).map((execution) => <tr key={execution.executionId}>
             <td>{execution.graphId} · {execution.executionId.slice(0, 10)}</td><td><StatusBadge value={execution.state} /></td>
             <td>{execution.currentNodeId || '—'}</td><td>{execution.completedNodeCount}</td><td>{execution.resultCode}</td>
             <td><div className="inline-actions">
-              <ActionButton disabled={['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
+              <ActionButton loading={graphControlPending === `${execution.executionId}:pause`}
+                disabled={Boolean(graphControlPending) || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
                 onClick={() => void controlGraph(execution.executionId, 'pause')}>{t('companions.pause')}</ActionButton>
-              <ActionButton disabled={!['PAUSED', 'RECONCILIATION_REQUIRED'].includes(execution.state)}
+              <ActionButton loading={graphControlPending === `${execution.executionId}:resume`}
+                disabled={Boolean(graphControlPending) || !['PAUSED', 'RECONCILIATION_REQUIRED'].includes(execution.state)}
                 onClick={() => void controlGraph(execution.executionId, 'resume')}>{t('companions.resume')}</ActionButton>
-              <ActionButton tone="danger" disabled={['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
+              <ActionButton tone="danger" loading={graphControlPending === `${execution.executionId}:cancel`}
+                disabled={Boolean(graphControlPending) || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
                 onClick={() => void controlGraph(execution.executionId, 'cancel')}>{t('common.cancel')}</ActionButton>
             </div></td>
           </tr>)}</tbody></table></div>

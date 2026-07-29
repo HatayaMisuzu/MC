@@ -42,6 +42,28 @@ class RuntimeApplicationTest {
     @TempDir Path temporary;
 
     @Test
+    void startsCliWhenLegacyProviderAndExternalBrainAreDisabled() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("disabled-brain-cli"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+
+        try (RuntimeApplication application = RuntimeApplication.start(config, true)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            HttpResponse<String> health = HttpClient.newHttpClient().send(
+                    HttpRequest.newBuilder(new URI("http://127.0.0.1:"
+                                    + config.server.managementPort + "/health"))
+                            .header("Authorization", "Bearer " + token)
+                            .timeout(Duration.ofSeconds(2))
+                            .GET()
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            assertEquals(200, health.statusCode(), health.body());
+            assertFalse(Json.parse(health.body()).path("brainConfigured").asBoolean());
+        }
+    }
+
+    @Test
     void boundedJsonBodiesRejectOversizeChunkedCompressedMismatchedAndSlowInputs() throws Exception {
         RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("body-limits"));
         config.server.port = 0;

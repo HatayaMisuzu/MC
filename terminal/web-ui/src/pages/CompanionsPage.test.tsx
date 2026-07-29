@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CompanionsPage } from './CompanionsPage'
 
@@ -97,5 +97,13 @@ describe('CompanionsPage text companion input', () => {
       instanceId: 'instance-1', companionId: 'companion-1',
       executionId: 'graph-execution-1', action: 'resume',
     })
+  })
+
+  it('shows Task Graph control failures instead of swallowing them', async () => {
+    post.mockRejectedValueOnce(new Error('ownership conflict'))
+    render(<CompanionsPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Resume' }))
+    await waitFor(() =>
+      expect(screen.getByText(/Task Graph control failed: ownership conflict/)).toBeVisible())
   })
 })

@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
 import com.mccompanion.minecraft.v121.SkillParameters;
-import com.mccompanion.protocol.ConversationDeliveryWindow;
+import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -277,17 +277,23 @@ final class RuntimeBridge implements AutoCloseable {
         String finalReply = reply;
         server.execute(() -> registry.runtimeSnapshots(true).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().ifPresent(snapshot -> {
-                    ServerPlayer owner = server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
-                    if (owner != null) {
-                        if (!deliveredConversationEvents.firstDelivery(eventId)) {
+                    try {
+                        ServerPlayer owner =
+                                server.getPlayerList().getPlayer(UUID.fromString(snapshot.ownerId()));
+                        if (owner != null) {
+                            if (!deliveredConversationEvents.firstDelivery(eventId)) {
+                                sendConversationDeliveryAck(eventId, companionId);
+                                return;
+                            }
+                            owner.sendSystemMessage(Component.translatable("mcac.chat.prefix")
+                                    .append(Component.literal(finalReply)));
+                            logger.info("conversation_delivered_to_game event={} kind={} companion={}",
+                                    payload.path("eventId").asText("unknown"),
+                                    payload.path("kind").asText("MESSAGE"), companionId);
                             sendConversationDeliveryAck(eventId, companionId);
-                            return;
                         }
-                        owner.sendSystemMessage(Component.translatable("mcac.chat.prefix")
-                                .append(Component.literal(finalReply)));
-                        logger.info("conversation_delivered_to_game event={} kind={} companion={}",
-                                payload.path("eventId").asText("unknown"), payload.path("kind").asText("MESSAGE"), companionId);
-                        sendConversationDeliveryAck(eventId, companionId);
+                    } catch (IllegalArgumentException ignored) {
+                        logger.warn("Runtime sent an invalid owner identity for companion {}", companionId);
                     }
                 }));
     }

@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $utf8 = [Text.UTF8Encoding]::new($false)
 $ascii = [Text.Encoding]::ASCII
 $sessions = @{}
+$taskIds = @{}
 $nextSession = 0
 
 function Find-HeaderEnd([byte[]]$bytes) {
@@ -46,12 +47,27 @@ function Read-HttpRequest([IO.Stream]$stream) {
     }
 }
 
-function Assert-TerminalObservation($request, [string]$expectedTool) {
+function Assert-AsyncReceipt($request, [string]$expectedTool) {
     $results = @($request.toolResults)
     if ($results.Count -ne 1 -or $results[0].toolName -ne $expectedTool -or
-        -not $results[0].terminal -or $results[0].observation.state -ne 'SUCCEEDED') {
+        -not $results[0].terminal -or -not $results[0].success -or
+        $results[0].observation.executionMode -ne 'ASYNCHRONOUS' -or
+        $results[0].observation.completionVerified -ne $false -or
+        $results[0].observation.statusTool -ne 'task.inspect' -or
+        -not $results[0].observation.taskId) {
         $actual = $request.toolResults | ConvertTo-Json -Compress -Depth 20
-        throw "Hermes replay expected terminal SUCCEEDED observation for $expectedTool; actual=$actual"
+        throw "Hermes replay expected an asynchronous receipt for $expectedTool; actual=$actual"
+    }
+    return [string]$results[0].observation.taskId
+}
+
+function Assert-TaskSucceeded($request) {
+    $results = @($request.toolResults)
+    if ($results.Count -ne 1 -or $results[0].toolName -ne 'task.inspect' -or
+        -not $results[0].terminal -or -not $results[0].success -or
+        $results[0].observation.state -ne 'COMPLETED') {
+        $actual = $request.toolResults | ConvertTo-Json -Compress -Depth 20
+        throw "Hermes replay expected task.inspect to verify COMPLETED; actual=$actual"
     }
 }
 
@@ -92,15 +108,35 @@ function New-TurnResponse([string]$sessionId, $request) {
             }
             $response = Tool-Response 'navigate-chest-1' 'movement.navigate' @{
                 dimension = 'minecraft:overworld'; x = $X; y = $Y; z = $Z } }
-        2 { Assert-TerminalObservation $request 'movement.navigate'; $response = Tool-Response 'withdraw-iron-1' 'inventory.withdraw' @{
+        2 {
+            $taskIds[$sessionId] = Assert-AsyncReceipt $request 'movement.navigate'
+            Start-Sleep -Seconds 4
+            $response = Tool-Response 'inspect-navigate-1' 'task.inspect' @{ taskId = $taskIds[$sessionId] }
+        }
+        3 { Assert-TaskSucceeded $request; $response = Tool-Response 'withdraw-iron-1' 'inventory.withdraw' @{
                 item = 'minecraft:iron_ingot'; quantity = 6; allowPartial = $false
                 container = @{ dimension = 'minecraft:overworld'; x = $X; y = $Y; z = $Z } } }
-        3 { Assert-TerminalObservation $request 'inventory.withdraw'; $response = Tool-Response 'return-owner-1' 'movement.return' @{} }
-        4 { Assert-TerminalObservation $request 'movement.return'; $response = Tool-Response 'deliver-iron-1' 'inventory.deliver' @{
+        4 {
+            $taskIds[$sessionId] = Assert-AsyncReceipt $request 'inventory.withdraw'
+            Start-Sleep -Seconds 2
+            $response = Tool-Response 'inspect-withdraw-1' 'task.inspect' @{ taskId = $taskIds[$sessionId] }
+        }
+        5 { Assert-TaskSucceeded $request; $response = Tool-Response 'return-owner-1' 'movement.return' @{} }
+        6 {
+            $taskIds[$sessionId] = Assert-AsyncReceipt $request 'movement.return'
+            Start-Sleep -Seconds 4
+            $response = Tool-Response 'inspect-return-1' 'task.inspect' @{ taskId = $taskIds[$sessionId] }
+        }
+        7 { Assert-TaskSucceeded $request; $response = Tool-Response 'deliver-iron-1' 'inventory.deliver' @{
                 item = 'minecraft:iron_ingot'; quantity = 6; allowPartial = $false } }
-        5 { Assert-TerminalObservation $request 'inventory.deliver'; $response =
+        8 {
+            $taskIds[$sessionId] = Assert-AsyncReceipt $request 'inventory.deliver'
+            Start-Sleep -Seconds 2
+            $response = Tool-Response 'inspect-deliver-1' 'task.inspect' @{ taskId = $taskIds[$sessionId] }
+        }
+        9 { Assert-TaskSucceeded $request; $response =
                 Tool-Response 'verify-delivery-1' 'inventory.inspect' @{} }
-        6 { Assert-VerifiedObservation $request 'inventory.inspect'; $response = @{
+        10 { Assert-VerifiedObservation $request 'inventory.inspect'; $response = @{
                 kind = 'FINAL_RESPONSE'
                 response = 'The delivery command succeeded, and I re-inspected the companion inventory afterward.'
                 completionClaim = @{
@@ -145,7 +181,7 @@ try {
                 $sessionId = $Matches[1]
                 $response = @{ resumed = $sessions.ContainsKey($sessionId) }
             } elseif ($http.path -match '^/sessions/([A-Za-z0-9_-]+)/cancel$') {
-                $sessions.Remove($Matches[1]); $response = @{ cancelled = $true }
+                $sessions.Remove($Matches[1]); $taskIds.Remove($Matches[1]); $response = @{ cancelled = $true }
             } else { throw "Unsupported Hermes replay path: $($http.path)" }
             $body = $utf8.GetBytes(($response | ConvertTo-Json -Compress -Depth 20))
             $header = $ascii.GetBytes("HTTP/1.1 200 OK`r`nContent-Type: application/json; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n")

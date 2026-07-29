@@ -49,6 +49,7 @@ export interface DoctorCheck {
   evidence: Record<string, string>
   repairs: string[]
   repairable: boolean
+  repairAction?: string
 }
 
 export interface DoctorResult {

@@ -4,7 +4,9 @@ param()
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$runtimeHome = Join-Path $root 'build\e2e-runtime'
+# Pairing tokens and the Runtime database require owner-only ACLs. Repository workspaces can
+# inherit broad Windows ACLs, so keep this disposable authenticated fixture in the user temp area.
+$runtimeHome = Join-Path ([System.IO.Path]::GetTempPath()) 'mcac-e2e-runtime-fabric'
 $fabric = Join-Path $root 'minecraft\fabric-1.21.1'
 $runtimeBat = Join-Path $root 'runtime\runtime-app\build\install\runtime-app\bin\runtime-app.bat'
 $config = Join-Path $runtimeHome 'runtime.yml'
@@ -56,7 +58,7 @@ brain:
   model: replay
   timeout_seconds: 10
   max_output_tokens: 1400
-  max_tool_calls_per_turn: 8
+  max_tool_calls_per_turn: 12
 logging:
   file: ./logs/runtime.log
   console: true
@@ -475,12 +477,26 @@ try {
     $runtimeErr = $runtime.StandardError.ReadToEndAsync()
 
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while (-not (Test-Path -LiteralPath $token)) {
+    $runtimeHealthReady = $false
+    while (-not $runtimeHealthReady) {
         if ($runtime.HasExited) { throw "Runtime exited before creating its pairing token ($($runtime.ExitCode))." }
-        if ([DateTime]::UtcNow -gt $deadline) { throw 'Runtime pairing token was not created in time.' }
+        if (Test-Path -LiteralPath $token) {
+            $candidateToken = (Get-Content -Raw -LiteralPath $token).Trim()
+            try {
+                $runtimeHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:18766/health' -Headers @{
+                    Authorization = "Bearer $candidateToken"
+                } -TimeoutSec 2
+                $runtimeHealthReady = $null -ne $runtimeHealth
+            } catch {
+                # Token creation precedes the authenticated health listener by a short interval.
+            }
+        }
+        if ([DateTime]::UtcNow -gt $deadline) {
+            throw 'Runtime did not remain alive with an authenticated health endpoint.'
+        }
         Start-Sleep -Milliseconds 200
     }
-    Write-Output '[runtime-e2e] Runtime token ready; starting Fabric GameTest'
+    Write-Output '[runtime-e2e] Runtime token and authenticated health ready; starting Fabric GameTest'
 
     if (Test-Path -LiteralPath $gameRun) {
         Remove-Item -LiteralPath $gameRun -Recurse -Force
@@ -1457,26 +1473,34 @@ try {
     $brainTools = @($brainReply.result.toolResults)
     $expectedBrainTools = @(
         'movement.navigate',
+        'task.inspect',
         'inventory.withdraw',
+        'task.inspect',
         'movement.return',
+        'task.inspect',
         'inventory.deliver',
+        'task.inspect',
         'inventory.inspect')
     if ($brainTools.Count -ne $expectedBrainTools.Count) {
         throw 'External Brain did not execute the four mutations and final verification observation.'
     }
     for ($index = 0; $index -lt $expectedBrainTools.Count; $index++) {
         $isFinalObservation = $index -eq ($expectedBrainTools.Count - 1)
-        $observationVerified = if ($isFinalObservation) {
+        $evidenceValid = if ($isFinalObservation) {
             $brainTools[$index].observation.verified -and
                 $brainTools[$index].observation.source -eq 'CONNECTED_BODY_OBSERVATION'
+        } elseif ($brainTools[$index].toolName -eq 'task.inspect') {
+            $brainTools[$index].observation.state -eq 'COMPLETED'
         } else {
-            $brainTools[$index].observation.state -eq 'SUCCEEDED' -and
-                $brainTools[$index].observation.fabricObservation
+            $brainTools[$index].observation.executionMode -eq 'ASYNCHRONOUS' -and
+                $brainTools[$index].observation.completionVerified -eq $false -and
+                $brainTools[$index].observation.statusTool -eq 'task.inspect' -and
+                $brainTools[$index].observation.taskId
         }
         if ($brainTools[$index].toolName -ne $expectedBrainTools[$index] -or
             -not $brainTools[$index].terminal -or -not $brainTools[$index].success -or
-            -not $observationVerified) {
-            throw "External Brain tool $index lacked its terminal Fabric observation."
+            -not $evidenceValid) {
+            throw "External Brain tool $index lacked the required receipt or verified observation."
         }
     }
     $brainAudit = Invoke-RestMethod -Uri "http://127.0.0.1:18766/brain/audit?companionId=$companionId" -Headers @{
@@ -1547,8 +1571,8 @@ try {
     if ($gameStdout -notmatch 'runtime_e2e_conversation_complete.*delivered=6') {
         throw 'Fabric did not verify the final six-item External Brain delivery.'
     }
-    if (-not $externalBrainEvidence -or $externalBrainEvidence.reply.result.toolResults.Count -ne 5) {
-        throw 'External Brain evidence did not retain the four mutation results and final verification observation.'
+    if (-not $externalBrainEvidence -or $externalBrainEvidence.reply.result.toolResults.Count -ne 9) {
+        throw 'External Brain evidence did not retain four asynchronous receipts, their task inspections, and final verification.'
     }
     if (-not $representativeTaskGraphEvidence -or
         $representativeTaskGraphEvidence.graphs.Count -ne 6 -or

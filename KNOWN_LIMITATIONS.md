@@ -16,8 +16,8 @@ kept explicit so Replay, local automation, and external verification are not con
   or OpenAI-compatible Brain is disabled, unreachable, credential-missing, or protocol-incompatible,
   requests fail closed. A plain text completion endpoint is not reported as Brain-compatible.
 - Action-start receipts are not completion evidence. They carry `completionVerified=false`; callers
-  must inspect the durable Task/Task Graph and use matching connected-body observations before
-  reporting an outcome.
+  must inspect the durable Task/Task Graph (using the receipt's `taskId` when supplied) and use
+  matching connected-body observations before reporting an outcome.
 - Compatibility Packs remain `STAGING` until trusted automation supplies real evidence. The Web
   Terminal cannot manufacture `passed=true` or `EXACT_VERIFIED`; broader real-pack and third-party
   Mod evidence remains limited to the concrete Fixture/GameTest/E2E entries in the RC matrix.

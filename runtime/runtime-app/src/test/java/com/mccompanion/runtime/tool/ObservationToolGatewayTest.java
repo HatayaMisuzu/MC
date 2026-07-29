@@ -85,6 +85,13 @@ class ObservationToolGatewayTest {
             var inspected = gateway.execute(context, new ToolCall("t1", "task.inspect", Json.object()));
             assertEquals(task.taskId(), inspected.observation().path("task").path("taskId").asText());
             assertFalse(inspected.observation().path("events").isEmpty());
+            var selected = gateway.execute(context, new ToolCall("t2", "task.inspect",
+                    Json.object().put("taskId", task.taskId())));
+            assertEquals(task.taskId(), selected.observation().path("task").path("taskId").asText());
+            var other = tasks.create("c2", TaskType.TRAVEL, "other",
+                    Json.object().set("target", Json.object().put("x", 2).put("y", 70).put("z", 2)));
+            assertEquals("TASK_NOT_FOUND", gateway.execute(context, new ToolCall("t3", "task.inspect",
+                    Json.object().put("taskId", other.taskId()))).code());
         }
     }
 

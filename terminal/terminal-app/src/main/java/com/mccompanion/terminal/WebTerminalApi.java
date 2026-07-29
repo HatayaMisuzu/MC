@@ -59,6 +59,8 @@ final class WebTerminalApi {
     try {
       if ("GET".equals(method) && "/api/status".equals(path))
         send(exchange, 200, statusSnapshot());
+      else if ("POST".equals(method) && "/api/discovery/rescan".equals(path))
+        send(exchange, 200, rescanDiscovery());
       else if ("GET".equals(method) && "/api/launchers".equals(path))
         send(exchange, 200, launchers());
       else if ("GET".equals(method) && "/api/instances".equals(path))
@@ -246,7 +248,9 @@ final class WebTerminalApi {
                   .put("summary", check.summary());
           value.set("evidence", JSON.valueToTree(check.evidence()));
           value.set("repairs", JSON.valueToTree(check.repairs()));
-          value.put("repairable", !check.repairs().isEmpty());
+          DoctorRepairRoute repair = doctorRepairRoute(check.code());
+          value.put("repairable", repair != null && !check.repairs().isEmpty());
+          if (repair != null) value.put("repairAction", repair.category() + '/' + repair.action());
         });
     boolean blocked = results.stream().anyMatch(value -> value.severity() == DiagnosticResult.Severity.BLOCKED);
     boolean warning = results.stream().anyMatch(value -> value.severity() == DiagnosticResult.Severity.WARNING);
@@ -254,6 +258,16 @@ final class WebTerminalApi {
         .put("instanceId", instance.instanceId())
         .put("state", blocked ? "BLOCKED" : warning ? "WARNING" : "PASS")
         .set("checks", checks);
+  }
+
+  private ObjectNode rescanDiscovery() {
+    root.invalidateLauncherDiscovery();
+    int launcherCount = root.context.launchers(root.roots()).size();
+    int instanceCount = root.context.instances(root.roots()).size();
+    return JSON.createObjectNode()
+        .put("rescanned", true)
+        .put("launcherCount", launcherCount)
+        .put("instanceCount", instanceCount);
   }
 
   private ArrayNode rollbackPoints(String instanceId) throws Exception {
@@ -914,7 +928,14 @@ final class WebTerminalApi {
         details,
         progress -> {
           RuntimeProfile profile = root.profile(instance);
-          if ("attach".equals(action)) return sessionStatus(instanceId);
+          if ("attach".equals(action)) {
+            ObjectNode current = sessionStatus(instanceId);
+            if (!current.path("connected").asBoolean(false)) {
+              throw new IOException(
+                  "NO_ACTIVE_GAME_SESSION: no authenticated Minecraft Runtime Bridge session exists");
+            }
+            return current;
+          }
           progress.update(15, "正在执行 Doctor");
           List<DiagnosticResult> checks =
               new TerminalDiagnosticService()
@@ -1080,17 +1101,33 @@ final class WebTerminalApi {
 
   private OperationManager.Plan doctorRepairPlan(JsonNode request) throws Exception {
     String code = required(request, "code");
+    DoctorRepairRoute repair = doctorRepairRoute(code);
+    if (repair == null) {
+      throw new IOException("This Doctor check requires a manual fix and has no safe automatic route");
+    }
     ObjectNode routed = JSON.createObjectNode().put("instanceId", required(request, "instanceId"));
-    if (code.startsWith("runtime.") || code.equals("protocol.compatible")) {
-      routed.put("action", code.equals("runtime.token_match") ? "rotate-token" : "restart");
+    if ("runtime".equals(repair.category())) {
+      routed.put("action", repair.action());
       return runtimePlan(routed);
     }
-    if (code.startsWith("install.") || code.startsWith("mods.")) {
-      routed.put("action", "repair");
+    if ("install".equals(repair.category())) {
+      routed.put("action", repair.action());
       return installPlan(routed);
     }
     throw new IOException("该检查项需要用户在启动器中修复，不能由 mcac 安全自动修改");
   }
+
+  static DoctorRepairRoute doctorRepairRoute(String code) {
+    return switch (code) {
+      case "runtime.profile", "runtime.pid", "runtime.health", "protocol.compatible" ->
+          new DoctorRepairRoute("runtime", "restart");
+      case "runtime.token_match" -> new DoctorRepairRoute("runtime", "rotate-token");
+      case "install.hash" -> new DoctorRepairRoute("install", "repair");
+      default -> null;
+    };
+  }
+
+  record DoctorRepairRoute(String category, String action) {}
 
   private ObjectNode execute(JsonNode request) {
     return operation(

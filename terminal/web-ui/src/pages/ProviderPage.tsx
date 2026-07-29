@@ -21,10 +21,10 @@ export function ProviderPage() {
       <StatusBadge value="LEGACY_DISABLED" />
       <strong>{status.data?.mode ?? 'rules'}</strong></div><p>{t('provider.keyBoundary')}</p></section>
     <div className="provider-layout"><section className="form-panel">
-      <h2>Legacy internal Provider</h2>
-      <p>This production path is disabled. Configure Hermes or an OpenAI-compatible external Brain on the Brain page.</p>
-    </section><section className="provider-test"><h2>Stored legacy configuration</h2>
-      <p>It is shown only so an old profile can be cleared; Runtime does not construct or call this Provider.</p>
+      <h2>{t('provider.legacyTitle')}</h2>
+      <p>{t('provider.legacyDisabled')}</p>
+    </section><section className="provider-test"><h2>{t('provider.storedLegacy')}</h2>
+      <p>{t('provider.storedLegacyBody')}</p>
       <ActionButton tone="danger" icon={<Power size={16} />} onClick={() => void requestPlan('provider', { instanceId: selectedId, action: 'disable' })}>{t('provider.rules')}</ActionButton>
     </section></div>
   </div>

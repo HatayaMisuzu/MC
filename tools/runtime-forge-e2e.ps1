@@ -3,7 +3,9 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$runtimeHome = Join-Path $root 'build\e2e-runtime-forge'
+# Pairing tokens and the Runtime database require owner-only ACLs. Repository workspaces can
+# inherit broad Windows ACLs, so keep this disposable authenticated fixture in the user temp area.
+$runtimeHome = Join-Path ([System.IO.Path]::GetTempPath()) 'mcac-e2e-runtime-forge'
 $forge = Join-Path $root 'minecraft\forge-1.20.1'
 $runtimeBat = Join-Path $root 'runtime\runtime-app\build\install\runtime-app\bin\runtime-app.bat'
 $config = Join-Path $runtimeHome 'runtime.yml'
@@ -144,12 +146,26 @@ try {
     $runtimeErr = $runtime.StandardError.ReadToEndAsync()
 
     $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    while (-not (Test-Path -LiteralPath $token)) {
+    $runtimeHealthReady = $false
+    while (-not $runtimeHealthReady) {
         if ($runtime.HasExited) { throw "Runtime exited early ($($runtime.ExitCode))." }
-        if ([DateTime]::UtcNow -gt $deadline) { throw 'Runtime pairing token was not created in time.' }
+        if (Test-Path -LiteralPath $token) {
+            $candidateToken = (Get-Content -Raw -LiteralPath $token).Trim()
+            try {
+                $runtimeHealth = Invoke-RestMethod -Uri 'http://127.0.0.1:18776/health' -Headers @{
+                    Authorization = "Bearer $candidateToken"
+                } -TimeoutSec 2
+                $runtimeHealthReady = $null -ne $runtimeHealth
+            } catch {
+                # Token creation precedes the authenticated health listener by a short interval.
+            }
+        }
+        if ([DateTime]::UtcNow -gt $deadline) {
+            throw 'Runtime did not remain alive with an authenticated health endpoint.'
+        }
         Start-Sleep -Milliseconds 200
     }
-    Write-Output '[runtime-forge-e2e] Runtime token ready'
+    Write-Output '[runtime-forge-e2e] Runtime token and authenticated health ready'
 
     if (Test-Path -LiteralPath $gameRun) {
         Remove-Item -LiteralPath $gameRun -Recurse -Force

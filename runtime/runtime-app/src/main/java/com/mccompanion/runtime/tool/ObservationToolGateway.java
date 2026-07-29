@@ -45,7 +45,7 @@ public final class ObservationToolGateway implements ToolGateway {
                 definition("safety.inspect", "Read observed vitals and deterministic immediate hazard flags",
                         emptySchema(), "SURVIVAL"),
                 definition("task.inspect", "Read the current durable task and recent state evidence",
-                        emptySchema(), "CONTROL_TASK"),
+                        taskSchema(), "CONTROL_TASK"),
                 definition("capability.list", "List formal and connected-body capability lifecycle states",
                         emptySchema(), "READ_WORLD"),
                 definition("capability.describe", "Describe one capability and its current lifecycle state",
@@ -132,13 +132,20 @@ public final class ObservationToolGateway implements ToolGateway {
     }
 
     private ToolResult task(ToolContext context, ToolCall call) throws SQLException {
-        rejectUnexpected(call.arguments(), Set.of());
+        rejectUnexpected(call.arguments(), Set.of("taskId"));
         ObjectNode observation = Json.object().put("companionId", context.companionId());
-        var active = tasks.activeForCompanion(context.companionId());
-        if (active.isEmpty()) return ok(call, observation.put("state", "IDLE"));
-        observation.put("state", active.get().state().name());
-        observation.set("task", Json.MAPPER.valueToTree(active.get()));
-        List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(active.get().taskId());
+        String taskId = call.arguments().path("taskId").asText("");
+        var selected = taskId.isBlank()
+                ? tasks.activeForCompanion(context.companionId())
+                : tasks.get(taskId).filter(task -> task.companionId().equals(context.companionId()));
+        if (selected.isEmpty()) {
+            if (taskId.isBlank()) return ok(call, observation.put("state", "IDLE"));
+            return ToolResult.rejected(call, "TASK_NOT_FOUND",
+                    "Task is unavailable for this companion");
+        }
+        observation.put("state", selected.get().state().name());
+        observation.set("task", Json.MAPPER.valueToTree(selected.get()));
+        List<com.mccompanion.runtime.task.TaskEvent> events = tasks.events(selected.get().taskId());
         if (events.size() > 16) events = events.subList(events.size() - 16, events.size());
         observation.set("events", Json.MAPPER.valueToTree(events));
         return ok(call, observation);
@@ -205,6 +212,13 @@ public final class ObservationToolGateway implements ToolGateway {
         schema.putObject("properties").putObject("select").put("type", "string").putArray("enum")
                 .add("position").add("vitals").add("inventory").add("containers").add("behavior").add("all");
         schema.putArray("required").add("select");
+        return schema;
+    }
+
+    private static ObjectNode taskSchema() {
+        ObjectNode schema = emptySchema();
+        schema.putObject("properties").putObject("taskId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
         return schema;
     }
 

@@ -1,5 +1,6 @@
 import { RefreshCw } from 'lucide-react'
-import { api } from '../api/client'
+import { useState } from 'react'
+import { api, post } from '../api/client'
 import { ActionButton } from '../components/ActionButton'
 import { InstanceTable } from '../components/InstanceTable'
 import { PageHeader } from '../components/PageHeader'
@@ -13,11 +14,25 @@ export function InstancesPage() {
   const { instances, selectedId, select, refresh } = useTerminal()
   const { t } = useI18n()
   const launchers = useResource(() => api<Launcher[]>('/api/launchers'), [])
+  const [rescanning, setRescanning] = useState(false)
+  const [rescanError, setRescanError] = useState('')
+  const rescan = async () => {
+    setRescanning(true)
+    setRescanError('')
+    try {
+      await post('/api/discovery/rescan', {})
+      await Promise.all([launchers.refresh(), refresh()])
+    } catch (failure) {
+      setRescanError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      setRescanning(false)
+    }
+  }
   return <div className="page">
     <PageHeader title={t('instances.title')} description={t('instances.description')}
-      actions={<ActionButton icon={<RefreshCw size={15} />} loading={launchers.loading}
-        onClick={() => { void launchers.refresh(); void refresh() }}>{t('common.rescan')}</ActionButton>} />
-    {launchers.error && <div className="inline-error">{launchers.error}</div>}
+      actions={<ActionButton icon={<RefreshCw size={15} />} loading={launchers.loading || rescanning}
+        onClick={() => void rescan()}>{t('common.rescan')}</ActionButton>} />
+    {(launchers.error || rescanError) && <div className="inline-error">{launchers.error || rescanError}</div>}
     <section className="launcher-strip">{(launchers.data ?? []).map((launcher) => <article key={launcher.id}>
       <div><strong>{launcher.type}</strong><span>{launcher.version}</span></div>
       <StatusBadge value={launcher.confidence} /><p>{launcher.executable}</p>

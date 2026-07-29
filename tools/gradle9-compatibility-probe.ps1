@@ -68,7 +68,7 @@ function Download-VerifiedArchive {
                 [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
             ).GetAwaiter().GetResult()
             try {
-                $response.EnsureSuccessStatusCode()
+                [void]$response.EnsureSuccessStatusCode()
                 $input = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
                 try {
                     $output = [System.IO.File]::Open(
@@ -139,7 +139,7 @@ if (-not [System.IO.File]::Exists($launcher)) {
     Expand-VerifiedDistribution
 }
 
-& $launcher -p $root check --warning-mode all --stacktrace --no-daemon
+& $launcher -p $root check --warning-mode all --stacktrace --no-daemon --no-parallel
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

@@ -9,7 +9,15 @@ def powershellExecutable = System.getProperty('os.name').toLowerCase().contains(
         ? 'powershell' : 'pwsh'
 def isWindowsHost = System.getProperty('os.name').toLowerCase().contains('windows')
 def runProcess = { Closure configuration ->
-    def execution = providers.exec(configuration)
+    def execution = providers.exec { spec ->
+        // ProviderFactory.exec throws while resolving a non-zero result unless the
+        // child is explicitly allowed to finish. Capture and publish both streams
+        // first so CI reports the actionable script failure rather than only exit 1.
+        spec.ignoreExitValue = true
+        configuration.delegate = spec
+        configuration.resolveStrategy = Closure.DELEGATE_FIRST
+        configuration.call()
+    }
     def result = execution.result.get()
     def stdout = execution.standardOutput.asText.get()
     def stderr = execution.standardError.asText.get()
@@ -735,7 +743,18 @@ tasks.register('releaseGoldenPathTest') {
         }
     }
 }
-tasks.register('runtimeDisabledLaunchTest', Exec) { group='verification'; workingDir file('minecraft/fabric-1.21.1'); commandLine 'cmd','/c','gradlew.bat','launchTest','-PmccompanionRuntimeDisabled=true'; doLast { def log=file('minecraft/fabric-1.21.1/build/launch-test/server/logs/latest.log').getText('UTF-8'); if(!log.contains('Runtime bridge disabled by instance config')||log.contains('pairing token not found'))throw new GradleException('enabled=false Runtime bridge regression') } }
+tasks.register('runtimeDisabledLaunchTest', Exec) {
+    group = 'verification'
+    workingDir file('minecraft/fabric-1.21.1')
+    commandLine 'cmd', '/c', 'gradlew.bat', 'launchTest', '-PmccompanionRuntimeDisabled=true'
+    standardInput = new ByteArrayInputStream(new byte[0])
+    doLast {
+        def log=file('minecraft/fabric-1.21.1/build/launch-test/server/logs/latest.log').getText('UTF-8')
+        if(!log.contains('Runtime bridge disabled by instance config')||log.contains('pairing token not found')) {
+            throw new GradleException('enabled=false Runtime bridge regression')
+        }
+    }
+}
 
 // These tests share Fabric run directories and fixed loopback ports, so a combined invocation must serialize them.
 tasks.named('persistenceRestartTest') { mustRunAfter 'runtimeFabricE2E' }

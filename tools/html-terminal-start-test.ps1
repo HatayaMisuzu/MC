@@ -35,9 +35,17 @@ try {
     $secondStart.Environment['LOCALAPPDATA'] = $testLocalAppData
     $second = [Diagnostics.Process]::Start($secondStart)
     Write-Output 'Second mcac.exe started for reuse check.'
-    if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) {
-        if (-not $second.HasExited) { $second.Kill() }
-        throw 'Second mcac.exe did not reuse the existing per-user HTML terminal'
+    try {
+        if (-not $second.WaitForExit(10000) -or $second.ExitCode -ne 0) {
+            if (-not $second.HasExited) {
+                & taskkill.exe /PID $second.Id /T /F | Out-Null
+                [void]$second.WaitForExit(5000)
+            }
+            throw 'Second mcac.exe did not reuse the existing per-user HTML terminal'
+        }
+    }
+    finally {
+        $second.Dispose()
     }
     if ($process.HasExited) { throw 'Primary HTML terminal exited during single-instance reuse' }
     Write-Output 'Single-instance reuse passed.'
@@ -46,6 +54,7 @@ try {
     $handler = [Net.Http.HttpClientHandler]::new()
     $handler.AllowAutoRedirect = $false
     $client = [Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(10)
     try {
         $bootstrap = $client.GetAsync([string]$server.bootstrapUrl).GetAwaiter().GetResult()
         if ([int]$bootstrap.StatusCode -ne 303) { throw "Bootstrap returned $([int]$bootstrap.StatusCode)" }

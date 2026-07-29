@@ -50,6 +50,19 @@ function Stop-TestProcessTree([Diagnostics.Process]$process) {
     try { $process.WaitForExit() } catch { }
 }
 
+function Get-TestLogTail([string[]]$paths) {
+    $sections = foreach ($path in $paths) {
+        if (Test-Path -LiteralPath $path) {
+            $tail = Get-Content -LiteralPath $path -Tail 80 -ErrorAction SilentlyContinue
+            if ($tail) {
+                "===== $([IO.Path]::GetFileName($path)) (last 80 lines) ====="
+                $tail
+            }
+        }
+    }
+    return ($sections -join [Environment]::NewLine)
+}
+
 function Invoke-RuntimeCommand(
     [string]$pairingToken,
     [string]$companionId,
@@ -153,8 +166,14 @@ try {
     # 90 seconds compiling, starting the server, and reaching that verified point.
     $readyDeadline = [DateTime]::UtcNow.AddSeconds(180)
     do {
-        if ($game.HasExited) { throw "Forge Runtime GameTest exited early ($($game.ExitCode))." }
-        if ([DateTime]::UtcNow -gt $readyDeadline) { throw 'Forge companion did not register in time.' }
+        if ($game.HasExited) {
+            $context = Get-TestLogTail @($gameOut, $gameErr, $gameLog)
+            throw "Forge Runtime GameTest exited early ($($game.ExitCode)).`n$context"
+        }
+        if ([DateTime]::UtcNow -gt $readyDeadline) {
+            $context = Get-TestLogTail @($gameOut, $gameErr, $gameLog)
+            throw "Forge companion did not register in time.`n$context"
+        }
         Start-Sleep -Milliseconds 200
         $log = if (Test-Path -LiteralPath $gameLog) {
             [string](Get-Content -Raw -LiteralPath $gameLog)
@@ -192,7 +211,10 @@ try {
     }
 
     if (-not $game.WaitForExit(30000)) { throw 'Forge Runtime GameTest did not finish.' }
-    if ($game.ExitCode -ne 0) { throw "Forge Runtime GameTest failed ($($game.ExitCode))." }
+    if ($game.ExitCode -ne 0) {
+        $context = Get-TestLogTail @($gameOut, $gameErr, $gameLog)
+        throw "Forge Runtime GameTest failed ($($game.ExitCode)).`n$context"
+    }
     Write-Output '[runtime-forge-e2e] authenticated handshake and behavior controls passed'
 } finally {
     Stop-TestProcessTree $game

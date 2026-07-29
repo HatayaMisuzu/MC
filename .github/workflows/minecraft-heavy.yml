@@ -3,12 +3,30 @@ name: Minecraft heavy validation
 on:
   push:
     branches: [main]
+    paths:
+      - '.github/workflows/minecraft-heavy.yml'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'core/**'
+      - 'protocol/**'
+      - 'runtime/**'
+      - 'terminal/**'
+      - 'compatibility/**'
+      - 'minecraft/**'
+      - 'tools/runtime-*.ps1'
+      - 'tools/*persistence*.ps1'
   schedule:
     - cron: '23 18 * * *'
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: minecraft-heavy-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   loaders-and-runtime:
@@ -29,6 +47,7 @@ jobs:
           cache-dependency-path: terminal/web-ui/package-lock.json
       - uses: gradle/actions/setup-gradle@48b5f213c81028ace310571dc5ec0fbbca0b2947 # v4
       - name: Warm Gradle wrapper with network retry
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $exitCode = 1
@@ -40,31 +59,41 @@ jobs:
           }
           if ($exitCode -ne 0) { exit $exitCode }
       - name: Build all supported Loader artifacts
+        timeout-minutes: 20
         shell: pwsh
-        run: ./gradlew.bat buildPlatforms --stacktrace
+        run: ./gradlew.bat buildPlatforms --no-daemon --no-parallel --stacktrace
       - name: Launch dedicated servers
+        timeout-minutes: 20
         shell: pwsh
-        run: ./gradlew.bat launchTest --stacktrace
+        run: ./gradlew.bat launchTest --no-daemon --no-parallel --stacktrace
       - name: Run all Loader GameTests
+        timeout-minutes: 35
         shell: pwsh
-        run: ./gradlew.bat gameTest --stacktrace
+        run: ./gradlew.bat gameTest --no-daemon --no-parallel --stacktrace
       - name: Run Runtime/Fabric end-to-end test
         timeout-minutes: 10
         shell: pwsh
-        run: ./gradlew.bat runtimeFabricE2E --stacktrace
+        run: ./gradlew.bat runtimeFabricE2E --no-daemon --no-parallel --stacktrace
       - name: Run Runtime/Forge end-to-end test
         timeout-minutes: 10
         shell: pwsh
-        run: ./gradlew.bat runtimeForgeE2E --stacktrace
+        run: ./gradlew.bat runtimeForgeE2E --no-daemon --no-parallel --stacktrace
       - name: Run Fabric persistence restart test
+        timeout-minutes: 15
         shell: pwsh
-        run: ./gradlew.bat persistenceRestartTest --stacktrace
+        run: ./gradlew.bat persistenceRestartTest --no-daemon --no-parallel --stacktrace
       - name: Run Forge persistence restart test
+        timeout-minutes: 15
         shell: pwsh
-        run: ./gradlew.bat forgePersistenceRestartTest --stacktrace
+        run: ./gradlew.bat forgePersistenceRestartTest --no-daemon --no-parallel --stacktrace
       - name: Run Runtime multi-profile test
+        timeout-minutes: 5
         shell: pwsh
-        run: ./gradlew.bat runtimeMultiProfileTest --stacktrace
+        run: ./gradlew.bat runtimeMultiProfileTest --no-daemon --no-parallel --stacktrace
+      - name: Run Runtime-disabled Fabric launch
+        timeout-minutes: 10
+        shell: pwsh
+        run: ./gradlew.bat runtimeDisabledLaunchTest --no-daemon --no-parallel --stacktrace
       - name: Upload safe test reports and logs on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -78,5 +107,7 @@ jobs:
             minecraft/*/build/launch-test/server/logs/
             minecraft/*/build/gametest/logs/
             build/e2e-runtime/evidence/
+            build/e2e-runtime-forge/*.log
+            build/e2e-runtime-forge/logs/
             build/terminal-package/runtime-multi-profile-test/
             build/reports/problems/

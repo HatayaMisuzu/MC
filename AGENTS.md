@@ -58,8 +58,31 @@ Development-time Codex may edit this repository. Runtime Hermes may not.
 - Replay is never Live-provider evidence. GameTest is real Minecraft execution but not human play.
 - Only `docs/RC_COMPLETION_MATRIX.md` is the current completion matrix.
 - Do not remove unfinished rows or lower acceptance standards to make the matrix appear complete.
-- Update the matrix after each stable vertical slice.
-- Run tests proportional to risk, then commit, push, and inspect remote CI.
+- Update the matrix when a stable vertical slice changes product truth, acceptance evidence, or an
+  explicit deferral. Do not edit it merely to record workflow transitions.
+- Run focused tests proportional to the changed product risk. Use the repository's three validation
+  layers only at their defined boundaries; do not restart a full chain after every small edit.
+
+## Delivery discipline
+
+- Product behavior, user value, security boundaries, compatibility, and truthful documentation are
+  the work. Branches, checks, candidates, and reports are supporting mechanisms, not progress by
+  themselves.
+- The repository has at most three validation layers: fast PR validation, one Ready-PR Windows
+  integration boundary, and scheduled/manual audit plus exact-main candidate validation.
+- Keep a PR Draft while iterating. Layer 2 runs when the coherent change is opened as non-Draft or
+  deliberately moved to Ready; later substantial changes must return it to Draft before the next
+  Ready boundary.
+- Diagnose a failed check from its evidence, fix the root cause, and run the smallest test that
+  covers the fix. Do not add retries or repeat complete suites without evidence of an external
+  transient failure.
+- Ordinary commits, documentation updates, and merge commits are not release candidates. A
+  candidate may be created only by manually dispatching Layer 3 in `candidate` mode from exact
+  `main`, after its audit jobs pass.
+- Do not create extra commits or candidates solely to record workflow run IDs. Record remote
+  evidence in the PR/release handoff or with the next substantive documentation update.
+- Prefer one coherent implementation branch and one ordinary merge. Avoid branch churn, ceremonial
+  checkpoints, duplicated reports, and repeated status-only work.
 
 The only permitted final readiness labels are:
 

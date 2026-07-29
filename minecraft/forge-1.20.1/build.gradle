@@ -82,32 +82,32 @@ legacyForge {
 dependencies {
     // RuntimeBridge is production code. Embed the JSON stack in the distributable Forge Mod and
     // add it explicitly to ModDev runs because plain Java libraries are not auto-loaded as mods.
-    jarJar(implementation('com.fasterxml.jackson.core:jackson-databind:2.18.3')) {
+    jarJar(implementation('com.fasterxml.jackson.core:jackson-databind:2.22')) {
         version {
             strictly '[2.18.3,2.19)'
             prefer '2.18.3'
         }
     }
-    jarJar(implementation('com.fasterxml.jackson.core:jackson-core:2.18.3')) {
+    jarJar(implementation('com.fasterxml.jackson.core:jackson-core:2.22')) {
         version {
             strictly '[2.18.3,2.19)'
             prefer '2.18.3'
         }
     }
-    jarJar(implementation('com.fasterxml.jackson.core:jackson-annotations:2.18.3')) {
+    jarJar(implementation('com.fasterxml.jackson.core:jackson-annotations:2.22')) {
         version {
             strictly '[2.18.3,2.19)'
             prefer '2.18.3'
         }
     }
-    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
-    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-core:2.18.3'
-    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-annotations:2.18.3'
+    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-databind:2.22'
+    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-core:2.22'
+    additionalRuntimeClasspath 'com.fasterxml.jackson.core:jackson-annotations:2.22'
 
     implementation "com.mccompanion:pure-core:${mod_version}"
     implementation "com.mccompanion:protocol-model:${mod_version}"
     gameTestModImplementation sourceSets.main.output
-    gameTestModImplementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    gameTestModImplementation 'com.fasterxml.jackson.core:jackson-databind:2.22'
 }
 
 def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {

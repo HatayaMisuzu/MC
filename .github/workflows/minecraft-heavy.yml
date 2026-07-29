@@ -78,4 +78,5 @@ jobs:
             minecraft/*/build/launch-test/server/logs/
             minecraft/*/build/gametest/logs/
             build/e2e-runtime/evidence/
+            build/terminal-package/runtime-multi-profile-test/
             build/reports/problems/

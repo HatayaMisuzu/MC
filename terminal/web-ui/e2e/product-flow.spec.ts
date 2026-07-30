@@ -1,10 +1,39 @@
 import { expect, test, type Page } from '@playwright/test'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { createServer, type Server } from 'node:http'
 import { Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
+import type { AddressInfo } from 'node:net'
 
 type Locale = 'zh-CN' | 'en-US'
+interface ProtocolCommand {
+  commandId: string
+}
+interface TaskGraphListEntry {
+  executionId: string
+  graphId: string
+}
+interface CompanionListEntry {
+  id: string
+  online: boolean
+}
+interface CompanionTaskEntry {
+  state: string
+}
+interface E2EInstance {
+  id: string
+  gameDir: string
+}
+let activeHermesServer: Server | undefined
+
+test.afterEach(() => {
+  if (!activeHermesServer) return
+  const server = activeHermesServer
+  activeHermesServer = undefined
+  server.closeAllConnections()
+  server.close()
+})
 
 const copy = {
   'zh-CN': {
@@ -149,6 +178,391 @@ async function portOpen(port: number) {
   })
 }
 
+function startHermesFixture(): Promise<{
+  server: Server
+  endpoint: string
+  calls: { opened: number; turned: number; cancelled: number }
+}> {
+  const calls = { opened: 0, turned: 0, cancelled: 0 }
+  const server = createServer((request, response) => {
+    const path = request.url ?? ''
+    response.setHeader('Content-Type', 'application/json')
+    if (request.method === 'POST' && path === '/sessions') {
+      calls.opened += 1
+      response.end('{"sessionId":"playwright-health-session"}')
+    } else if (request.method === 'POST' && path.endsWith('/turns')) {
+      calls.turned += 1
+      response.end(JSON.stringify({
+        kind: 'TOOL_CALLS',
+        toolCalls: [{ callId: 'playwright-probe', name: 'mcac_health_probe', arguments: {} }],
+      }))
+    } else if (request.method === 'POST' && path.endsWith('/cancel')) {
+      calls.cancelled += 1
+      response.end('{}')
+    } else {
+      response.statusCode = 404
+      response.end('{}')
+    }
+  })
+  return new Promise((resolveStarted, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address() as AddressInfo
+      server.unref()
+      resolveStarted({
+        server,
+        endpoint: `http://127.0.0.1:${address.port}`,
+        calls,
+      })
+    })
+  })
+}
+
+async function verifyDiscoveryAndBrain(
+  page: Page,
+  endpoint: string,
+  calls: { opened: number; turned: number; cancelled: number },
+) {
+  await navigate(page, 'en-US', 'instances')
+  const rescanResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/api/discovery/rescan') && response.request().method() === 'POST')
+  await page.getByRole('button', { name: 'Rescan', exact: true }).click()
+  expect((await rescanResponse).status()).toBe(200)
+  await expect(page.locator('.inline-error')).toHaveCount(0)
+  expect((await apiJson(page, '/api/instances')).length).toBeGreaterThan(0)
+
+  await navigate(page, 'en-US', 'brain')
+  await page.getByLabel('Endpoint', { exact: true }).fill(endpoint)
+  await page.getByLabel('Token environment variable', { exact: true })
+    .fill('MCAC_E2E_BRAIN_TOKEN')
+  await clickPlan(page, 'en-US', 'Review configuration')
+  const instances = await apiJson(page, '/api/instances')
+  const brain = await apiJson(page,
+    `/api/brain/config?instanceId=${encodeURIComponent(instances[0].id as string)}`)
+  expect(brain.mode).toBe('hermes')
+  expect(brain.endpoint).toBe(endpoint)
+
+  await page.getByRole('button', { name: 'Verify MCAC protocol', exact: true }).click()
+  await expect(page.getByText('TOOL_CALL_VERIFIED', { exact: true })).toBeVisible()
+  expect(calls).toEqual({ opened: 1, turned: 1, cancelled: 1 })
+
+  await clickPlan(page, 'en-US', 'Disable')
+  const disabled = await apiJson(page,
+    `/api/brain/config?instanceId=${encodeURIComponent(instances[0].id as string)}`)
+  expect(disabled.mode).toBe('disabled')
+}
+
+async function connectProtocolCompanion(runtimePort: number, instanceId: string) {
+  const profile = resolve(tmpdir(), 'mcac-playwright-fixture', 'local-app-data',
+    'MinecraftAICompanion', 'profiles', instanceId)
+  const token = readFileSync(resolve(profile, 'pairing.token'), 'ascii').trim()
+  const socket = new WebSocket(`ws://127.0.0.1:${runtimePort}`)
+  let sessionId = ''
+  let sequence = 0
+  let behaviorRevision = 0
+  const current = { behaviorId: '', controlEpoch: 0 }
+  const send = (type: string, payload: Record<string, unknown>) => {
+    socket.send(JSON.stringify({ type, sessionId, sequence: sequence++, payload }))
+  }
+  const opened = new Promise<void>((resolveOpened, reject) => {
+    socket.addEventListener('open', () => resolveOpened(), { once: true })
+    socket.addEventListener('error', () => reject(new Error('Runtime WebSocket failed')), { once: true })
+  })
+  await opened
+  const acknowledged = new Promise<void>((resolveAck, reject) => {
+    const timer = setTimeout(() => reject(new Error('Runtime hello acknowledgement timed out')), 5_000)
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data))
+      if (message.type === 'hello_ack') {
+        clearTimeout(timer)
+        sessionId = message.sessionId
+        resolveAck()
+      }
+    })
+  })
+  socket.send(JSON.stringify({
+    type: 'hello',
+    protocol: 'mc-companion/1',
+    token,
+    modVersion: 'playwright-fixture',
+    minecraftVersion: '1.21.1',
+    loader: 'fabric',
+    worldId: 'playwright-world',
+    capabilities: {
+      NavigateTo: true,
+      FollowOwner: true,
+      DeliverItem: true,
+      EatAndRecover: true,
+      CraftItem: true,
+    },
+  }))
+  await acknowledged
+  socket.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data))
+    if (String(message.type).toLowerCase() !== 'command') return
+    const payload = message.payload ?? {}
+    const command = String(payload.command ?? '').toUpperCase()
+    if (command === 'START_BEHAVIOR') {
+      current.behaviorId = payload.arguments.behaviorId
+      current.controlEpoch = payload.controlEpoch
+      behaviorRevision += 1
+      send('command_accepted', {
+        commandId: payload.commandId,
+        duplicate: false,
+        behaviorId: current.behaviorId,
+        behaviorRevision,
+        acceptedAt: new Date().toISOString(),
+      })
+      behaviorRevision += 1
+      send('behavior_event', behaviorEvent(
+        payload, current, behaviorRevision, 'STARTED', 'RUNNING', 0.05))
+    } else if (command === 'PAUSE_BEHAVIOR') {
+      behaviorRevision += 1
+      send('behavior_event', behaviorEvent(
+        payload, current, behaviorRevision, 'PAUSED', 'PAUSED', 0.25))
+    } else if (command === 'RESUME_BEHAVIOR') {
+      behaviorRevision += 1
+      send('behavior_event', behaviorEvent(
+        payload, current, behaviorRevision, 'RESUMED', 'RUNNING', 0.3))
+    } else if (command === 'CANCEL_BEHAVIOR') {
+      behaviorRevision += 1
+      send('behavior_event', behaviorEvent(
+        payload, current, behaviorRevision, 'CANCELLED', 'CANCELLED', 1))
+    }
+  })
+  send('companion_status', {
+    companionId: 'playwright-companion',
+    ownerId: 'playwright-owner',
+    displayName: 'Playwright Companion',
+    worldId: 'playwright-world',
+    dimension: 'minecraft:overworld',
+    position: { x: 0, y: 64, z: 0 },
+    bodyState: 'spawned',
+    behaviorRevision: 0,
+    controlEpoch: 0,
+    runtimeConnected: true,
+    capabilities: {},
+    observedAt: new Date().toISOString(),
+  })
+  const heartbeat = setInterval(() => {
+    if (socket.readyState === WebSocket.OPEN) send('heartbeat', {})
+  }, 5_000)
+  return {
+    socket,
+    token,
+    profile,
+    close: () => {
+      clearInterval(heartbeat)
+      socket.close()
+    },
+  }
+}
+
+function behaviorEvent(
+  command: ProtocolCommand,
+  current: { behaviorId: string; controlEpoch: number },
+  revision: number,
+  event: string,
+  state: string,
+  progress: number,
+) {
+  return {
+    eventId: `playwright-event-${revision}`,
+    behaviorId: current.behaviorId,
+    commandId: command.commandId,
+    companionId: 'playwright-companion',
+    event,
+    state,
+    revision,
+    tick: revision,
+    progress,
+    failureCode: null,
+    message: `Playwright ${event.toLowerCase()}`,
+    occurredAt: new Date().toISOString(),
+    snapshot: { controlEpoch: current.controlEpoch },
+  }
+}
+
+async function startWaitingTaskGraph(page: Page, healthPort: number, token: string) {
+  const endpoint = `http://127.0.0.1:${healthPort}/mcp`
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'X-MCAC-Controller-Id': 'playwright-controller',
+    'X-MCAC-Brain-Session-Id': 'playwright-brain-session',
+    'X-MCAC-Companion-Id': 'playwright-companion',
+  }
+  const initialized = await page.request.post(endpoint, {
+    headers,
+    timeout: 20_000,
+    data: {
+      jsonrpc: '2.0',
+      id: 'playwright-init',
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'playwright', version: '1' },
+      },
+    },
+  })
+  expect(initialized.status()).toBe(200)
+  const mcpSession = initialized.headers()['mcp-session-id']
+  expect(mcpSession).toBeTruthy()
+  const completion = page.request.post(endpoint, {
+    headers: {
+      ...headers,
+      'MCP-Protocol-Version': '2025-06-18',
+      'Mcp-Session-Id': mcpSession as string,
+    },
+    timeout: 70_000,
+    data: {
+      jsonrpc: '2.0',
+      id: 'playwright-graph',
+      method: 'tools/call',
+      params: {
+        name: 'task_graph.execute',
+        arguments: {
+          graph: {
+            version: 'mcac-task-graph/1',
+            id: 'playwright-waiting-graph',
+            permissions: [],
+            root: {
+              id: 'delay',
+              type: 'wait',
+              durationMillis: 60_000,
+            },
+          },
+        },
+      },
+    },
+  })
+  let executionId = ''
+  await expect.poll(async () => {
+    const listed = await page.request.get(
+      `http://127.0.0.1:${healthPort}/task-graphs?companionId=playwright-companion`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+    expect(listed.status()).toBe(200)
+    const body = await listed.json() as { executions?: TaskGraphListEntry[] }
+    executionId = body.executions?.find(
+      (execution) => execution.graphId === 'playwright-waiting-graph',
+    )?.executionId ?? ''
+    return executionId
+  }).not.toBe('')
+  return { executionId, completion }
+}
+
+async function verifyCompanionAndTaskGraphControls(
+  page: Page,
+  instanceId: string,
+  runtime: { port: number; healthPort: number },
+) {
+  const fixture = await connectProtocolCompanion(runtime.port, instanceId)
+  try {
+    await expect.poll(async () => {
+      const value = await apiJson(page,
+        `/api/companions?instanceId=${encodeURIComponent(instanceId)}`) as {
+        companions?: CompanionListEntry[]
+      }
+      return value.companions?.some((companion) =>
+        companion.id === 'playwright-companion' && companion.online)
+    }).toBe(true)
+    await navigate(page, 'en-US', 'companions')
+    await expect(page.getByText('Playwright Companion', { exact: true })).toBeVisible()
+
+    await clickPlan(page, 'en-US', 'status')
+    await clickPlan(page, 'en-US', 'follow')
+    await expect.poll(async () => {
+      const value = await apiJson(page,
+        `/api/companions?instanceId=${encodeURIComponent(instanceId)}`) as {
+        tasks?: CompanionTaskEntry[]
+      }
+      return value.tasks?.[0]?.state
+    }).toBe('RUNNING')
+    await clickPlan(page, 'en-US', 'pause')
+    await expect.poll(async () => {
+      const value = await apiJson(page,
+        `/api/companions?instanceId=${encodeURIComponent(instanceId)}`) as {
+        tasks?: CompanionTaskEntry[]
+      }
+      return value.tasks?.[0]?.state
+    }).toBe('PAUSED')
+    await clickPlan(page, 'en-US', 'resume')
+    await clickPlan(page, 'en-US', 'stop')
+    await expect.poll(async () => {
+      const value = await apiJson(page,
+        `/api/companions?instanceId=${encodeURIComponent(instanceId)}`) as {
+        tasks?: CompanionTaskEntry[]
+      }
+      return value.tasks?.every((task) =>
+        ['COMPLETED', 'FAILED', 'CANCELLED'].includes(task.state))
+    }).toBe(true)
+
+    await clickPlan(page, 'en-US', 'come')
+    await clickPlan(page, 'en-US', 'stop')
+    await page.getByLabel('X', { exact: true }).fill('12')
+    await page.getByLabel('Y', { exact: true }).fill('70')
+    await page.getByLabel('Z', { exact: true }).fill('-8')
+    await clickPlan(page, 'en-US', 'goto')
+    await clickPlan(page, 'en-US', 'stop')
+
+    const graph = await startWaitingTaskGraph(page, runtime.healthPort, fixture.token)
+    await page.getByRole('main').getByRole(
+      'button', { name: 'Refresh status', exact: true },
+    ).click()
+    const graphRow = page.getByRole('row').filter({ hasText: 'playwright-waiting-graph' })
+    await expect(graphRow).toContainText(graph.executionId.slice(0, 10))
+    await graphRow.getByRole('button', { name: 'Pause', exact: true }).click()
+    await expect(graphRow).toContainText('PAUSED')
+    await graphRow.getByRole('button', { name: 'Resume', exact: true }).click()
+    await expect(graphRow).toContainText('RUNNING')
+    await graphRow.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await expect(graphRow).toContainText('CANCELLED')
+    const completed = await graph.completion
+    expect(completed.status()).toBe(200)
+  } finally {
+    fixture.close()
+  }
+}
+
+async function stopRuntime(page: Page) {
+  await navigate(page, 'en-US', 'runtime')
+  await clickPlan(page, 'en-US', copy['en-US'].actions.runtimeStop)
+}
+
+async function repairDoctorCheck(page: Page, code: string) {
+  await navigate(page, 'en-US', 'doctor')
+  await page.getByRole('button', { name: 'Check again', exact: true }).click()
+  const row = page.locator('article').filter({ hasText: code })
+  await expect(row.getByRole('button', { name: 'Repair', exact: true })).toBeVisible()
+  await row.getByRole('button', { name: 'Repair', exact: true }).click()
+  await confirmAndWait(page, 'en-US')
+}
+
+async function verifyDoctorRepairButtons(page: Page, instance: E2EInstance) {
+  for (const code of ['runtime.pid', 'runtime.health', 'protocol.compatible']) {
+    await repairDoctorCheck(page, code)
+    await stopRuntime(page)
+  }
+
+  const profile = resolve(tmpdir(), 'mcac-playwright-fixture', 'local-app-data',
+    'MinecraftAICompanion', 'profiles', instance.id as string)
+  writeFileSync(resolve(profile, 'pairing.token'),
+    'doctor-mismatch-token-that-is-long-enough-for-the-fixture\n', 'ascii')
+  await repairDoctorCheck(page, 'runtime.token_match')
+
+  const mods = resolve(instance.gameDir as string, 'mods')
+  const managedJar = readdirSync(mods, { recursive: true })
+    .map((entry) => resolve(mods, String(entry)))
+    .find((entry) => entry.toLowerCase().endsWith('.jar')
+      && entry.toLowerCase().includes('minecraft-ai-companion'))
+  expect(managedJar).toBeTruthy()
+  appendFileSync(managedJar as string, 'playwright-hash-corruption')
+  await repairDoctorCheck(page, 'install.hash')
+}
+
 async function verifyNavigationAndShell(page: Page, locale: Locale) {
   for (const route of Object.keys(copy[locale].nav) as Array<keyof typeof copy['en-US']['nav']>) {
     await navigate(page, locale, route)
@@ -174,7 +588,7 @@ async function verifyNavigationAndShell(page: Page, locale: Locale) {
   })).toBeVisible()
 }
 
-async function verifyManagedCriticalPath(page: Page, locale: Locale) {
+async function verifyManagedCriticalPath(page: Page, locale: Locale, targetedControls = false) {
   const labels = copy[locale].actions
   await navigate(page, locale, 'install')
   await clickPlan(page, locale, labels.install)
@@ -205,6 +619,9 @@ async function verifyManagedCriticalPath(page: Page, locale: Locale) {
   expect(runtime.pidAlive).toBe(true)
   expect(runtime.identityMatches).toBe(true)
   expect(runtime.detail).toContain('authenticated health identity verified')
+  if (targetedControls) {
+    await verifyCompanionAndTaskGraphControls(page, instanceId, runtime)
+  }
 
   await navigate(page, locale, 'game')
   await clickPlanExpectFailure(page, locale, labels.attach, 'NO_ACTIVE_GAME_SESSION')
@@ -224,6 +641,9 @@ async function verifyManagedCriticalPath(page: Page, locale: Locale) {
   expect(runtime.pidAlive).toBe(false)
   expect(await portOpen(runtime.port as number)).toBe(false)
   expect(await portOpen(runtime.healthPort as number)).toBe(false)
+  if (targetedControls) {
+    await verifyDoctorRepairButtons(page, instances[0])
+  }
 }
 
 async function verifyCompatibilityLifecycle(page: Page) {
@@ -260,7 +680,7 @@ async function verifyCompatibilityLifecycle(page: Page) {
 }
 
 test('packaged Terminal completes bilingual real-backend product paths', async ({ page }) => {
-  test.setTimeout(300_000)
+  test.setTimeout(420_000)
   const consoleErrors: string[] = []
   page.on('console', (message) => {
     const text = message.text()
@@ -271,6 +691,8 @@ test('packaged Terminal completes bilingual real-backend product paths', async (
   const state = JSON.parse(
     readFileSync(resolve(tmpdir(), 'mcac-playwright-server.json'), 'utf8'),
   ) as { bootstrapUrl: string }
+  const hermes = await startHermesFixture()
+  activeHermesServer = hermes.server
 
   await page.goto(state.bootstrapUrl)
   await expect(page).toHaveTitle('Minecraft AI Companion')
@@ -281,6 +703,9 @@ test('packaged Terminal completes bilingual real-backend product paths', async (
   for (const locale of ['zh-CN', 'en-US'] as const) {
     await setLocale(page, locale)
     await verifyNavigationAndShell(page, locale)
+    if (locale === 'en-US') {
+      await verifyDiscoveryAndBrain(page, hermes.endpoint, hermes.calls)
+    }
     await navigate(page, locale, 'compatibility')
     const selected = await apiJson(page, '/api/instances')
     const compatibility = await apiJson(page,
@@ -292,7 +717,7 @@ test('packaged Terminal completes bilingual real-backend product paths', async (
       fullPage: true,
     })
     if (locale === 'zh-CN') await verifyCompatibilityLifecycle(page)
-    await verifyManagedCriticalPath(page, locale)
+    await verifyManagedCriticalPath(page, locale, locale === 'en-US')
   }
 
   await setLocale(page, 'zh-CN')

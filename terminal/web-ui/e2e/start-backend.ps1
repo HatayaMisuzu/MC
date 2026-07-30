@@ -14,6 +14,7 @@ Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
 Copy-Item -LiteralPath $fixtureSource -Destination $fixture -Recurse -Force
 $env:LOCALAPPDATA = Join-Path $fixture 'local-app-data'
 $env:APPDATA = Join-Path $fixture 'roaming-app-data'
+$env:MCAC_E2E_BRAIN_TOKEN = 'playwright-local-hermes-token'
 New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
 New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
 

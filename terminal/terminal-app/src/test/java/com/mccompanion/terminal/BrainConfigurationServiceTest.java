@@ -104,6 +104,43 @@ class BrainConfigurationServiceTest {
         }
     }
 
+    @Test
+    void hermesProbeReportsRejectedSessionCleanup() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/sessions", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if ("/sessions".equals(path)) {
+                respond(exchange, 200, "{\"sessionId\":\"probe-session\"}");
+            } else if (path.endsWith("/turns")) {
+                respond(exchange, 200, """
+                        {"kind":"TOOL_CALLS","toolCalls":[
+                          {"callId":"probe-1","name":"mcac_health_probe","arguments":{}}
+                        ]}
+                        """);
+            } else if (path.endsWith("/cancel")) {
+                respond(exchange, 500, "{}");
+            } else {
+                respond(exchange, 404, "{}");
+            }
+        });
+        server.start();
+        try {
+            var config = JsonNodeFactory.instance.objectNode()
+                    .put("mode", "hermes")
+                    .put("endpoint", "http://127.0.0.1:" + server.getAddress().getPort())
+                    .put("timeoutSeconds", 2);
+
+            var result = new BrainConfigurationService()
+                    .testWithToken(config, "fixture-token");
+
+            assertFalse(result.success());
+            assertEquals("SESSION_CLEANUP_FAILED", result.status());
+            assertTrue(result.message().contains("HTTP 500"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
     private static void respond(
             com.sun.net.httpserver.HttpExchange exchange, int status, String response)
             throws java.io.IOException {

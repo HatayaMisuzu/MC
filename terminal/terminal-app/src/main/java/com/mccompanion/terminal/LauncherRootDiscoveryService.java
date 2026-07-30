@@ -20,6 +20,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /** Bounded Windows scan for portable PCL2/HMCL roots without reading account data. */
 final class LauncherRootDiscoveryService {
+  private static final Duration SCAN_TIMEOUT = Duration.ofSeconds(8);
+  private static final int MAX_VISITS = 60_000;
   private static final Set<String> SKIP =
       Set.of(
           "windows",
@@ -67,10 +69,9 @@ final class LauncherRootDiscoveryService {
         }
       }
     }
-    Instant deadline = Instant.now().plusSeconds(8);
-    AtomicInteger visited = new AtomicInteger();
+    ScanBudget budget = new ScanBudget(Instant.now().plus(SCAN_TIMEOUT), MAX_VISITS);
     for (Root start : starts) {
-      if (Instant.now().isAfter(deadline) || visited.get() > 60_000 || !Files.isDirectory(start.path())) break;
+      if (budget.exhausted() || !Files.isDirectory(start.path())) break;
       try {
         Files.walkFileTree(
             start.path(),
@@ -79,8 +80,7 @@ final class LauncherRootDiscoveryService {
             new FileVisitor<>() {
               @Override
               public FileVisitResult preVisitDirectory(Path directory, BasicFileAttributes attributes) {
-                if (Instant.now().isAfter(deadline) || visited.incrementAndGet() > 60_000)
-                  return FileVisitResult.TERMINATE;
+                if (!budget.tryVisit()) return FileVisitResult.TERMINATE;
                 if (!directory.equals(start.path()) && isSkippedDirectory(directory))
                   return FileVisitResult.SKIP_SUBTREE;
                 if (Files.isRegularFile(directory.resolve("PCL/Setup.ini"))
@@ -93,17 +93,23 @@ final class LauncherRootDiscoveryService {
 
               @Override
               public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
-                return FileVisitResult.CONTINUE;
+                return budget.tryVisit()
+                    ? FileVisitResult.CONTINUE
+                    : FileVisitResult.TERMINATE;
               }
 
               @Override
               public FileVisitResult visitFileFailed(Path file, IOException failure) {
-                return FileVisitResult.CONTINUE;
+                return budget.tryVisit()
+                    ? FileVisitResult.CONTINUE
+                    : FileVisitResult.TERMINATE;
               }
 
               @Override
               public FileVisitResult postVisitDirectory(Path directory, IOException failure) {
-                return FileVisitResult.CONTINUE;
+                return budget.deadlineReached()
+                    ? FileVisitResult.TERMINATE
+                    : FileVisitResult.CONTINUE;
               }
             });
       } catch (IOException ignored) {
@@ -121,6 +127,30 @@ final class LauncherRootDiscoveryService {
   static boolean isSkippedDirectory(Path directory) {
     Path name = directory.getFileName();
     return name != null && SKIP.contains(name.toString().toLowerCase(Locale.ROOT));
+  }
+
+  static final class ScanBudget {
+    private final Instant deadline;
+    private final int maximumVisits;
+    private final AtomicInteger visits = new AtomicInteger();
+
+    ScanBudget(Instant deadline, int maximumVisits) {
+      this.deadline = deadline;
+      this.maximumVisits = maximumVisits;
+    }
+
+    boolean tryVisit() {
+      if (deadlineReached()) return false;
+      return visits.incrementAndGet() <= maximumVisits;
+    }
+
+    boolean deadlineReached() {
+      return !Instant.now().isBefore(deadline);
+    }
+
+    boolean exhausted() {
+      return deadlineReached() || visits.get() >= maximumVisits;
+    }
   }
 
   private record Root(Path path, int depth) {}

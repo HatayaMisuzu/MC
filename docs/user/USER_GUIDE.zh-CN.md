@@ -5,14 +5,16 @@
 ## 开始使用
 
 1. 完整解压 `mcac-release.zip`，不要只复制 `mcac.exe`。
-2. 双击 `mcac.exe`。
+2. 在 PowerShell 中运行 `.\mcac.exe web --open-browser`，明确允许本次启动打开默认浏览器。
 3. 在“启动器与实例”中选择自动发现的 PCL2 或 HMCL 实例。
 4. 先运行“诊断”，再进入“安装管理”审阅并确认安装计划。
 5. 在“运行服务”中启动 Runtime；页面应显示真实 PID、端口和认证健康状态。
 6. 需要连接游戏时，按“游戏启动”页的预检和启动计划操作。
 
-再次启动 `mcac.exe` 会复用本机已运行的终端。服务只监听 `127.0.0.1`，不要把启动
-URL、会话 Cookie、CSRF Token、启动器凭据或 API Key 分享给他人。
+直接双击或再次启动 `mcac.exe` 只会启动或复用本机终端，不会隐式打开默认浏览器。
+只有 `--open-browser` 或 `MCAC_OPEN_BROWSER=true` 会请求 Windows 打开浏览器；
+`MCAC_NO_BROWSER=true` 可为开发、测试和无人值守流程强制禁用该行为。服务只监听
+`127.0.0.1`，不要把启动 URL、会话 Cookie、CSRF Token、启动器凭据或 API Key 分享给他人。
 
 ## 支持范围
 

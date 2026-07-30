@@ -9,7 +9,6 @@ $start = [Diagnostics.ProcessStartInfo]::new()
 $start.FileName = Join-Path $release 'mcac.exe'
 $start.WorkingDirectory = $env:TEMP
 $start.UseShellExecute = $false
-$start.Environment['MCAC_NO_BROWSER'] = 'true'
 $start.Environment['MCAC_WEB_STATE_FILE'] = $state
 $start.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
 $start.Environment['LOCALAPPDATA'] = $testLocalAppData
@@ -30,7 +29,6 @@ try {
     $secondStart.FileName = Join-Path $release 'mcac.exe'
     $secondStart.WorkingDirectory = $env:TEMP
     $secondStart.UseShellExecute = $false
-    $secondStart.Environment['MCAC_NO_BROWSER'] = 'true'
     $secondStart.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
     $secondStart.Environment['LOCALAPPDATA'] = $testLocalAppData
     $second = [Diagnostics.Process]::Start($secondStart)

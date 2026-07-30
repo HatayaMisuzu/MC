@@ -5,13 +5,17 @@ Applies to: 0.3.1 productization repair candidate
 ## Get started
 
 1. Extract the complete `mcac-release.zip`; do not copy only `mcac.exe`.
-2. Run `mcac.exe`.
+2. In PowerShell, run `.\mcac.exe web --open-browser` to explicitly allow this launch to open the
+   system default browser.
 3. Select the detected PCL2 or HMCL instance under Launchers & instances.
 4. Run Diagnostics, then review and confirm the installation plan.
 5. Start Runtime and verify that the UI shows a real PID, ports and authenticated health.
 6. When connecting the game, follow the preflight and launch plan on Game launch.
 
-Starting `mcac.exe` again reuses the local Terminal. It listens only on `127.0.0.1`. Do not share
+Double-clicking or starting `mcac.exe` again only starts or reuses the local Terminal; it does not
+implicitly open the default browser. Only `--open-browser` or `MCAC_OPEN_BROWSER=true` requests
+Windows browser activation. `MCAC_NO_BROWSER=true` is an unconditional safety override for
+development, tests, and unattended runs. The service listens only on `127.0.0.1`. Do not share
 bootstrap URLs, session cookies, CSRF tokens, launcher credentials or API keys.
 
 ## Supported targets

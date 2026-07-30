@@ -15,11 +15,11 @@ Workspace、兼容层、诊断和恢复边界；Live Brain 验证与真人启动
 ## 使用发布包
 
 1. 解压 `mcac-release.zip`，不要只单独复制 `mcac.exe`。
-2. 双击第一层的 `mcac.exe`。
+2. 在 PowerShell 中运行 `.\mcac.exe web --open-browser`，明确允许本次启动打开系统默认浏览器。
 3. 在浏览器页面中选择自动扫描到的 PCL2/HMCL 实例。
 4. 依次完成 Doctor、安装、Runtime、游戏启动、Companion 控制和冒烟测试。
 
-再次双击 `mcac.exe` 会复用已运行的本地后端并重新打开控制页面。服务只监听 `127.0.0.1` 的动态端口；所有 API 需要随机会话 Cookie 与独立 CSRF Token，拒绝跨站、局域网和公网请求。
+直接双击 `mcac.exe` 只会启动或复用本地后端，不再隐式调用 Windows 默认浏览器；需要打开控制页面时必须明确传入 `--open-browser`，也可以设置 `MCAC_OPEN_BROWSER=true`。开发、测试和无人值守流程应保持默认行为，或设置 `MCAC_NO_BROWSER=true` 作为不可被命令行覆盖的安全开关。服务只监听 `127.0.0.1` 的动态端口；所有 API 需要随机会话 Cookie 与独立 CSRF Token，拒绝跨站、局域网和公网请求。
 
 发布目录结构：
 

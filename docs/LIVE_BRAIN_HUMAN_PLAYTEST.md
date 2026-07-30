@@ -23,7 +23,8 @@ result form, screenshot, log, or Support Bundle.
 
 ## 2. Install only to a supported Full-Bridge instance
 
-Open `mcac.exe` to use the HTML terminal. Select a disposable Fabric 1.21.1 or Forge 1.20.1
+Run `.\mcac.exe web --open-browser` to explicitly open the HTML terminal in the system browser.
+Select a disposable Fabric 1.21.1 or Forge 1.20.1
 instance, review the installation plan, and confirm Install. Record the Loader in the result form.
 Do not use this guide with NeoForge, another Minecraft version, or an arbitrary personal world.
 

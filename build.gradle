@@ -581,7 +581,10 @@ tasks.register('stageTerminal') {
             from('docs/PRODUCTIZATION_AUDIT_V5.md') { into 'docs' }
             from('docs/execution/DUAL_LOADER_HERMES_ACCEPTANCE_STATUS.md') { into 'docs/execution' }
             from('docs/product/PRODUCTIZATION_BASELINE.md') { into 'docs/product' }
-            from('docs/product/PRODUCTIZATION_CLOSEOUT_REPORT.md') { into 'docs/product' }
+            from('AGENTS.md')
+            from('CHANGELOG.md')
+            from('CODEX_GOAL.md')
+            from('docs') { into 'docs' }
             from('docs/user') { into 'docs/user' }
             from('docs/developer') { into 'docs/developer' }
             from('docs/compatibility') { into 'docs/compatibility' }

@@ -12,7 +12,7 @@ function Read-Repo([string]$relative) {
     Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root $relative)
 }
 
-$excluded = '[\\/](build|node_modules|\.gradle|artifacts|\.git)[\\/]'
+$excluded = '[\\/](build|mcac-local|node_modules|\.gradle|artifacts|\.git)[\\/]'
 $markdown = Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.md' |
     Where-Object { $_.FullName -notmatch $excluded }
 

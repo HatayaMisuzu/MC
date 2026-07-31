@@ -541,6 +541,7 @@ tasks.register('stageTerminal') {
     dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
     doLast {
         copy {
+            duplicatesStrategy = DuplicatesStrategy.EXCLUDE
             into terminalImage
             from(terminalJpackage.map { it.dir('mcac') })
             from('mcac.cmd')
@@ -552,8 +553,10 @@ tasks.register('stageTerminal') {
             from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
             from('minecraft/forge-1.20.1/build/libs') { into 'artifacts/forge-1.20.1'; include '*.jar'; exclude '*sources*' }
             from('README.md') { rename { 'README.txt' } }
+            from('README.md')
             from('KNOWN_LIMITATIONS.md')
             from('CODEX_EXECUTION.md')
+            from('FINAL_REPORT.md') { into '.' }
             from('docs/INDEX.md') { into 'docs' }
             from('docs/PRODUCT_STATUS.md') { into 'docs' }
             from('docs/product/PRODUCT_TRUTH.json') { into 'docs/product' }
@@ -567,6 +570,18 @@ tasks.register('stageTerminal') {
             from('docs/RC_COMPLETION_MATRIX.md') { into 'docs' }
             from('docs/LIVE_BRAIN_HUMAN_PLAYTEST.md') { into 'docs' }
             from('docs/POST_PRODUCTIZATION_P0.md') { into 'docs' }
+            from('docs/TROUBLESHOOTING.md') { into 'docs' }
+            from('docs/PRIMITIVE_TOOLS.md') { into 'docs' }
+            from('docs/AGENT_WORKSPACE.md') { into 'docs' }
+            from('docs/execution') { into 'docs/execution' }
+            from('docs/archive') { into 'docs/archive' }
+            from('docs/GOAL_STATE.md') { into 'docs' }
+            from('docs/EXTERNAL_BRAIN_STATE.md') { into 'docs' }
+            from('docs/TEXT_COMPANION_IMPLEMENTATION_STATUS.md') { into 'docs' }
+            from('docs/PRODUCTIZATION_AUDIT_V5.md') { into 'docs' }
+            from('docs/execution/DUAL_LOADER_HERMES_ACCEPTANCE_STATUS.md') { into 'docs/execution' }
+            from('docs/product/PRODUCTIZATION_BASELINE.md') { into 'docs/product' }
+            from('docs/product/PRODUCTIZATION_CLOSEOUT_REPORT.md') { into 'docs/product' }
             from('docs/user') { into 'docs/user' }
             from('docs/developer') { into 'docs/developer' }
             from('docs/compatibility') { into 'docs/compatibility' }

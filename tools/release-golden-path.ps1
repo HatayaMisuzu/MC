@@ -35,6 +35,12 @@ foreach ($required in @('mcac.exe', 'mcac-cli.exe', 'web', 'artifacts\fabric-1.2
     }
 }
 
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+    (Join-Path $PSScriptRoot 'release-documentation-check.ps1') -ReleaseDir $release
+if ($LASTEXITCODE -ne 0) {
+    throw 'Extracted release documentation check failed (links, required documents or release boundary)'
+}
+
 Push-Location $web
 try {
     $env:MCAC_E2E_PREBUILT = '1'

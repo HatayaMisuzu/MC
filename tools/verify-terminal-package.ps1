@@ -197,9 +197,12 @@ try {
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $release 'mcac.ps1') --version
     if ($LASTEXITCODE -ne 0) { throw 'mcac.ps1 --version failed' }
 
-    $starter = Join-Path $release $starterName
-    cmd /d /c "`"$starter`" --version"
-    if ($LASTEXITCODE -ne 0) { throw 'release starter --version failed' }
+    # The release starter now launches `mcac.exe web --open-browser` by design,
+    # so it is not a CLI that answers --version; the terminal-entrypoint tests
+    # verify its web launch behavior and the MCAC_NO_BROWSER safety veto instead.
+    if (-not (Test-Path -LiteralPath (Join-Path $release $starterName) -PathType Leaf)) {
+        throw 'release starter is missing'
+    }
 }
 finally {
     Pop-Location

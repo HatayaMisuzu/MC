@@ -1,6 +1,6 @@
 # MCAC documentation
 
-Updated: 2026-07-28
+Updated: 2026-07-31
 
 This is the current documentation entry point. It separates product status, evidence, user
 instructions, developer contracts and historical logs so one old milestone cannot override the
@@ -14,13 +14,12 @@ current candidate.
 - [Brain Adapter capability matrix](product/BRAIN_ADAPTER_CAPABILITIES.json): machine-readable
   Hermes, OpenAI-compatible and Replay differences.
 - [RC completion matrix](RC_COMPLETION_MATRIX.md): the only completion/evidence matrix.
-- [Productization baseline](product/PRODUCTIZATION_BASELINE.md): automated freeze identity,
-  support boundary and immutable hotfix policy.
-- [Productization closeout report](product/PRODUCTIZATION_CLOSEOUT_REPORT.md): reconstructed
-  checklist and closure evidence.
 - [Known limitations](../KNOWN_LIMITATIONS.md): current explicit limitations.
-- [Execution contract](../CODEX_EXECUTION.md): durable implementation and evidence boundaries.
 - [Architecture](ARCHITECTURE.md): product responsibility and trust boundaries.
+
+Productization baseline/closeout and repository-productization audit files under `docs/product/`
+are repository-internal evidence and do not ship in release packages; they never replace the
+RC matrix as a current status source.
 
 ## Users
 
@@ -42,9 +41,9 @@ current candidate.
 - [Built-in Skill scope](product/BUILTIN_SKILL_SCOPE.md)
 - [First real Compatibility Pack acceptance](compatibility/FIRST_REAL_PACK_ACCEPTANCE.md)
 
-## Execution and history
+## Repository-internal execution and history
 
-- [0.3.1 repair execution tracker](execution/MCAC_0.3.1_AUDIT_REPAIR_TRACKER.md)
-- [Archive index](archive/INDEX.md)
-
-Older execution checkpoints are historical evidence and do not replace the RC matrix.
+The following exist only in the source repository and are **not** included in product release
+packages: the execution tracker under `docs/execution/`, the archive index under `docs/archive/`,
+the root execution contract `CODEX_EXECUTION.md`, and agent rules in root `AGENTS.md`. They are
+historical or agent-execution evidence and do not replace the RC matrix.

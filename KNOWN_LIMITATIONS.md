@@ -1,7 +1,10 @@
-# Known limitations — 0.3.1 RC
+# Known limitations — 0.3.1
 
 The authoritative completion evidence is in `docs/RC_COMPLETION_MATRIX.md`. These limitations are
-kept explicit so Replay, local automation, and external verification are not confused.
+kept explicit so Replay, local automation, and external verification are not confused. The
+automated baseline is frozen and published as `mcac-productization-baseline-0.3.1`; the readiness
+label `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC` only means the automated closure is complete and
+Live Brain / human-play evidence is still pending.
 
 - Fabric 1.21.1 and Forge 1.20.1 are the full Runtime Bridge RC targets. NeoForge 1.21.1 is detected,
   diagnosed, and packaged as `LOCAL_ONLY`; it does not claim the full body/Tool bridge.

@@ -35,6 +35,64 @@ function Stop-ProcessTree([Diagnostics.Process]$Process) {
     [void]$Process.WaitForExit(5000)
 }
 
+function Assert-StarterWebLaunch(
+    [string]$Starter,
+    [string]$Name,
+    [string]$ExtraArguments = '',
+    [string]$WebRoot = ''
+) {
+    # The release starter launches the HTML terminal with an explicit browser opt-in.
+    # The MCAC_NO_BROWSER=true veto must keep it testable headless and must never be
+    # weakened by the starter script.
+    $state = Join-Path $env:TEMP ('mcac-starter-state-' + [Guid]::NewGuid().ToString('N') + '.json')
+    $testLocalAppData = Join-Path $env:TEMP ('mcac-starter-localappdata-' + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $testLocalAppData | Out-Null
+    $start = [Diagnostics.ProcessStartInfo]::new()
+    $start.FileName = $env:ComSpec
+    $start.Arguments = '/d /s /c ""' + $Starter + '" ' + $ExtraArguments + '"'
+    $start.WorkingDirectory = $env:TEMP
+    $start.UseShellExecute = $false
+    $start.CreateNoWindow = $true
+    $start.Environment['MCAC_WEB_STATE_FILE'] = $state
+    $start.Environment['MCAC_NO_BROWSER'] = 'true'
+    $start.Environment['LOCALAPPDATA'] = $testLocalAppData
+    if (-not [string]::IsNullOrWhiteSpace($WebRoot)) {
+        $start.Environment['MCAC_WEB_ROOT'] = $WebRoot
+    }
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo = $start
+    try {
+        if (-not $process.Start()) { throw "Unable to start $Name" }
+        $deadline = [DateTime]::UtcNow.AddSeconds(25)
+        while (-not (Test-Path -LiteralPath $state) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+        if (-not (Test-Path -LiteralPath $state)) {
+            throw "$Name did not publish HTML terminal state"
+        }
+        $server = Get-Content -LiteralPath $state -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($server.bind -ne '127.0.0.1' -or $server.port -le 0) {
+            throw "$Name did not bind loopback on a valid port"
+        }
+        Add-Type -AssemblyName System.Net.Http
+        $client = [Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromSeconds(10)
+        try {
+            $index = $client.GetAsync("http://127.0.0.1:$($server.port)/").GetAwaiter().GetResult()
+            $html = $index.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            if (-not $index.IsSuccessStatusCode -or $html -notmatch 'Minecraft AI Companion') {
+                throw "$Name embedded HTML did not load"
+            }
+        }
+        finally { $client.Dispose() }
+        Write-Output "$Name launched the HTML terminal on loopback with the browser veto active."
+    }
+    finally {
+        if (-not $process.HasExited) { Stop-ProcessTree $process }
+        $process.Dispose()
+        Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Assert-Version(
     [string]$FileName,
     [string]$Arguments,
@@ -95,7 +153,8 @@ if($Mode -eq 'root'){
     $starter = Join-Path $root $starterName
     Assert-Version $env:ComSpec ('/d /s /c ""{0}" --version"' -f $cmd) 'root mcac.cmd'
     Assert-Version 'powershell.exe' ('-NoProfile -ExecutionPolicy Bypass -File "{0}" --version' -f $ps1) 'root mcac.ps1'
-    Assert-Version $env:ComSpec ('/d /s /c ""{0}" --version"' -f $starter) 'root starter'
+    Assert-StarterWebLaunch $starter 'root starter (no arguments)'
+    Assert-StarterWebLaunch $starter 'root starter with --open-browser' '--open-browser'
     Write-Output 'Root launcher test passed from an arbitrary working directory.';exit 0
 }
 $cmd = Join-Path $release 'mcac.cmd'
@@ -103,5 +162,6 @@ $ps1 = Join-Path $release 'mcac.ps1'
 $starter = Join-Path $release $starterName
 Assert-Version $env:ComSpec ('/d /s /c ""{0}" --version"' -f $cmd) 'release mcac.cmd'
 Assert-Version 'powershell.exe' ('-NoProfile -ExecutionPolicy Bypass -File "{0}" --version' -f $ps1) 'release mcac.ps1'
-Assert-Version $env:ComSpec ('/d /s /c ""{0}" --version"' -f $starter) 'release starter'
+Assert-StarterWebLaunch $starter 'release starter (no arguments)' '' (Join-Path $release 'web')
+Assert-StarterWebLaunch $starter 'release starter with --open-browser' '--open-browser' (Join-Path $release 'web')
 Write-Output 'Release starter test passed from an arbitrary working directory.'

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Repair the release documentation boundary: the staged package now ships only current
+  user/operator and external-Brain integration documentation plus machine-readable product
+  facts; repository-internal execution rules, historical reports and archived evidence are no
+  longer bundled. New `tools/release-documentation-check.ps1` verifies required documents, every
+  Markdown link, the release boundary and the README.txt/README.md equivalence against the staged
+  and clean-extracted release, with negative tests covering deleted link targets, escaping links,
+  forbidden files and missing user guides.
+- Unify version/readiness wording (published frozen baseline vs. pending Live Brain/human-play
+  evidence), the managed Runtime port range (`8766..8866`, management port +10000) and External
+  Brain failure behavior across the README, product status, troubleshooting and bilingual user
+  guides.
+- Make the release starter `启动终端.cmd` launch `mcac.exe web --open-browser` as its name
+  promises; `MCAC_NO_BROWSER=true` remains an unconditional safety veto.
+
 ## 0.3.1
 
 - Converges the product version, readiness, Loader modes and managed Runtime port range through a

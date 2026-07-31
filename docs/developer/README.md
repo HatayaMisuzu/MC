@@ -17,7 +17,8 @@ filesystem, secrets or direct world mutation.
 Start here:
 
 - [Architecture and authority](../ARCHITECTURE.md)
-- [Execution contract](../../CODEX_EXECUTION.md)
+- Execution contract: repository-root `CODEX_EXECUTION.md` (source repository only; it does not
+  ship inside product release packages)
 - [Primitive Tools](../PRIMITIVE_TOOLS.md)
 - [Task Graph DSL](../TASK_GRAPH_DSL.md)
 - [MCP protocol](../MCP_PROTOCOL.md)

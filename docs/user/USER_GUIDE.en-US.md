@@ -1,22 +1,25 @@
 # MCAC user guide (English)
 
-Applies to: 0.3.1 productization repair candidate
+Applies to: 0.3.1 (automated baseline frozen and published; Live Brain and human play still
+pending external verification)
 
 ## Get started
 
 1. Extract the complete `mcac-release.zip`; do not copy only `mcac.exe`.
-2. In PowerShell, run `.\mcac.exe web --open-browser` to explicitly allow this launch to open the
-   system default browser.
+2. Start it either way: in PowerShell run `.\mcac.exe web --open-browser` to explicitly allow
+   this launch to open the system default browser, or double-click `启动终端.cmd` (equivalent
+   to `mcac.exe web --open-browser`).
 3. Select the detected PCL2 or HMCL instance under Launchers & instances.
 4. Run Diagnostics, then review and confirm the installation plan.
 5. Start Runtime and verify that the UI shows a real PID, ports and authenticated health.
 6. When connecting the game, follow the preflight and launch plan on Game launch.
 
-Double-clicking or starting `mcac.exe` again only starts or reuses the local Terminal; it does not
-implicitly open the default browser. Only `--open-browser` or `MCAC_OPEN_BROWSER=true` requests
-Windows browser activation. `MCAC_NO_BROWSER=true` is an unconditional safety override for
-development, tests, and unattended runs. The service listens only on `127.0.0.1`. Do not share
-bootstrap URLs, session cookies, CSRF tokens, launcher credentials or API keys.
+Double-clicking or starting `mcac.exe` again (or running `mcac.cmd` / `mcac.ps1`) only starts or
+reuses the local Terminal; it does not implicitly open the default browser. Only `--open-browser`
+or `MCAC_OPEN_BROWSER=true` requests Windows browser activation. `MCAC_NO_BROWSER=true` is an
+unconditional safety override for development, tests, and unattended runs (it also applies to
+`启动终端.cmd`). The service listens only on `127.0.0.1`. Do not share bootstrap URLs, session
+cookies, CSRF tokens, launcher credentials or API keys.
 
 ## Supported targets
 

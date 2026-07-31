@@ -1,12 +1,18 @@
 # MCAC product status
 
-Updated: 2026-07-29
+Updated: 2026-07-31
 
 MCAC 0.3.1 is the released repair baseline for the frozen automated productization scope.
 Its readiness is `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`; this does not constitute Live-provider
 or human-play evidence. Machine-readable product facts are in
 [PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json), while exact module evidence is maintained only in
 [RC_COMPLETION_MATRIX.md](RC_COMPLETION_MATRIX.md).
+
+"Released" here means the frozen automated baseline was published as the annotated tag and GitHub
+Release `mcac-productization-baseline-0.3.1`. The readiness label `RC` means the automated closure
+is complete and the candidate is waiting for external evidence: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`
+and `HUMAN_PLAYTEST_PENDING` remain open and are not replaced by Replay, fixture, GameTest or
+browser automation evidence.
 
 ## Current support
 

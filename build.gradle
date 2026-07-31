@@ -353,6 +353,11 @@ tasks.register('documentationCheck') {
                     file('tools/documentation-check-negative.ps1').absolutePath,
                     '-RepositoryRoot', projectDir.absolutePath
         }
+        runProcess {
+            commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    file('tools/release-documentation-check-negative.ps1').absolutePath,
+                    '-RepositoryRoot', projectDir.absolutePath
+        }
     }
 }
 
@@ -479,6 +484,51 @@ def terminalImage = layout.buildDirectory.dir('distributions/mcac-release')
 def terminalInput = layout.buildDirectory.dir('tmp/jpackage-terminal-input')
 def terminalJpackage = layout.buildDirectory.dir('tmp/jpackage-terminal-output')
 
+// 发布文档集合：只包含当前用户/运维文档、外部 Brain 集成/协议文档与机器可读产品事实。
+// 仓库内部执行与历史证据（AGENTS.md、CODEX_EXECUTION.md、CODEX_GOAL.md、FINAL_REPORT.md、
+// docs/execution、docs/archive、docs/adr、docs/design、docs/human-test、GOAL_STATE、
+// EXTERNAL_BRAIN_STATE、TEXT_COMPANION_IMPLEMENTATION_STATUS、PRODUCTIZATION_AUDIT_V5、
+// PRODUCTIZATION_BASELINE/CLOSEOUT_REPORT、REPOSITORY_PRODUCTIZATION_AUDIT、
+// MCAC_0.3.1_FULL_AUDIT_AND_REPAIR_REPORT、UI_INTERACTION_MATRIX 等）不进入产品发布包；
+// 它们保留在源码仓库用于追溯，边界由 tools/release-documentation-check.ps1 强制校验。
+def releaseDocumentation = [
+    // 根级用户文档
+    'README.md',
+    'KNOWN_LIMITATIONS.md',
+    'CHANGELOG.md',
+    // 当前导航与状态
+    'docs/INDEX.md',
+    'docs/PRODUCT_STATUS.md',
+    'docs/COMPATIBILITY.md',
+    'docs/RUNTIME_SETUP.md',
+    'docs/TROUBLESHOOTING.md',
+    'docs/COMMANDS.md',
+    'docs/CONTROL_TERMINAL.md',
+    'docs/ARCHITECTURE.md',
+    'docs/RC_COMPLETION_MATRIX.md',
+    'docs/LIVE_BRAIN_HUMAN_PLAYTEST.md',
+    'docs/POST_PRODUCTIZATION_P0.md',
+    // 安装指南与用户指南
+    'docs/INSTALL_FABRIC_1.21.1.md',
+    'docs/INSTALL_FORGE_1.20.1.md',
+    'docs/INSTALL_NEOFORGE_1.21.1.md',
+    'docs/user/USER_GUIDE.zh-CN.md',
+    'docs/user/USER_GUIDE.en-US.md',
+    // 开发者 / 外部 Brain 集成与协议
+    'docs/developer/README.md',
+    'docs/TASK_GRAPH_DSL.md',
+    'docs/MCP_PROTOCOL.md',
+    'docs/PRIMITIVE_TOOLS.md',
+    'docs/AGENT_WORKSPACE.md',
+    'docs/compatibility/MCAC_COMPATIBILITY_LAYER_ENGINEERING.md',
+    'docs/compatibility/FIRST_REAL_PACK_ACCEPTANCE.md',
+    // 机器可读产品事实与术语
+    'docs/product/PRODUCT_TRUTH.json',
+    'docs/product/BRAIN_ADAPTER_CAPABILITIES.json',
+    'docs/product/BUILTIN_SKILL_SCOPE.md',
+    'docs/product/TERMINOLOGY.md'
+]
+
 def npmCommand = isWindowsHost ? 'npm.cmd' : 'npm'
 
 tasks.register('webInstall', Exec) {
@@ -541,7 +591,6 @@ tasks.register('stageTerminal') {
     dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
     doLast {
         copy {
-            duplicatesStrategy = DuplicatesStrategy.EXCLUDE
             into terminalImage
             from(terminalJpackage.map { it.dir('mcac') })
             from('mcac.cmd')
@@ -552,45 +601,24 @@ tasks.register('stageTerminal') {
             from('minecraft/fabric-1.21.1/build/libs') { into 'artifacts/fabric-1.21.1'; include '*.jar'; exclude '*sources*', '*gametest*' }
             from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
             from('minecraft/forge-1.20.1/build/libs') { into 'artifacts/forge-1.20.1'; include '*.jar'; exclude '*sources*' }
-            from('README.md') { rename { 'README.txt' } }
-            from('README.md')
-            from('KNOWN_LIMITATIONS.md')
-            from('CODEX_EXECUTION.md')
-            from('FINAL_REPORT.md') { into '.' }
-            from('docs/INDEX.md') { into 'docs' }
-            from('docs/PRODUCT_STATUS.md') { into 'docs' }
-            from('docs/product/PRODUCT_TRUTH.json') { into 'docs/product' }
-            from('docs/product/BRAIN_ADAPTER_CAPABILITIES.json') { into 'docs/product' }
-            from('docs/product/BUILTIN_SKILL_SCOPE.md') { into 'docs/product' }
-            from('docs/ARCHITECTURE.md') { into 'docs' }
-            from('docs/COMPATIBILITY.md') { into 'docs' }
-            from('docs/CONTROL_TERMINAL.md') { into 'docs' }
-            from('docs/MCP_PROTOCOL.md') { into 'docs' }
-            from('docs/TASK_GRAPH_DSL.md') { into 'docs' }
-            from('docs/RC_COMPLETION_MATRIX.md') { into 'docs' }
-            from('docs/LIVE_BRAIN_HUMAN_PLAYTEST.md') { into 'docs' }
-            from('docs/POST_PRODUCTIZATION_P0.md') { into 'docs' }
-            from('docs/TROUBLESHOOTING.md') { into 'docs' }
-            from('docs/PRIMITIVE_TOOLS.md') { into 'docs' }
-            from('docs/AGENT_WORKSPACE.md') { into 'docs' }
-            from('docs/execution') { into 'docs/execution' }
-            from('docs/archive') { into 'docs/archive' }
-            from('docs/GOAL_STATE.md') { into 'docs' }
-            from('docs/EXTERNAL_BRAIN_STATE.md') { into 'docs' }
-            from('docs/TEXT_COMPANION_IMPLEMENTATION_STATUS.md') { into 'docs' }
-            from('docs/PRODUCTIZATION_AUDIT_V5.md') { into 'docs' }
-            from('docs/execution/DUAL_LOADER_HERMES_ACCEPTANCE_STATUS.md') { into 'docs/execution' }
-            from('docs/product/PRODUCTIZATION_BASELINE.md') { into 'docs/product' }
-            from('AGENTS.md')
-            from('CHANGELOG.md')
-            from('CODEX_GOAL.md')
-            from('docs') { into 'docs' }
-            from('docs/user') { into 'docs/user' }
-            from('docs/developer') { into 'docs/developer' }
-            from('docs/compatibility') { into 'docs/compatibility' }
+            // Gradle 单文件 from 的目标路径是文件 basename；docs/ 下的文档必须
+            // 用 into 保留目录结构（例如 docs/user/USER_GUIDE.zh-CN.md）。
+            releaseDocumentation.each { doc ->
+                def slash = doc.lastIndexOf('/')
+                if (slash >= 0) {
+                    from(doc) { into doc.substring(0, slash) }
+                } else {
+                    from(doc)
+                }
+            }
             from('LICENSE') { into 'legal' }
             from('NOTICE') { into 'legal' }
         }
+        // README.txt 由 README.md 生成，避免双份维护。
+        java.nio.file.Files.copy(
+                terminalImage.get().asFile.toPath().resolve('README.md'),
+                terminalImage.get().asFile.toPath().resolve('README.txt'),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
         def root=terminalImage.get().asFile
         def sha256={f->java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()}
         def relative={f->root.toPath().relativize(f.toPath()).toString().replace('\\','/')}
@@ -742,7 +770,15 @@ tasks.register('packageTerminalZip', Zip) {
     }
 }
 
-tasks.register('verifyTerminalPackage') { group='verification'; dependsOn 'packageTerminalZip'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/verify-terminal-package.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('verifyTerminalPackage') {
+    group='verification'
+    dependsOn 'packageTerminalZip'
+    doLast {
+        def releaseDir = terminalImage.get().asFile.absolutePath
+        exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/verify-terminal-package.ps1').absolutePath,'-ReleaseDir',releaseDir }
+        exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/release-documentation-check.ps1').absolutePath,'-ReleaseDir',releaseDir }
+    }
+}
 tasks.register('runtimeMultiProfileTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/runtime-multi-profile-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
 tasks.register('tuiIntegrationTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','tui' } } }
 tasks.register('rootLauncherTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','root' } } }

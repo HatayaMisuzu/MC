@@ -405,8 +405,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         }
         try {
             ToolResult accepted = toolGateway.execute(context, call);
-            ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
-                    context, call, accepted, Duration.ofSeconds(30), ignored -> { });
+            ToolResult terminal = settleMcpToolCall(context, call, accepted, ignored -> { });
             completeMcpCall(call, terminal);
             return mcpToolResult(terminal);
         } finally {
@@ -443,8 +442,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             }
             try {
                 ToolResult accepted = toolGateway.execute(context, call);
-                ToolResult terminal = accepted.terminal() ? accepted : toolGateway.awaitTerminal(
-                        context, call, accepted, Duration.ofSeconds(30), progress -> {
+                ToolResult terminal = settleMcpToolCall(context, call, accepted, progress -> {
                             if (progressToken == null || progressToken.isNull()) return;
                             try {
                                 writeDurableSse(exchange, output, call,
@@ -475,6 +473,28 @@ public final class RuntimeHealthServer implements AutoCloseable {
         } finally {
             if (replayed == null && permit) streamingMcpPermits.release();
         }
+    }
+
+    private ToolResult settleMcpToolCall(ToolContext context, ToolCall call, ToolResult accepted,
+                                         java.util.function.Consumer<ToolResult> progress) {
+        if (accepted.terminal()) return accepted;
+        if (isDurableAsynchronousStart(accepted)) {
+            ObjectNode receipt = (ObjectNode) accepted.observation().deepCopy();
+            receipt.put("executionMode", "ASYNCHRONOUS")
+                    .put("completionVerified", false)
+                    .put("statusTool", call.name().startsWith("task_graph.")
+                            ? "task_graph.inspect" : "task.inspect");
+            return new ToolResult(call.callId(), call.name(), accepted.success(), accepted.code(), receipt, true);
+        }
+        Duration timeout = toolGateway.definitions(context).stream()
+                .filter(definition -> definition.name().equals(call.name()))
+                .findFirst().map(ToolDefinition::timeout).orElse(Duration.ofSeconds(30));
+        return toolGateway.awaitTerminal(context, call, accepted, timeout, progress);
+    }
+
+    private static boolean isDurableAsynchronousStart(ToolResult result) {
+        if (!result.success() || result.terminal() || !result.observation().isObject()) return false;
+        return !result.observation().path("taskId").asText("").isBlank();
     }
 
     private void mcpReplayEvents(HttpExchange exchange) throws IOException {

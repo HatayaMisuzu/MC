@@ -30,6 +30,17 @@ class CapabilityVisibilityTest {
     }
 
     @Test
+    void exposesFormallyImplementedConnectedForgeCapabilities() {
+        var capabilities = Json.object().put("NavigateTo", true).put("FollowOwner", true);
+        var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
+
+        var snapshot = visibility.resolve(handshake("forge", "1.20.1", capabilities), status);
+
+        assertEquals(List.of("FollowOwner", "NavigateTo"), snapshot.availableNames());
+        assertEquals("AVAILABLE_NOW", snapshot.toJson().path("FollowOwner").path("state").asText());
+    }
+
+    @Test
     void distinguishesImplementedConnectedBlockedAndUnsupportedStates() {
         var disconnected = visibility.resolve(null, Json.object());
         assertEquals("IMPLEMENTED", disconnected.toJson().path("NavigateTo").path("state").asText());

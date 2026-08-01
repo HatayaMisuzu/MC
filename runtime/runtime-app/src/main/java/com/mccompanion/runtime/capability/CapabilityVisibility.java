@@ -29,7 +29,7 @@ public final class CapabilityVisibility {
         if (handshake == null) {
             return value(definition, CapabilityLifecycleState.IMPLEMENTED, "BODY_NOT_CONNECTED");
         }
-        if (!"fabric".equalsIgnoreCase(handshake.loader()) || !"1.21.1".equals(handshake.minecraftVersion())) {
+        if (!supportsFullBridge(handshake)) {
             return value(definition, CapabilityLifecycleState.UNSUPPORTED, "LOADER_OR_VERSION_UNSUPPORTED");
         }
         if (!bodyDeclares(handshake.capabilities(), definition.name())) {
@@ -45,6 +45,11 @@ public final class CapabilityVisibility {
             return value(definition, CapabilityLifecycleState.TEMPORARILY_BLOCKED, "BODY_NOT_SPAWNED");
         }
         return value(definition, CapabilityLifecycleState.AVAILABLE_NOW, "");
+    }
+
+    private static boolean supportsFullBridge(Handshake handshake) {
+        return "fabric".equalsIgnoreCase(handshake.loader()) && "1.21.1".equals(handshake.minecraftVersion())
+                || "forge".equalsIgnoreCase(handshake.loader()) && "1.20.1".equals(handshake.minecraftVersion());
     }
 
     private static CapabilityStatus value(CapabilityDefinition definition, CapabilityLifecycleState state, String reason) {

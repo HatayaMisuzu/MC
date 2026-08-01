@@ -147,6 +147,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
                 .put("NavigateTo", true)
+                .put("FollowOwner", true)
                 .put("ExploreArea", true)
                 .put("LookAt", true)
                 .put("InteractBlock", true)

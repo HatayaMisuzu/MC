@@ -546,6 +546,73 @@ class RuntimeApplicationTest {
     }
 
     @Test
+    void returnsDurableForgeFollowReceiptWithoutWaitingForTaskCompletion() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("forge-follow-mcp"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        config.provider.mode = "rules";
+        try (RuntimeApplication application = RuntimeApplication.start(config, false)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.20.1","loader":"forge",
+                     "worldId":"forge-world","capabilities":{"NavigateTo":true,"FollowOwner":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"forge-companion","ownerId":"owner-1","displayName":"Forge Companion",
+                      "worldId":"forge-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("forge-companion").isEmpty()
+                    && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertTrue(application.companions().get("forge-companion").isPresent());
+
+            URI endpoint = new URI("http://127.0.0.1:" + config.server.managementPort + "/mcp");
+            HttpClient http = HttpClient.newHttpClient();
+            String mcpSession = initializeMcpSession(http, endpoint, token,
+                    "hermes-test", "forge-follow-session", "forge-companion");
+            HttpResponse<String> response = http.send(HttpRequest.newBuilder(endpoint)
+                            .header("Authorization", "Bearer " + token)
+                            .header("Content-Type", "application/json")
+                            .header("MCP-Protocol-Version", "2025-06-18")
+                            .header("X-MCAC-Controller-Id", "hermes-test")
+                            .header("X-MCAC-Brain-Session-Id", "forge-follow-session")
+                            .header("X-MCAC-Companion-Id", "forge-companion")
+                            .header("Mcp-Session-Id", mcpSession)
+                            .timeout(Duration.ofSeconds(5))
+                            .POST(HttpRequest.BodyPublishers.ofString("""
+                                    {"jsonrpc":"2.0","id":"follow-start","method":"tools/call","params":{
+                                      "name":"movement.follow","arguments":{}}}
+                                    """)).build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            assertEquals(200, response.statusCode(), response.body());
+            JsonNode result = Json.parse(response.body()).path("result");
+            assertFalse(result.path("isError").asBoolean(), response.body());
+            JsonNode observation = result.path("structuredContent").path("observation");
+            assertFalse(observation.path("taskId").asText().isBlank(), response.body());
+            assertEquals("ASYNCHRONOUS", observation.path("executionMode").asText(), response.body());
+            assertFalse(observation.path("completionVerified").asBoolean(true), response.body());
+            assertEquals("task.inspect", observation.path("statusTool").asText(), response.body());
+            JsonNode followCommand = client.awaitCommand("start_behavior", 5);
+            assertEquals("follow", followCommand.path("payload").path("arguments")
+                    .path("behaviorType").asText());
+            assertTrue(application.commands().activeTaskFor("forge-companion").isPresent());
+            client.closeBlocking();
+        }
+    }
+
+    @Test
     void routesLiveRegistryQueriesFromMcpThroughTheAuthenticatedModSession() throws Exception {
         RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("registry-mcp"));
         config.server.port = 0;

@@ -69,4 +69,16 @@ class TerminalDiagnosticServiceTest {
                 "runtime.profile", "runtime.health", "mcp.protocol",
                 "registry.generic_tools", "navigation.global_tool", "brain.protocol")));
     }
+
+    @Test void liveHandshakeOverridesStaleLogKeywordWarning() {
+        var results = new java.util.ArrayList<com.mccompanion.terminal.diagnostics.DiagnosticResult>();
+        results.add(new com.mccompanion.terminal.diagnostics.DiagnosticResult(
+                com.mccompanion.terminal.diagnostics.DiagnosticResult.Severity.WARNING,
+                "recent.mod_load", "No recent log evidence", Map.of(), List.of("inspect log")));
+        TerminalDiagnosticService.applyConnectedModEvidence(
+                results, new ConnectionService.Status(true, 1, 1, "FULL"));
+        assertEquals(com.mccompanion.terminal.diagnostics.DiagnosticResult.Severity.PASS,
+                results.getFirst().severity());
+        assertEquals("runtime-handshake", results.getFirst().evidence().get("source"));
+    }
 }

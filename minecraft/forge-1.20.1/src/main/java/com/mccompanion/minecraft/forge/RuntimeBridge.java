@@ -1,9 +1,9 @@
 package com.mccompanion.minecraft.forge;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mccompanion.minecraft.forge.json.JsonNode;
+import com.mccompanion.minecraft.forge.json.ObjectMapper;
+import com.mccompanion.minecraft.forge.json.ArrayNode;
+import com.mccompanion.minecraft.forge.json.ObjectNode;
 import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
 import com.mccompanion.minecraft.v120.SkillParameters;

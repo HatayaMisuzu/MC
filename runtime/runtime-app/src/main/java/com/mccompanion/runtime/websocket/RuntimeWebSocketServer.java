@@ -10,16 +10,9 @@ import com.mccompanion.protocol.CompanionStatus;
 import com.mccompanion.protocol.ErrorEnvelope;
 import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.agent.AgentContext;
-import com.mccompanion.runtime.agent.AgentKernel;
-import com.mccompanion.runtime.agent.AgentPlanRepository;
-import com.mccompanion.runtime.agent.DecisionKind;
-import com.mccompanion.runtime.agent.AgentDecision;
-import com.mccompanion.runtime.agent.StepState;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
 import com.mccompanion.runtime.json.Json;
-import com.mccompanion.runtime.intent.Intent;
-import com.mccompanion.runtime.task.TaskType;
 import com.mccompanion.runtime.logging.RuntimeLog;
 import com.mccompanion.runtime.memory.MemoryRepository;
 import com.mccompanion.runtime.conversation.ConversationService;
@@ -31,7 +24,6 @@ import com.mccompanion.runtime.session.RuntimeSession;
 import com.mccompanion.runtime.session.SessionPeer;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
-import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
@@ -63,9 +55,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final SessionRegistry sessions;
     private final CommandService commands;
     private final CompanionRepository companions;
-    private final ProviderRouter providers;
-    private final AgentPlanRepository plans;
-    private final AgentKernel kernel;
     private final CapabilityVisibility capabilityVisibility;
     private final MemoryRepository memories;
     private final ConversationService conversations;
@@ -82,38 +71,17 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final Map<WebSocket, String> headerTokens = new ConcurrentHashMap<>();
 
     public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
-                                  CommandService commands, CompanionRepository companions, ProviderRouter providers,
-                                  AgentPlanRepository plans, AgentKernel kernel,
-                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories,
-                                  ConversationService conversations, RuntimeLog log) {
-        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, memories, conversations, null, null, log, Clock.systemUTC());
-    }
-
-    public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
-                                  CommandService commands, CompanionRepository companions, ProviderRouter providers,
-                                  AgentPlanRepository plans, AgentKernel kernel,
-                                  CapabilityVisibility capabilityVisibility, MemoryRepository memories,
-                                  ConversationService conversations, ExternalBrainCoordinator externalBrain,
-                                  RuntimeLog log) {
-        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
-                capabilityVisibility, memories, conversations, externalBrain, null, log, Clock.systemUTC());
-    }
-
-    public RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
-                                  CommandService commands, CompanionRepository companions, ProviderRouter providers,
-                                  AgentPlanRepository plans, AgentKernel kernel,
+                                  CommandService commands, CompanionRepository companions,
                                   CapabilityVisibility capabilityVisibility, MemoryRepository memories,
                                   ConversationService conversations, ExternalBrainCoordinator externalBrain,
                                   TaskGraphRuntime taskGraphRuntime, RuntimeLog log) {
-        this(address, pairingToken, sessions, commands, companions, providers, plans, kernel,
+        this(address, pairingToken, sessions, commands, companions,
                 capabilityVisibility, memories, conversations, externalBrain, taskGraphRuntime,
                 log, Clock.systemUTC());
     }
 
     RuntimeWebSocketServer(InetSocketAddress address, String pairingToken, SessionRegistry sessions,
-                           CommandService commands, CompanionRepository companions, ProviderRouter providers,
-                           AgentPlanRepository plans, AgentKernel kernel,
+                           CommandService commands, CompanionRepository companions,
                            CapabilityVisibility capabilityVisibility, MemoryRepository memories,
                            ConversationService conversations, ExternalBrainCoordinator externalBrain,
                            TaskGraphRuntime taskGraphRuntime, RuntimeLog log, Clock clock) {
@@ -122,9 +90,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.sessions = sessions;
         this.commands = commands;
         this.companions = companions;
-        this.providers = providers;
-        this.plans = plans;
-        this.kernel = kernel;
         this.capabilityVisibility = capabilityVisibility;
         this.memories = memories;
         this.conversations = conversations;
@@ -336,14 +301,12 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         try {
             planningExecutor.execute(() -> {
             ObjectNode reply = Json.object().put("requestId", requestId).put("companionId", companionId);
-            com.mccompanion.runtime.conversation.ConversationEvent directReply = null;
             try {
                 var companion = companions.get(companionId).orElseThrow(() -> new IllegalArgumentException("COMPANION_NOT_FOUND"));
                 if (!session.companionIds().contains(companionId) || !ownerId.equals(companion.ownerId())) {
                     throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
                 }
                 var active = commands.activeTaskFor(companionId);
-                var activePlan = plans.activeForCompanion(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
                 if (waiting.isPresent() && taskGraphRuntime != null
@@ -375,23 +338,9 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         waiting = java.util.Optional.empty();
                     }
                 }
-                if (kernel != null && waiting.isPresent() && waiting.orElseThrow().brainSessionId() == null
-                        && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
-                    var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
-                    reply.put("accepted", true).put("source", "waiting-answer")
-                            .put("reply", "已收到你的回答，并继续原来的任务。")
-                            .put("decision", DecisionKind.REPLAN.name())
-                            .put("questionId", waiting.orElseThrow().questionId())
-                            .put("planId", resumed.planId()).put("planState", resumed.state().name())
-                            .put("resumedOriginalPlan", true);
-                    ObjectNode message = envelope(session, "player_reply");
-                    message.set("payload", reply);
-                    if (session.peer().isOpen()) session.peer().send(Json.write(message));
-                    return;
-                }
                 var recentConversation = conversations.recentTranscript(companionId, 12);
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
-                    conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                    conversations.hear(companionId, null,
                             "MESSAGE", text, Json.object().put("channel", "GAME"));
                 }
                 var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
@@ -404,7 +353,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 if (externalBrain == null) {
                     reply.put("accepted", false).put("source", "external-brain")
                             .put("code", "EXTERNAL_BRAIN_UNAVAILABLE")
-                            .put("reply", "The external Brain is not configured.");
+                            .put("reply", "No external Brain is configured. Configure Hermes or an external Brain in the local control terminal.");
                     reply.set("capabilityStates", visible.toJson());
                     ObjectNode unavailable = envelope(session, "player_reply");
                     unavailable.set("payload", reply);
@@ -478,67 +427,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     }
                     return;
                 }
-                if (providers == null || kernel == null) {
-                    reply.put("accepted", false).put("source", "external-brain")
-                            .put("code", "EXTERNAL_BRAIN_UNAVAILABLE")
-                            .put("reply", "External Brain is not configured; no internal planning fallback is enabled.");
-                    ObjectNode unavailable = envelope(session, "player_reply");
-                    unavailable.set("payload", reply);
-                    if (session.peer().isOpen()) session.peer().send(Json.write(unavailable));
-                    return;
-                }
-                var result = providers.plan(text, context);
-                reply.put("accepted", result.accepted()).put("source", result.source())
-                        .put("reply", result.decision().reply()).put("decision", result.decision().kind().name());
-                reply.set("capabilityStates", visible.toJson());
-                if (!result.accepted()) reply.put("code", result.errorCode()).put("reply", result.userMessage());
-                else if (activePlan.isPresent() && (result.decision().kind() == DecisionKind.CREATE_PLAN
-                        || result.decision().kind() == DecisionKind.REPLAN) && !result.decision().steps().isEmpty()) {
-                    AgentDecision value = result.decision();
-                    AgentDecision revision = new AgentDecision(DecisionKind.REPLAN, value.understoodGoal(),
-                            value.constraints(), value.assumptions(), value.steps(), value.reply(),
-                            "OWNER_MODIFIED_GOAL: " + value.reason());
-                    var previous = activePlan.orElseThrow();
-                    var queued = plans.queueGoalModification(previous.planId(), previous.revision(), text, revision,
-                            Json.object().put("ownerModifiedGoal", true)
-                                    .put("previousRequest", previous.requestText()));
-                    if (waiting.isPresent()) {
-                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_MODIFIED_GOAL");
-                    }
-                    if (active.isPresent()) {
-                        var cancellation = commands.execute("goal-change-" + requestId, companionId,
-                                new Intent(TaskType.STOP, Json.object().put("action", "cancel"), text));
-                        reply.put("accepted", cancellation.accepted()).put("code", cancellation.code());
-                        if (!cancellation.accepted()) reply.put("reply", cancellation.message());
-                    } else {
-                        int queuedStep = queued.currentStep();
-                        var old = queued.steps().stream().filter(step -> step.index() != queuedStep)
-                                .filter(step -> step.state() == StepState.RUNNING || step.state() == StepState.BLOCKED
-                                        || step.state() == StepState.PAUSED || step.state() == StepState.CANCELLED)
-                                .max(java.util.Comparator.comparingInt(candidate -> candidate.index())).orElseThrow();
-                        queued = plans.activateGoalModification(queued.planId(), queued.revision(), old.index(),
-                                StepState.CANCELLED, Json.object().put("noActiveBehavior", true), "GOAL_MODIFIED");
-                        queued = kernel.start(queued.planId());
-                    }
-                    reply.put("planId", queued.planId()).put("planState", queued.state().name())
-                            .put("goalModified", true);
-                } else if (result.executableIntent().isPresent()) {
-                    var execution = commands.execute("game-" + requestId, companionId, result.executableIntent().get());
-                    reply.put("accepted", execution.accepted()).put("code", execution.code()).put("taskId", execution.taskId());
-                    if (!execution.accepted()) reply.put("reply", execution.message());
-                } else if (result.decision().kind() == DecisionKind.CREATE_PLAN || result.decision().kind() == DecisionKind.REPLAN) {
-                    var plan = plans.create(companionId, text, result.decision());
-                    plan = kernel.start(plan.planId());
-                    reply.put("planId", plan.planId()).put("planState", plan.state().name());
-                }
-                String assistantReply = reply.path("reply").asText("");
-                if (!assistantReply.isBlank()) {
-                    directReply = conversations.recordDirectReply(companionId, reply.path("planId").asText(null),
-                            ConversationService.kindForDecision(result.decision().kind()), assistantReply,
-                            Json.object().put("channel", "GAME").put("source", result.source())
-                                    .put("decision", result.decision().kind().name()));
-                    reply.put("conversationEventId", directReply.eventId());
-                }
             } catch (Exception failure) {
                 log.warn("Game text request stopped safely: " + failure.getClass().getSimpleName());
                 reply.put("accepted", false).put("code", "REQUEST_BLOCKED")
@@ -548,12 +436,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             message.set("payload", reply);
             if (session.peer().isOpen()) {
                 session.peer().send(Json.write(message));
-                if (directReply != null) {
-                    try { conversations.markDirectReplyDelivered(directReply.eventId()); }
-                    catch (java.sql.SQLException failure) {
-                        log.error("Unable to mark direct conversation reply delivered", failure);
-                    }
-                }
             }
             });
         } catch (RejectedExecutionException saturated) {

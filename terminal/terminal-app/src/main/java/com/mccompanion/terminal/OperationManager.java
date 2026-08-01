@@ -23,6 +23,7 @@ import java.util.concurrent.locks.ReentrantLock;
 /** Stores bounded, short-lived confirmed plans and publishes structured operation progress. */
 final class OperationManager implements AutoCloseable {
   private static final ObjectMapper JSON = new ObjectMapper();
+  private static final PrivacyFilter PRIVACY = new PrivacyFilter();
   static final int MAX_PLANS = 128;
   static final int MAX_OPERATIONS = 512;
   static final Duration PLAN_TTL = Duration.ofMinutes(5);
@@ -72,6 +73,7 @@ final class OperationManager implements AutoCloseable {
     }
     String id = UUID.randomUUID().toString();
     Instant now = clock.instant();
+    JsonNode safeDetails = sanitize(details);
     Plan plan =
         new Plan(
             id,
@@ -79,7 +81,7 @@ final class OperationManager implements AutoCloseable {
             action,
             instanceId,
             dangerous,
-            details.deepCopy(),
+            safeDetails == null ? JSON.createObjectNode() : safeDetails,
             now,
             now.plus(PLAN_TTL),
             work);
@@ -176,13 +178,14 @@ final class OperationManager implements AutoCloseable {
                             null));
         update(id, "SUCCEEDED", 100, "Execution and verification succeeded", result, null);
       } catch (Exception failure) {
+        SafeProblemMapper.Problem problem = SafeProblemMapper.unexpected(failure);
         update(
             id,
             "FAILED",
             100,
             "Execution failed; the operation-specific rollback policy was applied",
             null,
-            failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
+            problem.code() + ":" + problem.correlationId());
       }
     } finally {
       instanceLock.unlock();
@@ -194,6 +197,9 @@ final class OperationManager implements AutoCloseable {
 
   private void update(
       String id, String state, int progress, String message, JsonNode result, String error) {
+    String safeMessage = PRIVACY.filter(message, PrivacyFilter.Policy.UI_DEFAULT);
+    String safeError = PRIVACY.filter(error, PrivacyFilter.Policy.UI_DEFAULT);
+    JsonNode safeResult = sanitize(result);
     operations.computeIfPresent(
         id,
         (ignored, old) ->
@@ -204,15 +210,34 @@ final class OperationManager implements AutoCloseable {
                 old.instanceId(),
                 state,
                 progress,
-                message,
-                result == null ? old.result() : result.deepCopy(),
-                error,
+                safeMessage,
+                safeResult == null ? old.result() : safeResult,
+                safeError,
                 old.startedAt(),
                 terminal(state) ? clock.instant() : null));
     ObjectNode value = event("OPERATION_PROGRESS", id).put("state", state).put("progress", progress);
-    value.put("message", message);
-    if (error != null) value.put("error", error);
+    value.put("message", safeMessage);
+    if (safeError != null) value.put("error", safeError);
     publish(value);
+  }
+
+  private static JsonNode sanitize(JsonNode value) {
+    if (value == null) return null;
+    if (value.isTextual()) {
+      return JSON.getNodeFactory().textNode(
+          PRIVACY.filter(value.asText(), PrivacyFilter.Policy.UI_DEFAULT));
+    }
+    if (value.isArray()) {
+      var copy = JSON.createArrayNode();
+      value.forEach(item -> copy.add(sanitize(item)));
+      return copy;
+    }
+    if (value.isObject()) {
+      var copy = JSON.createObjectNode();
+      value.fields().forEachRemaining(entry -> copy.set(entry.getKey(), sanitize(entry.getValue())));
+      return copy;
+    }
+    return value.deepCopy();
   }
 
   private void publish(ObjectNode event) {

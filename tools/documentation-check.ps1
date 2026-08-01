@@ -104,7 +104,9 @@ try {
 if ($null -ne $truth) {
     if ($truth.schemaVersion -ne 'mcac-product-truth/1') { Add-Error 'unsupported product truth schema' }
     if ($truth.productVersion -ne '0.3.1') { Add-Error 'product truth version must be 0.3.1' }
-    if ($truth.readiness -ne 'READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC') { Add-Error 'product truth readiness is invalid' }
+    $readinessLabels = @('READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC',
+        'LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING', 'HUMAN_PLAYTEST_PENDING')
+    if ($readinessLabels -notcontains $truth.readiness) { Add-Error 'product truth readiness is invalid' }
     if ($truth.automatedBaseline -ne 'FROZEN') { Add-Error 'product truth automated baseline must be FROZEN' }
     $expectedLoaders = @{
         'fabric-1.21.1' = @{ java = 21; mode = 'FULL_RUNTIME_BRIDGE' }
@@ -122,8 +124,18 @@ if ($null -ne $truth) {
         Add-Error 'managed Runtime profile range must be 8766..8866'
     }
     $pending = @($truth.pendingExternalEvidence)
-    foreach ($label in @('LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING', 'HUMAN_PLAYTEST_PENDING')) {
-        if ($pending -notcontains $label) { Add-Error "missing external-evidence label: $label" }
+    if ($pending -notcontains 'HUMAN_PLAYTEST_PENDING') {
+        Add-Error 'missing external-evidence label: HUMAN_PLAYTEST_PENDING'
+    }
+    if ($pending -contains 'LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING') {
+        Add-Error 'live-provider pending label contradicts the verified live combination'
+    }
+    $live = @($truth.verifiedLiveCombinations)
+    if ($live.Count -ne 1 -or $live[0].launcher -ne 'PCL' -or $live[0].minecraft -ne '1.20.1' -or
+            $live[0].loader -ne 'Forge' -or $live[0].brainAdapter -ne 'Hermes' -or
+            $live[0].provider -ne 'DeepSeek official API' -or
+            $live[0].evidenceClass -ne 'LIVE_PROVIDER_VERTICAL_SLICE') {
+        Add-Error 'verified live combination is missing or overstated'
     }
 }
 
@@ -161,9 +173,9 @@ foreach ($relative in $supportDocs) {
 $matrixHead = ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root 'docs/RC_COMPLETION_MATRIX.md') |
     Select-Object -First 25) -join "`n")
 foreach ($requiredText in @(
-    'READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC', 'Automated productization baseline: `FROZEN`',
+    'Overall status: `HUMAN_PLAYTEST_PENDING`', 'Automated productization baseline: `FROZEN`',
     'Product version: `0.3.1`', 'mcac-productization-baseline-0.3.0',
-    'LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING', 'HUMAN_PLAYTEST_PENDING'
+    'Current live evidence:', 'HUMAN_PLAYTEST_PENDING'
 )) {
     if (-not $matrixHead.Contains($requiredText)) { Add-Error "RC matrix header missing: $requiredText" }
 }

@@ -82,6 +82,15 @@ export interface SessionStatus {
   companions: number
 }
 
+export interface SmokeStatus {
+  instanceId: string
+  state: 'WAITING' | 'SUCCEEDED' | 'FAILED' | 'MANUAL_REQUIRED' | 'STALE'
+  success: boolean
+  manualRequired: boolean
+  summary: string
+  completedAt?: string
+}
+
 export interface Companion {
   id: string
   displayName: string

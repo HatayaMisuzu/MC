@@ -7,9 +7,10 @@ MCAC 不是内置高层 Agent，也不是隐藏 Planner。
 
 当前产品版本为 0.3.1：自动化产品化基线已冻结（`FROZEN`），并已作为
 `mcac-productization-baseline-0.3.1` 标注 tag / GitHub Release 发布。Readiness 标签
-`READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC` 表示自动化闭环已完成、正在等待外部证据，它
-**不构成** Live-provider 或真人试玩证据：`LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING` 与
-`HUMAN_PLAYTEST_PENDING` 仍然有效。机器可读的当前产品事实位于
+现为 `HUMAN_PLAYTEST_PENDING`。2026-08-01 的一次真实纵向测试已验证
+PCL + Forge 1.20.1 + Runtime + Hermes + DeepSeek 官方 API 的握手/恢复、世界状态读取、
+Follow、Navigate 位置变化、安全空闲与重连；这不代表其他 Provider、Loader、全部工具、
+复杂地形或长期真人游玩已经验证。机器可读的当前产品事实位于
 [PRODUCT_TRUTH.json](docs/product/PRODUCT_TRUTH.json)，自动化证据与外部待验证项以
 [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md) 为准。
 
@@ -25,10 +26,10 @@ NeoForge 1.21.1 保持 `LOCAL_ONLY`。
 3. 在浏览器页面中选择自动扫描到的 PCL2/HMCL 实例。
 4. 依次完成 Doctor、安装、Runtime、游戏启动、Companion 控制和冒烟测试。
 
-直接双击 `mcac.exe`（或运行 `mcac.cmd`、`mcac.ps1`）只会启动或复用本地后端，不再隐式调用
-Windows 默认浏览器；需要打开控制页面时明确传入 `--open-browser`，也可以设置
-`MCAC_OPEN_BROWSER=true`。开发、测试和无人值守流程应保持默认行为，或设置
-`MCAC_NO_BROWSER=true` 作为不可被命令行覆盖的安全开关（对 `启动终端.cmd` 同样生效）。
+直接双击或无参数启动 `mcac.exe` 会启动或复用本地后端并打开控制页面；显式 `web`
+模式仍可用于无界面启动，传入 `--open-browser` 时才打开浏览器。开发、测试和无人值守
+流程应设置 `MCAC_NO_BROWSER=true`，它是不可被命令行覆盖的安全开关（对
+`启动终端.cmd` 同样生效）。
 服务只监听 `127.0.0.1` 的动态端口；所有 API 需要随机会话 Cookie 与独立 CSRF Token，
 拒绝跨站、局域网和公网请求。
 

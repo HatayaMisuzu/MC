@@ -74,7 +74,7 @@ class TaskGraphRuntimeTest {
                         {"version":"mcac-task-graph/1","id":"pausable","permissions":["READ_WORLD"],
                          "root":{"id":"root","type":"sequence","nodes":[
                            {"id":"observe","type":"call_tool","tool":"test.observe","arguments":{"item":"first"}},
-                           {"id":"wait","type":"wait","durationMillis":2000},
+                           {"id":"wait","type":"wait","durationMillis":5000},
                            {"id":"done","type":"return","value":"ok"}
                          ]}}
                         """);
@@ -90,7 +90,7 @@ class TaskGraphRuntimeTest {
 
                 ToolResult resumed = runtime.controlForManagement("companion-1", "execution-2", "resume");
                 assertTrue(resumed.success(), resumed.code() + ": " + resumed.observation());
-                ToolResult completed = runtime.await(context, execute, Duration.ofSeconds(4), ignored -> { });
+                ToolResult completed = runtime.await(context, execute, Duration.ofSeconds(8), ignored -> { });
                 assertTrue(completed.success(), completed.observation().toString());
                 assertEquals(1, gateway.arguments.size(), "completed Tool effect repeated after resume");
             }

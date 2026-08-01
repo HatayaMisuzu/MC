@@ -1,6 +1,6 @@
 package com.mccompanion.minecraft.v120;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mccompanion.minecraft.forge.json.ObjectMapper;
 import com.mccompanion.minecraft.forge.PrimitiveObservationService;
 import com.mccompanion.minecraft.forge.RegistryObservationService;
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
@@ -37,6 +37,57 @@ public final class CompanionLifecycleForgeGameTests {
     private static final Logger LOGGER = LoggerFactory.getLogger(MinecraftAiCompanionForge.MOD_ID);
 
     private CompanionLifecycleForgeGameTests() {
+    }
+
+    @GameTest(
+            batch = "controlArbitration",
+            templateNamespace = "minecraft",
+            template = "bastion/mobs/empty",
+            timeoutTicks = 200)
+    public static void ownerTakeoverInvalidatesRuntimeLeaseAndControlOwnerIsObservable(GameTestHelper helper) {
+        FakeConnection ownerConnection = new FakeConnection();
+        ServerPlayer owner = new ServerPlayer(
+                helper.getLevel().getServer(), helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-arbiter-owner"));
+        Vec3 spawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(ownerConnection, owner);
+        CompanionRegistry registry = MinecraftAiCompanionForge.integrationRegistryFor(helper.getLevel().getServer());
+        helper.assertTrue(registry.create(owner, "Arbiter").success(), "arbitration create failed");
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst().orElseThrow();
+        String lease = "forge-control-arbitration";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, lease, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "arbitration lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(
+                        companionId, lease, 1L, "runtime-follow", "follow",
+                        null, null, null, null).success(),
+                "arbitration Runtime start failed");
+        helper.assertTrue(registry.stop(owner).success(), "owner takeover stop failed");
+        CompanionRegistry.RuntimeResult replay = registry.runtimeResume(companionId, lease, 1L);
+        helper.assertTrue(!replay.success() && replay.code().equals("STALE_EPOCH"),
+                "old Runtime lease survived owner takeover: " + replay.code());
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, "forge-control-arbitration-2", 2L,
+                        System.currentTimeMillis() + 30_000L).success(),
+                "higher-epoch handoff after owner stop failed");
+        helper.assertTrue(registry.runtimeReleaseLease(
+                        companionId, "forge-control-arbitration-2", 2L).success(),
+                "higher-epoch handoff release failed");
+        String evidence = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.companionId().equals(companionId))
+                .map(CompanionRegistry.RuntimeSnapshot::evidenceSummary)
+                .findFirst().orElse("");
+        helper.assertTrue(evidence.contains("controlAuthority=IDLE")
+                        && evidence.contains("controlRevision="),
+                "control arbitration was not observable: " + evidence);
+        helper.assertTrue(registry.remove(owner).success(), "arbitration cleanup failed");
+        helper.getLevel().getServer().getPlayerList().remove(owner);
+        ownerConnection.disconnect(Component.literal("Forge arbitration GameTest complete"));
+        helper.succeed();
     }
 
     @GameTest(

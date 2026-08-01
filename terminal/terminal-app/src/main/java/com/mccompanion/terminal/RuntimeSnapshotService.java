@@ -12,6 +12,7 @@ import java.sql.DriverManager;
 /** Read-only, allow-listed projection of Runtime state for the local control UI. */
 final class RuntimeSnapshotService {
   private static final ObjectMapper JSON = new ObjectMapper();
+  private static final PrivacyFilter PRIVACY = new PrivacyFilter();
 
   ObjectNode snapshot(RuntimeProfile profile) {
     ObjectNode root = JSON.createObjectNode();
@@ -53,11 +54,11 @@ final class RuntimeSnapshotService {
             values
                 .addObject()
                 .put("id", rows.getString("companion_id"))
-                .put("displayName", rows.getString("display_name"))
+                .put("displayName", PRIVACY.pseudonymLabel("Companion", rows.getString("display_name")))
                 .put("online", rows.getInt("online") == 1)
                 .put("lastSeenAt", rows.getLong("last_seen_at"));
         String status = rows.getString("status_json");
-        if (status != null && !status.isBlank()) value.set("status", JSON.readTree(status));
+        if (status != null && !status.isBlank()) value.set("status", safe(JSON.readTree(status), "status"));
         long epoch = rows.getLong("epoch");
         if (!rows.wasNull()) {
           value
@@ -117,7 +118,7 @@ final class RuntimeSnapshotService {
                 .put("eventType", rows.getString("event_type"))
                 .put("createdAt", rows.getLong("created_at"));
         String payload = rows.getString("payload_json");
-        if (payload != null && !payload.isBlank()) value.set("payload", JSON.readTree(payload));
+        if (payload != null && !payload.isBlank()) value.set("payload", safe(JSON.readTree(payload), "payload"));
       }
     }
   }
@@ -130,11 +131,11 @@ final class RuntimeSnapshotService {
       while (rows.next()) {
         ObjectNode value = values.addObject().put("eventId", rows.getString("event_id"))
             .put("companionId", rows.getString("companion_id")).put("direction", rows.getString("direction"))
-            .put("kind", rows.getString("kind")).put("content", rows.getString("content"))
+            .put("kind", rows.getString("kind")).put("content", "<PRIVATE_CONTENT_OMITTED>")
             .put("gameDelivered", rows.getInt("game_delivered") != 0).put("createdAt", rows.getLong("created_at"));
         String plan = rows.getString("plan_id"); if (plan != null) value.put("planId", plan);
         String question = rows.getString("question_id"); if (question != null) value.put("questionId", question);
-        value.set("payload", JSON.readTree(rows.getString("payload_json")));
+        value.set("payload", safe(JSON.readTree(rows.getString("payload_json")), "payload"));
       }
     }
   }
@@ -148,13 +149,38 @@ final class RuntimeSnapshotService {
       while (rows.next()) {
         ObjectNode value = values.addObject().put("questionId", rows.getString("question_id"))
             .put("planId", rows.getString("plan_id")).put("companionId", rows.getString("companion_id"))
-            .put("prompt", rows.getString("prompt")).put("reason", rows.getString("reason"))
+            .put("prompt", PRIVACY.filter(rows.getString("prompt"), PrivacyFilter.Policy.UI_DEFAULT))
+            .put("reason", PRIVACY.filter(rows.getString("reason"), PrivacyFilter.Policy.UI_DEFAULT))
             .put("freeTextAllowed", rows.getInt("free_text_allowed") != 0).put("state", rows.getString("state"))
             .put("createdAt", rows.getLong("created_at")).put("updatedAt", rows.getLong("updated_at"));
         value.set("options", JSON.readTree(rows.getString("options_json")));
-        value.set("context", JSON.readTree(rows.getString("context_json")));
+        value.set("context", safe(JSON.readTree(rows.getString("context_json")), "context"));
         long expires = rows.getLong("expires_at"); if (!rows.wasNull()) value.put("expiresAt", expires);
       }
     }
+  }
+
+  private static com.fasterxml.jackson.databind.JsonNode safe(
+      com.fasterxml.jackson.databind.JsonNode value, String key) {
+    if (value == null || value.isNull()) return JSON.nullNode();
+    if (value.isTextual()) {
+      if (key.equalsIgnoreCase("displayName") || key.equalsIgnoreCase("playerName")
+          || key.equalsIgnoreCase("ownerName")) {
+        return JSON.getNodeFactory().textNode(PRIVACY.pseudonymLabel("Identity", value.asText()));
+      }
+      return JSON.getNodeFactory().textNode(
+          PRIVACY.filter(value.asText(), PrivacyFilter.Policy.UI_DEFAULT));
+    }
+    if (value.isArray()) {
+      ArrayNode copy = JSON.createArrayNode();
+      value.forEach(item -> copy.add(safe(item, key)));
+      return copy;
+    }
+    if (value.isObject()) {
+      ObjectNode copy = JSON.createObjectNode();
+      value.fields().forEachRemaining(entry -> copy.set(entry.getKey(), safe(entry.getValue(), entry.getKey())));
+      return copy;
+    }
+    return value.deepCopy();
   }
 }

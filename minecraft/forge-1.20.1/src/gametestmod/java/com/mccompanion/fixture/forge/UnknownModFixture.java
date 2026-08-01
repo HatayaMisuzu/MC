@@ -1,6 +1,6 @@
 package com.mccompanion.fixture.forge;
 
-import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.mccompanion.minecraft.forge.json.ObjectMapper;
 import com.mccompanion.minecraft.forge.RegistryObservationService;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -26,6 +26,7 @@ import net.minecraftforge.registries.RegistryObject;
 @GameTestHolder(UnknownModFixture.MOD_ID)
 @PrefixGameTestTemplate(false)
 public final class UnknownModFixture {
+    private static final ObjectMapper JSON = new ObjectMapper();
     static final String MOD_ID = "mcac_unknown_fixture";
     private static final DeferredRegister<Block> BLOCKS =
             DeferredRegister.create(ForgeRegistries.BLOCKS, MOD_ID);
@@ -56,7 +57,7 @@ public final class UnknownModFixture {
     public static void genericRegistryAndRecipeDiscovery(GameTestHelper helper) {
         var search = RegistryObservationService.registry(
                 helper.getLevel().getServer(),
-                JsonNodeFactory.instance.objectNode()
+                JSON.createObjectNode()
                         .put("tool", "registry.search")
                         .put("kind", "ITEM")
                         .put("namespace", MOD_ID)
@@ -72,7 +73,7 @@ public final class UnknownModFixture {
 
         var described = RegistryObservationService.registry(
                 helper.getLevel().getServer(),
-                JsonNodeFactory.instance.objectNode()
+                JSON.createObjectNode()
                         .put("tool", "registry.describe")
                         .put("kind", "BLOCK")
                         .put("id", MOD_ID + ":blue_block"));
@@ -86,7 +87,7 @@ public final class UnknownModFixture {
 
         var recipe = RegistryObservationService.recipes(
                 helper.getLevel().getServer(),
-                JsonNodeFactory.instance.objectNode()
+                JSON.createObjectNode()
                         .put("type", "CRAFTING")
                         .put("query", "charged_blue_item")
                         .put("output", MOD_ID + ":charged_blue_item")

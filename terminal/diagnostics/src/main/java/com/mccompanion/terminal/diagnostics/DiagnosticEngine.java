@@ -44,8 +44,22 @@ public final class DiagnosticEngine {
         Path state=instance.gameDirectory().resolve(".mccompanion"); Path manifest=state.resolve("install-manifest.json");
         result.add(new DiagnosticResult(instance.configuredJava().isPresent()?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"java.configured",instance.configuredJava().map(p->"Configured Java detected").orElse("Launcher Java path not confirmed"),Map.of()));
         Path crash=instance.gameDirectory().resolve("crash-reports");result.add(new DiagnosticResult(Files.isDirectory(crash)?DiagnosticResult.Severity.WARNING:DiagnosticResult.Severity.PASS,"recent.crash",Files.isDirectory(crash)?"Crash reports exist; inspect newest report":"No crash-report directory",Map.of()));
-        Path latest=instance.logsDirectory().resolve("latest.log");boolean loaded=false;try{loaded=Files.isRegularFile(latest)&&Files.readString(latest).contains("minecraft_ai_companion");}catch(IOException ignored){}
-        result.add(new DiagnosticResult(loaded?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"recent.mod_load",loaded?"Recent log contains Companion":"No recent Companion load evidence",Map.of("logPresent",Boolean.toString(Files.isRegularFile(latest)))));
+        Path latest=instance.logsDirectory().resolve("latest.log");boolean loaded=false;
+        Map<String,String> loadEvidence = new java.util.LinkedHashMap<>();
+        loadEvidence.put("logPresent", Boolean.toString(Files.isRegularFile(latest)));
+        try {
+            var log = BoundedTextReader.readTail(latest, 1024 * 1024);
+            String text = log.text().toLowerCase(java.util.Locale.ROOT);
+            loaded = text.contains("minecraft_ai_companion") || text.contains("minecraft ai companion");
+            loadEvidence.put("charset", log.charset());
+            loadEvidence.put("replacementCount", Integer.toString(log.replacementCount()));
+            loadEvidence.put("truncated", Boolean.toString(log.truncated()));
+        } catch(IOException failure) {
+            loadEvidence.put("readError", failure.getClass().getSimpleName());
+        }
+        result.add(new DiagnosticResult(loaded?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,
+                "recent.mod_load",loaded?"Recent log contains Companion":"No recent Companion load evidence",
+                Map.copyOf(loadEvidence)));
         try{long usable=Files.getFileStore(instance.gameDirectory()).getUsableSpace();result.add(new DiagnosticResult(usable>512L*1024*1024?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"disk.space","Usable disk space: "+(usable/1024/1024)+" MiB",Map.of("usableBytes",Long.toString(usable))));}catch(IOException e){result.add(new DiagnosticResult(DiagnosticResult.Severity.WARNING,"disk.space","Disk space check failed: "+e.getClass().getSimpleName(),Map.of()));}
         result.add(new DiagnosticResult(Files.isRegularFile(manifest)?DiagnosticResult.Severity.PASS:DiagnosticResult.Severity.WARNING,"install.manifest",Files.isRegularFile(manifest)?"Install manifest present":"Not installed by mcac",Map.of("present",Boolean.toString(Files.isRegularFile(manifest)))));
         return result;

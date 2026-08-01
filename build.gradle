@@ -580,6 +580,7 @@ tasks.register('jpackageTerminal', Exec) {
                 '--main-jar', "terminal-app-${project.version}.jar",
                 '--main-class', 'com.mccompanion.terminal.ControlTerminalMain',
                 '--dest', terminalJpackage.get().asFile,
+                '--win-console',
                 '--add-launcher', "runtime-app=${file('tools/runtime-launcher.properties').absolutePath}",
                 '--add-launcher', "mcac-cli=${file('tools/mcac-cli-launcher.properties').absolutePath}",
                 '--java-options', '-Dfile.encoding=UTF-8'
@@ -784,6 +785,7 @@ tasks.register('tuiIntegrationTest') { group='verification'; dependsOn 'stageTer
 tasks.register('rootLauncherTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','root' } } }
 tasks.register('releaseStarterTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/terminal-entrypoint-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath,'-Mode','release' } } }
 tasks.register('htmlTerminalStartTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/html-terminal-start-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
+tasks.register('windowsFinalArtifactTest') { group='verification'; dependsOn 'stageTerminal'; doLast { exec { commandLine powershellExecutable,'-NoProfile','-ExecutionPolicy','Bypass','-File',file('tools/windows-final-artifact-test.ps1').absolutePath,'-ReleaseDir',terminalImage.get().asFile.absolutePath } } }
 tasks.register('releaseGoldenPathTest') {
     group='verification'
     dependsOn 'packageTerminalZip'

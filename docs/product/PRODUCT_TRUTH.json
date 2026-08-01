@@ -1,7 +1,7 @@
 {
   "schemaVersion": "mcac-product-truth/1",
   "productVersion": "0.3.1",
-  "readiness": "READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC",
+  "readiness": "HUMAN_PLAYTEST_PENDING",
   "automatedBaseline": "FROZEN",
   "loaders": {
     "fabric-1.21.1": {
@@ -21,8 +21,33 @@
     "first": 8766,
     "last": 8866
   },
+  "verifiedLiveCombinations": [
+    {
+      "evidenceDate": "2026-08-01",
+      "launcher": "PCL",
+      "minecraft": "1.20.1",
+      "loader": "Forge",
+      "runtimeBridge": "FULL_RUNTIME_BRIDGE",
+      "brainAdapter": "Hermes",
+      "provider": "DeepSeek official API",
+      "evidenceClass": "LIVE_PROVIDER_VERTICAL_SLICE",
+      "verifiedScope": [
+        "runtime_handshake",
+        "world_state_observation",
+        "follow_lifecycle",
+        "navigate_position_change",
+        "safe_idle",
+        "reconnect_recovery"
+      ]
+    }
+  ],
+  "remainingLiveCoverage": [
+    "Fabric live-provider combinations",
+    "providers other than the official DeepSeek API",
+    "broader Tool and complex-terrain coverage",
+    "long-duration subjective human play"
+  ],
   "pendingExternalEvidence": [
-    "LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING",
     "HUMAN_PLAYTEST_PENDING"
   ]
 }

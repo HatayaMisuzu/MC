@@ -3,20 +3,36 @@ package com.mccompanion.terminal;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mccompanion.protocol.security.OwnerOnlyFile;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
 import com.mccompanion.terminal.runtime.RuntimeProfile;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 final class SmokeTestService {
+    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final Duration FRESHNESS = Duration.ofDays(7);
     record Result(boolean success, boolean manualRequired, String summary) { }
+    record StoredResult(String state, boolean success, boolean manualRequired, String summary,
+                        Instant completedAt) { }
 
     Result run(MinecraftInstance instance, RuntimeProfile profile) {
+        Result result = execute(instance, profile);
+        try { record(profile, result, Clock.systemUTC()); }
+        catch (IOException ignored) { }
+        return result;
+    }
+
+    private Result execute(MinecraftInstance instance, RuntimeProfile profile) {
         if (!FullBridgeSupport.supports(instance)) {
             return new Result(true, true, "LOCAL_ONLY: verify Mod load log and /companion status manually");
         }
@@ -77,6 +93,55 @@ final class SmokeTestService {
             }
             return new Result(false, false, "Behavior smoke failed safely: " + failure.getMessage());
         }
+    }
+
+    StoredResult latest(RuntimeProfile profile) throws IOException {
+        Path file = resultFile(profile);
+        if (!Files.isRegularFile(file)) {
+            return new StoredResult("WAITING", false, false, "No smoke result recorded", Instant.EPOCH);
+        }
+        JsonNode value = JSON.readTree(file.toFile());
+        Instant completedAt = Instant.parse(value.path("completedAt").asText());
+        boolean success = value.path("success").asBoolean(false);
+        boolean manualRequired = value.path("manualRequired").asBoolean(false);
+        String state = value.path("state").asText(success ? "SUCCEEDED" : "FAILED");
+        if (completedAt.plus(FRESHNESS).isBefore(Instant.now())) state = "STALE";
+        return new StoredResult(
+                state, success, manualRequired, value.path("summary").asText(""), completedAt);
+    }
+
+    void record(RuntimeProfile profile, Result result, Clock clock) throws IOException {
+        Path target = resultFile(profile);
+        Files.createDirectories(target.getParent());
+        Path temporary = OwnerOnlyFile.createTempFile(target.getParent(), ".smoke-result-", ".part");
+        try {
+            String state = result.manualRequired() ? "MANUAL_REQUIRED"
+                    : result.success() ? "SUCCEEDED" : "FAILED";
+            ObjectNode value = JSON.createObjectNode()
+                    .put("schemaVersion", 1)
+                    .put("state", state)
+                    .put("success", result.success())
+                    .put("manualRequired", result.manualRequired())
+                    .put("summary", new PrivacyFilter().filter(
+                            result.summary(), PrivacyFilter.Policy.UI_DEFAULT))
+                    .put("completedAt", clock.instant().toString());
+            JSON.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), value);
+            OwnerOnlyFile.secure(temporary);
+            try {
+                Files.move(temporary, target,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporary, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            }
+            OwnerOnlyFile.secure(target);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static Path resultFile(RuntimeProfile profile) {
+        return profile.profileDirectory().resolve("smoke-result.json");
     }
 
     private static JsonNode waitFor(RuntimeProfile profile, RuntimeControlClient client, String taskId,

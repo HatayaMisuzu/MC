@@ -54,11 +54,81 @@ class SupportBundleServiceTest {
             String doctorText=new String(zip.getInputStream(zip.getEntry("doctor.txt")).readAllBytes(),StandardCharsets.UTF_8);
             assertFalse(doctorText.contains("doctor-secret"));assertTrue(doctorText.contains("brain.provider"));
             assertEquals(java.util.Set.of("summary.txt","minecraft-errors.log","runtime-summary.txt",
-                            "safe-config-summary.txt","runtime-errors.log","doctor.txt","reproduction-steps.txt","mods.txt"),
+                            "safe-config-summary.txt","runtime-errors.log","doctor.txt","reproduction-steps.txt","mods.txt",
+                            "bundle-manifest.json"),
                     zip.stream().map(java.util.zip.ZipEntry::getName).collect(java.util.stream.Collectors.toSet()));
             for (var entry : java.util.Collections.list(zip.entries())) {
                 String contents = new String(zip.getInputStream(entry).readAllBytes(), StandardCharsets.UTF_8);
                 assertFalse(contents.contains("memory value that must never enter support archive"));
+            }
+        }
+    }
+
+    @Test void decodesNonUtf8LogsAndRecordsEncodingEvidence() throws Exception {
+        Path game=temp.resolve("gb-game");Files.createDirectories(game.resolve("logs"));Files.createDirectories(game.resolve("mods"));
+        Files.write(game.resolve("logs/latest.log"), "[ERROR] 中文错误\n".getBytes(java.nio.charset.Charset.forName("GB18030")));
+        MinecraftInstance instance=new MinecraftInstance("id","launcher","Test",temp,temp,game,game.resolve("mods"),
+                game.resolve("config"),game.resolve("logs"),"1.20.1",LoaderType.FORGE,"1",17, Optional.empty(),
+                InstanceIsolation.EXPLICIT,DetectionConfidence.HIGH);
+        Path output=temp.resolve("gb-support.zip");new SupportBundleService().collect(instance,output);
+        try(ZipFile zip=new ZipFile(output.toFile())){
+            String log=new String(zip.getInputStream(zip.getEntry("minecraft-errors.log")).readAllBytes(),StandardCharsets.UTF_8);
+            assertTrue(log.contains("中文错误"));
+            String manifest=new String(zip.getInputStream(zip.getEntry("bundle-manifest.json")).readAllBytes(),StandardCharsets.UTF_8);
+            assertTrue(manifest.contains("GB18030"));
+            assertTrue(manifest.contains("minecraft-latest-log"));
+        }
+    }
+
+    @Test void failedVerificationPreservesExistingArchiveAndRemovesPartFile() throws Exception {
+        Path game=temp.resolve("fault-game");Files.createDirectories(game.resolve("logs"));Files.createDirectories(game.resolve("mods"));
+        MinecraftInstance instance=new MinecraftInstance("id","launcher","Test",temp,temp,game,game.resolve("mods"),
+                game.resolve("config"),game.resolve("logs"),"1.21.1",LoaderType.FABRIC,"1",21, Optional.empty(),
+                InstanceIsolation.EXPLICIT,DetectionConfidence.HIGH);
+        Path output=temp.resolve("existing.zip");Files.writeString(output,"preserve-me",StandardCharsets.UTF_8);
+        SupportBundleService service=new SupportBundleService(part -> { throw new java.io.IOException("injected"); });
+        assertThrows(java.io.IOException.class, () -> service.collect(instance,output));
+        assertEquals("preserve-me",Files.readString(output,StandardCharsets.UTF_8));
+        try(var files=Files.list(temp)){
+            assertTrue(files.noneMatch(path -> path.getFileName().toString().endsWith(".part")));
+        }
+    }
+
+    @Test void concurrentLogGrowthAndRotationStillPublishesOneVerifiedArchive() throws Exception {
+        Path game=temp.resolve("rolling-game");Files.createDirectories(game.resolve("logs"));Files.createDirectories(game.resolve("mods"));
+        Path latest=game.resolve("logs/latest.log");
+        byte[] initial=("[ERROR] initial\n"+"x".repeat(512*1024)+"\n").getBytes(StandardCharsets.UTF_8);
+        initial[initial.length-2]=(byte)0x81;
+        Files.write(latest,initial);
+        MinecraftInstance instance=new MinecraftInstance("rolling","launcher","Test",temp,temp,game,game.resolve("mods"),
+                game.resolve("config"),game.resolve("logs"),"1.20.1",LoaderType.FORGE,"1",17, Optional.empty(),
+                InstanceIsolation.EXPLICIT,DetectionConfidence.HIGH);
+        java.util.concurrent.CountDownLatch started=new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Throwable> writerFailure=new java.util.concurrent.atomic.AtomicReference<>();
+        Thread writer=new Thread(() -> {
+            try {
+                started.countDown();
+                for(int i=0;i<100;i++){
+                    Files.writeString(latest,"[ERROR] appended-"+i+"\n",StandardCharsets.UTF_8,
+                            java.nio.file.StandardOpenOption.APPEND);
+                    if(i==40) Files.copy(latest,game.resolve("logs/latest.1.log"),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+            } catch(Throwable failure){writerFailure.set(failure);}
+        },"support-bundle-log-writer");
+        writer.start();started.await();
+        Path output=temp.resolve("rolling-support.zip");
+        new SupportBundleService().collect(instance,output);
+        writer.join();
+        assertNull(writerFailure.get());
+        assertTrue(Files.isRegularFile(output));
+        try(var files=Files.list(temp)){
+            assertTrue(files.noneMatch(path -> path.getFileName().toString().endsWith(".part")));
+        }
+        try(ZipFile zip=new ZipFile(output.toFile())){
+            assertNotNull(zip.getEntry("bundle-manifest.json"));
+            for(var entry:java.util.Collections.list(zip.entries())){
+                assertDoesNotThrow(() -> zip.getInputStream(entry).readAllBytes());
             }
         }
     }

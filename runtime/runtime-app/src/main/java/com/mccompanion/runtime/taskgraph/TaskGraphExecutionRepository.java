@@ -129,6 +129,25 @@ public final class TaskGraphExecutionRepository {
         return List.copyOf(values);
     }
 
+    public List<String> nonterminalSkillExecutionIds(String companionId, String skillId) throws SQLException {
+        ArrayList<String> values = new ArrayList<>();
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT execution_id FROM task_graph_execution
+                WHERE companion_id=? AND json_extract(provenance_json,'$.skillId')=?
+                  AND json_extract(provenance_json,'$.source') IN
+                    ('BUILT_IN_SKILL','APPROVED_GENERATED_SKILL','GENERATED_SKILL_TRIAL')
+                  AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED')
+                ORDER BY created_at, execution_id
+                """)) {
+            statement.setString(1, required(companionId));
+            statement.setString(2, required(skillId));
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) values.add(rows.getString(1));
+            }
+        }
+        return List.copyOf(values);
+    }
+
     public List<ExecutionSummary> listByCompanion(String companionId, int limit) throws SQLException {
         int bounded = Math.max(1, Math.min(limit, 100));
         ArrayList<ExecutionSummary> values = new ArrayList<>();

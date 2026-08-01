@@ -1,136 +1,225 @@
 package com.mccompanion.terminal;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mccompanion.terminal.diagnostics.BoundedTextReader;
 import com.mccompanion.terminal.diagnostics.DiagnosticEngine;
 import com.mccompanion.terminal.diagnostics.DiagnosticResult;
 import com.mccompanion.terminal.launcher.MinecraftInstance;
 import com.mccompanion.terminal.runtime.RuntimeProfile;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.util.HashSet;
 import java.util.List;
-import java.util.regex.Pattern;
+import java.util.Set;
+import java.util.UUID;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
-/** Creates a deliberately allow-listed and redacted support archive. */
+/** Creates a bounded, allow-listed, redacted, verified, and atomically published support archive. */
 final class SupportBundleService {
-    private static final Pattern SENSITIVE_ASSIGNMENT = Pattern.compile(
-            "(?i)([\\\"']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|secret|password|passwd|cookie|session[_-]?id|account|username|player[_-]?name|instance[_-]?id|installation[_-]?id|profile[_-]?id|companion[_-]?id|brain[_-]?session[_-]?id|controller[_-]?id)[\\\"']?\\s*[:=]\\s*[\\\"']?)([^\\\"',\\s}\\]]+)");
-    private static final Pattern ABSOLUTE_PATH=Pattern.compile("(?i)[A-Z]:\\\\[^\\r\\n\"']+");
-    private static final Pattern POSIX_PATH=Pattern.compile("(?<![:\\w])/(?:Users|home|var|tmp|opt|srv|mnt|etc)/[^\\s\"']+");
-    private static final Pattern IPV4=Pattern.compile("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?::[0-9]{1,5})?");
-    private static final Pattern IPV6=Pattern.compile("(?i)(?<![0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?:%[0-9a-z]+)?(?:\\:[0-9]{1,5})?");
-    private static final Pattern UUID=Pattern.compile("(?i)\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b");
-    private static final Pattern HOSTNAME=Pattern.compile("(?i)\\b(?!(?:brain|search|runtime|mcp|protocol|install|launcher|mods|hook|java|loader)\\.)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+(?!(?:jar|log|json|txt|ya?ml)\\b)[a-z]{2,63}(?::[0-9]{1,5})?\\b");
-    private static final Pattern EMAIL=Pattern.compile("(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}\\b");
-    private static final Pattern JWT=Pattern.compile("\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b");
-    Path collect(MinecraftInstance instance, Path output) throws IOException {
-        return collect(instance, null, List.of(), output);
+  private static final ObjectMapper JSON = new ObjectMapper();
+  private static final PrivacyFilter PRIVACY = new PrivacyFilter();
+  private static final int MAX_SOURCE_BYTES = 16 * 1024 * 1024;
+  private static final long MAX_ARCHIVE_UNCOMPRESSED_BYTES = 64L * 1024 * 1024;
+  private static final Set<String> REQUIRED_ENTRIES = Set.of(
+      "summary.txt", "reproduction-steps.txt", "mods.txt", "bundle-manifest.json");
+  private final ArchiveHook archiveHook;
+
+  SupportBundleService() {
+    this(ignored -> { });
+  }
+
+  SupportBundleService(ArchiveHook archiveHook) {
+    this.archiveHook = java.util.Objects.requireNonNull(archiveHook, "archiveHook");
+  }
+
+  Path collect(MinecraftInstance instance, Path output) throws IOException {
+    return collect(instance, null, List.of(), output);
+  }
+
+  Path collect(MinecraftInstance instance, RuntimeProfile profile, Path output) throws IOException {
+    return collect(instance, profile, List.of(), output);
+  }
+
+  Path collect(MinecraftInstance instance, RuntimeProfile profile, List<DiagnosticResult> doctor,
+               Path output) throws IOException {
+    Path target = output.toAbsolutePath().normalize();
+    Files.createDirectories(target.getParent());
+    Path part = target.resolveSibling(target.getFileName() + "." + UUID.randomUUID() + ".part");
+    try {
+      writeArchive(instance, profile, doctor, part);
+      archiveHook.afterArchiveWritten(part);
+      verifySanitized(part);
+      try {
+        Files.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+      } catch (AtomicMoveNotSupportedException unsupported) {
+        throw new IOException("SUPPORT_BUNDLE_ATOMIC_MOVE_UNAVAILABLE", unsupported);
+      }
+      return target;
+    } finally {
+      Files.deleteIfExists(part);
     }
-    Path collect(MinecraftInstance instance, RuntimeProfile profile, Path output) throws IOException {
-        return collect(instance, profile, List.of(), output);
-    }
-    Path collect(MinecraftInstance instance, RuntimeProfile profile, List<DiagnosticResult> doctor,
-                 Path output) throws IOException {
-        Files.createDirectories(output.toAbsolutePath().normalize().getParent());
-        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(output))) {
-            StringBuilder summary = new StringBuilder("Minecraft=").append(instance.minecraftVersion()).append('\n')
-                    .append("Loader=").append(instance.loader()).append(' ').append(instance.loaderVersion()).append('\n')
-                    .append("Java=").append(instance.requiredJavaMajor()).append('\n')
-                    .append("Instance=<INSTANCE>\n");
-            new DiagnosticEngine().run(instance).forEach(result -> summary.append(result.severity()).append(' ')
-                    .append(result.code()).append(' ').append(result.summary()).append('\n'));
-            add(zip, "summary.txt", redact(summary.toString()));
-            Path manifest = instance.gameDirectory().resolve(".mccompanion/install-manifest.json");
-            if (Files.isRegularFile(manifest)) add(zip, "install-manifest.json", redact(Files.readString(manifest)));
-            Path latest = instance.logsDirectory().resolve("latest.log");
-            if (Files.isRegularFile(latest) && Files.size(latest) <= 16L * 1024 * 1024)
-                add(zip, "minecraft-errors.log", redact(safeErrorExcerpt(Files.readString(latest, StandardCharsets.UTF_8))));
-            if (profile != null) {
-                String runtimeSummary = "Profile=<PROFILE>\nConfigured=" + Files.isDirectory(profile.profileDirectory())
-                        + "\nPort=" + profile.port() + "\nHealthPort=" + profile.healthPort() + "\n";
-                add(zip, "runtime-summary.txt", redact(runtimeSummary));
-                add(zip, "safe-config-summary.txt", redact(configurationSummary(profile)));
-                Path runtimeLog = profile.logFile();
-                if (Files.isRegularFile(runtimeLog) && Files.size(runtimeLog) <= 16L * 1024 * 1024) {
-                    add(zip, "runtime-errors.log", redact(safeErrorExcerpt(Files.readString(runtimeLog, StandardCharsets.UTF_8))));
-                }
-            }
-            if (!doctor.isEmpty()) {
-                StringBuilder checks = new StringBuilder();
-                doctor.forEach(result -> checks.append(result.severity()).append(' ').append(result.code())
-                        .append(' ').append(result.summary()).append(' ').append(result.evidence()).append('\n'));
-                add(zip, "doctor.txt", redact(checks.toString()));
-            }
-            add(zip, "reproduction-steps.txt", "1. Open the MCAC control terminal.\n"
-                    + "2. Select the affected instance and run Doctor.\n"
-                    + "3. Repeat the failed confirmed operation.\n"
-                    + "4. Record the visible operation reason code and approximate time.\n");
-            StringBuilder mods = new StringBuilder();
-            if (Files.isDirectory(instance.modsDirectory())) try (var files = Files.newDirectoryStream(instance.modsDirectory(), "*.jar")) {
-                for (Path file : files) mods.append(file.getFileName()).append('\n');
-            }
-            add(zip, "mods.txt", redact(mods.toString()));
+  }
+
+  private static void writeArchive(MinecraftInstance instance, RuntimeProfile profile,
+                                   List<DiagnosticResult> doctor, Path part) throws IOException {
+    ArrayNode sources = JSON.createArrayNode();
+    try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(part,
+        StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))) {
+      StringBuilder summary = new StringBuilder("Minecraft=").append(instance.minecraftVersion()).append('\n')
+          .append("Loader=").append(instance.loader()).append(' ').append(instance.loaderVersion()).append('\n')
+          .append("Java=").append(instance.requiredJavaMajor()).append('\n')
+          .append("Instance=<INSTANCE>\n");
+      new DiagnosticEngine().run(instance).forEach(result -> summary.append(result.severity()).append(' ')
+          .append(result.code()).append(' ').append(result.summary()).append('\n'));
+      add(zip, "summary.txt", shareable(summary.toString()));
+
+      Path installManifest = instance.gameDirectory().resolve(".mccompanion/install-manifest.json");
+      BoundedTextReader.Result installText = readSource(installManifest, "install-manifest", sources);
+      if (installText != null) add(zip, "install-manifest.json", shareable(installText.text()));
+
+      Path latest = instance.logsDirectory().resolve("latest.log");
+      BoundedTextReader.Result minecraftLog = readSource(latest, "minecraft-latest-log", sources);
+      if (minecraftLog != null) {
+        add(zip, "minecraft-errors.log", shareable(safeErrorExcerpt(minecraftLog.text())));
+      }
+
+      if (profile != null) {
+        String runtimeSummary = "Profile=<PROFILE>\nConfigured=" + Files.isDirectory(profile.profileDirectory())
+            + "\nPort=" + profile.port() + "\nHealthPort=" + profile.healthPort() + "\n";
+        add(zip, "runtime-summary.txt", shareable(runtimeSummary));
+        add(zip, "safe-config-summary.txt", shareable(configurationSummary(profile)));
+        BoundedTextReader.Result runtimeLog = readSource(profile.logFile(), "runtime-log", sources);
+        if (runtimeLog != null) {
+          add(zip, "runtime-errors.log", shareable(safeErrorExcerpt(runtimeLog.text())));
         }
-        verifySanitized(output);
-        return output;
-    }
-    private static String configurationSummary(RuntimeProfile profile) throws IOException {
-        var brain = new BrainConfigurationService().status(profile);
-        var search = new SearchConfigurationService().status(profile);
-        String brainEnvironment = brain.path("tokenEnv").asText("");
-        String searchEnvironment = search.path("tokenEnv").asText("");
-        return "BrainMode=" + brain.path("mode").asText("disabled") + '\n'
-                + "BrainModel=" + brain.path("model").asText("disabled") + '\n'
-                + "BrainCredentialReference=" + (brainEnvironment.isBlank() ? "not-required" : brainEnvironment) + '\n'
-                + "BrainCredentialPresent=" + (!brainEnvironment.isBlank() && present(brainEnvironment)) + '\n'
-                + "SearchMode=" + search.path("mode").asText("disabled") + '\n'
-                + "SearchCredentialReference=" + (searchEnvironment.isBlank() ? "not-required" : searchEnvironment) + '\n'
-                + "SearchCredentialPresent=" + (!searchEnvironment.isBlank() && present(searchEnvironment)) + '\n';
-    }
-    private static boolean present(String environment) {
-        String value = System.getenv(environment);
-        return value != null && !value.isBlank();
-    }
-    private static String safeErrorExcerpt(String text) {
-        String[] lines = text.split("\\R");
-        StringBuilder result = new StringBuilder();
-        int included = 0;
-        for (int index = Math.max(0, lines.length - 2_000); index < lines.length && included < 200; index++) {
-            String line = lines[index];
-            String lower = line.toLowerCase(java.util.Locale.ROOT);
-            boolean error = lower.contains("error") || lower.contains("warn") || lower.contains("exception")
-                    || lower.contains("caused by") || lower.matches("^\\s*at\\s+.*");
-            boolean privateChat = lower.contains("[chat]") || lower.contains("chat message")
-                    || lower.matches(".*<[^>]{1,64}>.*");
-            if (error && !privateChat) {
-                result.append(line, 0, Math.min(line.length(), 4_096)).append('\n');
-                included++;
-            }
+      }
+
+      if (!doctor.isEmpty()) {
+        StringBuilder checks = new StringBuilder();
+        doctor.forEach(result -> checks.append(result.severity()).append(' ').append(result.code())
+            .append(' ').append(result.summary()).append(' ').append(result.evidence()).append('\n'));
+        add(zip, "doctor.txt", shareable(checks.toString()));
+      }
+
+      add(zip, "reproduction-steps.txt", "1. Open the MCAC control terminal.\n"
+          + "2. Select the affected instance and run Doctor.\n"
+          + "3. Repeat the failed confirmed operation.\n"
+          + "4. Record the visible operation reason code and approximate time.\n");
+      StringBuilder mods = new StringBuilder();
+      if (Files.isDirectory(instance.modsDirectory())) {
+        try (var files = Files.newDirectoryStream(instance.modsDirectory(), "*.jar")) {
+          for (Path file : files) mods.append(file.getFileName()).append('\n');
         }
-        return "ErrorLines=" + included + '\n' + result;
+      }
+      add(zip, "mods.txt", shareable(mods.toString()));
+
+      ObjectNode manifest = JSON.createObjectNode()
+          .put("format", "mcac-support-bundle/2")
+          .put("privacyPolicy", PrivacyFilter.Policy.SHAREABLE_BUNDLE.name())
+          .put("atomicPublication", true)
+          .put("maxSourceBytes", MAX_SOURCE_BYTES);
+      manifest.set("sources", sources);
+      add(zip, "bundle-manifest.json", JSON.writerWithDefaultPrettyPrinter().writeValueAsString(manifest));
     }
-    private static void verifySanitized(Path output)throws IOException{try(var zip=new java.util.zip.ZipFile(output.toFile())){var entries=zip.entries();while(entries.hasMoreElements()){var entry=entries.nextElement();if(entry.isDirectory())continue;String text=new String(zip.getInputStream(entry).readAllBytes(),StandardCharsets.UTF_8);var secrets=SENSITIVE_ASSIGNMENT.matcher(text);while(secrets.find())if(!"<REDACTED>".equals(secrets.group(2)))throw new IOException("Support bundle secret scan failed: "+entry.getName());if(ABSOLUTE_PATH.matcher(text).find()||POSIX_PATH.matcher(text).find())throw new IOException("Support bundle path scan failed: "+entry.getName());if(IPV4.matcher(text).find()||IPV6.matcher(text).find())throw new IOException("Support bundle IP scan failed: "+entry.getName());if(UUID.matcher(text).find())throw new IOException("Support bundle UUID scan failed: "+entry.getName());if(EMAIL.matcher(text).find())throw new IOException("Support bundle email scan failed: "+entry.getName());if(JWT.matcher(text).find())throw new IOException("Support bundle JWT scan failed: "+entry.getName());if(HOSTNAME.matcher(text).find())throw new IOException("Support bundle hostname scan failed: "+entry.getName());}}}
-    private static String redact(String text) {
-        String value = SENSITIVE_ASSIGNMENT.matcher(text).replaceAll("$1<REDACTED>");
-        String home=System.getProperty("user.home", "");
-        if(!home.isBlank())value = value.replace(home, "<HOME>");
-        String user = System.getProperty("user.name", "");
-        if (!user.isBlank()) value = value.replace(user, "<USER>");
-        value=value.replaceAll("(?i)Bearer\\s+[^\\s,]+", "Bearer <REDACTED>")
-                .replaceAll("(?i)([?&](?:key|token|secret|signature|auth)=)[^&\\s]+","$1<REDACTED>")
-                .replaceAll("(?i)(Authorization\\s*:\\s*)[^\\r\\n]+","$1<REDACTED>");
-        value=EMAIL.matcher(value).replaceAll("<EMAIL>");
-        value=JWT.matcher(value).replaceAll("<REDACTED>");
-        value=ABSOLUTE_PATH.matcher(value).replaceAll("<PATH>");
-        value=POSIX_PATH.matcher(value).replaceAll("<PATH>");
-        value=IPV4.matcher(value).replaceAll("<IP>");
-        value=IPV6.matcher(value).replaceAll("<IP>");
-        value=UUID.matcher(value).replaceAll("<UUID>");
-        return HOSTNAME.matcher(value).replaceAll("<HOST>");
+  }
+
+  private static BoundedTextReader.Result readSource(Path path, String logicalName, ArrayNode sources)
+      throws IOException {
+    if (!Files.isRegularFile(path)) return null;
+    BoundedTextReader.Result result = BoundedTextReader.readTail(path, MAX_SOURCE_BYTES);
+    sources.addObject()
+        .put("name", logicalName)
+        .put("charset", result.charset())
+        .put("replacementCount", result.replacementCount())
+        .put("truncated", result.truncated())
+        .put("bytesRead", result.bytesRead())
+        .put("sourceBytes", result.sourceBytes());
+    return result;
+  }
+
+  private static String configurationSummary(RuntimeProfile profile) throws IOException {
+    var brain = new BrainConfigurationService().status(profile);
+    var search = new SearchConfigurationService().status(profile);
+    String brainEnvironment = brain.path("tokenEnv").asText("");
+    String searchEnvironment = search.path("tokenEnv").asText("");
+    return "BrainMode=" + brain.path("mode").asText("disabled") + '\n'
+        + "BrainModel=" + brain.path("model").asText("disabled") + '\n'
+        + "BrainCredentialReference=" + (brainEnvironment.isBlank() ? "not-required" : brainEnvironment) + '\n'
+        + "BrainCredentialPresent=" + (!brainEnvironment.isBlank() && present(brainEnvironment)) + '\n'
+        + "SearchMode=" + search.path("mode").asText("disabled") + '\n'
+        + "SearchCredentialReference=" + (searchEnvironment.isBlank() ? "not-required" : searchEnvironment) + '\n'
+        + "SearchCredentialPresent=" + (!searchEnvironment.isBlank() && present(searchEnvironment)) + '\n';
+  }
+
+  private static boolean present(String environment) {
+    String value = System.getenv(environment);
+    return value != null && !value.isBlank();
+  }
+
+  private static String safeErrorExcerpt(String text) {
+    String[] lines = text.split("\\R");
+    StringBuilder result = new StringBuilder();
+    int included = 0;
+    for (int index = Math.max(0, lines.length - 2_000); index < lines.length && included < 200; index++) {
+      String line = lines[index];
+      String lower = line.toLowerCase(java.util.Locale.ROOT);
+      boolean error = lower.contains("error") || lower.contains("warn") || lower.contains("exception")
+          || lower.contains("caused by") || lower.matches("^\\s*at\\s+.*");
+      boolean privateChat = lower.contains("[chat]") || lower.contains("chat message")
+          || lower.matches(".*<[^>]{1,64}>.*");
+      if (error && !privateChat) {
+        result.append(line, 0, Math.min(line.length(), 4_096)).append('\n');
+        included++;
+      }
     }
-    private static void add(ZipOutputStream zip, String name, String content) throws IOException {
-        zip.putNextEntry(new ZipEntry(name)); zip.write(content.getBytes(StandardCharsets.UTF_8)); zip.closeEntry();
+    return "ErrorLines=" + included + '\n' + result;
+  }
+
+  private static void verifySanitized(Path output) throws IOException {
+    Set<String> names = new HashSet<>();
+    long total = 0;
+    try (ZipFile zip = new ZipFile(output.toFile())) {
+      var entries = zip.entries();
+      while (entries.hasMoreElements()) {
+        var entry = entries.nextElement();
+        if (entry.isDirectory()) continue;
+        if (!names.add(entry.getName())) throw new IOException("SUPPORT_BUNDLE_DUPLICATE_ENTRY");
+        if (entry.getName().contains("..") || entry.getName().startsWith("/")) {
+          throw new IOException("SUPPORT_BUNDLE_UNSAFE_ENTRY");
+        }
+        byte[] bytes = zip.getInputStream(entry).readAllBytes();
+        total += bytes.length;
+        if (total > MAX_ARCHIVE_UNCOMPRESSED_BYTES) throw new IOException("SUPPORT_BUNDLE_TOO_LARGE");
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        if (PRIVACY.containsShareablePrivateData(text)) {
+          throw new IOException("SUPPORT_BUNDLE_PRIVACY_SCAN_FAILED:" + entry.getName());
+        }
+      }
     }
+    if (!names.containsAll(REQUIRED_ENTRIES)) throw new IOException("SUPPORT_BUNDLE_REQUIRED_ENTRY_MISSING");
+  }
+
+  private static String shareable(String text) {
+    return PRIVACY.filter(text, PrivacyFilter.Policy.SHAREABLE_BUNDLE);
+  }
+
+  private static void add(ZipOutputStream zip, String name, String content) throws IOException {
+    zip.putNextEntry(new ZipEntry(name));
+    zip.write(content.getBytes(StandardCharsets.UTF_8));
+    zip.closeEntry();
+  }
+
+  @FunctionalInterface
+  interface ArchiveHook {
+    void afterArchiveWritten(Path part) throws IOException;
+  }
 }

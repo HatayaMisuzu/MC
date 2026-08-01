@@ -14,7 +14,8 @@ record WebTerminalOptions(
   static WebTerminalOptions parse(String[] arguments, Function<String, String> environment) {
     Path webRoot = pathEnvironment(environment, "MCAC_WEB_ROOT");
     int port = integerEnvironment(environment, "MCAC_WEB_PORT", 0);
-    boolean openBrowser = booleanEnvironment(environment, "MCAC_OPEN_BROWSER");
+    boolean openBrowser =
+        arguments.length == 0 || booleanEnvironment(environment, "MCAC_OPEN_BROWSER");
     Path stateFile = pathEnvironment(environment, "MCAC_WEB_STATE_FILE");
     List<Path> roots = new ArrayList<>();
     for (int index = 0; index < arguments.length; index++) {

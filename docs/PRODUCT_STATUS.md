@@ -1,18 +1,22 @@
 # MCAC product status
 
-Updated: 2026-07-31
+Updated: 2026-08-02
 
 MCAC 0.3.1 is the released repair baseline for the frozen automated productization scope.
-Its readiness is `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC`; this does not constitute Live-provider
-or human-play evidence. Machine-readable product facts are in
+Its current readiness is `HUMAN_PLAYTEST_PENDING`. One bounded live-provider vertical slice is now
+verified; this is not a claim that every provider, Loader, Tool, terrain, or long-duration human-play
+scenario has passed. Machine-readable product facts are in
 [PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json), while exact module evidence is maintained only in
 [RC_COMPLETION_MATRIX.md](RC_COMPLETION_MATRIX.md).
 
 "Released" here means the frozen automated baseline was published as the annotated tag and GitHub
-Release `mcac-productization-baseline-0.3.1`. The readiness label `RC` means the automated closure
-is complete and the candidate is waiting for external evidence: `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`
-and `HUMAN_PLAYTEST_PENDING` remain open and are not replaced by Replay, fixture, GameTest or
-browser automation evidence.
+Release `mcac-productization-baseline-0.3.1`. The frozen release remains immutable; current `main`
+contains post-release reliability work and evidence updates.
+
+On 2026-08-01, a disposable PCL + Forge 1.20.1 instance completed a real Runtime + Hermes + official
+DeepSeek API vertical slice. Sanitized evidence verifies handshake, recovery, world-state reading,
+Follow lifecycle, Navigate position change, safe idle, and reconnect. It does not validate Fabric,
+other providers, every Tool, complex terrain, or sustained subjective human play.
 
 ## Current support
 
@@ -37,12 +41,12 @@ trusted test runner supplies evidence through the scoped Host boundary.
 - The 0.3.0 automated baseline is frozen and its tag remains immutable.
 - The 0.3.1 repair was ordinarily merged as `747c7e8046073d9534eae6ae775645341be4cdcd`
   and published as annotated tag and GitHub Release `mcac-productization-baseline-0.3.1`.
-- Live Hermes and subjective human play are explicitly deferred until after the automated baseline.
+- The exact Forge/PCL/Hermes/official-DeepSeek vertical slice above is live-provider verified.
+- Broader provider/Loader coverage and subjective long-duration human play remain follow-up work.
 
-The only permitted external follow-up labels are:
+The remaining external follow-up label is:
 
 ```text
-LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING
 HUMAN_PLAYTEST_PENDING
 ```
 

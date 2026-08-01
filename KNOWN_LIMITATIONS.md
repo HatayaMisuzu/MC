@@ -1,15 +1,16 @@
 # Known limitations — 0.3.1
 
 The authoritative completion evidence is in `docs/RC_COMPLETION_MATRIX.md`. These limitations are
-kept explicit so Replay, local automation, and external verification are not confused. The
-automated baseline is frozen and published as `mcac-productization-baseline-0.3.1`; the readiness
-label `READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC` only means the automated closure is complete and
-Live Brain / human-play evidence is still pending.
+kept explicit so Replay, local automation, bounded live-provider evidence, and human play are not
+confused. The automated baseline is frozen and published as
+`mcac-productization-baseline-0.3.1`; current readiness is `HUMAN_PLAYTEST_PENDING`.
 
 - Fabric 1.21.1 and Forge 1.20.1 are the full Runtime Bridge RC targets. NeoForge 1.21.1 is detected,
   diagnosed, and packaged as `LOCAL_ONLY`; it does not claim the full body/Tool bridge.
-- Live external-Brain verification is pending. Automated external-client, Replay, Fake, Mock,
-  GameTest, and Dedicated Server evidence is not described as a paid/live model run.
+- One live external-Brain vertical slice passed on 2026-08-01: PCL + Forge 1.20.1 + Runtime +
+  Hermes + the official DeepSeek API, covering handshake/recovery, world observation, Follow,
+  Navigate position change, safe idle, and reconnect. Fabric, other providers, broader Tools,
+  complex terrain, and long-duration live use remain unverified.
 - Human playtesting in a personal launcher account and world is pending. Automated fixtures never
   read or store launcher account credentials.
 - OpenAI-compatible Brain and Search providers require user-supplied environment variables. The

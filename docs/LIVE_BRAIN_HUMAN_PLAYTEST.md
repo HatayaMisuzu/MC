@@ -1,10 +1,18 @@
 # Live Brain and human playtest guide
 
-Updated: 2026-07-22
+Updated: 2026-08-02
 
 This is the shortest supported Fabric 1.21.1 or Forge 1.20.1 validation path for a real external
 Brain and a human player. Automated Replay, Fake, Fixture, 105-turn, and soak results are not substitutes for this run.
 Use a disposable test world and test account; do not point the test at a private world.
+
+## Verified evidence to date
+
+The 2026-08-01 sanitized evidence verifies one real vertical slice: PCL + Forge 1.20.1 + Runtime +
+Hermes + the official DeepSeek API. It covered handshake and recovery, world-state reading, Follow
+lifecycle, Navigate position change, safe idle, and reconnect. It did not execute all three broader
+scenarios below and is not a sustained subjective human playtest. Fabric, other providers, broad
+Tool/terrain coverage, and long-duration play therefore remain open.
 
 ## 1. Verify and unpack the RC
 
@@ -44,6 +52,10 @@ The example name below is not a credential:
 $env:MC_COMPANION_BRAIN_TOKEN = '<set the real value locally; never record it>'
 .\mcac.exe provider configure <instance-id> --base-url https://provider.example/v1 --model <model-id> --api-key-env MC_COMPANION_BRAIN_TOKEN --timeout-seconds 30
 ```
+
+For the official DeepSeek provider, use the configured `DEEPSEEK_BASE_URL` endpoint variable and
+`DEEPSEEK_API_KEY` token variable. Do not route that evidence through OpenRouter or record either
+value in the result.
 
 Also set bounded validation controls when the defaults are not appropriate:
 

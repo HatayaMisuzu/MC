@@ -457,6 +457,56 @@ class SkillToolGatewayTest {
     }
 
     @Test
+    void persistedSkillExecutionCanBeCancelledAfterFacadeRestart() throws Exception {
+        AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("restart-workspace"), "profile");
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("restart-skill.db"))) {
+            database.initialize();
+            SkillRepository repository = new SkillRepository(database);
+            TaskGraphExecutionRepository executions = new TaskGraphExecutionRepository(database);
+            ToolContext context = new ToolContext("controller", "brain-session", "c1");
+            ToolCall execute = new ToolCall("restart-skill-execution", "skill.execute",
+                    Json.object().put("skillId", "restart_wait"));
+            ToolResult accepted;
+
+            SkillToolGateway[] firstHolder = new SkillToolGateway[1];
+            firstHolder[0] = new SkillToolGateway(workspace, repository, "profile",
+                    ignored -> firstHolder[0].definitions(context));
+            try (TaskGraphRuntime firstRuntime = new TaskGraphRuntime(firstHolder[0], executions)) {
+                firstHolder[0].attachTaskGraphRuntime(firstRuntime);
+                String graph = """
+                        version: mcac-task-graph/1
+                        id: restart_wait
+                        permissions: []
+                        root:
+                          id: wait
+                          type: wait
+                          durationMillis: 10000
+                        """;
+                firstHolder[0].execute(context, new ToolCall("restart-save", "skill.save_draft",
+                        Json.object().put("skillId", "restart_wait").put("format", "yaml")
+                                .put("document", graph)));
+                ToolResult promotion = firstHolder[0].execute(context, new ToolCall(
+                        "restart-promote", "skill.request_promotion",
+                        Json.object().put("skillId", "restart_wait").put("format", "yaml")));
+                repository.approve(promotion.observation().path("requestId").asText(), "user:owner");
+                accepted = firstHolder[0].execute(context, execute);
+                waitForGraphState(executions, execute.callId(), "WAITING");
+            }
+
+            SkillToolGateway[] restartedHolder = new SkillToolGateway[1];
+            restartedHolder[0] = new SkillToolGateway(workspace, repository, "profile",
+                    ignored -> restartedHolder[0].definitions(context));
+            try (TaskGraphRuntime restartedRuntime = new TaskGraphRuntime(restartedHolder[0], executions)) {
+                restartedHolder[0].attachTaskGraphRuntime(restartedRuntime);
+                restartedHolder[0].cancel(context, execute.callId(), "OWNER_CANCELLED_AFTER_RESTART");
+                ToolResult terminal = restartedHolder[0].awaitTerminal(
+                        context, execute, accepted, Duration.ofSeconds(2), ignored -> { });
+                assertEquals("CANCELLED", terminal.observation().path("state").asText());
+            }
+        }
+    }
+
+    @Test
     void invalidGraphRemainsQuarantinedAndUnknownFieldsAreRejected() throws Exception {
         AgentWorkspace workspace = new AgentWorkspace(temporary.resolve("invalid"), "profile");
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("invalid.db"))) {

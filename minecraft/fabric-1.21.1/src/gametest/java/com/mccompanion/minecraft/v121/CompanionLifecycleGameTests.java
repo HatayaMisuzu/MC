@@ -35,6 +35,45 @@ import org.slf4j.LoggerFactory;
 public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "controlArbitration")
+    public void ownerTakeoverInvalidatesRuntimeLeaseAndControlOwnerIsObservable(GameTestHelper helper) {
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Arbiter").success(), "arbitration create failed");
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .findFirst().orElseThrow();
+        String lease = "fabric-control-arbitration";
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, lease, 1L, System.currentTimeMillis() + 30_000L).success(),
+                "arbitration lease acquisition failed");
+        helper.assertTrue(registry.runtimeStart(
+                        companionId, lease, 1L, "runtime-follow", "follow",
+                        null, null, null, null).success(),
+                "arbitration Runtime start failed");
+        helper.assertTrue(registry.stop(owner).success(), "owner takeover stop failed");
+        CompanionRegistry.RuntimeResult replay = registry.runtimeResume(companionId, lease, 1L);
+        helper.assertTrue(!replay.success() && replay.code().equals("STALE_EPOCH"),
+                "old Runtime lease survived owner takeover: " + replay.code());
+        helper.assertTrue(registry.runtimeAcquireLease(
+                        companionId, "fabric-control-arbitration-2", 2L,
+                        System.currentTimeMillis() + 30_000L).success(),
+                "higher-epoch handoff after owner stop failed");
+        helper.assertTrue(registry.runtimeReleaseLease(
+                        companionId, "fabric-control-arbitration-2", 2L).success(),
+                "higher-epoch handoff release failed");
+        String evidence = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.companionId().equals(companionId))
+                .map(CompanionRegistry.RuntimeSnapshot::evidenceSummary)
+                .findFirst().orElse("");
+        helper.assertTrue(evidence.contains("controlAuthority=IDLE")
+                        && evidence.contains("controlRevision="),
+                "control arbitration was not observable: " + evidence);
+        removeFixture(helper, registry, owner, "arbitration cleanup failed");
+        helper.succeed();
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "registry")
     public void liveRegistryAndRecipeQueriesDiscoverUnknownNamespaceContent(GameTestHelper helper) {
         var search = RegistryObservationService.registry(helper.getLevel().getServer(),

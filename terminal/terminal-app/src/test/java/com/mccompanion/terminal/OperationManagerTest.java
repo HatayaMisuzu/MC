@@ -97,6 +97,30 @@ class OperationManagerTest {
     }
   }
 
+  @Test
+  void plansResultsAndFailuresCrossTheSafeOutputBoundary() throws Exception {
+    try (OperationManager manager = new OperationManager()) {
+      var plan = manager.create("support", "collect", "instance-a", false,
+          JSON.createObjectNode().put("path", "C:\\Users\\Alice\\secret.log"),
+          ignored -> JSON.createObjectNode().put("output", "C:\\Users\\Alice\\support.zip"));
+      assertFalse(plan.details().toString().contains("Alice"));
+      var successful = manager.execute(plan.id(), plan.id());
+      waitForState(manager, successful.id(), "SUCCEEDED");
+      assertFalse(manager.requireOperation(successful.id()).result().toString().contains("Alice"));
+
+      var failing = manager.create("runtime", "start", "instance-a", false,
+          JSON.createObjectNode(), ignored -> {
+            throw new IllegalStateException("token=private C:\\Users\\Alice\\runtime.log");
+          });
+      var failed = manager.execute(failing.id(), failing.id());
+      waitForState(manager, failed.id(), "FAILED");
+      String error = manager.requireOperation(failed.id()).error();
+      assertTrue(error.startsWith("INTERNAL_ERROR:"));
+      assertFalse(error.contains("private"));
+      assertFalse(error.contains("Alice"));
+    }
+  }
+
   private static void waitForState(OperationManager manager, String id, String state) throws Exception {
     long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
     while (System.nanoTime() < deadline) {

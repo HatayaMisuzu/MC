@@ -8,8 +8,8 @@ import org.junit.jupiter.api.Test;
 
 class WebTerminalOptionsTest {
   @Test
-  void browserActivationIsOptIn() {
-    assertFalse(WebTerminalOptions.parse(new String[] {}, Map.<String, String>of()::get).openBrowser());
+  void directNoArgumentLaunchOpensBrowserButExplicitWebRemainsHeadless() {
+    assertTrue(WebTerminalOptions.parse(new String[] {}, Map.<String, String>of()::get).openBrowser());
     assertFalse(
         WebTerminalOptions.parse(new String[] {"web"}, Map.<String, String>of()::get)
             .openBrowser());

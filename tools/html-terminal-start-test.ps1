@@ -11,6 +11,7 @@ $start.WorkingDirectory = $env:TEMP
 $start.UseShellExecute = $false
 $start.Environment['MCAC_WEB_STATE_FILE'] = $state
 $start.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
+$start.Environment['MCAC_NO_BROWSER'] = 'true'
 $start.Environment['LOCALAPPDATA'] = $testLocalAppData
 $process = [Diagnostics.Process]::new()
 $process.StartInfo = $start

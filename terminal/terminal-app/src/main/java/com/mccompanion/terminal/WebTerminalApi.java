@@ -38,6 +38,7 @@ final class WebTerminalApi {
   static final ObjectMapper JSON = new ObjectMapper()
       .registerModule(new JavaTimeModule())
       .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+  private static final PrivacyFilter PRIVACY = new PrivacyFilter();
   private final ControlTerminalMain root;
   private final OperationManager operations;
   private final RuntimeSnapshotService snapshots = new RuntimeSnapshotService();
@@ -89,6 +90,8 @@ final class WebTerminalApi {
         send(exchange, 200, runtimeInspect(exchange, "/search/sessions"));
       else if ("GET".equals(method) && "/api/session/status".equals(path))
         send(exchange, 200, sessionStatus(requiredQuery(exchange, "instanceId")));
+      else if ("GET".equals(method) && "/api/smoke/latest".equals(path))
+        send(exchange, 200, smokeStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/companions".equals(path))
         send(exchange, 200, companionSnapshot(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/brain/status".equals(path))
@@ -130,17 +133,13 @@ final class WebTerminalApi {
         send(exchange, 200, operation(path.substring("/api/operations/".length())));
       else sendError(exchange, 404, "NOT_FOUND", "API 路径不存在");
     } catch (TerminalRequestBodies.Failure failure) {
-      sendError(exchange, failure.status(), failure.code(), failure.getMessage());
+      sendProblem(exchange, SafeProblemMapper.expected(failure.status(), failure.code(), failure));
     } catch (IllegalArgumentException failure) {
-      sendError(exchange, 400, "INVALID_REQUEST", failure.getMessage());
+      sendProblem(exchange, SafeProblemMapper.expected(400, "INVALID_REQUEST", failure));
     } catch (IOException failure) {
-      sendError(exchange, 409, "BLOCKED", failure.getMessage());
+      sendProblem(exchange, SafeProblemMapper.expected(409, "BLOCKED", failure));
     } catch (Exception failure) {
-      sendError(
-          exchange,
-          500,
-          "INTERNAL_ERROR",
-          failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage());
+      sendProblem(exchange, SafeProblemMapper.unexpected(failure));
     }
   }
 
@@ -151,7 +150,7 @@ final class WebTerminalApi {
             .put("version", "0.3.1")
             .put("backend", "CONNECTED")
             .put("loopbackOnly", true)
-            .put("controlHome", ControlTerminalMain.controlHome().toString())
+            .put("controlHome", "<CONTROL_HOME>")
             .put("launcherCount", root.context.launchers(root.roots()).size())
             .put("instanceCount", instances.size())
             .put("at", Instant.now().toString());
@@ -194,8 +193,8 @@ final class WebTerminalApi {
                       .put("id", launcher.launcherId())
                       .put("type", launcher.type().name())
                       .put("version", launcher.detectedVersion())
-                      .put("executable", launcher.executable().toString())
-                      .put("dataDirectory", launcher.dataDirectory().toString())
+                      .put("executable", "<PATH>")
+                      .put("dataDirectory", "<PATH>")
                       .put("confidence", launcher.confidence().name());
               value.set("evidence", JSON.valueToTree(launcher.evidence()));
             });
@@ -217,13 +216,13 @@ final class WebTerminalApi {
     return JSON.createObjectNode()
         .put("id", instance.instanceId())
         .put("launcherId", instance.launcherId())
-        .put("name", instance.displayName())
+        .put("name", PRIVACY.pseudonymLabel("Instance", instance.displayName()))
         .put("minecraftVersion", instance.minecraftVersion())
         .put("loader", instance.loader().name())
         .put("loaderVersion", instance.loaderVersion())
-        .put("gameDir", instance.gameDirectory().toString())
+        .put("gameDir", "<PATH>")
         .put("javaRequired", instance.requiredJavaMajor())
-        .put("javaConfigured", instance.configuredJava().map(Path::toString).orElse(""))
+        .put("javaConfigured", instance.configuredJava().isPresent() ? "<PATH>" : "")
         .put("confidence", instance.confidence().name())
         .put("isolation", instance.isolation().name())
         .put("compatible", com.mccompanion.terminal.install.InstallPlanner.isSupported(instance))
@@ -313,6 +312,29 @@ final class WebTerminalApi {
         .put("protocolVersion", text(health.protocolVersion()))
         .put("sessions", health.sessionCount())
         .put("detail", health.detail());
+  }
+
+  private ObjectNode smokeStatus(String instanceId) throws IOException {
+    RuntimeProfile profile = profileIfPresent(instanceId);
+    if (profile == null) {
+      return JSON.createObjectNode()
+          .put("instanceId", instanceId)
+          .put("state", "WAITING")
+          .put("success", false)
+          .put("manualRequired", false)
+          .put("summary", "No smoke result recorded");
+    }
+    SmokeTestService.StoredResult stored = new SmokeTestService().latest(profile);
+    ObjectNode result = JSON.createObjectNode()
+        .put("instanceId", instanceId)
+        .put("state", stored.state())
+        .put("success", stored.success())
+        .put("manualRequired", stored.manualRequired())
+        .put("summary", stored.summary());
+    if (!stored.completedAt().equals(Instant.EPOCH)) {
+      result.put("completedAt", stored.completedAt().toString());
+    }
+    return result;
   }
 
   private JsonNode providerStatus(String instanceId) throws Exception {
@@ -490,12 +512,18 @@ final class WebTerminalApi {
             : instance.logsDirectory().resolve("latest.log");
     BoundedLogReader.Result tail = BoundedLogReader.read(file, offset, 500);
     ArrayNode lines = JSON.createArrayNode();
-    tail.lines().forEach(lines::add);
+    tail.lines().stream()
+        .map(line -> PRIVACY.filterLogLine(line, PrivacyFilter.Policy.UI_DEFAULT))
+        .forEach(lines::add);
     return JSON.createObjectNode()
         .put("kind", kind)
         .put("available", Files.isRegularFile(file))
         .put("nextOffset", tail.nextOffset())
         .put("reset", tail.reset())
+        .put("resetReason", tail.resetReason())
+        .put("charset", tail.charset())
+        .put("replacementCount", tail.replacementCount())
+        .put("truncated", tail.truncated())
         .set("lines", lines);
   }
 
@@ -1208,6 +1236,16 @@ final class WebTerminalApi {
             .put("ok", false)
             .put("code", code)
             .put("message", message == null ? code : message));
+  }
+
+  private static void sendProblem(HttpExchange exchange, SafeProblemMapper.Problem problem)
+      throws IOException {
+    ObjectNode body = JSON.createObjectNode()
+        .put("ok", false)
+        .put("code", problem.code())
+        .put("message", problem.message());
+    if (problem.correlationId() != null) body.put("correlationId", problem.correlationId());
+    send(exchange, problem.status(), body);
   }
 
   private static Map<String, String> query(HttpExchange exchange) {

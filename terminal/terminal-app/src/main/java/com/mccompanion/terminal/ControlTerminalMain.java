@@ -19,7 +19,7 @@ import picocli.CommandLine.*;
     mixinStandardHelpOptions = true,
     version = "mcac 0.3.1",
     description =
-        "Minecraft AI Companion automation CLI (the default entry starts the HTML terminal without launching a browser)",
+        "Minecraft AI Companion automation CLI (the default entry opens the HTML terminal)",
     subcommands = {
       ControlTerminalMain.LauncherCmd.class,
       ControlTerminalMain.InstanceCmd.class,
@@ -60,14 +60,17 @@ public final class ControlTerminalMain implements Runnable {
       new LauncherRootDiscoveryService();
 
   public static void main(String[] args) {
+    BootstrapDiagnostics.install(args);
     if (args.length == 0 || "web".equals(args[0])) {
       try {
+        BootstrapDiagnostics.note("html-terminal", "starting");
         WebTerminalOptions options = WebTerminalOptions.parse(args);
         ControlTerminalMain root = new ControlTerminalMain();
         root.suppliedRoots.addAll(options.scanRoots());
         WebTerminalInstanceCoordinator.run(root, options);
         return;
       } catch (Exception failure) {
+        BootstrapDiagnostics.failure("html-terminal", failure);
         System.err.println("Unable to start HTML terminal: " + failure.getMessage());
         System.exit(INTERNAL);
       }
@@ -77,6 +80,7 @@ public final class ControlTerminalMain implements Runnable {
         new InteractiveTerminal(new ControlTerminalMain(), System.in, System.out).run();
         return;
       } catch (IOException failure) {
+        BootstrapDiagnostics.failure("tui", failure);
         System.err.println("Unable to start TUI: " + failure.getMessage());
         System.exit(INTERNAL);
       }
@@ -84,6 +88,7 @@ public final class ControlTerminalMain implements Runnable {
     CommandLine c = new CommandLine(new ControlTerminalMain());
     c.setExecutionExceptionHandler(
         (e, l, p) -> {
+          BootstrapDiagnostics.failure("cli", e);
           l.getErr()
               .println(
                   (e instanceof IOException || e instanceof IllegalArgumentException

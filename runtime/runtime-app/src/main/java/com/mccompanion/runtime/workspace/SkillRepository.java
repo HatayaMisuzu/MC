@@ -420,6 +420,16 @@ public final class SkillRepository {
         }
     }
 
+    public Optional<SkillTrialLease> trialForExecution(String executionId) throws SQLException {
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT * FROM skill_trial_lease WHERE execution_id=? ORDER BY updated_at DESC LIMIT 1")) {
+            statement.setString(1, required(executionId));
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? Optional.of(readTrial(result)) : Optional.empty();
+            }
+        }
+    }
+
     public List<SkillTrialLease> trials(String profileId, String companionId) throws SQLException {
         try (Connection connection = database.open()) {
             expireTrials(connection, clock.millis());

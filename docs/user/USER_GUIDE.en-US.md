@@ -1,7 +1,7 @@
 # MCAC user guide (English)
 
-Applies to: 0.3.1 (automated baseline frozen and published; Live Brain and human play still
-pending external verification)
+Applies to: 0.3.1 (automated baseline frozen and published; one live-Brain vertical slice verified,
+long-duration human play still pending)
 
 ## Get started
 
@@ -14,10 +14,10 @@ pending external verification)
 5. Start Runtime and verify that the UI shows a real PID, ports and authenticated health.
 6. When connecting the game, follow the preflight and launch plan on Game launch.
 
-Double-clicking or starting `mcac.exe` again (or running `mcac.cmd` / `mcac.ps1`) only starts or
-reuses the local Terminal; it does not implicitly open the default browser. Only `--open-browser`
-or `MCAC_OPEN_BROWSER=true` requests Windows browser activation. `MCAC_NO_BROWSER=true` is an
-unconditional safety override for development, tests, and unattended runs (it also applies to
+Double-clicking or starting `mcac.exe` without arguments starts or reuses the local Terminal and
+opens its control page. Explicit `web` mode remains headless unless `--open-browser` is supplied.
+`MCAC_NO_BROWSER=true` is an unconditional safety override for development, tests, and unattended
+runs (it also applies to
 `启动终端.cmd`). The service listens only on `127.0.0.1`. Do not share bootstrap URLs, session
 cookies, CSRF tokens, launcher credentials or API keys.
 
@@ -43,8 +43,11 @@ touches only MCAC-managed files. The two uninstall choices are intentionally sep
 
 Hermes, DeepSeek or another external LLM/Agent is the high-level decision-maker. Configure
 credentials only through environment variables or Windows Credential Manager. Never place them in
-the repository, chat, screenshots or a support bundle. Live Hermes and human play are not claimed
-by the current automated candidate.
+the repository, chat, screenshots or a support bundle. On 2026-08-01, PCL + Forge 1.20.1 + Runtime
++ Hermes + the official DeepSeek API passed a bounded live vertical slice covering handshake,
+recovery, world observation, Follow, Navigate position change, safe idle, and reconnect. Fabric,
+other providers, broad Tool/terrain coverage, and sustained subjective human play remain outside
+that result.
 
 ## Troubleshooting
 

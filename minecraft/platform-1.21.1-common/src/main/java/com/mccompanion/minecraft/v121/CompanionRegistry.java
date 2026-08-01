@@ -150,6 +150,8 @@ public final class CompanionRegistry {
         if (entry == null) {
             return missingOrSleeping(owner);
         }
+        String controlFailure = ownerControl(entry, "OWNER_FOLLOW");
+        if (controlFailure != null) return Result.failure(controlFailure, "Safety control is still active.");
         entry.mode = CompanionEntry.Mode.FOLLOW;
         entry.resumeMode = CompanionEntry.Mode.FOLLOW;
         entry.hasTarget = false;
@@ -166,6 +168,8 @@ public final class CompanionRegistry {
         if (!Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z)) {
             return Result.failure("INVALID_TARGET", "Navigation target coordinates must be finite.");
         }
+        String controlFailure = ownerControl(entry, "OWNER_GOTO");
+        if (controlFailure != null) return Result.failure(controlFailure, "Safety control is still active.");
         entry.mode = CompanionEntry.Mode.GOTO;
         entry.resumeMode = CompanionEntry.Mode.GOTO;
         entry.hasTarget = true;
@@ -193,6 +197,8 @@ public final class CompanionRegistry {
         if (entry == null) {
             return missingOrSleeping(owner);
         }
+        String controlFailure = ownerControl(entry, "OWNER_STOP");
+        if (controlFailure != null) return Result.failure(controlFailure, "Safety control is still active.");
         CompanionPlayer body = liveBodies.get(entry.companionId);
         behaviorDirector.stop(entry, body, false, "CANCELLED_BY_OWNER");
         entry.mode = CompanionEntry.Mode.IDLE;
@@ -207,6 +213,8 @@ public final class CompanionRegistry {
         if (entry == null) {
             return missingOrSleeping(owner);
         }
+        String controlFailure = ownerControl(entry, "OWNER_PAUSE");
+        if (controlFailure != null) return Result.failure(controlFailure, "Safety control is still active.");
         if (entry.mode == CompanionEntry.Mode.PAUSED) {
             return Result.failure("ALREADY_PAUSED", entry.profileName + " is already paused.");
         }
@@ -225,6 +233,8 @@ public final class CompanionRegistry {
         if (entry.mode != CompanionEntry.Mode.PAUSED) {
             return Result.failure("NOT_PAUSED", entry.profileName + " is not paused.");
         }
+        String controlFailure = ownerControl(entry, "OWNER_RESUME");
+        if (controlFailure != null) return Result.failure(controlFailure, "Safety control is still active.");
         entry.mode = entry.resumeMode == CompanionEntry.Mode.PAUSED
                 ? CompanionEntry.Mode.IDLE
                 : entry.resumeMode;
@@ -345,6 +355,8 @@ public final class CompanionRegistry {
                 || previous != null && proposedEpoch <= previous.epoch) {
             return RuntimeResult.failure("STALE_EPOCH");
         }
+        String controlFailure = behaviorDirector.claimRuntime(entry, "RUNTIME_LEASE_ACQUIRED");
+        if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         RuntimeControl control = new RuntimeControl(proposedLeaseId, proposedEpoch, expiresAt);
         if (entry.mode == CompanionEntry.Mode.PAUSED
                 && entry.runtimeBehaviorId != null
@@ -384,6 +396,8 @@ public final class CompanionRegistry {
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
         if (leaseFailure != null) return leaseFailure;
+        String controlFailure = behaviorDirector.claimRuntime(entry, "RUNTIME_START");
+        if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         CompanionPlayer body = liveBodies.get(entry.companionId);
         if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
         if (behaviorId == null || behaviorId.isBlank()) return RuntimeResult.failure("INVALID_BEHAVIOR_ID");
@@ -474,6 +488,8 @@ public final class CompanionRegistry {
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
         if (leaseFailure != null) return leaseFailure;
+        String controlFailure = behaviorDirector.claimRuntime(entry, "RUNTIME_RESUME");
+        if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         CompanionPlayer body = liveBodies.get(entry.companionId);
         if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
         if (entry.mode != CompanionEntry.Mode.PAUSED) return RuntimeResult.failure("NOT_PAUSED");
@@ -501,6 +517,7 @@ public final class CompanionRegistry {
         control.behaviorId = null;
         entry.runtimeBehaviorId = null;
         entry.runtimeBehaviorRevision = control.behaviorRevision;
+        behaviorDirector.releaseRuntime(entry, "RUNTIME_CANCEL");
         savedData.changed();
         return RuntimeResult.success(behaviorId, control.behaviorRevision, "CANCELLED");
     }
@@ -527,6 +544,7 @@ public final class CompanionRegistry {
                 entry.runtimeEpoch = Math.max(entry.runtimeEpoch, value.getValue().epoch);
                 entry.runtimeBehaviorId = value.getValue().behaviorId;
                 entry.runtimeBehaviorRevision = value.getValue().behaviorRevision;
+                behaviorDirector.releaseRuntime(entry, "RUNTIME_OFFLINE");
                 savedData.changed();
             }
         }
@@ -570,6 +588,46 @@ public final class CompanionRegistry {
             if (entry.companionId.toString().equals(companionId)) return entry;
         }
         return null;
+    }
+
+    private String ownerControl(CompanionEntry entry, String reason) {
+        String failure = behaviorDirector.claimOwner(entry, reason);
+        if (failure != null) return failure;
+        RuntimeControl displaced = runtimeControls.remove(entry.companionId);
+        if (displaced != null) {
+            entry.runtimeEpoch = Math.max(entry.runtimeEpoch, displaced.epoch);
+            entry.runtimeBehaviorId = null;
+            entry.runtimeBehaviorRevision = Math.max(entry.runtimeBehaviorRevision, displaced.behaviorRevision + 1);
+            savedData.changed();
+            logger.info("companion_runtime_control_preempted companion={} epoch={} reason={}",
+                    entry.companionId, displaced.epoch, reason);
+        }
+        return null;
+    }
+
+    private void expireRuntimeControls() {
+        long now = System.currentTimeMillis();
+        for (var value : new ArrayList<>(runtimeControls.entrySet())) {
+            RuntimeControl control = value.getValue();
+            if (control.expiresAt > now) continue;
+            CompanionEntry entry = entryByCompanion(value.getKey().toString());
+            CompanionPlayer body = entry == null ? null : liveBodies.get(entry.companionId);
+            if (entry != null) {
+                if (body != null && entry.mode != CompanionEntry.Mode.IDLE
+                        && entry.mode != CompanionEntry.Mode.PAUSED) {
+                    entry.resumeMode = entry.mode;
+                    entry.mode = CompanionEntry.Mode.PAUSED;
+                    behaviorDirector.stop(entry, body, false, "LEASE_EXPIRED");
+                }
+                entry.runtimeEpoch = Math.max(entry.runtimeEpoch, control.epoch);
+                entry.runtimeBehaviorId = control.behaviorId;
+                entry.runtimeBehaviorRevision = control.behaviorRevision;
+                behaviorDirector.releaseRuntime(entry, "LEASE_EXPIRED");
+                savedData.changed();
+                logger.warn("companion_runtime_lease_expired companion={} epoch={}", entry.companionId, control.epoch);
+            }
+            runtimeControls.remove(value.getKey(), control);
+        }
     }
 
     private static RuntimeResult checkLease(RuntimeControl control, String leaseId, long epoch) {
@@ -644,6 +702,7 @@ public final class CompanionRegistry {
     }
 
     public void tick() {
+        expireRuntimeControls();
         for (CompanionEntry entry : new ArrayList<>(savedData.entries())) {
             CompanionPlayer body = liveBodies.get(entry.companionId);
             if (!entry.spawned) {

@@ -1,6 +1,6 @@
 # MCAC 用户指南（简体中文）
 
-适用版本：0.3.1（自动化基线已冻结并发布；Live Brain 与真人试玩仍待外部验证）
+适用版本：0.3.1（自动化基线已冻结并发布；一个真实 Brain 纵向组合已验证，长期真人试玩仍待验证）
 
 ## 开始使用
 
@@ -11,10 +11,10 @@
 5. 在“运行服务”中启动 Runtime；页面应显示真实 PID、端口和认证健康状态。
 6. 需要连接游戏时，按“游戏启动”页的预检和启动计划操作。
 
-直接双击或再次启动 `mcac.exe`（或运行 `mcac.cmd` / `mcac.ps1`）只会启动或复用本机终端，
-不会隐式打开默认浏览器。只有 `--open-browser` 或 `MCAC_OPEN_BROWSER=true` 会请求 Windows
-打开浏览器；`MCAC_NO_BROWSER=true` 可为开发、测试和无人值守流程强制禁用该行为（对
-`启动终端.cmd` 同样生效）。服务只监听 `127.0.0.1`，不要把启动 URL、会话 Cookie、CSRF
+直接双击或无参数启动 `mcac.exe` 会启动或复用本机终端并打开控制页面；显式 `web`
+模式默认不打开浏览器，除非传入 `--open-browser`。`MCAC_NO_BROWSER=true` 可为开发、测试
+和无人值守流程强制禁用浏览器行为（对 `启动终端.cmd` 同样生效）。服务只监听
+`127.0.0.1`，不要把启动 URL、会话 Cookie、CSRF
 Token、启动器凭据或 API Key 分享给他人。
 
 ## 支持范围
@@ -39,7 +39,9 @@ Token、启动器凭据或 API Key 分享给他人。
 
 Hermes、DeepSeek 或其他外部 LLM/Agent 是高层决策者。凭据只能通过环境变量或 Windows
 Credential Manager 配置，不要写进仓库、聊天、截图或支持包。Live Hermes 与真人试玩
-尚未作为本产品化候选的自动化证据。
+不能由自动化证据替代。2026-08-01 已真实验证 PCL + Forge 1.20.1 + Runtime + Hermes +
+DeepSeek 官方 API 的有限纵向组合；Fabric、其他 Provider、广泛工具/地形和长期主观试玩
+仍不在该结论范围内。
 
 ## 故障处理
 

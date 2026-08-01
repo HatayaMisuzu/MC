@@ -36,5 +36,20 @@ class BoundedLogReaderTest {
         BoundedLogReader.Result delta = BoundedLogReader.read(log, partial.nextOffset(), 500);
         assertEquals(java.util.List.of("partial-done", "next"), delta.lines());
         assertFalse(delta.reset());
+        assertEquals("UTF-8", delta.charset());
+        assertEquals(0, delta.replacementCount());
+    }
+
+    @Test
+    void reportsGb18030AndRotationResetReason() throws Exception {
+        Path log = temporary.resolve("gb.log");
+        Files.write(log, "中文日志\n".getBytes(java.nio.charset.Charset.forName("GB18030")));
+        BoundedLogReader.Result first = BoundedLogReader.read(log, -1, 10);
+        assertEquals(java.util.List.of("中文日志"), first.lines());
+        assertEquals("GB18030", first.charset());
+        assertEquals("INITIAL", first.resetReason());
+        BoundedLogReader.Result rotated = BoundedLogReader.read(log, 9999, 10);
+        assertTrue(rotated.reset());
+        assertEquals("FILE_TRUNCATED_OR_ROTATED", rotated.resetReason());
     }
 }

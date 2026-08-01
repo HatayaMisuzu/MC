@@ -77,6 +77,9 @@ public final class SkillToolGateway implements ToolGateway {
         SkillTrialLease revoked = skills.revokeTrial(profileId,
                 requiredIdentifier(companionId, "companionId"), leaseId, "LOCAL_MANAGEMENT_USER");
         if (taskGraphRuntime != null && revoked.executionId() != null) {
+            ToolContext persistedOwner = new ToolContext(
+                    revoked.controllerId(), revoked.brainSessionId(), revoked.companionId());
+            taskGraphRuntime.cancel(persistedOwner, revoked.executionId(), "SKILL_TRIAL_REVOKED");
             activeExecutions.forEach((key, execution) -> {
                 if (revoked.leaseId().equals(execution.leaseId())
                         && activeExecutions.remove(key, execution)) {
@@ -170,8 +173,13 @@ public final class SkillToolGateway implements ToolGateway {
             ActiveSkillExecution execution = activeExecutions.get(executionKey(context, call.callId()));
             try {
                 ToolResult terminal = taskGraphRuntime.await(context, call, timeout, progress);
-                if (execution != null && execution.leaseId() != null) {
-                    skills.finishTrial(execution.leaseId(), call.callId(), trialEvidence(terminal));
+                String leaseId = execution == null ? skills.trialForExecution(call.callId())
+                        .map(SkillTrialLease::leaseId).orElse(null) : execution.leaseId();
+                if (leaseId != null) {
+                    SkillTrialLease trial = skills.trial(leaseId).orElse(null);
+                    if (trial != null && trial.status().equals("RUNNING")) {
+                        skills.finishTrial(leaseId, call.callId(), trialEvidence(terminal));
+                    }
                 }
                 return terminal;
             } catch (SQLException failure) {
@@ -187,11 +195,20 @@ public final class SkillToolGateway implements ToolGateway {
     @Override
     public void cancel(ToolContext context, String callId, String reason) {
         ActiveSkillExecution execution = activeExecutions.remove(executionKey(context, callId));
-        if (taskGraphRuntime != null && execution != null) {
-            if (execution.leaseId() != null) {
+        boolean persistedSkill = taskGraphRuntime != null && taskGraphRuntime.isSkillExecution(context, callId);
+        if (taskGraphRuntime != null && (execution != null || persistedSkill)) {
+            String leaseId = execution == null ? null : execution.leaseId();
+            if (leaseId == null) {
+                try {
+                    leaseId = skills.trialForExecution(callId).map(SkillTrialLease::leaseId).orElse(null);
+                } catch (SQLException ignored) {
+                    // Durable graph cancellation still wins; lease state remains visible for repair.
+                }
+            }
+            if (leaseId != null) {
                 try {
                     skills.revokeTrial(profileId, context.companionId(),
-                            execution.leaseId(), "BRAIN_CANCELLED");
+                            leaseId, "BRAIN_CANCELLED");
                 } catch (SQLException ignored) {
                     // Task cancellation still wins; the durable running lease remains visible for repair.
                 }
@@ -203,7 +220,8 @@ public final class SkillToolGateway implements ToolGateway {
     @Override
     public boolean pause(ToolContext context, String callId, String reason) {
         ActiveSkillExecution execution = activeExecutions.get(executionKey(context, callId));
-        if (taskGraphRuntime == null || execution == null) return false;
+        if (taskGraphRuntime == null || (execution == null
+                && !taskGraphRuntime.isSkillExecution(context, callId))) return false;
         ToolResult paused = taskGraphRuntime.pause(context,
                 new ToolCall("interrupt-pause-" + callId, "task_graph.pause",
                         Json.object().put("executionId", callId)), callId);
@@ -479,6 +497,7 @@ public final class SkillToolGateway implements ToolGateway {
 
     private void cancelRevoked(String companionId, String skillId, String retainedRequestId, String reason) {
         if (taskGraphRuntime == null) return;
+        taskGraphRuntime.cancelSkillExecutions(companionId, skillId, retainedRequestId, reason);
         activeExecutions.forEach((key, execution) -> {
             if (!execution.context().companionId().equals(companionId)
                     || !execution.skillId().equals(skillId)

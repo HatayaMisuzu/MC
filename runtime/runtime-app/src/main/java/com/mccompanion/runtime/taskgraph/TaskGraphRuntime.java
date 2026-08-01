@@ -235,6 +235,36 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
     }
 
+    /** Restart-safe ownership check used by the Skill facade before forwarding lifecycle control. */
+    public boolean isSkillExecution(ToolContext context, String executionId) {
+        try {
+            return isSkillProvenance(owned(context, executionId).provenance());
+        } catch (SQLException | IllegalArgumentException failure) {
+            return false;
+        }
+    }
+
+    /** Cancels persisted Skill executions even when the in-memory Skill facade index was lost. */
+    public int cancelSkillExecutions(String companionId, String skillId, String retainedRequestId,
+                                     String reason) {
+        int cancelled = 0;
+        try {
+            for (String executionId : repository.nonterminalSkillExecutionIds(companionId, skillId)) {
+                TaskGraphExecutionRecord record = repository.get(executionId).orElse(null);
+                if (record == null || (retainedRequestId != null
+                        && retainedRequestId.equals(record.provenance().path("promotionRequestId").asText(null)))) {
+                    continue;
+                }
+                ToolContext owner = new ToolContext(
+                        record.controllerId(), record.brainSessionId(), record.companionId());
+                if (cancel(owner, executionId, reason).success()) cancelled++;
+            }
+        } catch (SQLException failure) {
+            LOGGER.warn("Unable to reconcile persisted Skill executions for cancellation", failure);
+        }
+        return cancelled;
+    }
+
     public java.util.List<TaskGraphExecutionRepository.ExecutionSummary> listForManagement(
             String companionId, int limit) throws SQLException {
         return repository.listByCompanion(companionId, limit);
@@ -1107,6 +1137,12 @@ public final class TaskGraphRuntime implements AutoCloseable {
                 || !record.companionId().equals(context.companionId())) {
             throw new IllegalArgumentException("execution does not belong to this session");
         }
+    }
+
+    private static boolean isSkillProvenance(JsonNode provenance) {
+        String source = provenance.path("source").asText();
+        return source.equals("BUILT_IN_SKILL") || source.equals("APPROVED_GENERATED_SKILL")
+                || source.equals("GENERATED_SKILL_TRIAL");
     }
 
     private static boolean isGraphCallable(ToolDefinition definition) {

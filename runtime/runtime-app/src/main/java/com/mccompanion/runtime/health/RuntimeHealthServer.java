@@ -6,11 +6,6 @@ import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.command.CommandReply;
 import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.agent.AgentContext;
-import com.mccompanion.runtime.agent.AgentPlanRepository;
-import com.mccompanion.runtime.agent.AgentKernel;
-import com.mccompanion.runtime.agent.AgentDecision;
-import com.mccompanion.runtime.agent.DecisionKind;
-import com.mccompanion.runtime.agent.StepState;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.brain.BrainAuditRepository;
@@ -26,7 +21,6 @@ import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.security.Digests;
 import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
-import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.websocket.RuntimeWebSocketServer;
 import com.mccompanion.runtime.conversation.ConversationService;
 import com.mccompanion.runtime.conversation.IncomingMessageClassifier;
@@ -35,6 +29,7 @@ import com.mccompanion.runtime.task.TaskType;
 import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.tool.ToolContext;
 import com.mccompanion.runtime.tool.ToolDefinition;
+import com.mccompanion.runtime.tool.DurableExecutionReceipt;
 import com.mccompanion.runtime.tool.ToolGateway;
 import com.mccompanion.runtime.tool.ToolResult;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
@@ -80,9 +75,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private final SessionRegistry sessions;
     private final CommandService commands;
     private final CompanionRepository companions;
-    private final AgentPlanRepository plans;
-    private final AgentKernel kernel;
-    private final ProviderRouter providers;
     private final CapabilityVisibility capabilityVisibility;
     private final ConversationService conversations;
     private final MemoryRepository memories;
@@ -113,9 +105,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
             SessionRegistry sessions,
             CommandService commands,
             CompanionRepository companions,
-            AgentPlanRepository plans,
-            AgentKernel kernel,
-            ProviderRouter providers,
             CapabilityVisibility capabilityVisibility,
             ConversationService conversations,
             MemoryRepository memories,
@@ -123,7 +112,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             BrainAuditRepository brainAudit,
             ToolGateway toolGateway,
             RuntimeLog log) throws IOException {
-        this(config, pairingToken, sessions, commands, companions, plans, kernel, providers,
+        this(config, pairingToken, sessions, commands, companions,
                 capabilityVisibility, conversations, memories, externalBrain, brainAudit, toolGateway,
                 null, null, null, null, null, null, null, log);
     }
@@ -134,9 +123,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
             SessionRegistry sessions,
             CommandService commands,
             CompanionRepository companions,
-            AgentPlanRepository plans,
-            AgentKernel kernel,
-            ProviderRouter providers,
             CapabilityVisibility capabilityVisibility,
             ConversationService conversations,
             MemoryRepository memories,
@@ -156,9 +142,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
         this.sessions = sessions;
         this.commands = commands;
         this.companions = companions;
-        this.plans = plans;
-        this.kernel = kernel;
-        this.providers = providers;
         this.capabilityVisibility = capabilityVisibility;
         this.conversations = conversations;
         this.memories = memories;
@@ -180,7 +163,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
         server.createContext("/agent", this::legacyAgentClosed);
         server.createContext("/brain", this::brainDispatch);
         server.createContext("/tasks", this::tasks);
-        server.createContext("/plans", this::plans);
+        server.createContext("/plans", this::legacyAgentClosed);
         server.createContext("/conversations", this::conversations);
         server.createContext("/memories", this::memoryManagement);
         server.createContext("/task-graphs", this::taskGraphManagement);
@@ -478,23 +461,12 @@ public final class RuntimeHealthServer implements AutoCloseable {
     private ToolResult settleMcpToolCall(ToolContext context, ToolCall call, ToolResult accepted,
                                          java.util.function.Consumer<ToolResult> progress) {
         if (accepted.terminal()) return accepted;
-        if (isDurableAsynchronousStart(accepted)) {
-            ObjectNode receipt = (ObjectNode) accepted.observation().deepCopy();
-            receipt.put("executionMode", "ASYNCHRONOUS")
-                    .put("completionVerified", false)
-                    .put("statusTool", call.name().startsWith("task_graph.")
-                            ? "task_graph.inspect" : "task.inspect");
-            return new ToolResult(call.callId(), call.name(), accepted.success(), accepted.code(), receipt, true);
-        }
+        var durableReceipt = DurableExecutionReceipt.fromAccepted(accepted);
+        if (durableReceipt.isPresent()) return durableReceipt.orElseThrow();
         Duration timeout = toolGateway.definitions(context).stream()
                 .filter(definition -> definition.name().equals(call.name()))
                 .findFirst().map(ToolDefinition::timeout).orElse(Duration.ofSeconds(30));
         return toolGateway.awaitTerminal(context, call, accepted, timeout, progress);
-    }
-
-    private static boolean isDurableAsynchronousStart(ToolResult result) {
-        if (!result.success() || result.terminal() || !result.observation().isObject()) return false;
-        return !result.observation().path("taskId").asText("").isBlank();
     }
 
     private void mcpReplayEvents(HttpExchange exchange) throws IOException {
@@ -995,7 +967,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
             }
             if ("GET".equals(exchange.getRequestMethod())) {
                 if (externalBrain == null) {
-                    sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
+                    sendJson(exchange, 503, externalBrainUnavailable());
                     return;
                 }
                 ObjectNode body = Json.object().put("activeControllerId",
@@ -1018,7 +990,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 var companion = companions.get(companionId)
                         .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
                 var activeTask = commands.activeTaskFor(companionId);
-                var activePlan = plans.activeForCompanion(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
                 var recent = conversations.recentTranscript(companionId, 12);
@@ -1055,7 +1026,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     }
                 }
                 if (externalBrain == null) {
-                    sendJson(exchange, 503, Json.object().put("code", "EXTERNAL_BRAIN_UNAVAILABLE"));
+                    sendJson(exchange, 503, externalBrainUnavailable());
                     return;
                 }
                 if (incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION) {
@@ -1086,7 +1057,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                     externalBrain.cancel(controllerId, companionId, "OWNER_MODIFIED_GOAL");
                 }
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
-                    conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                    conversations.hear(companionId, null,
                             "MESSAGE", text, Json.object().put("channel", "EXTERNAL_BRAIN"));
                 }
                 var result = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
@@ -1094,7 +1065,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         ? externalBrain.answer(controllerId, waiting.orElseThrow(), incoming, context)
                         : externalBrain.continueTurn(controllerId, companionId, text, context);
                 if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE && !result.response().isBlank()) {
-                    conversations.say(companionId, activePlan.map(value -> value.planId()).orElse(null),
+                    conversations.say(companionId, null,
                             "CHAT", result.response(), Json.object().put("channel", "EXTERNAL_BRAIN")
                                     .put("brainSessionId", result.sessionId()));
                 }
@@ -1143,136 +1114,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
             sendJson(exchange, 410, Json.object().put("accepted", false)
                     .put("code", "INTERNAL_AGENT_REMOVED")
                     .put("message", "Use the configured external Brain through /brain or bounded MCP tools."));
-        }
-    }
-
-    /** Historical migration implementation; no HTTP context or production caller is bound to it. */
-    @Deprecated(forRemoval = true)
-    private void agent(HttpExchange exchange) throws IOException {
-        try (exchange) {
-            if (!authenticated(exchange)) return;
-            if (providers == null || kernel == null) {
-                sendJson(exchange, 410, Json.object().put("accepted", false)
-                        .put("code", "LEGACY_INTERNAL_AGENT_DISABLED")
-                        .put("message", "Use the bounded /brain endpoint with an external Brain."));
-                return;
-            }
-            if (!"POST".equals(exchange.getRequestMethod())) {
-                exchange.sendResponseHeaders(405, -1);
-                return;
-            }
-            try {
-                var request = readJsonOrRespond(exchange, ORDINARY_JSON_LIMIT, false);
-                if (request == null) return;
-                String commandId = required(request, "commandId");
-                String companionId = required(request, "companionId");
-                String text = requiredText(request, "text", 4096);
-                var companion = companions.get(companionId)
-                        .orElseThrow(() -> new IllegalArgumentException("Companion is not registered"));
-                var active = commands.activeTaskFor(companionId);
-                var activePlan = plans.activeForCompanion(companionId);
-                var waiting = conversations.repository().activeForCompanion(companionId);
-                var incoming = incomingMessages.classify(text, waiting.orElse(null));
-                if (waiting.isPresent() && taskGraphRuntime != null
-                        && taskGraphRuntime.handles(waiting.orElseThrow())
-                        && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
-                    ToolResult resumed = taskGraphRuntime.answer(waiting.orElseThrow(), incoming);
-                    ObjectNode body = Json.object().put("accepted", resumed.success())
-                            .put("source", "task-graph").put("code", resumed.code())
-                            .put("questionId", waiting.orElseThrow().questionId())
-                            .put("executionId", waiting.orElseThrow().taskGraphExecutionId());
-                    body.set("result", resumed.observation());
-                    sendJson(exchange, resumed.success() ? 200 : 409, body);
-                    return;
-                }
-                if (waiting.isPresent() && incoming.kind() == IncomingMessageKind.WAITING_ANSWER) {
-                    var resumed = kernel.resumeWaitingAnswer(waiting.orElseThrow(), incoming);
-                    ObjectNode body = Json.object().put("accepted", true).put("source", "waiting-answer")
-                            .put("message", "已收到你的回答，并继续原来的任务。")
-                            .put("questionId", waiting.orElseThrow().questionId())
-                            .put("planId", resumed.planId()).put("planState", resumed.state().name())
-                            .put("planRevision", resumed.revision()).put("currentStep", resumed.currentStep())
-                            .put("resumedOriginalPlan", true);
-                    sendJson(exchange, 200, body);
-                    return;
-                }
-                var recentConversation = conversations.recentTranscript(companionId, 12);
-                conversations.hear(companionId, activePlan.map(value -> value.planId()).orElse(null),
-                        "MESSAGE", text, Json.object().put("channel", "HTTP"));
-                var visible = capabilityVisibility.resolve(
-                        sessions.forCompanion(companionId).map(value -> value.handshake()).orElse(null),
-                        companion.status());
-                AgentContext context = new AgentContext(companionId, companion.status(), recentConversation,
-                        active.<com.fasterxml.jackson.databind.JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
-                        strings(request.path("knownLandmarks"), 64), visible.availableNames(),
-                        memories.preferenceContext(companionId, 24), memories.latestCapsuleContext(companionId), 5);
-                var result = providers.plan(text, context);
-                ObjectNode body = Json.object().put("accepted", result.accepted())
-                        .put("source", result.source());
-                body.set("decision", Json.MAPPER.valueToTree(result.decision()));
-                body.set("capabilityStates", visible.toJson());
-                visible.availableNames().forEach(body.putArray("availableCapabilities")::add);
-                if (result.errorCode() != null) body.put("code", result.errorCode()).put("message", result.userMessage());
-                if (result.accepted() && activePlan.isPresent()
-                        && (result.decision().kind() == DecisionKind.CREATE_PLAN
-                        || result.decision().kind() == DecisionKind.REPLAN)
-                        && !result.decision().steps().isEmpty()) {
-                    AgentDecision value = result.decision();
-                    AgentDecision revision = new AgentDecision(DecisionKind.REPLAN, value.understoodGoal(),
-                            value.constraints(), value.assumptions(), value.steps(), value.reply(),
-                            "OWNER_MODIFIED_GOAL: " + value.reason());
-                    var previous = activePlan.orElseThrow();
-                    var queued = plans.queueGoalModification(previous.planId(), previous.revision(), text, revision,
-                            Json.object().put("ownerModifiedGoal", true)
-                                    .put("previousRequest", previous.requestText()));
-                    if (waiting.isPresent()) {
-                        conversations.repository().cancel(waiting.orElseThrow().questionId(), "OWNER_MODIFIED_GOAL");
-                    }
-                    if (active.isPresent()) {
-                        var cancellation = commands.execute("goal-change-" + commandId, companionId,
-                                new Intent(TaskType.STOP, Json.object().put("action", "cancel"), text));
-                        body.set("execution", cancellation.toJson());
-                    } else {
-                        int queuedStep = queued.currentStep();
-                        var old = queued.steps().stream().filter(step -> step.index() != queuedStep)
-                                .filter(step -> step.state() == StepState.RUNNING || step.state() == StepState.BLOCKED
-                                        || step.state() == StepState.PAUSED || step.state() == StepState.CANCELLED)
-                                .max(java.util.Comparator.comparingInt(candidate -> candidate.index())).orElseThrow();
-                        queued = plans.activateGoalModification(queued.planId(), queued.revision(), old.index(),
-                                StepState.CANCELLED, Json.object().put("noActiveBehavior", true), "GOAL_MODIFIED");
-                        if (request.path("execute").asBoolean(true)) queued = kernel.start(queued.planId());
-                    }
-                    body.put("executionState", queued.state().name()).put("planId", queued.planId())
-                            .put("planRevision", queued.revision()).put("currentStep", queued.currentStep())
-                            .put("planState", queued.state().name()).put("goalModified", true);
-                } else if (result.accepted() && result.executableIntent().isPresent() && request.path("execute").asBoolean(true)) {
-                    body.set("execution", commands.execute(commandId, companionId, result.executableIntent().get()).toJson());
-                } else if (result.accepted() && (result.decision().kind() == com.mccompanion.runtime.agent.DecisionKind.CREATE_PLAN
-                        || result.decision().kind() == com.mccompanion.runtime.agent.DecisionKind.REPLAN)) {
-                    var plan = plans.create(companionId, text, result.decision());
-                    if (request.path("execute").asBoolean(true)) plan = kernel.start(plan.planId());
-                    body.put("executionState", plan.state().name()).put("planId", plan.planId())
-                            .put("planRevision", plan.revision()).put("currentStep", plan.currentStep())
-                            .put("planState", plan.state().name());
-                } else if (result.accepted()) {
-                    body.put("executionState", "NO_ACTION");
-                }
-                String assistantReply = result.accepted() ? result.decision().reply() : result.userMessage();
-                if (assistantReply != null && !assistantReply.isBlank()) {
-                    String replyPlanId = body.path("planId").asText(null);
-                    conversations.say(companionId, replyPlanId,
-                            ConversationService.kindForDecision(result.decision().kind()), assistantReply,
-                            Json.object().put("channel", "HTTP").put("source", result.source())
-                                    .put("decision", result.decision().kind().name()));
-                }
-                sendJson(exchange, result.accepted() ? 200 : 422, body);
-            } catch (IllegalArgumentException invalid) {
-                sendJson(exchange, 400, Json.object().put("accepted", false)
-                        .put("code", "INVALID_REQUEST").put("message", invalid.getMessage()));
-            } catch (java.sql.SQLException failure) {
-                log.error("Unable to build agent context", failure);
-                sendJson(exchange, 500, Json.object().put("accepted", false).put("code", "PERSISTENCE_ERROR"));
-            }
         }
     }
 
@@ -1329,28 +1170,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 sendJson(exchange, 200, body);
             } catch (Exception failure) {
                 log.error("Unable to inspect Runtime task", failure);
-                sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
-            }
-        }
-    }
-
-    private void plans(HttpExchange exchange) throws IOException {
-        try (exchange) {
-            if (!authenticated(exchange)) return;
-            if (!"GET".equals(exchange.getRequestMethod())) { exchange.sendResponseHeaders(405, -1); return; }
-            String prefix = "/plans/";
-            String path = exchange.getRequestURI().getPath();
-            if (!path.startsWith(prefix) || path.length() <= prefix.length()) {
-                sendJson(exchange, 400, Json.object().put("code", "PLAN_ID_REQUIRED")); return;
-            }
-            try {
-                var plan = plans.get(path.substring(prefix.length()));
-                if (plan.isEmpty()) { sendJson(exchange, 404, Json.object().put("code", "PLAN_NOT_FOUND")); return; }
-                ObjectNode body = Json.object();
-                body.set("plan", Json.MAPPER.valueToTree(plan.orElseThrow()));
-                sendJson(exchange, 200, body);
-            } catch (java.sql.SQLException failure) {
-                log.error("Unable to inspect agent plan", failure);
                 sendJson(exchange, 500, Json.object().put("code", "PERSISTENCE_ERROR"));
             }
         }
@@ -1524,6 +1343,12 @@ public final class RuntimeHealthServer implements AutoCloseable {
         exchange.getResponseHeaders().set("Cache-Control", "no-store");
         exchange.sendResponseHeaders(status, bytes.length);
         exchange.getResponseBody().write(bytes);
+    }
+
+    private static ObjectNode externalBrainUnavailable() {
+        return Json.object().put("accepted", false).put("code", "EXTERNAL_BRAIN_UNAVAILABLE")
+                .put("message", "No external Brain is configured; internal planning fallback is disabled.")
+                .put("configurationAction", "Configure Hermes or an external Brain in the local control terminal.");
     }
 
     private static String required(com.fasterxml.jackson.databind.JsonNode node, String field) {

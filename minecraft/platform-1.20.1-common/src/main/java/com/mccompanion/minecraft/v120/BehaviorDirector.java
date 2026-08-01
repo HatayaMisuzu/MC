@@ -1,5 +1,6 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodyControlArbiter;
 import com.mccompanion.core.navigation.GridPathPlanner;
 import java.util.HashMap;
 import java.util.List;
@@ -56,6 +57,7 @@ final class BehaviorDirector {
     private final PlayerActionGateway actionGateway = new PlayerActionGateway();
     private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
     private final ReflexController reflexController = new ReflexController();
+    private final BodyControlArbiter controlArbiter = new BodyControlArbiter();
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, PrimitiveProgress> primitives = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
@@ -95,6 +97,31 @@ final class BehaviorDirector {
                 || code.equals("LEASE_EXPIRED"))) {
             primitives.remove(entry.companionId);
         }
+        if ((success || !isSuspension(code))
+                && controlArbiter.snapshot(entry.companionId).authority()
+                != BodyControlArbiter.Authority.SAFETY_REFLEX) {
+            releaseCurrent(entry, code);
+        }
+    }
+
+    String claimOwner(CompanionEntry entry, String reason) {
+        return claim(entry, BodyControlArbiter.Authority.OWNER_IMMEDIATE, reason);
+    }
+
+    String claimRuntime(CompanionEntry entry, String reason) {
+        return claim(entry, BodyControlArbiter.Authority.RUNTIME_TASK, reason);
+    }
+
+    void releaseRuntime(CompanionEntry entry, String reason) {
+        release(entry, BodyControlArbiter.Authority.RUNTIME_TASK, reason);
+    }
+
+    private void claimSafety(CompanionEntry entry, String reason) {
+        claim(entry, BodyControlArbiter.Authority.SAFETY_REFLEX, reason);
+    }
+
+    private void releaseSafety(CompanionEntry entry) {
+        release(entry, BodyControlArbiter.Authority.SAFETY_REFLEX, "HAZARD_CLEARED");
     }
 
     void forget(UUID companionId) {
@@ -103,10 +130,15 @@ final class BehaviorDirector {
         observations.remove(companionId);
         MenuSessionTracker.invalidate(companionId);
         actionGateway.discard(companionId);
+        controlArbiter.clear(companionId);
     }
 
     String evidenceSummary(UUID companionId) {
-        return actionGateway.evidenceSummary(companionId);
+        var control = controlArbiter.snapshot(companionId);
+        return actionGateway.evidenceSummary(companionId)
+                + " controlAuthority=" + control.authority()
+                + " controlRevision=" + control.revision()
+                + " controlReason=" + control.reason();
     }
 
     CompanionRegistry.BehaviorObservation behaviorObservation(UUID companionId) {
@@ -114,12 +146,14 @@ final class BehaviorDirector {
     }
 
     void tick(CompanionEntry entry, CompanionPlayer body) {
-        if (entry.mode == CompanionEntry.Mode.IDLE || entry.mode == CompanionEntry.Mode.PAUSED) {
-            return;
-        }
         var reflex = reflexController.blockingReason(body);
         if (reflex.isPresent()) {
-            pauseSafely(entry, body, reflex.get());
+            claimSafety(entry, reflex.get());
+            if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, reflex.get());
+            return;
+        }
+        releaseSafety(entry);
+        if (entry.mode == CompanionEntry.Mode.IDLE || entry.mode == CompanionEntry.Mode.PAUSED) {
             return;
         }
         if (entry.mode == CompanionEntry.Mode.SKILL) {
@@ -1446,6 +1480,37 @@ final class BehaviorDirector {
         stop(entry, body, false, code);
         savedData.changed();
         logger.warn("companion_paused code={} owner={} companion={}", code, entry.ownerId, entry.companionId);
+    }
+
+    private String claim(CompanionEntry entry, BodyControlArbiter.Authority authority, String reason) {
+        var decision = controlArbiter.claim(entry.companionId, authority, reason);
+        if (decision.accepted() && !decision.code().equals("UNCHANGED")) {
+            logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
+                    entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
+        }
+        return decision.accepted() ? null : decision.code();
+    }
+
+    private void release(CompanionEntry entry, BodyControlArbiter.Authority authority, String reason) {
+        var snapshot = controlArbiter.snapshot(entry.companionId);
+        if (snapshot.authority() != authority) return;
+        var decision = controlArbiter.release(entry.companionId, authority, reason);
+        logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
+                entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
+    }
+
+    private void releaseCurrent(CompanionEntry entry, String reason) {
+        var decision = controlArbiter.releaseCurrent(entry.companionId, reason);
+        if (!decision.code().equals("UNCHANGED")) {
+            logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
+                    entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
+        }
+    }
+
+    private static boolean isSuspension(String code) {
+        return code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
+                || code.equals("RUNTIME_OFFLINE") || code.equals("LEASE_EXPIRED")
+                || code.equals("PAUSED_BY_OWNER");
     }
 
     private static final class NavigationProgress {

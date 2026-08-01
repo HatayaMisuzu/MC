@@ -347,6 +347,78 @@ class ExternalBrainCoordinatorTest {
     }
 
     @Test
+    void multipleDurableStartsRemainIndependentlyCancellable() {
+        List<String> cancelled = new java.util.concurrent.CopyOnWriteArrayList<>();
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(
+                        new ToolDefinition("movement.navigate", "1.0", "navigate", Json.object(),
+                                "LOW", "MOVE", Duration.ofSeconds(5), false),
+                        new ToolDefinition("task_graph.execute", "1.0", "graph", Json.object(),
+                                "LOW", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(5), false));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                var observation = Json.object().put("state", "ACCEPTED");
+                if (call.name().equals("movement.navigate")) observation.put("taskId", "task-1");
+                else observation.put("executionId", "graph-1");
+                return new ToolResult(call.callId(), call.name(), true, "ACCEPTED", observation, false);
+            }
+            @Override public void cancel(ToolContext context, String callId, String reason) {
+                cancelled.add(callId);
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> turns.getAndIncrement() == 0
+                ? BrainTurnResult.tools(List.of(
+                new ToolCall("navigate-1", "movement.navigate", Json.object()),
+                new ToolCall("graph-1", "task_graph.execute", Json.object())))
+                : BrainTurnResult.finalResponse("accepted"));
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            coordinator.continueTurn("hermes-1", "c1", "start both", context());
+            coordinator.cancel("hermes-1", "c1", "OWNER_CANCELLED");
+            assertEquals(java.util.Set.of("navigate-1", "graph-1"), new java.util.HashSet<>(cancelled));
+        }
+    }
+
+    @Test
+    void durableTrackingIsBoundedAcrossBrainTurnsAndCancelsOverflow() {
+        List<String> cancelled = new java.util.concurrent.CopyOnWriteArrayList<>();
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("movement.navigate", "1.0", "navigate", Json.object(),
+                        "LOW", "MOVE", Duration.ofSeconds(5), false));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "ACCEPTED",
+                        Json.object().put("state", "ACCEPTED").put("taskId", "task-" + call.callId()), false);
+            }
+            @Override public void cancel(ToolContext context, String callId, String reason) {
+                if ("DURABLE_EXECUTION_TRACKING_CAPACITY_EXCEEDED".equals(reason)) cancelled.add(callId);
+            }
+        };
+        AtomicInteger batch = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            if (!request.toolResults().isEmpty()) return BrainTurnResult.finalResponse("accepted");
+            int count = batch.getAndIncrement() < 2 ? 32 : 1;
+            List<ToolCall> calls = java.util.stream.IntStream.range(0, count)
+                    .mapToObj(index -> new ToolCall("call-" + batch.get() + "-" + index,
+                            "movement.navigate", Json.object()))
+                    .toList();
+            return BrainTurnResult.tools(calls);
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 32)) {
+            assertTrue(coordinator.continueTurn("hermes-1", "c1", "batch one", context())
+                    .toolResults().stream().allMatch(ToolResult::success));
+            assertTrue(coordinator.continueTurn("hermes-1", "c1", "batch two", context())
+                    .toolResults().stream().allMatch(ToolResult::success));
+            BrainCoordinatorResult overflow = coordinator.continueTurn(
+                    "hermes-1", "c1", "overflow", context());
+            assertEquals("DURABLE_EXECUTION_TRACKING_FULL", overflow.toolResults().get(0).code());
+            assertEquals(List.of("call-3-0"), cancelled);
+        }
+    }
+
+    @Test
     void verifiedInterruptionPausesActiveToolAndDeliversPauseBeforeNewMessage() throws Exception {
         CountDownLatch awaiting = new CountDownLatch(1);
         CountDownLatch paused = new CountDownLatch(1);
@@ -559,6 +631,33 @@ class ExternalBrainCoordinatorTest {
                     () -> coordinator.continueTurn("controller", "c1", "collect iron", context()));
             assertEquals("BRAIN_FINAL_OBSERVATION_CONDITION_FAILED:/inventory/minecraft:iron_ingot",
                     failure.getMessage());
+        }
+    }
+
+    @Test
+    void successfulTaskGraphInspectionCanVerifyCompletion() {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> turns.getAndIncrement() == 0
+                ? BrainTurnResult.tools(List.of(new ToolCall("inspect-graph", "task_graph.inspect",
+                Json.object().put("executionId", "graph-1"))))
+                : BrainTurnResult.finalResponse("Graph completed").withCompletionClaim(
+                new BrainCompletionClaim("Graph completed", BrainCompletionClaim.Certainty.VERIFIED,
+                        "inspect-graph", "", List.of(
+                        new BrainCompletionClaim.EvidenceCondition("/state",
+                                BrainCompletionClaim.Operator.EQUALS, Json.parse("\"SUCCEEDED\""))), "")));
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("task_graph.inspect", "1.0", "inspect", Json.object(),
+                        "LOW", "READ_TASK_GRAPH", Duration.ofSeconds(5), true));
+            }
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "TASK_GRAPH_SUCCEEDED",
+                        Json.object().put("executionId", "graph-1").put("state", "SUCCEEDED"), true);
+            }
+        };
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            BrainCoordinatorResult result = coordinator.continueTurn("controller", "c1", "finish", context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
         }
     }
 

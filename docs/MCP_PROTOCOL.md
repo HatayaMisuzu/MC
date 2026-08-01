@@ -89,6 +89,13 @@ text envelope and the same machine-readable `structuredContent`. `isError` is tr
 verified failure, block, interruption, cancellation, timeout, unavailable capability, invalid
 argument, or missing companion; tool acceptance is never reported as tool completion.
 
+A successful nonterminal Tool result containing exactly one durable `taskId` or `executionId` is
+normalized before it leaves any public Runtime path. The terminal protocol receipt has
+`accepted=true`, `executionMode=ASYNCHRONOUS`, `completionVerified=false`, an opaque
+`executionHandle`, and the exact status/cancel/pause/resume Tool names. This response terminates
+the transport request, not the durable execution. The caller must inspect the handle and obtain a
+verified terminal Observation before claiming completion.
+
 ## Cancellation, timeout, and disconnect
 
 Cancel using the original JSON-RPC request ID and the same identity headers:
@@ -100,9 +107,16 @@ Cancel using the original JSON-RPC request ID and the same identity headers:
 ```
 
 Runtime deterministically maps the request ID plus bound identities to the internal call ID, so
-the notification cannot cancel another Brain session's call. A disconnected SSE stream triggers
-the same cancellation path. Runtime waits at most 30 seconds for a call and then dispatches task
-cancellation; its terminal Observation states whether cancellation was confirmed.
+the notification cannot cancel another Brain session's call. Explicit cancellation dispatches the
+matching bounded cancellation path and its terminal Observation states whether cancellation was
+confirmed.
+
+Disconnecting a JSON or SSE transport does not implicitly destroy an execution that already
+returned a durable asynchronous receipt. Reconnect and reconcile it through the receipt's status
+Tool, the replay ledger, and persisted SSE events. Synchronous or otherwise non-durable calls retain
+their Tool-specific bounded wait; when that wait expires, Runtime requests cancellation rather than
+inventing a result. A start result with both `taskId` and `executionId` is rejected as ambiguous and
+requires reconciliation.
 
 Before dispatch, Runtime durably binds that internal call ID to the exact Tool name and canonical
 argument hash. An identical retry after completion returns the persisted terminal result without

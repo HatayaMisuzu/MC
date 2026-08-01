@@ -43,6 +43,7 @@ final class TerminalDiagnosticService {
                 "Recreate the invalid Runtime profile"));
 
         WindowsRuntimeSupervisor.RuntimeHealth health = new WindowsRuntimeSupervisor().status(profile);
+        applyConnectedModEvidence(results, new ConnectionService().status(profile));
         results.add(result(health.pidAlive(), "runtime.pid", health.pidAlive() ? "Runtime PID is alive" : "Runtime is stopped",
                 Map.of("pid", String.valueOf(health.pid())), "Run mcac runtime start " + instance.instanceId()));
         results.add(result(health.healthy(), "runtime.health", health.detail(),
@@ -144,6 +145,18 @@ final class TerminalDiagnosticService {
         results.add(result(installed, "install.hash", installed ? "Managed artifact hash verified" : "No valid managed artifact hash",
                 Map.of(), "Run mcac repair " + instance.instanceId() + " --yes"));
         return List.copyOf(results);
+    }
+
+    static void applyConnectedModEvidence(List<DiagnosticResult> results, ConnectionService.Status connection) {
+        if (connection == null || !connection.connected()) return;
+        for (int index = 0; index < results.size(); index++) {
+            if (!results.get(index).code().equals("recent.mod_load")) continue;
+            results.set(index, new DiagnosticResult(DiagnosticResult.Severity.PASS, "recent.mod_load",
+                    "Live Runtime handshake confirms the Companion Mod is loaded",
+                    Map.of("source", "runtime-handshake", "sessions", Integer.toString(connection.sessions()),
+                            "companions", Integer.toString(connection.companions())), List.of()));
+            return;
+        }
     }
 
     private static DiagnosticResult result(boolean pass, String code, String summary,

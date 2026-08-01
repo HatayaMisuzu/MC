@@ -335,7 +335,9 @@ class RuntimeApplicationTest {
                     playerReply.path("payload").path("code").asText());
             assertEquals("external-brain", playerReply.path("payload").path("source").asText());
             assertFalse(playerReply.path("payload").path("reply").asText().isBlank());
-            assertTrue(application.plans().activeForCompanion("companion-1").isEmpty(),
+            assertTrue(new com.mccompanion.runtime.agent.AgentPlanRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()))
+                    .activeForCompanion("companion-1").isEmpty(),
                     "missing external Brain must not create an internal Agent plan");
             assertTrue(application.commands().activeTaskFor("companion-1").isEmpty(),
                     "a conversational status response must not start a Minecraft task");
@@ -876,7 +878,9 @@ class RuntimeApplicationTest {
                     .path("sources").path(0).path("sourceId").asText());
             assertFalse(visibleSearch.toString().contains("Version documentation"),
                     "opened page content must not enter Search session inspection");
-            assertTrue(application.plans().activeForCompanion("brain-companion").isEmpty());
+            assertTrue(new com.mccompanion.runtime.agent.AgentPlanRepository(
+                    new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()))
+                    .activeForCompanion("brain-companion").isEmpty());
             assertTrue(application.commands().activeTaskFor("brain-companion").isEmpty());
 
             HttpResponse<String> asked = HttpClient.newHttpClient().send(HttpRequest.newBuilder()
@@ -1125,11 +1129,22 @@ class RuntimeApplicationTest {
                             """)).build(), HttpResponse.BodyHandlers.ofString());
             JsonNode startedResult = Json.parse(started.body()).path("result").path("structuredContent");
             assertFalse(startedResult.path("isError").asBoolean(false), started.body());
-            assertEquals("WAITING", startedResult.path("observation").path("state").asText());
-            String executionId = startedResult.path("observation").path("executionId").asText();
+            JsonNode startObservation = startedResult.path("observation");
+            assertEquals("ASYNCHRONOUS", startObservation.path("executionMode").asText(), started.body());
+            assertFalse(startObservation.path("completionVerified").asBoolean(true), started.body());
+            assertEquals("task_graph.inspect", startObservation.path("statusTool").asText(), started.body());
+            String executionId = startObservation.path("executionId").asText();
+            JsonNode waitingGraph = awaitTaskGraphState(http, mcpRequest, executionId, "WAITING");
+            assertEquals("TASK_GRAPH_WAITING_USER", waitingGraph.path("resultCode").asText());
             var conversations = new com.mccompanion.runtime.conversation.ConversationRepository(
                     new com.mccompanion.runtime.db.RuntimeDatabase(config.databasePath()));
-            String questionId = conversations.activeForTaskGraph(executionId).orElseThrow().questionId();
+            var activeQuestion = conversations.activeForTaskGraph(executionId);
+            long questionDeadline = System.nanoTime() + java.time.Duration.ofSeconds(5).toNanos();
+            while (activeQuestion.isEmpty() && System.nanoTime() < questionDeadline) {
+                Thread.sleep(20);
+                activeQuestion = conversations.activeForTaskGraph(executionId);
+            }
+            String questionId = activeQuestion.orElseThrow().questionId();
             client.send("""
                     {"type":"companion_status","sessionId":"%s","sequence":1,"payload":{
                       "companionId":"graph-companion","ownerId":"owner-1","displayName":"Graph Companion",
@@ -1207,6 +1222,7 @@ class RuntimeApplicationTest {
             String httpExecution = Json.parse(httpStarted.body()).path("result").path("structuredContent")
                     .path("observation").path("executionId").asText();
             assertFalse(httpExecution.isBlank(), httpStarted.body());
+            awaitTaskGraphState(http, mcpRequest, httpExecution, "WAITING");
             HttpResponse<String> httpAnswer = http.send(HttpRequest.newBuilder(
                             new URI("http://127.0.0.1:" + config.server.managementPort + "/brain"))
                     .header("Authorization", "Bearer " + token).header("Content-Type", "application/json")

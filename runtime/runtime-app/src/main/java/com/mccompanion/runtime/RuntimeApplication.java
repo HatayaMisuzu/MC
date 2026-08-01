@@ -3,8 +3,6 @@ package com.mccompanion.runtime;
 import com.mccompanion.runtime.command.CommandService;
 import com.mccompanion.runtime.command.IdempotencyStore;
 import com.mccompanion.runtime.command.ProtocolCommandSender;
-import com.mccompanion.runtime.agent.AgentPlanRepository;
-import com.mccompanion.runtime.agent.AgentKernel;
 import com.mccompanion.runtime.brain.ExternalBrainAdapter;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainAuditRepository;
@@ -31,8 +29,6 @@ import com.mccompanion.runtime.memory.MemoryRepository;
 import com.mccompanion.runtime.memory.MemoryToolGateway;
 import com.mccompanion.runtime.conversation.ConversationRepository;
 import com.mccompanion.runtime.conversation.ConversationService;
-import com.mccompanion.runtime.provider.IntentProvider;
-import com.mccompanion.runtime.provider.ProviderRouter;
 import com.mccompanion.runtime.security.PairingTokenStore;
 import com.mccompanion.runtime.search.DisabledSearchProvider;
 import com.mccompanion.runtime.search.HttpSearchProvider;
@@ -78,10 +74,6 @@ public final class RuntimeApplication implements AutoCloseable {
     private final CompanionRepository companions;
     private final SessionRegistry sessions;
     private final CommandService commands;
-    private final AgentPlanRepository plans;
-    private final AgentKernel kernel;
-    private final IntentProvider provider;
-    private final ProviderRouter providerRouter;
     private final ExternalBrainCoordinator externalBrain;
     private final CompositeToolGateway toolGateway;
     private final RuntimeWebSocketServer webSocket;
@@ -98,10 +90,6 @@ public final class RuntimeApplication implements AutoCloseable {
             CompanionRepository companions,
             SessionRegistry sessions,
             CommandService commands,
-            AgentPlanRepository plans,
-            AgentKernel kernel,
-            IntentProvider provider,
-            ProviderRouter providerRouter,
             ExternalBrainCoordinator externalBrain,
             CompositeToolGateway toolGateway,
             RuntimeWebSocketServer webSocket,
@@ -114,10 +102,6 @@ public final class RuntimeApplication implements AutoCloseable {
         this.companions = companions;
         this.sessions = sessions;
         this.commands = commands;
-        this.plans = plans;
-        this.kernel = kernel;
-        this.provider = provider;
-        this.providerRouter = providerRouter;
         this.externalBrain = externalBrain;
         this.toolGateway = toolGateway;
         this.webSocket = webSocket;
@@ -146,13 +130,11 @@ public final class RuntimeApplication implements AutoCloseable {
         redactor.registerSecret(pairingToken);
         RuntimeLog log = new RuntimeLog(config.logPath(), config.logging.console, redactor);
         RuntimeDatabase database = new RuntimeDatabase(config.databasePath());
-        IntentProvider provider = null;
         SessionRegistry sessions = null;
         RuntimeWebSocketServer webSocket = null;
         RuntimeHealthServer healthServer = null;
         ScheduledExecutorService maintenance = null;
         RuntimeCli cli = null;
-        AgentKernel kernel = null;
         ExternalBrainCoordinator externalBrain = null;
         CompositeToolGateway toolGateway = null;
         try {
@@ -169,7 +151,6 @@ public final class RuntimeApplication implements AutoCloseable {
             TaskEventStore events = new TaskEventStore(database);
             TaskRepository tasks = new TaskRepository(database, events);
             TaskGraphExecutionRepository taskGraphs = new TaskGraphExecutionRepository(database);
-            AgentPlanRepository plans = new AgentPlanRepository(database);
             MemoryRepository memories = new MemoryRepository(database);
             int expiredMemories = memories.expire();
             LeaseService leases = new LeaseService(database);
@@ -186,10 +167,6 @@ public final class RuntimeApplication implements AutoCloseable {
                     new IdempotencyStore(database),
                     commandSender,
                     log);
-            // The legacy internal Agent/Provider path is intentionally not constructed in production.
-            // External Brain is the only high-level decision-maker; these null compatibility references
-            // keep old test-only constructors source-compatible until the classes are deleted separately.
-            ProviderRouter providerRouter = null;
             CapabilityRegistry capabilityRegistry = CapabilityRegistry.standard();
             CapabilityVisibility capabilityVisibility = new CapabilityVisibility(capabilityRegistry);
             SessionRegistry activeSessionRegistry = sessions;
@@ -240,14 +217,12 @@ public final class RuntimeApplication implements AutoCloseable {
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
-            // Production does not construct the legacy high-level Agent. External Brain is the
-            // sole author of plans; the Runtime only validates and executes its bounded requests.
-            kernel = null;
             sessions.setListener(commands);
 
             int staleSessions = sessions.recoverStaleSessions();
             int reconciliationTasks = tasks.markUnfinishedForReconciliation().size();
-            int recoveryPlans = plans.pauseRunningForRecovery();
+            int recoveryPlans = new com.mccompanion.runtime.db.LegacyAgentStateMigrator(database)
+                    .pauseRunningForExternalBrainMigration();
             int reconciliationGraphs = taskGraphs.markUnfinishedForReconciliation();
             if (staleSessions > 0 || reconciliationTasks > 0 || invalidatedLeases > 0
                     || recoveryPlans > 0 || interruptedBrainSessions > 0 || reconciliationGraphs > 0
@@ -272,9 +247,6 @@ public final class RuntimeApplication implements AutoCloseable {
                     sessions,
                     commands,
                     companions,
-                    providerRouter,
-                    plans,
-                    kernel,
                     capabilityVisibility,
                     memories,
                     conversations,
@@ -283,8 +255,8 @@ public final class RuntimeApplication implements AutoCloseable {
                     log);
             webSocket.attachRegistryQueries(registryTools);
             webSocket.startAndAwait(Duration.ofSeconds(15));
-            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions, plans,
-                    kernel, providerRouter, capabilityVisibility, conversations, memories, externalBrain, brainAudit,
+            healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions,
+                    capabilityVisibility, conversations, memories, externalBrain, brainAudit,
                     toolGateway, taskGraphRuntime, skillRepository, skillTools, mcpReplay, mcpSessions, mcpEvents,
                     searchSessions, log);
             healthServer.start();
@@ -317,7 +289,7 @@ public final class RuntimeApplication implements AutoCloseable {
 
             final RuntimeApplication[] holder = new RuntimeApplication[1];
             if (enableCli) {
-                cli = new RuntimeCli(companions, sessions, commands, providerRouter, capabilityVisibility, () -> {
+                cli = new RuntimeCli(companions, commands, () -> {
                     RuntimeApplication application = holder[0];
                     if (application != null) {
                         application.close();
@@ -325,7 +297,7 @@ public final class RuntimeApplication implements AutoCloseable {
                 }, System.in, System.out);
             }
             RuntimeApplication application = new RuntimeApplication(config, log, database, companions, sessions,
-                    commands, plans, kernel, provider, providerRouter, externalBrain, toolGateway,
+                    commands, externalBrain, toolGateway,
                     webSocket, healthServer, maintenance, cli);
             holder[0] = application;
             log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, legacyProvider=disabled"
@@ -341,11 +313,9 @@ public final class RuntimeApplication implements AutoCloseable {
             shutdownExecutor(maintenance);
             closeQuietly(webSocket);
             closeQuietly(healthServer);
-            closeQuietly(kernel);
             closeQuietly(externalBrain);
             closeQuietly(toolGateway);
             closeQuietly(sessions);
-            closeQuietly(provider);
             closeQuietly(database);
             closeQuietly(log);
             throw failure;
@@ -418,12 +388,6 @@ public final class RuntimeApplication implements AutoCloseable {
         return commands;
     }
 
-    public AgentPlanRepository plans() { return plans; }
-
-    public ProviderRouter providerRouter() {
-        return providerRouter;
-    }
-
     public java.util.Optional<ExternalBrainCoordinator> externalBrain() {
         return java.util.Optional.ofNullable(externalBrain);
     }
@@ -451,11 +415,9 @@ public final class RuntimeApplication implements AutoCloseable {
         }
         closeQuietly(webSocket);
         closeQuietly(healthServer);
-        closeQuietly(kernel);
         closeQuietly(externalBrain);
         closeQuietly(toolGateway);
         closeQuietly(sessions);
-        closeQuietly(provider);
         closeQuietly(database);
         closeQuietly(log);
         stopped.countDown();

@@ -231,6 +231,17 @@ try {
         $context = Get-TestLogTail @($gameOut, $gameErr, $gameLog)
         throw "Forge Runtime GameTest failed ($($game.ExitCode)).`n$context"
     }
+    $classLoadEvidence = @($gameOut, $gameErr, $gameLog) | ForEach-Object {
+        if (Test-Path -LiteralPath $_) { Get-Content -LiteralPath $_ -Raw -ErrorAction SilentlyContinue }
+    }
+    if (($classLoadEvidence -join "`n") -match '(?is)(ClassNotFoundException[^\r\n]*jackson|jackson[^\r\n]*(?:transform|ClassNotFoundException))') {
+        throw 'Forge startup still contains a target Jackson class-load/transformation failure.'
+    }
+    if (($classLoadEvidence -join "`n") -match '(?i)Missing metadata in pack mod:minecraft_ai_companion|Missing data pack mod:minecraft_ai_companion') {
+        throw 'Forge startup reports invalid MCAC ResourcePackInfo metadata.'
+    }
+    Write-Output '[runtime-forge-e2e] startup log contains no target Jackson class-load/transformation failure'
+    Write-Output '[runtime-forge-e2e] MCAC pack metadata loaded without ResourcePackInfo warnings'
     Write-Output '[runtime-forge-e2e] authenticated handshake and behavior controls passed'
 } finally {
     Stop-TestProcessTree $game

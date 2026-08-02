@@ -106,7 +106,8 @@ final class SupportBundleService {
       if (!doctor.isEmpty()) {
         StringBuilder checks = new StringBuilder();
         doctor.forEach(result -> checks.append(result.severity()).append(' ').append(result.code())
-            .append(' ').append(result.summary()).append(' ').append(result.evidence()).append('\n'));
+            .append(' ').append(result.summary()).append(' ')
+            .append(shareableJson(result.evidence())).append('\n'));
         add(zip, "doctor.txt", shareable(checks.toString()));
       }
 
@@ -142,7 +143,8 @@ final class SupportBundleService {
         .put("replacementCount", result.replacementCount())
         .put("truncated", result.truncated())
         .put("bytesRead", result.bytesRead())
-        .put("sourceBytes", result.sourceBytes());
+        .put("sourceBytes", result.sourceBytes())
+        .put("stability", result.stability().name());
     return result;
   }
 
@@ -210,6 +212,11 @@ final class SupportBundleService {
 
   private static String shareable(String text) {
     return PRIVACY.filter(text, PrivacyFilter.Policy.SHAREABLE_BUNDLE);
+  }
+
+  private static String shareableJson(Object value) {
+    if (value == null) return "null";
+    return PRIVACY.sanitizeJson(JSON.valueToTree(value), PrivacyFilter.Policy.SHAREABLE_BUNDLE).toString();
   }
 
   private static void add(ZipOutputStream zip, String name, String content) throws IOException {

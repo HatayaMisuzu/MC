@@ -13,6 +13,7 @@ import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.conversation.IncomingMessageResolution;
 import com.mccompanion.runtime.conversation.WaitingQuestion;
 import com.mccompanion.runtime.db.RuntimeDatabase;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -416,6 +417,86 @@ class ExternalBrainCoordinatorTest {
             assertEquals("DURABLE_EXECUTION_TRACKING_FULL", overflow.toolResults().get(0).code());
             assertEquals(List.of("call-3-0"), cancelled);
         }
+    }
+
+    @Test
+    void completedTaskGraphAndSkillExecutionsReleaseTrackingAcrossLongMixedRun() {
+        List<String> cancelled = new java.util.concurrent.CopyOnWriteArrayList<>();
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(
+                        new ToolDefinition("movement.navigate", "1.0", "start task", Json.object(),
+                                "LOW", "MOVE", Duration.ofSeconds(5), false),
+                        new ToolDefinition("task_graph.execute", "1.0", "start graph", Json.object(),
+                                "LOW", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(5), false),
+                        new ToolDefinition("skill.execute", "1.0", "start skill graph", Json.object(),
+                                "LOW", "EXECUTE_TASK_GRAPH", Duration.ofSeconds(5), false),
+                        new ToolDefinition("task.inspect", "1.0", "inspect task", Json.object(),
+                                "LOW", "READ_WORLD", Duration.ofSeconds(5), true),
+                        new ToolDefinition("task_graph.inspect", "1.0", "inspect graph", Json.object(),
+                                "LOW", "READ_WORLD", Duration.ofSeconds(5), true));
+            }
+
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                if (call.name().equals("task.inspect")) {
+                    return new ToolResult(call.callId(), call.name(), true, "OK",
+                            Json.object().put("state", "COMPLETED")
+                                    .put("taskId", call.arguments().path("taskId").asText()), true);
+                }
+                if (call.name().equals("task_graph.inspect")) {
+                    return new ToolResult(call.callId(), call.name(), true, "OK",
+                            Json.object().put("state", "SUCCEEDED")
+                                    .put("executionId", call.arguments().path("executionId").asText()), true);
+                }
+                if (call.name().equals("movement.navigate")) {
+                    return new ToolResult(call.callId(), call.name(), true, "ACCEPTED",
+                            Json.object().put("state", "RUNNING").put("taskId", "task-" + call.callId()), false);
+                }
+                return new ToolResult(call.callId(), call.name(), true, "ACCEPTED",
+                        Json.object().put("state", "RUNNING").put("executionId", "graph-" + call.callId()), false);
+            }
+
+            @Override public void cancel(ToolContext context, String callId, String reason) {
+                cancelled.add(callId + ":" + reason);
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            turns.incrementAndGet();
+            if (!request.toolResults().isEmpty()) return BrainTurnResult.finalResponse("ack");
+            String message = request.userMessage();
+            if (message.startsWith("start:")) {
+                int id = Integer.parseInt(message.substring("start:".length()));
+                String name = id % 3 == 0 ? "skill.execute" : id % 2 == 0
+                        ? "task_graph.execute" : "movement.navigate";
+                return BrainTurnResult.tools(List.of(new ToolCall("start-" + id, name, Json.object())));
+            }
+            int id = Integer.parseInt(message.substring("finish:".length()));
+            boolean task = id % 3 != 0 && id % 2 != 0;
+            String name = task ? "task.inspect" : "task_graph.inspect";
+            String handle = task ? "task-start-" + id : "graph-start-" + id;
+            JsonNode arguments = task ? Json.object().put("taskId", handle)
+                    : Json.object().put("executionId", handle);
+            return BrainTurnResult.tools(List.of(new ToolCall("finish-" + id, name, arguments)));
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            for (int id = 1; id <= 120; id++) {
+                BrainCoordinatorResult started = coordinator.continueTurn(
+                        "hermes-1", "c1", "start:" + id, context());
+                assertTrue(started.toolResults().stream().allMatch(ToolResult::success), "start " + id);
+                BrainCoordinatorResult finished = coordinator.continueTurn(
+                        "hermes-1", "c1", "finish:" + id, context());
+                assertTrue(finished.toolResults().stream().allMatch(ToolResult::success), "finish " + id);
+                assertEquals(0, coordinator.trackedDurableCount("c1"), "leaked handle at " + id);
+                // A repeated terminal inspection is idempotent and must not re-add the completed handle.
+                BrainCoordinatorResult replay = coordinator.continueTurn(
+                        "hermes-1", "c1", "finish:" + id, context());
+                assertTrue(replay.toolResults().stream().allMatch(ToolResult::success), "replay " + id);
+                assertEquals(0, coordinator.trackedDurableCount("c1"), "replayed handle at " + id);
+            }
+        }
+        assertTrue(cancelled.isEmpty(), "completed executions must never be cancelled: " + cancelled);
+        assertTrue(turns.get() > 0);
     }
 
     @Test

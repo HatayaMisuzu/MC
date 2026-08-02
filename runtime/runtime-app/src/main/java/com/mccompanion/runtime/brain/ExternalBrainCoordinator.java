@@ -17,12 +17,12 @@ import java.util.List;
 import java.util.Map;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Hosts only the external protocol/tool loop. It never invents a strategy or natural response. */
 public final class ExternalBrainCoordinator implements AutoCloseable {
     private static final int MAX_TRACKED_DURABLE_TOOLS_PER_COMPANION = 64;
-    private static final Duration DURABLE_TOOL_TRACKING_RETENTION = Duration.ofHours(8);
     private final ExternalBrainAdapter adapter;
     private final ToolGateway tools;
     private final int maxToolCallsPerTurn;
@@ -213,7 +213,8 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 if (accepted.terminal()) {
                     observation = accepted;
                 } else if (durableReceipt.isPresent()) {
-                    ActiveTool durable = new ActiveTool(toolContext, call, Instant.now());
+                    ActiveTool durable = new ActiveTool(toolContext, call,
+                            DurableExecutionReceipt.handle(accepted).orElse(null), Instant.now());
                     if (rememberActive(companionId, durable)) {
                         observation = durableReceipt.orElseThrow();
                     } else {
@@ -222,7 +223,8 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                                 "Durable execution was cancelled because the bounded tracking capacity is full");
                     }
                 } else {
-                    if (!rememberActive(companionId, new ActiveTool(toolContext, call, Instant.now()))) {
+                    if (!rememberActive(companionId,
+                            new ActiveTool(toolContext, call, null, Instant.now()))) {
                         tools.cancel(toolContext, call.callId(), "TOOL_TRACKING_CAPACITY_EXCEEDED");
                         observation = ToolResult.rejected(call, "TOOL_TRACKING_FULL",
                                 "Tool was cancelled because the bounded tracking capacity is full");
@@ -240,6 +242,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                     observation = ToolResult.rejected(call, "NON_TERMINAL_TOOL_RESULT",
                             "Tool gateway returned before a terminal observation");
                 }
+                releaseCompletedDurable(companionId, observation);
                 if (audit != null) audit.tool(session.sessionId(), call, observation);
                 batch.add(observation);
                 observations.add(observation);
@@ -297,7 +300,9 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 ? "OWNER_IMMEDIATE_INSTRUCTION" : reason.strip();
         pendingInterruptions.put(companionId, boundedReason);
         boolean accepted = active.stream().map(value ->
-                tools.pause(value.context(), value.call().callId(), boundedReason))
+                value.handle() == null
+                        ? tools.pause(value.context(), value.call().callId(), boundedReason)
+                        : tools.pauseDurable(value.context(), value.call(), value.handle(), boundedReason))
                 .reduce(false, Boolean::logicalOr);
         if (!accepted) pendingInterruptions.remove(companionId, boundedReason);
         return accepted;
@@ -312,7 +317,9 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         String reason = "OWNER_SAME_TARGET_ACTIVITY";
         pendingInterruptions.put(companionId, reason);
         boolean accepted = active.stream().map(value ->
-                tools.pause(value.context(), value.call().callId(), reason))
+                value.handle() == null
+                        ? tools.pause(value.context(), value.call().callId(), reason)
+                        : tools.pauseDurable(value.context(), value.call(), value.handle(), reason))
                 .reduce(false, Boolean::logicalOr);
         if (!accepted) pendingInterruptions.remove(companionId, reason);
         return accepted;
@@ -326,7 +333,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         pendingInterruptions.clear();
         interruptedObservations.clear();
         activeTools.values().forEach(active -> active.values().forEach(value ->
-                tools.cancel(value.context(), value.call().callId(), "CONTROLLER_RELEASED")));
+                cancelActive(value, "CONTROLLER_RELEASED")));
         activeTools.clear();
         for (BrainSession session : cancelledSessions) adapter.cancel(session.sessionId(), "CONTROLLER_RELEASED");
         activeControllerId = null;
@@ -342,6 +349,24 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                                                         BrainSemanticState.PersonalityMode personalityMode) {
         if (audit == null) throw new IllegalStateException("BRAIN_BEHAVIOR_SETTINGS_PERSISTENCE_DISABLED");
         return audit.updateBehaviorSettings(companionId, initiativeMode, personalityMode, "LOCAL_MANAGEMENT_USER");
+    }
+
+    /** Restores only executions that are still live or require reconciliation. */
+    public void restoreActiveDurableCalls(List<BrainAuditRepository.DurableCall> recovered) {
+        if (recovered == null) return;
+        for (BrainAuditRepository.DurableCall value : recovered) {
+            ToolContext context = new ToolContext(value.controllerId(), value.sessionId(), value.companionId());
+            Optional<ToolResult> inspected = tools.inspectDurable(context, value.handle());
+            if (inspected.isPresent()
+                    && DurableExecutionReceipt.isTerminalObservation(inspected.get().observation())) {
+                if (audit != null) audit.clearDurableHandle(value.sessionId(), value.handle());
+                continue;
+            }
+            ActiveTool active = new ActiveTool(context, value.call(), value.handle(), Instant.now());
+            if (rememberActive(value.companionId(), active)) {
+                tools.restoreDurable(context, value.call(), value.handle());
+            }
+        }
     }
 
     private synchronized void requireController(String controllerId) {
@@ -407,7 +432,6 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     }
 
     private boolean rememberActive(String companionId, ActiveTool active) {
-        pruneExpiredActive(companionId, active.registeredAt());
         Map<String, ActiveTool> companionTools = activeTools.computeIfAbsent(
                 companionId, ignored -> new ConcurrentHashMap<>());
         synchronized (companionTools) {
@@ -428,23 +452,42 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     }
 
     private List<ActiveTool> activeFor(String companionId) {
-        pruneExpiredActive(companionId, Instant.now());
         Map<String, ActiveTool> companionTools = activeTools.get(companionId);
         return companionTools == null ? List.of() : List.copyOf(companionTools.values());
     }
 
-    private void pruneExpiredActive(String companionId, Instant now) {
+    int trackedDurableCount(String companionId) {
         Map<String, ActiveTool> companionTools = activeTools.get(companionId);
-        if (companionTools == null) return;
-        Instant cutoff = now.minus(DURABLE_TOOL_TRACKING_RETENTION);
-        for (ActiveTool active : List.copyOf(companionTools.values())) {
-            if (active.registeredAt().isBefore(cutoff)
-                    && companionTools.remove(active.call().callId(), active)) {
-                tools.cancel(active.context(), active.call().callId(), "DURABLE_EXECUTION_TRACKING_EXPIRED");
-            }
-        }
-        if (companionTools.isEmpty()) activeTools.remove(companionId, companionTools);
+        return companionTools == null ? 0 : companionTools.size();
     }
 
-    private record ActiveTool(ToolContext context, ToolCall call, Instant registeredAt) { }
+    private void releaseCompletedDurable(String companionId, ToolResult observation) {
+        if (!DurableExecutionReceipt.isTerminalObservation(observation.observation())) return;
+        DurableExecutionReceipt.handleFromObservation(observation.observation()).ifPresent(handle -> {
+            Map<String, ActiveTool> companionTools = activeTools.get(companionId);
+            if (companionTools == null) return;
+            for (ActiveTool active : List.copyOf(companionTools.values())) {
+                if (sameHandle(active.handle(), handle)
+                        && companionTools.remove(active.call().callId(), active)
+                        && audit != null) {
+                    audit.clearDurableHandle(active.context().brainSessionId(), handle);
+                }
+            }
+            if (companionTools.isEmpty()) activeTools.remove(companionId, companionTools);
+        });
+    }
+
+    private void cancelActive(ActiveTool active, String reason) {
+        if (active.handle() == null) tools.cancel(active.context(), active.call().callId(), reason);
+        else tools.cancelDurable(active.context(), active.call(), active.handle(), reason);
+    }
+
+    private static boolean sameHandle(DurableExecutionReceipt.Handle left,
+                                      DurableExecutionReceipt.Handle right) {
+        return left != null && right != null && left.kind().equals(right.kind())
+                && left.id().equals(right.id());
+    }
+
+    private record ActiveTool(ToolContext context, ToolCall call,
+                              DurableExecutionReceipt.Handle handle, Instant registeredAt) { }
 }

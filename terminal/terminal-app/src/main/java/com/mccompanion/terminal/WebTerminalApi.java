@@ -63,9 +63,9 @@ final class WebTerminalApi {
       else if ("POST".equals(method) && "/api/discovery/rescan".equals(path))
         send(exchange, 200, rescanDiscovery());
       else if ("GET".equals(method) && "/api/launchers".equals(path))
-        send(exchange, 200, launchers());
+        send(exchange, 200, launchers(controlView(exchange)));
       else if ("GET".equals(method) && "/api/instances".equals(path))
-        send(exchange, 200, instances());
+        send(exchange, 200, instances(controlView(exchange)));
       else if ("GET".equals(method) && "/api/install/rollback-points".equals(path))
         send(exchange, 200, rollbackPoints(requiredQuery(exchange, "instanceId")));
       else if ("POST".equals(method) && "/api/doctor".equals(path))
@@ -93,7 +93,7 @@ final class WebTerminalApi {
       else if ("GET".equals(method) && "/api/smoke/latest".equals(path))
         send(exchange, 200, smokeStatus(requiredQuery(exchange, "instanceId")));
       else if ("GET".equals(method) && "/api/companions".equals(path))
-        send(exchange, 200, companionSnapshot(requiredQuery(exchange, "instanceId")));
+        send(exchange, 200, companionSnapshot(requiredQuery(exchange, "instanceId"), controlView(exchange)));
       else if ("GET".equals(method) && "/api/brain/status".equals(path))
         send(exchange, 200, runtimeInspect(exchange, "/brain"));
       else if ("GET".equals(method) && "/api/brain/audit".equals(path))
@@ -144,6 +144,10 @@ final class WebTerminalApi {
   }
 
   ObjectNode statusSnapshot() {
+    return statusSnapshot(false);
+  }
+
+  ObjectNode statusSnapshot(boolean controlView) {
     List<MinecraftInstance> instances = root.context.instances(root.roots());
     ObjectNode value =
         JSON.createObjectNode()
@@ -178,10 +182,10 @@ final class WebTerminalApi {
             .put("mode", FullBridgeSupport.supports(selected) ? "SAFE_IDLE" : "LOCAL_ONLY");
       }
     }
-    return value;
+    return controlView ? value : (ObjectNode) PRIVACY.sanitizeJson(value, PrivacyFilter.Policy.UI_DEFAULT);
   }
 
-  private ArrayNode launchers() {
+  private ArrayNode launchers(boolean controlView) {
     ArrayNode values = JSON.createArrayNode();
     root.context
         .launchers(root.roots())
@@ -198,13 +202,13 @@ final class WebTerminalApi {
                       .put("confidence", launcher.confidence().name());
               value.set("evidence", JSON.valueToTree(launcher.evidence()));
             });
-    return values;
+    return controlView ? values : (ArrayNode) PRIVACY.sanitizeJson(values, PrivacyFilter.Policy.UI_DEFAULT);
   }
 
-  private ArrayNode instances() {
+  private ArrayNode instances(boolean controlView) {
     ArrayNode values = JSON.createArrayNode();
     root.context.instances(root.roots()).forEach(instance -> values.add(instance(instance)));
-    return values;
+    return controlView ? values : (ArrayNode) PRIVACY.sanitizeJson(values, PrivacyFilter.Policy.UI_DEFAULT);
   }
 
   private ObjectNode instance(MinecraftInstance instance) {
@@ -404,20 +408,35 @@ final class WebTerminalApi {
   }
 
   ObjectNode companionSnapshot(String instanceId) throws Exception {
+    return companionSnapshot(instanceId, false);
+  }
+
+  ObjectNode companionSnapshot(String instanceId, boolean controlView) throws Exception {
     MinecraftInstance instance = root.instance(instanceId);
     if (!FullBridgeSupport.supports(instance)) {
-      return JSON.createObjectNode()
+      ObjectNode localOnly = JSON.createObjectNode()
           .put("instanceId", instanceId)
           .put("mode", "LOCAL_ONLY")
           .set("companions", JSON.createArrayNode());
+      return controlView ? localOnly
+          : (ObjectNode) PRIVACY.sanitizeJson(localOnly, PrivacyFilter.Policy.UI_DEFAULT);
     }
-    ObjectNode value = snapshots.snapshot(root.profile(instance));
+    ObjectNode value = snapshots.snapshot(root.profile(instance), controlView);
     var connection = new ConnectionService().status(root.profile(instance));
     value.put("mode", connection.connected() ? connection.mode() : "SAFE_IDLE");
-    return value;
+    return controlView ? value : (ObjectNode) PRIVACY.sanitizeJson(value, PrivacyFilter.Policy.UI_DEFAULT);
+  }
+
+  JsonNode view(JsonNode value, boolean controlView) {
+    return controlView ? value : PRIVACY.sanitizeJson(value, PrivacyFilter.Policy.UI_DEFAULT);
   }
 
   private JsonNode runtimeInspect(HttpExchange exchange, String runtimePath, String... forwarded) throws Exception {
+    return runtimeInspect(exchange, runtimePath, controlView(exchange), forwarded);
+  }
+
+  private JsonNode runtimeInspect(HttpExchange exchange, String runtimePath, boolean controlView,
+                                  String... forwarded) throws Exception {
     Map<String, String> query = query(exchange);
     MinecraftInstance instance = root.instance(required(query, "instanceId"));
     StringBuilder path = new StringBuilder(runtimePath);
@@ -429,7 +448,8 @@ final class WebTerminalApi {
           .append('=').append(java.net.URLEncoder.encode(value, StandardCharsets.UTF_8));
       first = false;
     }
-    return new RuntimeControlClient().inspect(root.profile(instance), path.toString(), Duration.ofSeconds(8));
+    JsonNode result = new RuntimeControlClient().inspect(root.profile(instance), path.toString(), Duration.ofSeconds(8));
+    return controlView ? result : PRIVACY.sanitizeJson(result, PrivacyFilter.Policy.UI_DEFAULT);
   }
 
   private JsonNode reviewMemorySuggestion(JsonNode request) throws Exception {
@@ -524,6 +544,7 @@ final class WebTerminalApi {
         .put("charset", tail.charset())
         .put("replacementCount", tail.replacementCount())
         .put("truncated", tail.truncated())
+        .put("stability", tail.stability().name())
         .set("lines", lines);
   }
 
@@ -1219,7 +1240,11 @@ final class WebTerminalApi {
   }
 
   static void send(HttpExchange exchange, int status, JsonNode value) throws IOException {
-    byte[] bytes = JSON.writeValueAsBytes(value);
+    boolean apiResponse = exchange.getRequestURI().getPath().startsWith("/api/");
+    boolean controlView = "control".equals(queryValue(exchange, "view"));
+    JsonNode output = apiResponse && !controlView
+        ? PRIVACY.sanitizeJson(value, PrivacyFilter.Policy.UI_DEFAULT) : value;
+    byte[] bytes = JSON.writeValueAsBytes(output);
     exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
     exchange.getResponseHeaders().set("Cache-Control", "no-store");
     exchange.sendResponseHeaders(status, bytes.length);
@@ -1304,6 +1329,21 @@ final class WebTerminalApi {
 
   private static String decode(String value) {
     return URLDecoder.decode(value, StandardCharsets.UTF_8);
+  }
+
+  private static boolean controlView(HttpExchange exchange) {
+    return "control".equals(queryValue(exchange, "view"));
+  }
+
+  private static String queryValue(HttpExchange exchange, String key) {
+    String raw = exchange.getRequestURI().getRawQuery();
+    if (raw == null || raw.isBlank()) return "";
+    for (String pair : raw.split("&")) {
+      int equals = pair.indexOf('=');
+      String name = equals < 0 ? pair : pair.substring(0, equals);
+      if (key.equals(decode(name))) return equals < 0 ? "" : decode(pair.substring(equals + 1));
+    }
+    return "";
   }
 
   private static String text(String value) {

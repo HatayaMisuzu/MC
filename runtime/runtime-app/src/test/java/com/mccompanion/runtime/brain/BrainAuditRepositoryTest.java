@@ -48,10 +48,10 @@ class BrainAuditRepositoryTest {
             BrainAuditRepository audit = new BrainAuditRepository(database);
             BrainSession original = new BrainSession("resume-session-1", "controller", "c1", Instant.now());
             audit.opened(original, "replay");
-            ToolCall call = new ToolCall("navigate-1", "movement.navigate", Json.object());
+            ToolCall call = new ToolCall("observe-1", "world.observe", Json.object());
             audit.tool(original.sessionId(), call, new ToolResult(call.callId(), call.name(), true,
                     "COMMAND_DISPATCHED", Json.object().put("state", "RUNNING")
-                            .put("taskId", "task-1").put("behaviorId", "behavior-1"), false));
+                            .put("cursor", "fixture"), false));
 
             assertEquals(1, audit.interruptActiveSessions());
             assertEquals(original.sessionId(), audit.interrupted("controller", "c1").orElseThrow().sessionId());
@@ -64,7 +64,7 @@ class BrainAuditRepositoryTest {
                 turns.incrementAndGet();
                 assertEquals(original.sessionId(), request.sessionId());
                 assertEquals(1, request.toolResults().size());
-                assertEquals("navigate-1", request.toolResults().getFirst().callId());
+                assertEquals("observe-1", request.toolResults().getFirst().callId());
                 return BrainTurnResult.finalResponse("Recovered safely.");
             });
             try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(replay,
@@ -75,6 +75,30 @@ class BrainAuditRepositoryTest {
                 assertEquals(1, turns.get());
                 assertTrue(audit.undeliveredTerminal(original.sessionId()).isEmpty());
             }
+        }
+    }
+
+    @Test
+    void durableExecutionRemainsControllableAcrossRestartUntilVerifiedTerminalState() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("brain-durable-restart.db"))) {
+            database.initialize();
+            BrainAuditRepository audit = new BrainAuditRepository(database);
+            BrainSession session = new BrainSession("durable-session-1", "controller", "c1", Instant.now());
+            audit.opened(session, "replay");
+            ToolCall start = new ToolCall("navigate-1", "movement.navigate", Json.object());
+            audit.tool(session.sessionId(), start, new ToolResult(start.callId(), start.name(), true,
+                    "COMMAND_DISPATCHED", Json.object().put("state", "RUNNING")
+                            .put("taskId", "task-1"), false));
+
+            assertEquals(1, audit.interruptActiveSessions());
+            assertEquals(1, audit.activeDurableCalls().size());
+            assertEquals("task-1", audit.activeDurableCalls().getFirst().handle().id());
+
+            ToolCall inspect = new ToolCall("inspect-1", "task.inspect", Json.object());
+            audit.tool(session.sessionId(), inspect, new ToolResult(inspect.callId(), inspect.name(), true,
+                    "OK", Json.object().put("state", "COMPLETED").put("taskId", "task-1"), true));
+            assertTrue(audit.activeDurableCalls().isEmpty(), "terminal task must not be recovered as active");
+            assertTrue(audit.activeDurableCalls().isEmpty(), "repeated recovery inspection is idempotent");
         }
     }
 

@@ -77,6 +77,7 @@ class SupportBundleServiceTest {
             String manifest=new String(zip.getInputStream(zip.getEntry("bundle-manifest.json")).readAllBytes(),StandardCharsets.UTF_8);
             assertTrue(manifest.contains("GB18030"));
             assertTrue(manifest.contains("minecraft-latest-log"));
+            assertTrue(manifest.contains("\"stability\""));
         }
     }
 
@@ -126,7 +127,8 @@ class SupportBundleServiceTest {
             assertTrue(files.noneMatch(path -> path.getFileName().toString().endsWith(".part")));
         }
         try(ZipFile zip=new ZipFile(output.toFile())){
-            assertNotNull(zip.getEntry("bundle-manifest.json"));
+            String manifest=new String(zip.getInputStream(zip.getEntry("bundle-manifest.json")).readAllBytes(),StandardCharsets.UTF_8);
+            assertTrue(manifest.contains("\"stability\""));
             for(var entry:java.util.Collections.list(zip.entries())){
                 assertDoesNotThrow(() -> zip.getInputStream(entry).readAllBytes());
             }

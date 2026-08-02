@@ -30,8 +30,24 @@ public final class DurableExecutionReceipt {
         if (!result.success() || result.terminal() || !result.observation().isObject()) {
             return Optional.empty();
         }
-        String taskId = result.observation().path("taskId").asText("").trim();
-        String executionId = result.observation().path("executionId").asText("").trim();
+        return handleFromObservation(result.observation());
+    }
+
+    /** Extracts a durable identity from either an acceptance receipt or a later observation. */
+    public static Optional<Handle> handleFromObservation(com.fasterxml.jackson.databind.JsonNode observation) {
+        if (observation == null || !observation.isObject()) return Optional.empty();
+        String taskId = observation.path("taskId").asText("").trim();
+        String executionId = observation.path("executionId").asText("").trim();
+        if (taskId.isEmpty() && executionId.isEmpty()) {
+            ObjectNode executionHandle = observation.path("executionHandle").isObject()
+                    ? (ObjectNode) observation.path("executionHandle") : null;
+            if (executionHandle != null) {
+                String kind = executionHandle.path("kind").asText("").trim();
+                String id = executionHandle.path("id").asText("").trim();
+                if ("TASK".equals(kind)) taskId = id;
+                else if ("TASK_GRAPH".equals(kind)) executionId = id;
+            }
+        }
         if (!taskId.isEmpty() && !executionId.isEmpty()) return Optional.empty();
         if (!taskId.isEmpty()) {
             return Optional.of(new Handle("TASK", "taskId", taskId,
@@ -42,6 +58,23 @@ public final class DurableExecutionReceipt {
                     "task_graph.inspect", "task_graph.cancel", "task_graph.pause", "task_graph.resume"));
         }
         return Optional.empty();
+    }
+
+    /** The execution states that no longer need durable lifecycle control. */
+    public static boolean isTerminalObservation(com.fasterxml.jackson.databind.JsonNode observation) {
+        if (observation == null || !observation.isObject()) return false;
+        return switch (observation.path("state").asText("").trim().toUpperCase(java.util.Locale.ROOT)) {
+            case "COMPLETED", "SUCCEEDED", "FAILED", "CANCELLED" -> true;
+            default -> false;
+        };
+    }
+
+    /** True for the terminal-looking protocol receipt that still represents live durable work. */
+    public static boolean isAcceptedReceipt(ToolResult result) {
+        return result != null && result.success() && result.terminal()
+                && result.observation().path("accepted").asBoolean(false)
+                && "ASYNCHRONOUS".equals(result.observation().path("executionMode").asText(""))
+                && !result.observation().path("completionVerified").asBoolean(true);
     }
 
     public record Handle(String kind, String field, String id, String statusTool,

@@ -331,7 +331,8 @@ public final class CompanionRegistry {
                 || previous != null && proposedEpoch <= previous.epoch) {
             return RuntimeResult.failure("STALE_EPOCH");
         }
-        String controlFailure = behaviorDirector.claimRuntime(entry, "RUNTIME_LEASE_ACQUIRED");
+        String controlFailure = behaviorDirector.claimRuntime(entry,
+                "runtime-lease:" + proposedLeaseId + ":" + proposedEpoch, "RUNTIME_LEASE_ACQUIRED");
         if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         RuntimeControl control = new RuntimeControl(proposedLeaseId, proposedEpoch, expiresAt);
         if (entry.mode == CompanionEntry.Mode.PAUSED
@@ -372,7 +373,9 @@ public final class CompanionRegistry {
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
         if (leaseFailure != null) return leaseFailure;
-        String controlFailure = behaviorDirector.claimRuntime(entry, "RUNTIME_START");
+        String controlFailure = behaviorDirector.claimRuntime(entry,
+                "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + behaviorId,
+                "RUNTIME_START");
         if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         CompanionPlayer body = liveBodies.get(entry.companionId);
         if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
@@ -471,7 +474,9 @@ public final class CompanionRegistry {
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
         if (leaseFailure != null) return leaseFailure;
-        String controlFailure = behaviorDirector.claimRuntime(entry, "RUNTIME_RESUME");
+        String controlFailure = behaviorDirector.claimRuntime(entry,
+                "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + entry.runtimeBehaviorId,
+                "RUNTIME_RESUME");
         if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         CompanionPlayer body = liveBodies.get(entry.companionId);
         if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
@@ -503,7 +508,9 @@ public final class CompanionRegistry {
         control.behaviorId = null;
         entry.runtimeBehaviorId = null;
         entry.runtimeBehaviorRevision = control.behaviorRevision;
-        behaviorDirector.releaseRuntime(entry, "RUNTIME_CANCEL");
+        behaviorDirector.releaseRuntime(entry,
+                "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + behaviorId,
+                "RUNTIME_CANCEL");
         savedData.changed();
         return RuntimeResult.success(behaviorId, control.behaviorRevision, "CANCELLED");
     }
@@ -530,7 +537,10 @@ public final class CompanionRegistry {
                 entry.runtimeEpoch = Math.max(entry.runtimeEpoch, value.getValue().epoch);
                 entry.runtimeBehaviorId = value.getValue().behaviorId;
                 entry.runtimeBehaviorRevision = value.getValue().behaviorRevision;
-                behaviorDirector.releaseRuntime(entry, "RUNTIME_OFFLINE");
+                behaviorDirector.releaseRuntime(entry,
+                        "runtime-lease:" + value.getValue().leaseId + ":" + value.getValue().epoch
+                                + ":behavior:" + value.getValue().behaviorId,
+                        "RUNTIME_OFFLINE");
                 savedData.changed();
             }
         }
@@ -647,7 +657,10 @@ public final class CompanionRegistry {
                 entry.runtimeEpoch = Math.max(entry.runtimeEpoch, control.epoch);
                 entry.runtimeBehaviorId = control.behaviorId;
                 entry.runtimeBehaviorRevision = control.behaviorRevision;
-                behaviorDirector.releaseRuntime(entry, "LEASE_EXPIRED");
+                behaviorDirector.releaseRuntime(entry,
+                        "runtime-lease:" + control.leaseId + ":" + control.epoch
+                                + ":behavior:" + control.behaviorId,
+                        "LEASE_EXPIRED");
                 savedData.changed();
                 logger.warn("companion_runtime_lease_expired companion={} epoch={}", entry.companionId, control.epoch);
             }

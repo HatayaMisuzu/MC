@@ -181,18 +181,19 @@ final class WebTerminalServer implements AutoCloseable {
     exchange.sendResponseHeaders(200, 0);
     var queue = operations.subscribe();
     String instanceId = queryParameter(exchange, "instanceId");
+    boolean controlView = "control".equals(queryParameter(exchange, "view"));
     try (exchange) {
       writeSse(exchange, JSON.createObjectNode().put("type", "STREAM_READY"));
       while (!closed) {
         ObjectNode event = queue.poll(2, TimeUnit.SECONDS);
         if (event == null) {
           ObjectNode status = JSON.createObjectNode().put("type", "STATUS");
-          status.set("data", api.statusSnapshot());
+          status.set("data", api.statusSnapshot(controlView));
           writeSse(exchange, status);
           if (instanceId != null && !instanceId.isBlank()) {
             try {
               ObjectNode companions = JSON.createObjectNode().put("type", "COMPANIONS");
-              companions.set("data", api.companionSnapshot(instanceId));
+              companions.set("data", api.companionSnapshot(instanceId, controlView));
               writeSse(exchange, companions);
             } catch (Exception failure) {
               writeSse(
@@ -206,7 +207,7 @@ final class WebTerminalServer implements AutoCloseable {
                               : failure.getMessage()));
             }
           }
-        } else writeSse(exchange, event);
+        } else writeSse(exchange, (ObjectNode) api.view(event, controlView));
       }
     } catch (InterruptedException interrupted) {
       Thread.currentThread().interrupt();

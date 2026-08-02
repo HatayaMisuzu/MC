@@ -61,6 +61,7 @@ final class BehaviorDirector {
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, PrimitiveProgress> primitives = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
+    private final Map<UUID, Map<BodyControlArbiter.Authority, String>> controlTokens = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
         this.server = server;
@@ -105,23 +106,34 @@ final class BehaviorDirector {
     }
 
     String claimOwner(CompanionEntry entry, String reason) {
-        return claim(entry, BodyControlArbiter.Authority.OWNER_IMMEDIATE, reason);
+        return claim(entry, BodyControlArbiter.Authority.OWNER_IMMEDIATE,
+                "owner:" + entry.ownerId, reason);
     }
 
     String claimRuntime(CompanionEntry entry, String reason) {
-        return claim(entry, BodyControlArbiter.Authority.RUNTIME_TASK, reason);
+        return claim(entry, BodyControlArbiter.Authority.RUNTIME_TASK,
+                runtimeIdentity(entry), reason);
+    }
+
+    String claimRuntime(CompanionEntry entry, String ownerIdentity, String reason) {
+        return claim(entry, BodyControlArbiter.Authority.RUNTIME_TASK, ownerIdentity, reason);
     }
 
     void releaseRuntime(CompanionEntry entry, String reason) {
-        release(entry, BodyControlArbiter.Authority.RUNTIME_TASK, reason);
+        releaseRuntime(entry, runtimeIdentity(entry), reason);
+    }
+
+    void releaseRuntime(CompanionEntry entry, String ownerIdentity, String reason) {
+        release(entry, BodyControlArbiter.Authority.RUNTIME_TASK, ownerIdentity, reason);
     }
 
     private void claimSafety(CompanionEntry entry, String reason) {
-        claim(entry, BodyControlArbiter.Authority.SAFETY_REFLEX, reason);
+        claim(entry, BodyControlArbiter.Authority.SAFETY_REFLEX, "safety:" + reason, reason);
     }
 
     private void releaseSafety(CompanionEntry entry) {
-        release(entry, BodyControlArbiter.Authority.SAFETY_REFLEX, "HAZARD_CLEARED");
+        release(entry, BodyControlArbiter.Authority.SAFETY_REFLEX,
+                controlArbiter.snapshot(entry.companionId).ownerIdentity(), "HAZARD_CLEARED");
     }
 
     void forget(UUID companionId) {
@@ -130,6 +142,7 @@ final class BehaviorDirector {
         observations.remove(companionId);
         MenuSessionTracker.invalidate(companionId);
         actionGateway.discard(companionId);
+        controlTokens.remove(companionId);
         controlArbiter.clear(companionId);
     }
 
@@ -1482,8 +1495,13 @@ final class BehaviorDirector {
         logger.warn("companion_paused code={} owner={} companion={}", code, entry.ownerId, entry.companionId);
     }
 
-    private String claim(CompanionEntry entry, BodyControlArbiter.Authority authority, String reason) {
-        var decision = controlArbiter.claim(entry.companionId, authority, reason);
+    private String claim(CompanionEntry entry, BodyControlArbiter.Authority authority,
+            String ownerIdentity, String reason) {
+        var decision = controlArbiter.claim(entry.companionId, authority, ownerIdentity, reason);
+        if (decision.accepted()) {
+            controlTokens.computeIfAbsent(entry.companionId, ignored -> new HashMap<>())
+                    .put(authority, decision.claimToken());
+        }
         if (decision.accepted() && !decision.code().equals("UNCHANGED")) {
             logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
                     entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
@@ -1491,20 +1509,36 @@ final class BehaviorDirector {
         return decision.accepted() ? null : decision.code();
     }
 
-    private void release(CompanionEntry entry, BodyControlArbiter.Authority authority, String reason) {
+    private void release(CompanionEntry entry, BodyControlArbiter.Authority authority,
+            String ownerIdentity, String reason) {
         var snapshot = controlArbiter.snapshot(entry.companionId);
-        if (snapshot.authority() != authority) return;
-        var decision = controlArbiter.release(entry.companionId, authority, reason);
+        if (snapshot.authority() != authority || !snapshot.ownerIdentity().equals(ownerIdentity)) return;
+        String token = controlTokens.getOrDefault(entry.companionId, Map.of()).get(authority);
+        var decision = controlArbiter.release(entry.companionId, authority, token, reason);
+        if (decision.accepted()) {
+            Map<BodyControlArbiter.Authority, String> tokens = controlTokens.get(entry.companionId);
+            if (tokens != null) tokens.remove(authority);
+        }
         logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
                 entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
     }
 
     private void releaseCurrent(CompanionEntry entry, String reason) {
-        var decision = controlArbiter.releaseCurrent(entry.companionId, reason);
+        var snapshot = controlArbiter.snapshot(entry.companionId);
+        if (snapshot.authority() == BodyControlArbiter.Authority.OWNER_IMMEDIATE
+                && !snapshot.ownerIdentity().equals("owner:" + entry.ownerId)) return;
+        var decision = controlArbiter.releaseCurrent(entry.companionId, snapshot.claimToken(), reason);
+        if (decision.accepted()) controlTokens.remove(entry.companionId);
         if (!decision.code().equals("UNCHANGED")) {
             logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
                     entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
         }
+    }
+
+    private static String runtimeIdentity(CompanionEntry entry) {
+        return "runtime:" + entry.runtimeEpoch + ":"
+                + (entry.runtimeBehaviorId == null ? "" : entry.runtimeBehaviorId)
+                + ":" + entry.runtimeBehaviorRevision;
     }
 
     private static boolean isSuspension(String code) {

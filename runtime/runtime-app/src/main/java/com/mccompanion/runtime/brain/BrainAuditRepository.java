@@ -3,6 +3,7 @@ package com.mccompanion.runtime.brain;
 import com.mccompanion.runtime.db.RuntimeDatabase;
 import com.mccompanion.runtime.json.Json;
 import com.mccompanion.runtime.tool.ToolCall;
+import com.mccompanion.runtime.tool.DurableExecutionReceipt;
 import com.mccompanion.runtime.tool.ToolResult;
 
 import java.sql.PreparedStatement;
@@ -27,7 +28,8 @@ public final class BrainAuditRepository {
             try {
                 long now = clock.millis();
                 try (PreparedStatement calls = connection.prepareStatement("""
-                        SELECT session_id,call_id,observation_json FROM brain_tool_call WHERE terminal=0
+                        SELECT session_id,call_id,observation_json FROM brain_tool_call
+                        WHERE terminal=0 AND durable_active=0
                         """); var rows = calls.executeQuery()) {
                     while (rows.next()) {
                         JsonNode previous = Json.parse(rows.getString("observation_json"));
@@ -36,7 +38,7 @@ public final class BrainAuditRepository {
                         interrupted.put("state", "INTERRUPTED").put("message", "Runtime restarted before terminal observation");
                         try (PreparedStatement update = connection.prepareStatement("""
                                 UPDATE brain_tool_call SET success=0,result_code='RUNTIME_RESTARTED',
-                                observation_json=?,terminal=1,state='INTERRUPTED',updated_at=?
+                                observation_json=?,terminal=1,state='INTERRUPTED',durable_active=0,updated_at=?
                                 WHERE session_id=? AND call_id=? AND terminal=0
                                 """)) {
                             update.setString(1, Json.write(interrupted)); update.setLong(2, now);
@@ -126,13 +128,14 @@ public final class BrainAuditRepository {
     public void tool(String sessionId, ToolCall call, ToolResult result) {
         try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 INSERT INTO brain_tool_call(session_id,call_id,tool_name,arguments_json,success,result_code,
-                observation_json,terminal,created_at,state,task_id,behavior_id,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+                observation_json,terminal,created_at,state,task_id,behavior_id,updated_at,durable_active)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(session_id,call_id) DO UPDATE SET success=excluded.success,
                 result_code=excluded.result_code,observation_json=excluded.observation_json,
                 terminal=excluded.terminal,state=excluded.state,
                 task_id=COALESCE(excluded.task_id,brain_tool_call.task_id),
-                behavior_id=COALESCE(excluded.behavior_id,brain_tool_call.behavior_id),updated_at=excluded.updated_at
+                behavior_id=COALESCE(excluded.behavior_id,brain_tool_call.behavior_id),
+                updated_at=excluded.updated_at,durable_active=excluded.durable_active
                 """)) {
             long now = clock.millis();
             statement.setString(1, sessionId); statement.setString(2, call.callId()); statement.setString(3, call.name());
@@ -142,7 +145,48 @@ public final class BrainAuditRepository {
             statement.setString(10, toolState(result));
             statement.setString(11, textOrNull(result.observation(), "taskId"));
             statement.setString(12, textOrNull(result.observation(), "behaviorId"));
-            statement.setLong(13, now); statement.executeUpdate();
+            statement.setLong(13, now);
+            statement.setInt(14, isDurableActive(result) ? 1 : 0);
+            statement.executeUpdate();
+            if (DurableExecutionReceipt.isTerminalObservation(result.observation())) {
+                Optional<DurableExecutionReceipt.Handle> handle =
+                        DurableExecutionReceipt.handleFromObservation(result.observation());
+                if (handle.isPresent()) clearDurableHandle(connection, sessionId, handle.get());
+            }
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
+    /** Returns accepted Task/Task Graph calls that still represent controllable durable work. */
+    public List<DurableCall> activeDurableCalls() {
+        List<DurableCall> recovered = new ArrayList<>();
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
+                SELECT c.session_id,c.call_id,c.tool_name,c.arguments_json,
+                       s.controller_id,s.companion_id,c.observation_json
+                FROM brain_tool_call c JOIN brain_session s ON s.session_id=c.session_id
+                WHERE c.durable_active=1 ORDER BY c.updated_at
+                """)) {
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) {
+                    Optional<DurableExecutionReceipt.Handle> handle =
+                            DurableExecutionReceipt.handleFromObservation(Json.parse(rows.getString("observation_json")));
+                    if (handle.isPresent()) {
+                        String sessionId = rows.getString("session_id");
+                        String callId = rows.getString("call_id");
+                        recovered.add(new DurableCall(sessionId, callId,
+                                new ToolCall(callId, rows.getString("tool_name"),
+                                        Json.parse(rows.getString("arguments_json"))),
+                                rows.getString("controller_id"), rows.getString("companion_id"), handle.get()));
+                    }
+                }
+            }
+            return List.copyOf(recovered);
+        } catch (SQLException failure) { throw persistence(failure); }
+    }
+
+    /** Clears one durable identity idempotently after a verified terminal observation. */
+    public void clearDurableHandle(String sessionId, DurableExecutionReceipt.Handle handle) {
+        try (var connection = database.open()) {
+            clearDurableHandle(connection, sessionId, handle);
         } catch (SQLException failure) { throw persistence(failure); }
     }
 
@@ -427,7 +471,52 @@ public final class BrainAuditRepository {
 
     private static String nullToEmpty(String value) { return value == null ? "" : value; }
 
+    private static boolean isDurableActive(ToolResult result) {
+        return (!result.terminal() && DurableExecutionReceipt.fromAccepted(result).isPresent())
+                || DurableExecutionReceipt.isAcceptedReceipt(result);
+    }
+
+    private static void clearDurableHandle(java.sql.Connection connection, String sessionId,
+                                           DurableExecutionReceipt.Handle handle) throws SQLException {
+        if (handle == null) return;
+        if ("TASK".equals(handle.kind())) {
+            try (PreparedStatement statement = connection.prepareStatement("""
+                    UPDATE brain_tool_call SET durable_active=0,updated_at=?
+                    WHERE session_id=? AND durable_active=1 AND task_id=?
+                    """)) {
+                statement.setLong(1, System.currentTimeMillis());
+                statement.setString(2, sessionId); statement.setString(3, handle.id());
+                statement.executeUpdate();
+            }
+            return;
+        }
+        try (PreparedStatement calls = connection.prepareStatement("""
+                SELECT call_id,observation_json FROM brain_tool_call
+                WHERE session_id=? AND durable_active=1
+                """)) {
+            calls.setString(1, sessionId);
+            try (var rows = calls.executeQuery();
+                 PreparedStatement update = connection.prepareStatement(
+                         "UPDATE brain_tool_call SET durable_active=0,updated_at=? WHERE session_id=? AND call_id=?")) {
+                while (rows.next()) {
+                    Optional<DurableExecutionReceipt.Handle> candidate =
+                            DurableExecutionReceipt.handleFromObservation(Json.parse(rows.getString("observation_json")));
+                    if (candidate.isPresent() && candidate.get().kind().equals(handle.kind())
+                            && candidate.get().id().equals(handle.id())) {
+                        update.setLong(1, System.currentTimeMillis());
+                        update.setString(2, sessionId); update.setString(3, rows.getString("call_id"));
+                        update.addBatch();
+                    }
+                }
+                update.executeBatch();
+            }
+        }
+    }
+
     public record AuditedToolCall(ToolCall call, ToolResult result) { }
+    public record DurableCall(String sessionId, String callId, ToolCall call,
+                              String controllerId, String companionId,
+                              DurableExecutionReceipt.Handle handle) { }
     public record SemanticStateSnapshot(String sessionId, String controllerId, String companionId,
                                         BrainSemanticState state, long revision, Instant authoredAt) { }
     public record CompletionClaimSnapshot(String sessionId, long sequence,

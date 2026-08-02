@@ -15,6 +15,16 @@ final class RuntimeSnapshotService {
   private static final PrivacyFilter PRIVACY = new PrivacyFilter();
 
   ObjectNode snapshot(RuntimeProfile profile) {
+    return snapshot(profile, false);
+  }
+
+  /** The raw projection is available only to the authenticated local control view. */
+  ObjectNode snapshot(RuntimeProfile profile, boolean controlView) {
+    ObjectNode root = rawSnapshot(profile);
+    return controlView ? root : (ObjectNode) PRIVACY.sanitizeJson(root, PrivacyFilter.Policy.UI_DEFAULT);
+  }
+
+  private ObjectNode rawSnapshot(RuntimeProfile profile) {
     ObjectNode root = JSON.createObjectNode();
     root.put("instanceId", profile.instanceId());
     root.set("companions", JSON.createArrayNode());

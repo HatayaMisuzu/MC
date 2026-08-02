@@ -146,6 +146,8 @@ public final class RuntimeApplication implements AutoCloseable {
             McpEventRepository mcpEvents = new McpEventRepository(database);
             int prunedMcpEvents = mcpEvents.pruneInactiveSessions();
             BrainAuditRepository brainAudit = new BrainAuditRepository(database);
+            java.util.List<BrainAuditRepository.DurableCall> recoveredDurableCalls =
+                    brainAudit.activeDurableCalls();
             int interruptedBrainSessions = brainAudit.interruptActiveSessions();
             CompanionRepository companions = new CompanionRepository(database);
             TaskEventStore events = new TaskEventStore(database);
@@ -217,6 +219,9 @@ public final class RuntimeApplication implements AutoCloseable {
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
+            if (externalBrain != null && !recoveredDurableCalls.isEmpty()) {
+                externalBrain.restoreActiveDurableCalls(recoveredDurableCalls);
+            }
             sessions.setListener(commands);
 
             int staleSessions = sessions.recoverStaleSessions();

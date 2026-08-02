@@ -21,8 +21,15 @@ export class ApiError extends Error {
   }
 }
 
+// The browser is the authenticated local control client. The backend keeps the safer
+// shareable/default projection unless this explicit loopback control view is requested.
+const controlPath = (path: string): string => {
+  if (!path.startsWith('/api/') || path.includes('view=')) return path
+  return `${path}${path.includes('?') ? '&' : '?'}view=control`
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(controlPath(path), {
     ...init,
     credentials: 'same-origin',
     headers: {
@@ -72,7 +79,9 @@ export async function streamEvents(
   signal: AbortSignal,
   instanceId = '',
 ): Promise<void> {
-  const query = instanceId ? `?instanceId=${encodeURIComponent(instanceId)}` : ''
+  const query = instanceId
+    ? `?instanceId=${encodeURIComponent(instanceId)}&view=control`
+    : '?view=control'
   const response = await fetch(`/api/events${query}`, {
     credentials: 'same-origin',
     headers: { Accept: 'text/event-stream', 'X-MCAC-CSRF': csrf },

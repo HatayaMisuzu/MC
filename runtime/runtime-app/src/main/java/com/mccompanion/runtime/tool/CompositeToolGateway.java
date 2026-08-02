@@ -21,12 +21,32 @@ public final class CompositeToolGateway implements ToolGateway, AutoCloseable {
     @Override public java.util.Optional<ToolResult> reconcile(ToolContext context, ToolCall call) {
         return delegate(context, call).flatMap(value -> value.reconcile(context, call));
     }
+    @Override public java.util.Optional<ToolResult> inspectDurable(
+            ToolContext context, DurableExecutionReceipt.Handle handle) {
+        return delegates.stream().flatMap(value -> value.inspectDurable(context, handle).stream()).findFirst();
+    }
+    @Override public void restoreDurable(ToolContext context, ToolCall call,
+                                         DurableExecutionReceipt.Handle handle) {
+        delegates.forEach(value -> value.restoreDurable(context, call, handle));
+    }
     @Override public void cancel(ToolContext context, String callId, String reason) {
         delegates.forEach(value -> value.cancel(context, callId, reason));
+    }
+    @Override public void cancelDurable(ToolContext context, ToolCall call,
+                                       DurableExecutionReceipt.Handle handle, String reason) {
+        delegates.forEach(value -> value.cancelDurable(context, call, handle, reason));
     }
     @Override public boolean pause(ToolContext context, String callId, String reason) {
         boolean accepted = false;
         for (ToolGateway delegate : delegates) accepted |= delegate.pause(context, callId, reason);
+        return accepted;
+    }
+    @Override public boolean pauseDurable(ToolContext context, ToolCall call,
+                                         DurableExecutionReceipt.Handle handle, String reason) {
+        boolean accepted = false;
+        for (ToolGateway delegate : delegates) {
+            accepted |= delegate.pauseDurable(context, call, handle, reason);
+        }
         return accepted;
     }
     @Override public boolean conflictsWithOwnerActivity(

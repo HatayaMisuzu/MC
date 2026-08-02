@@ -862,6 +862,11 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "CREATE INDEX mcp_session_pairing_idx ON mcp_session(pairing_context_hash,state,expires_at)");
         List<String> completionClaimConditions = List.of(
                 "ALTER TABLE brain_completion_claim ADD COLUMN conditions_json TEXT NOT NULL DEFAULT '[]'");
+        List<String> durableBrainTracking = List.of(
+                "ALTER TABLE brain_tool_call ADD COLUMN durable_active INTEGER NOT NULL DEFAULT 0",
+                "UPDATE brain_tool_call SET durable_active=1 WHERE observation_json LIKE '%\"executionMode\":\"ASYNCHRONOUS\"%'"
+                        + " AND observation_json LIKE '%\"completionVerified\":false%'",
+                "CREATE INDEX brain_tool_call_durable_idx ON brain_tool_call(session_id,durable_active,updated_at)");
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -895,6 +900,8 @@ public final class RuntimeDatabase implements AutoCloseable {
                         proactiveMessageAdmission),
                 new Migration(30, "bind MCP sessions to pairing-token generation", mcpPairingContext),
                 new Migration(31, "persist structured completion-claim evidence conditions",
-                        completionClaimConditions));
+                        completionClaimConditions),
+                new Migration(32, "persist active durable execution tracking across Runtime restart",
+                        durableBrainTracking));
     }
 }

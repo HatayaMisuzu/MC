@@ -245,6 +245,51 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         }
     }
 
+    @Override public Optional<ToolResult> inspectDurable(
+            ToolContext context, DurableExecutionReceipt.Handle handle) {
+        try {
+            if ("TASK".equals(handle.kind()) && tasks != null) {
+                TaskRecord task = tasks.get(handle.id()).orElse(null);
+                if (task == null || !task.companionId().equals(context.companionId())) return Optional.empty();
+                ToolCall inspect = new ToolCall("recovery-inspect-" + handle.id(), handle.statusTool(),
+                        Json.object().put(handle.field(), handle.id()));
+                return Optional.of(task.state().terminal() || task.state() == TaskState.BLOCKED
+                        || task.state() == TaskState.PAUSED || task.state() == TaskState.RECONCILIATION_REQUIRED
+                        ? terminalResult(inspect, task) : progressResult(inspect, task));
+            }
+            if ("TASK_GRAPH".equals(handle.kind()) && taskGraphRuntime != null) {
+                ToolCall inspect = new ToolCall("recovery-inspect-" + handle.id(), handle.statusTool(),
+                        Json.object().put(handle.field(), handle.id()));
+                return Optional.of(taskGraphRuntime.inspect(context, inspect, handle.id()));
+            }
+        } catch (java.sql.SQLException | RuntimeException ignored) {
+            return Optional.empty();
+        }
+        return Optional.empty();
+    }
+
+    @Override public void restoreDurable(ToolContext context, ToolCall call,
+                                         DurableExecutionReceipt.Handle handle) {
+        if ("TASK".equals(handle.kind())) activeTasks.put(key(context, call.callId()), handle.id());
+    }
+
+    @Override public void cancelDurable(ToolContext context, ToolCall call,
+                                       DurableExecutionReceipt.Handle handle, String reason) {
+        if ("TASK_GRAPH".equals(handle.kind()) && taskGraphRuntime != null) {
+            taskGraphRuntime.cancel(context,
+                    new ToolCall("recovery-cancel-" + handle.id(), handle.cancelTool(),
+                            Json.object().put(handle.field(), handle.id())), handle.id(), reason);
+            return;
+        }
+        if ("TASK".equals(handle.kind()) && tasks != null) {
+            activeTasks.remove(key(context, call.callId()));
+            commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
+                    context.companionId(), stop(reason == null ? "cancel" : reason));
+            return;
+        }
+        cancel(context, call.callId(), reason);
+    }
+
     @Override public List<ToolDefinition> definitions(ToolContext context) {
         Set<String> available = Set.copyOf(availableCapabilities.apply(context.companionId()));
         List<ToolDefinition> values = new ArrayList<>();
@@ -478,6 +523,23 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             accepted |= paused.accepted();
         }
         return accepted;
+    }
+
+    @Override public boolean pauseDurable(ToolContext context, ToolCall call,
+                                         DurableExecutionReceipt.Handle handle, String reason) {
+        if ("TASK_GRAPH".equals(handle.kind()) && taskGraphRuntime != null) {
+            ToolResult paused = taskGraphRuntime.pause(context,
+                    new ToolCall("recovery-pause-" + handle.id(), handle.pauseTool(),
+                            Json.object().put(handle.field(), handle.id())), handle.id());
+            return paused.success() && !paused.code().equals("TASK_GRAPH_NOT_RUNNING");
+        }
+        if ("TASK".equals(handle.kind()) && tasks != null) {
+            CommandReply paused = commands.execute(
+                    "brain-pause-" + context.brainSessionId() + '-' + call.callId(),
+                    context.companionId(), stop("pause"));
+            return paused.accepted();
+        }
+        return pause(context, call.callId(), reason);
     }
 
     @Override public boolean conflictsWithOwnerActivity(

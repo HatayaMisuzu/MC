@@ -222,22 +222,7 @@ final class OperationManager implements AutoCloseable {
   }
 
   private static JsonNode sanitize(JsonNode value) {
-    if (value == null) return null;
-    if (value.isTextual()) {
-      return JSON.getNodeFactory().textNode(
-          PRIVACY.filter(value.asText(), PrivacyFilter.Policy.UI_DEFAULT));
-    }
-    if (value.isArray()) {
-      var copy = JSON.createArrayNode();
-      value.forEach(item -> copy.add(sanitize(item)));
-      return copy;
-    }
-    if (value.isObject()) {
-      var copy = JSON.createObjectNode();
-      value.fields().forEachRemaining(entry -> copy.set(entry.getKey(), sanitize(entry.getValue())));
-      return copy;
-    }
-    return value.deepCopy();
+    return PRIVACY.sanitizeJson(value, PrivacyFilter.Policy.UI_DEFAULT);
   }
 
   private void publish(ObjectNode event) {

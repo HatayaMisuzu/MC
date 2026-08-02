@@ -1,5 +1,9 @@
 package com.mccompanion.terminal;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -32,6 +36,7 @@ final class PrivacyFilter {
       "(?i)\\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,63}\\b");
   private static final Pattern JWT = Pattern.compile(
       "\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\b");
+  private static final ObjectMapper JSON = new ObjectMapper();
 
   String filter(String text, Policy policy) {
     if (text == null || policy == Policy.INTERNAL_RAW) return text;
@@ -66,6 +71,44 @@ final class PrivacyFilter {
     return filter(line, policy);
   }
 
+  /**
+   * Applies the same classification to structured responses as {@link #filter(String, Policy)}
+   * applies to text. Identifier-looking field names are not allowed to bypass the boundary merely
+   * because a Runtime response added a new JSON field.
+   */
+  JsonNode sanitizeJson(JsonNode value, Policy policy) {
+    if (value == null || policy == Policy.INTERNAL_RAW) return value == null ? null : value.deepCopy();
+    if (value.isTextual()) {
+      String text = filter(value.asText(), policy);
+      if ((policy == Policy.UI_DEFAULT || policy == Policy.SHAREABLE_BUNDLE)
+          && isLikelyOpaqueIdentifier(text)) {
+        text = policy == Policy.SHAREABLE_BUNDLE ? "<ID>" : pseudonymLabel("ID", text);
+      }
+      return JSON.getNodeFactory().textNode(text);
+    }
+    if (value.isArray()) {
+      ArrayNode copy = JSON.createArrayNode();
+      value.forEach(item -> copy.add(sanitizeJson(item, policy)));
+      return copy;
+    }
+    if (!value.isObject()) return value.deepCopy();
+    ObjectNode copy = JSON.createObjectNode();
+    value.fields().forEachRemaining(entry -> {
+      String key = entry.getKey();
+      JsonNode child = entry.getValue();
+      String kind = identifierKind(key);
+      if (kind != null && (policy == Policy.UI_DEFAULT || policy == Policy.SHAREABLE_BUNDLE)) {
+        String replacement = "REDACTED".equals(kind) ? "<REDACTED>"
+            : policy == Policy.SHAREABLE_BUNDLE ? "<" + kind + ">"
+            : pseudonymLabel(kind, child.asText(""));
+        copy.set(key, JSON.getNodeFactory().textNode(replacement));
+      } else {
+        copy.set(key, sanitizeJson(child, policy));
+      }
+    });
+    return copy;
+  }
+
   boolean containsShareablePrivateData(String text) {
     if (text == null) return false;
     var secrets = SENSITIVE_ASSIGNMENT.matcher(text);
@@ -89,6 +132,60 @@ final class PrivacyFilter {
     }
     matcher.appendTail(result);
     return result.toString();
+  }
+
+  private static String identifierKind(String key) {
+    if (key == null || key.isBlank()) return null;
+    String normalized = key.replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
+    if (normalized.equals("id") || isKnownIdField(normalized)) return kindFromKey(normalized, "ID");
+    if (normalized.contains("token") || normalized.contains("secret")
+        || normalized.contains("password") || normalized.contains("cookie")
+        || normalized.contains("credential") || normalized.contains("authorization")) {
+      return "REDACTED";
+    }
+    if (normalized.contains("instance") || normalized.contains("companion")
+        || normalized.contains("controller") || normalized.contains("profile")
+        || normalized.contains("installation") || normalized.contains("launcher")) return "ID";
+    if (normalized.contains("lease") || normalized.contains("epoch")
+        || normalized.contains("revision") || normalized.contains("timestamp")
+        || normalized.endsWith("at") || normalized.equals("pid")
+        || normalized.equals("port") || normalized.endsWith("port")) return "LOCAL";
+    if (normalized.contains("handle") || normalized.contains("opaque")
+        || normalized.contains("reference") || normalized.equals("raw")) return "ID";
+    return null;
+  }
+
+  private static String kindFromKey(String normalized, String fallback) {
+    if (normalized.contains("companion")) return "Companion";
+    if (normalized.contains("instance")) return "Instance";
+    if (normalized.contains("task")) return "Task";
+    if (normalized.contains("execution")) return "Execution";
+    if (normalized.contains("event")) return "Event";
+    if (normalized.contains("question")) return "Question";
+    if (normalized.contains("plan")) return "Plan";
+    if (normalized.contains("behavior")) return "Behavior";
+    if (normalized.contains("session")) return "Session";
+    if (normalized.contains("controller")) return "Controller";
+    if (normalized.contains("lease")) return "Lease";
+    if (normalized.contains("call")) return "Call";
+    if (normalized.contains("operation")) return "Operation";
+    if (normalized.contains("profile")) return "Profile";
+    if (normalized.contains("launcher")) return "Launcher";
+    return fallback;
+  }
+
+  private static boolean isKnownIdField(String normalized) {
+    return java.util.List.of("instance", "launcher", "profile", "installation", "companion",
+        "controller", "session", "task", "execution", "event", "question", "plan",
+        "behavior", "lease", "call", "operation", "memory", "suggestion", "skill",
+        "trial", "request", "admission", "pack", "step", "revision", "correlation").stream()
+        .anyMatch(prefix -> normalized.equals(prefix + "id"));
+  }
+
+  private static boolean isLikelyOpaqueIdentifier(String value) {
+    return value != null && value.matches(
+        "(?i)(?:companion|instance|execution|task|event|question|plan|behavior|session|controller|"
+            + "lease|call|operation|skill|memory|suggestion|request|correlation)[-_][a-z0-9][a-z0-9._:-]{2,}");
   }
 
   private static String pseudonym(String value) {

@@ -54,6 +54,7 @@ public final class DiagnosticEngine {
             loadEvidence.put("charset", log.charset());
             loadEvidence.put("replacementCount", Integer.toString(log.replacementCount()));
             loadEvidence.put("truncated", Boolean.toString(log.truncated()));
+            loadEvidence.put("stability", log.stability().name());
         } catch(IOException failure) {
             loadEvidence.put("readError", failure.getClass().getSimpleName());
         }

@@ -23,7 +23,7 @@ Navigate position change, safe idle, and reconnect. It is retained as historical
 not reused as current 2026-08-02 proof. This bounded result does not establish Fabric, other-provider,
 broad Tool/terrain, or sustained subjective human-play coverage.
 
-### Current 2026-08-02 closeout evidence
+### Current closeout evidence
 
 The newly built Forge artifact was formally installed into
 the real PCL Forge 1.20.1 instance and its SHA-256 matched the build. Forge startup established the

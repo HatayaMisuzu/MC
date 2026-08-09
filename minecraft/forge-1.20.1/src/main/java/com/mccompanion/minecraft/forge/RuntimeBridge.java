@@ -682,6 +682,7 @@ final class RuntimeBridge implements AutoCloseable {
         pendingPlayerRequestTimes.clear();
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
+        observedBehaviorStates.clear();
         if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
         server.execute(() -> {
             if (!connections.isLatestAttempt(attempt) && socket != null && sessionId != null) return;
@@ -789,6 +790,7 @@ final class RuntimeBridge implements AutoCloseable {
         pendingPlayerRequestTimes.clear();
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
+        observedBehaviorStates.clear();
         executor.shutdownNow();
     }
 

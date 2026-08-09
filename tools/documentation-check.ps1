@@ -176,7 +176,7 @@ foreach ($requiredText in @(
     'Overall status: `HUMAN_PLAYTEST_PENDING`', 'Automated productization baseline: `FROZEN`',
     'Product version: `0.3.1`', 'mcac-productization-baseline-0.3.0',
     'Machine-readable current product facts:', '## Evidence scope',
-    '### Historical live evidence', '### Current 2026-08-02 closeout evidence',
+    '### Historical live evidence', '### Current closeout evidence',
     'HUMAN_PLAYTEST_PENDING'
 )) {
     if (-not $matrixHead.Contains($requiredText)) { Add-Error "RC matrix header missing: $requiredText" }
@@ -260,6 +260,16 @@ foreach ($versionFile in @(
     if ((Read-Repo $versionFile) -notmatch '(?m)^mod_version=0\.3\.1\s*$') {
         Add-Error "$versionFile does not declare mod_version=0.3.1"
     }
+}
+
+$neoForgeProperties = Read-Repo 'minecraft/neoforge-1.21.1/gradle.properties'
+if ($neoForgeProperties -notmatch '(?m)^mod_description=.*LOCAL_ONLY.*no Runtime or External Brain Bridge\.?\s*$') {
+    Add-Error 'NeoForge metadata must describe LOCAL_ONLY and reject Runtime/External Brain Bridge support'
+}
+$neoForgeEntrypoint = Read-Repo 'minecraft/neoforge-1.21.1/src/main/java/com/mccompanion/minecraft/neoforge/MinecraftAiCompanionNeoForge.java'
+if (($neoForgeEntrypoint -notmatch '"OFFLINE_LOCAL_CONTROL"\s*,\s*false') -or
+        ($neoForgeEntrypoint -notmatch 'runtime reports local body status only')) {
+    Add-Error 'NeoForge entrypoint must expose OFFLINE_LOCAL_CONTROL and local-only runtime diagnostics'
 }
 foreach ($productionFile in @(
     'tools/runtime-launcher.properties',

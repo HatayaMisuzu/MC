@@ -45,7 +45,8 @@ public final class MinecraftAiCompanionNeoForge {
         NeoForge.EVENT_BUS.addListener(this::onServerStarted);
         NeoForge.EVENT_BUS.addListener(this::onServerTick);
         NeoForge.EVENT_BUS.addListener(this::onServerStopping);
-        LOGGER.info("Minecraft AI Companion loaded with server-player companion control; Runtime is optional");
+        LOGGER.info("Minecraft AI Companion loaded in LOCAL_ONLY (OFFLINE_LOCAL_CONTROL) mode; "
+                + "/companion runtime reports local body status only; Runtime and External Brain Bridges are unavailable");
         LOGGER.info("capability_report={}", CAPABILITIES.toJson());
     }
 

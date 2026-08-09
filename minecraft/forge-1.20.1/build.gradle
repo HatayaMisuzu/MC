@@ -135,6 +135,7 @@ def verifyRuntimeBridgeArtifact = tasks.register('verifyRuntimeBridgeArtifact') 
         Set<String> required = [
                 'com/mccompanion/minecraft/forge/RuntimeBridge.class',
                 'com/mccompanion/minecraft/bridge/ConversationDeliveryWindow.class',
+                'com/mccompanion/minecraft/bridge/ConnectionEpochGate.class',
                 'com/mccompanion/minecraft/forge/json/ObjectMapper.class',
                 'com/mccompanion/core/body/BodyControlArbiter.class',
                 'pack.mcmeta'

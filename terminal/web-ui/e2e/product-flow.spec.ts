@@ -27,12 +27,12 @@ interface E2EInstance {
 }
 let activeHermesServer: Server | undefined
 
-test.afterEach(() => {
+test.afterEach(async () => {
   if (!activeHermesServer) return
   const server = activeHermesServer
   activeHermesServer = undefined
   server.closeAllConnections()
-  server.close()
+  await new Promise<void>((resolveClosed) => server.close(() => resolveClosed()))
 })
 
 const copy = {
@@ -157,11 +157,14 @@ async function clickPlanExpectFailure(
 
 async function apiJson(page: Page, path: string) {
   return page.evaluate(async (url) => {
-    const response = await fetch(url, {
+    const controlUrl = url.startsWith('/api/') && !url.includes('view=')
+      ? `${url}${url.includes('?') ? '&' : '?'}view=control`
+      : url
+    const response = await fetch(controlUrl, {
       credentials: 'same-origin',
       headers: { Accept: 'application/json', 'X-MCAC-CSRF': sessionStorage.getItem('mcac.csrf') ?? '' },
     })
-    if (!response.ok) throw new Error(`API ${url} failed with ${response.status}: ${await response.text()}`)
+    if (!response.ok) throw new Error(`API ${controlUrl} failed with ${response.status}: ${await response.text()}`)
     return response.json()
   }, path)
 }
@@ -225,7 +228,8 @@ async function verifyDiscoveryAndBrain(
 ) {
   await navigate(page, 'en-US', 'instances')
   const rescanResponse = page.waitForResponse((response) =>
-    response.url().endsWith('/api/discovery/rescan') && response.request().method() === 'POST')
+    new URL(response.url()).pathname === '/api/discovery/rescan'
+      && response.request().method() === 'POST')
   await page.getByRole('button', { name: 'Rescan', exact: true }).click()
   expect((await rescanResponse).status()).toBe(200)
   await expect(page.locator('.inline-error')).toHaveCount(0)
@@ -351,9 +355,13 @@ async function connectProtocolCompanion(runtimePort: number, instanceId: string)
     socket,
     token,
     profile,
-    close: () => {
+    close: async () => {
       clearInterval(heartbeat)
+      if (socket.readyState === WebSocket.CLOSED) return
+      const closed = new Promise<void>((resolveClosed) =>
+        socket.addEventListener('close', () => resolveClosed(), { once: true }))
       socket.close()
+      await closed
     },
   }
 }
@@ -470,7 +478,8 @@ async function verifyCompanionAndTaskGraphControls(
         companion.id === 'playwright-companion' && companion.online)
     }).toBe(true)
     await navigate(page, 'en-US', 'companions')
-    await expect(page.getByText('Playwright Companion', { exact: true })).toBeVisible()
+    await expect(page.getByRole('option', { name: /playwright-companion/ }))
+      .toHaveJSProperty('selected', true)
 
     await clickPlan(page, 'en-US', 'status')
     await clickPlan(page, 'en-US', 'follow')
@@ -523,7 +532,7 @@ async function verifyCompanionAndTaskGraphControls(
     const completed = await graph.completion
     expect(completed.status()).toBe(200)
   } finally {
-    fixture.close()
+    await fixture.close()
   }
 }
 
@@ -553,7 +562,8 @@ async function verifyDoctorRepairButtons(page: Page, instance: E2EInstance) {
     'doctor-mismatch-token-that-is-long-enough-for-the-fixture\n', 'ascii')
   await repairDoctorCheck(page, 'runtime.token_match')
 
-  const mods = resolve(instance.gameDir as string, 'mods')
+  const mods = resolve(tmpdir(), 'mcac-playwright-fixture', '.minecraft',
+    'versions', 'Fabric 1.21.1', 'mods')
   const managedJar = readdirSync(mods, { recursive: true })
     .map((entry) => resolve(mods, String(entry)))
     .find((entry) => entry.toLowerCase().endsWith('.jar')
@@ -696,7 +706,9 @@ test('packaged Terminal completes bilingual real-backend product paths', async (
 
   await page.goto(state.bootstrapUrl)
   await expect(page).toHaveTitle('Minecraft AI Companion')
-  await expect(page.getByRole('heading', { name: 'Fabric 1.21.1', exact: true })).toBeVisible()
+  const discovered = await apiJson(page, '/api/instances') as Array<E2EInstance & { name: string }>
+  expect(discovered).toHaveLength(1)
+  await expect(page.getByRole('heading', { name: discovered[0].name, exact: true })).toBeVisible()
 
   mkdirSync(resolve('..', '..', 'output', 'playwright'), { recursive: true })
 

@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class SessionRegistry implements AutoCloseable {
     private final RuntimeDatabase database;
@@ -28,6 +29,8 @@ public final class SessionRegistry implements AutoCloseable {
     private final Map<String, RuntimeSession> byId = new ConcurrentHashMap<>();
     private final Map<String, RuntimeSession> byWorld = new ConcurrentHashMap<>();
     private final Map<String, RuntimeSession> byCompanion = new ConcurrentHashMap<>();
+    private final Map<String, Long> companionAuthorityFloor = new ConcurrentHashMap<>();
+    private final AtomicLong sessionAuthorityOrder = new AtomicLong();
     private volatile Listener listener = Listener.NOOP;
 
     public SessionRegistry(RuntimeDatabase database, CompanionRepository companions, RuntimeLog log) {
@@ -48,7 +51,8 @@ public final class SessionRegistry implements AutoCloseable {
     public synchronized RuntimeSession register(SessionPeer peer, Handshake handshake) throws SQLException {
         requireText(handshake.worldId(), "worldId");
         Instant now = clock.instant();
-        RuntimeSession session = new RuntimeSession(UUID.randomUUID().toString(), peer, handshake, now);
+        RuntimeSession session = new RuntimeSession(UUID.randomUUID().toString(), peer, handshake, now,
+                sessionAuthorityOrder.incrementAndGet());
         persistConnected(session);
         RuntimeSession previous = byWorld.put(handshake.worldId(), session);
         if (previous != null && previous != session) {
@@ -104,16 +108,31 @@ public final class SessionRegistry implements AutoCloseable {
         }
     }
 
-    public void registerCompanion(RuntimeSession session, CompanionStatus status, JsonNode statusJson) throws SQLException {
+    public synchronized void registerCompanion(RuntimeSession session, CompanionStatus status, JsonNode statusJson) throws SQLException {
         requireText(status.companionId(), "companionId");
+        if (byId.get(session.sessionId()) != session) {
+            throw new IllegalArgumentException("STALE_COMPANION_SESSION");
+        }
         if (!session.handshake().worldId().equals(status.worldId())) {
             throw new IllegalArgumentException("Companion status worldId does not match the authenticated session");
         }
-        session.addCompanion(status.companionId());
-        byCompanion.put(status.companionId(), session);
+        RuntimeSession currentOwner = byCompanion.get(status.companionId());
+        long authorityFloor = companionAuthorityFloor.getOrDefault(status.companionId(), 0L);
+        if (session.authorityOrder() < authorityFloor || (currentOwner != null && currentOwner != session
+                && currentOwner.authorityOrder() > session.authorityOrder())) {
+            throw new IllegalArgumentException("STALE_COMPANION_SESSION");
+        }
         JsonNode persistedStatus = statusJson == null ? Json.object() : statusJson;
         companions.upsert(status.companionId(), session.sessionId(), session.handshake().worldId(), status.ownerId(),
                 status.displayName(), persistedStatus);
+        companionAuthorityFloor.merge(status.companionId(), session.authorityOrder(), Math::max);
+        RuntimeSession previous = byCompanion.put(status.companionId(), session);
+        if (previous != null && previous != session) {
+            previous.removeCompanion(status.companionId());
+            log.warn("Companion session authority rebound: companion=" + status.companionId()
+                    + ", oldSession=" + previous.sessionId() + ", newSession=" + session.sessionId());
+        }
+        session.addCompanion(status.companionId());
         listener.onCompanionUpdated(session, status, persistedStatus);
     }
 
@@ -144,6 +163,10 @@ public final class SessionRegistry implements AutoCloseable {
 
     public Optional<RuntimeSession> forPeer(SessionPeer peer) { return Optional.ofNullable(byPeer.get(peer.id())); }
     public Optional<RuntimeSession> forCompanion(String companionId) { return Optional.ofNullable(byCompanion.get(companionId)); }
+
+    public boolean isAuthoritative(RuntimeSession session, String companionId) {
+        return session != null && byCompanion.get(companionId) == session;
+    }
     public Optional<RuntimeSession> forWorld(String worldId) { return Optional.ofNullable(byWorld.get(worldId)); }
     public List<RuntimeSession> sessions() { return List.copyOf(byId.values()); }
 

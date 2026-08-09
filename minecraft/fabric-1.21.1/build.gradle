@@ -124,7 +124,8 @@ def verifyRuntimeBridgeArtifact = tasks.register('verifyRuntimeBridgeArtifact') 
         File artifact = tasks.named('jar').get().archiveFile.get().asFile
         Set<String> required = [
                 'com/mccompanion/minecraft/fabric/RuntimeBridge.class',
-                'com/mccompanion/minecraft/bridge/ConversationDeliveryWindow.class'
+                'com/mccompanion/minecraft/bridge/ConversationDeliveryWindow.class',
+                'com/mccompanion/minecraft/bridge/ConnectionEpochGate.class'
         ]
         new java.util.zip.ZipFile(artifact).withCloseable { zip ->
             required.each { entry ->

@@ -4,7 +4,7 @@ import { useI18n } from '../i18n/I18nContext'
 import { ActionButton } from './ActionButton'
 
 export function ConfirmDialog() {
-  const { pendingPlan, dismissPlan, confirmPlan, operation, planError } = useTerminal()
+  const { pendingPlan, dismissPlan, confirmPlan, operation, planError, confirmingPlan } = useTerminal()
   const { t } = useI18n()
   if (!pendingPlan && !operation && !planError) return null
   const finished = operation?.state === 'SUCCEEDED' || operation?.state === 'FAILED'
@@ -40,8 +40,9 @@ export function ConfirmDialog() {
       </div>}
       {planError && <div className="inline-error">{planError}</div>}
       <footer>{pendingPlan ? <>
-        <ActionButton tone="ghost" onClick={dismissPlan}>{t('common.cancel')}</ActionButton>
+        <ActionButton tone="ghost" disabled={confirmingPlan} onClick={dismissPlan}>{t('common.cancel')}</ActionButton>
         <ActionButton tone={pendingPlan.dangerous ? 'danger' : 'primary'}
+          disabled={confirmingPlan} loading={confirmingPlan}
           onClick={() => void confirmPlan()}>{t('dialog.confirmExecute')}</ActionButton>
       </> : (finished || planError) && <ActionButton onClick={dismissPlan}>{t('common.close')}</ActionButton>}</footer>
     </section>

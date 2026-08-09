@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, createPlan, executePlan, streamEvents, waitForOperation } from '../api/client'
 import type { CompanionSnapshot, Instance, Operation, OperationPlan, StreamEvent, TerminalStatus } from '../types'
 
@@ -14,6 +14,7 @@ interface TerminalContextValue {
   pendingPlan: OperationPlan | null
   operation: Operation | null
   planError: string | null
+  confirmingPlan: boolean
   select: (id: string) => void
   refresh: () => Promise<void>
   requestPlan: (category: string, body: Record<string, unknown>) => Promise<void>
@@ -34,6 +35,10 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   const [pendingPlan, setPendingPlan] = useState<OperationPlan | null>(null)
   const [operation, setOperation] = useState<Operation | null>(null)
   const [planError, setPlanError] = useState<string | null>(null)
+  const [confirmingPlan, setConfirmingPlan] = useState(false)
+  const operationWait = useRef<AbortController | null>(null)
+
+  useEffect(() => () => operationWait.current?.abort(), [])
 
   const refresh = useCallback(async () => {
     try {
@@ -44,10 +49,16 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
       setStatus(nextStatus)
       setInstances(nextInstances)
       setSelectedId((current) => {
+        const backendSelected = nextStatus.selectedInstanceId
+        const validBackendSelected = backendSelected
+          && nextInstances.some((value) => value.id === backendSelected)
+          ? backendSelected
+          : ''
         const next = nextInstances.some((value) => value.id === current)
           ? current
-          : (nextStatus.selectedInstanceId ?? nextInstances[0]?.id ?? '')
+          : (validBackendSelected || nextInstances[0]?.id || '')
         if (next) sessionStorage.setItem('mcac.instance', next)
+        else sessionStorage.removeItem('mcac.instance')
         return next
       })
       setBackendError(null)
@@ -127,20 +138,27 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const confirmPlan = useCallback(async () => {
-    if (!pendingPlan) return
+    if (!pendingPlan || confirmingPlan) return
     setPlanError(null)
+    setConfirmingPlan(true)
     try {
       const queued = await executePlan(pendingPlan)
       setPendingPlan(null)
       setOperation(queued)
-      const completed = await waitForOperation(queued.id, setOperation)
+      operationWait.current?.abort()
+      const waitController = new AbortController()
+      operationWait.current = waitController
+      const completed = await waitForOperation(queued.id, setOperation, waitController.signal)
       if (completed.state === 'FAILED') setPlanError(completed.error ?? completed.message)
       await refresh()
       window.dispatchEvent(new Event('mcac:refresh'))
     } catch (failure) {
       setPlanError(failure instanceof Error ? failure.message : String(failure))
+    } finally {
+      operationWait.current = null
+      setConfirmingPlan(false)
     }
-  }, [pendingPlan, refresh])
+  }, [pendingPlan, confirmingPlan, refresh])
 
   const value = useMemo<TerminalContextValue>(
     () => ({
@@ -155,13 +173,17 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
       pendingPlan,
       operation,
       planError,
+      confirmingPlan,
       select,
       refresh,
       requestPlan,
       dismissPlan: () => {
+        operationWait.current?.abort()
+        operationWait.current = null
         setPendingPlan(null)
         setOperation(null)
         setPlanError(null)
+        setConfirmingPlan(false)
       },
       confirmPlan,
     }),
@@ -176,6 +198,7 @@ export function TerminalProvider({ children }: { children: React.ReactNode }) {
       pendingPlan,
       operation,
       planError,
+      confirmingPlan,
       select,
       refresh,
       requestPlan,

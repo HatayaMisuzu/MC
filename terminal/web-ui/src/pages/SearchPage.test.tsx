@@ -14,7 +14,9 @@ const searchSessions = { trustBoundary: 'UNTRUSTED_EXTERNAL_CONTENT', sessions: 
   sources: [{ sourceId: 'docs-1', title: 'Fabric Documentation',
     url: 'https://docs.fabricmc.net/', domain: 'docs.fabricmc.net',
     snippet: 'Official external documentation', trustLevel: 'UNTRUSTED_EXTERNAL_CONTENT',
-    contentType: 'text/html' }],
+    contentType: 'text/html' }, { sourceId: 'dangerous-1', title: 'Unsafe source',
+    url: 'javascript:alert(1)', domain: 'untrusted', snippet: 'Rendered as text only',
+    trustLevel: 'UNTRUSTED_EXTERNAL_CONTENT', contentType: 'text/html' }],
 }] }
 
 vi.mock('../api/client', () => ({ api: vi.fn(), post }))
@@ -54,6 +56,8 @@ describe('SearchPage', () => {
     const source = screen.getByRole('link', { name: 'Open external source' })
     expect(source).toHaveAttribute('href', 'https://docs.fabricmc.net/')
     expect(source).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.queryByRole('link', { name: 'Unsafe source' })).not.toBeInTheDocument()
+    expect(screen.getByText('javascript:alert(1)')).toBeVisible()
     expect(screen.getByText('Official external documentation')).toBeVisible()
   })
 })

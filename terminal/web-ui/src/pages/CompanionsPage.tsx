@@ -81,13 +81,18 @@ export function CompanionsPage() {
             <ActionButton icon={<CirclePause size={16} />} onClick={() => void command('pause')}>pause</ActionButton>
             <ActionButton icon={<CirclePlay size={16} />} onClick={() => void command('resume')}>resume</ActionButton>
             <ActionButton tone="danger" icon={<Octagon size={16} />} onClick={() => void command('stop')}>stop</ActionButton>
-          </div><h3>{t('companions.goto')}</h3><div className="coordinate-row">
-            {(['x', 'y', 'z'] as const).map((axis) => <label className="field compact" key={axis}>
-              <span>{axis.toUpperCase()}</span><input type="number" value={coordinates[axis]}
-                onChange={(event) => setCoordinates((current) => ({ ...current, [axis]: event.target.value }))} />
-            </label>)}<ActionButton icon={<LocateFixed size={16} />} onClick={() => void command('goto', {
+          </div><h3>{t('companions.goto')}</h3><form className="coordinate-row" onSubmit={(event) => {
+            event.preventDefault()
+            void command('goto', {
               x: Number(coordinates.x), y: Number(coordinates.y), z: Number(coordinates.z),
-            })}>goto</ActionButton></div>
+            })
+          }}>
+            {(['x', 'y', 'z'] as const).map((axis) => <label className="field compact" key={axis}>
+              <span>{axis.toUpperCase()}</span><input type="number" required step="any"
+                min={axis === 'y' ? -2048 : -30000000} max={axis === 'y' ? 2048 : 30000000}
+                value={coordinates[axis]}
+                onChange={(event) => setCoordinates((current) => ({ ...current, [axis]: event.target.value }))} />
+            </label>)}<ActionButton type="submit" icon={<LocateFixed size={16} />}>goto</ActionButton></form>
           </section>
           <section className="companion-detail"><h2>{t('companions.onlineState')}</h2>
             {companions.filter((value) => value.id === activeId).map((companion) =>

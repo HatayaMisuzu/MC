@@ -171,11 +171,13 @@ foreach ($relative in $supportDocs) {
 }
 
 $matrixHead = ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root 'docs/RC_COMPLETION_MATRIX.md') |
-    Select-Object -First 25) -join "`n")
+    Select-Object -First 35) -join "`n")
 foreach ($requiredText in @(
     'Overall status: `HUMAN_PLAYTEST_PENDING`', 'Automated productization baseline: `FROZEN`',
     'Product version: `0.3.1`', 'mcac-productization-baseline-0.3.0',
-    'Current live evidence:', 'HUMAN_PLAYTEST_PENDING'
+    'Machine-readable current product facts:', '## Evidence scope',
+    '### Historical live evidence', '### Current 2026-08-02 closeout evidence',
+    'HUMAN_PLAYTEST_PENDING'
 )) {
     if (-not $matrixHead.Contains($requiredText)) { Add-Error "RC matrix header missing: $requiredText" }
 }

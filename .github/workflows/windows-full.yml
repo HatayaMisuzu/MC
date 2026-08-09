@@ -19,6 +19,8 @@ on:
       - 'tools/html-terminal-start-test.ps1'
       - 'tools/release-golden-path.ps1'
       - 'tools/verify-terminal-package.ps1'
+      - 'tools/release-documentation-check.ps1'
+      - 'tools/windows-final-artifact-test.ps1'
       - 'mcac.cmd'
       - 'mcac.ps1'
       - '启动终端.cmd'
@@ -95,7 +97,7 @@ jobs:
         run: >-
           ./gradlew.bat verifyTerminalPackage
           tuiIntegrationTest rootLauncherTest releaseStarterTest
-          htmlTerminalStartTest releaseGoldenPathTest
+          htmlTerminalStartTest windowsFinalArtifactTest releaseGoldenPathTest
           --no-daemon --no-parallel --stacktrace
 
       - name: Upload focused failure evidence

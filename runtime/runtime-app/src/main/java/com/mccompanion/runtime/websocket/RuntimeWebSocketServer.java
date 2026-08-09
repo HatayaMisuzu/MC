@@ -164,10 +164,12 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             route(session, message);
         } catch (SQLException failure) {
             log.error("Unable to persist WebSocket message for session=" + session.sessionId(), failure);
-            sendError(peer, session, "PERSISTENCE_ERROR", "Runtime could not persist this message");
+            sendError(peer, session, "PERSISTENCE_ERROR",
+                    "Runtime could not persist this message; retry its stable identity with a new sequence");
         } catch (RuntimeException failure) {
             log.error("Unable to process WebSocket message for session=" + session.sessionId(), failure);
-            sendError(peer, session, "INVALID_MESSAGE", "Message fields were invalid");
+            sendError(peer, session, "INVALID_MESSAGE",
+                    "Message fields were invalid; this observed sequence is consumed");
         }
     }
 
@@ -222,9 +224,21 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             case "companion_list" -> registerCompanionList(session, payload);
             case "companion_registered", "companion_status", "status_update", "status_event",
                     "reconciliation_status" -> registerCompanion(session, payload.isObject() ? payload : message);
-            case "command_accepted" -> commands.onCommandAccepted(convert(payload, CommandAccepted.class));
-            case "behavior_event", "event" -> commands.onBehaviorEvent(convert(payload, BehaviorEvent.class));
-            case "protocol_error", "error" -> commands.onProtocolError(convert(payload, ErrorEnvelope.class));
+            case "command_accepted" -> {
+                CommandAccepted accepted = convert(payload, CommandAccepted.class);
+                requireCommandAuthority(session, accepted.commandId());
+                commands.onCommandAccepted(accepted);
+            }
+            case "behavior_event", "event" -> {
+                BehaviorEvent event = convert(payload, BehaviorEvent.class);
+                requireAuthority(session, event.companionId());
+                commands.onBehaviorEvent(event);
+            }
+            case "protocol_error", "error" -> {
+                ErrorEnvelope error = convert(payload, ErrorEnvelope.class);
+                if (error.commandId() != null) requireCommandAuthority(session, error.commandId());
+                commands.onProtocolError(error);
+            }
             case "registry_result", "observation_result" -> {
                 if (registryQueries == null || !registryQueries.complete(session, payload)) {
                     sendError(session.peer(), session, "UNKNOWN_QUERY_RESULT",
@@ -242,13 +256,24 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private void acknowledgeConversationDelivery(RuntimeSession session, JsonNode payload) throws SQLException {
         String companionId = required(payload, "companionId");
         String eventId = required(payload, "eventId");
-        RuntimeSession owner = sessions.forCompanion(companionId).orElse(null);
-        if (owner != session) throw new IllegalArgumentException("conversation ack does not belong to this session");
+        requireAuthority(session, companionId);
         conversations.acknowledgeGameDelivery(companionId, eventId);
+    }
+
+    private void requireCommandAuthority(RuntimeSession session, String commandId) throws SQLException {
+        Optional<String> companionId = commands.companionForCommand(commandId);
+        if (companionId.isPresent()) requireAuthority(session, companionId.orElseThrow());
+    }
+
+    private void requireAuthority(RuntimeSession session, String companionId) {
+        if (!sessions.isAuthoritative(session, companionId)) {
+            throw new IllegalArgumentException("STALE_COMPANION_SESSION");
+        }
     }
 
     private void handleOwnerActivity(RuntimeSession session, JsonNode payload) {
         String companionId = required(payload, "companionId");
+        requireAuthority(session, companionId);
         String ownerId = required(payload, "ownerId");
         String activityType = required(payload, "activityType");
         if (!java.util.Set.of("BLOCK_USE", "BLOCK_BREAK").contains(activityType)) {
@@ -270,7 +295,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             planningExecutor.execute(() -> {
             try {
                 var companion = companions.get(companionId).orElse(null);
-                if (companion == null || !session.companionIds().contains(companionId)
+                if (companion == null || !sessions.isAuthoritative(session, companionId)
                         || !ownerId.equals(companion.ownerId()) || externalBrain == null) {
                     return;
                 }
@@ -295,6 +320,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private void handlePlayerRequest(RuntimeSession session, JsonNode payload) {
         String requestId = required(payload, "requestId");
         String companionId = required(payload, "companionId");
+        requireAuthority(session, companionId);
         String ownerId = required(payload, "ownerId");
         String text = payload.path("text").asText("").strip();
         if (text.isEmpty() || text.length() > 512) throw new IllegalArgumentException("player request text must be 1..512 characters");
@@ -303,7 +329,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             ObjectNode reply = Json.object().put("requestId", requestId).put("companionId", companionId);
             try {
                 var companion = companions.get(companionId).orElseThrow(() -> new IllegalArgumentException("COMPANION_NOT_FOUND"));
-                if (!session.companionIds().contains(companionId) || !ownerId.equals(companion.ownerId())) {
+                if (!sessions.isAuthoritative(session, companionId) || !ownerId.equals(companion.ownerId())) {
                     throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
                 }
                 var active = commands.activeTaskFor(companionId);

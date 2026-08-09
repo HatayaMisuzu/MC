@@ -740,7 +740,8 @@ final class WebTerminalApi {
         case "activate" -> host.activate(grant, required(copy, "coordinate"),
             compatibilityFingerprint(instance), operationId);
         case "deactivate" -> host.deactivate(grant, required(copy, "coordinate"), operationId);
-        case "rollback" -> host.rollback(grant, required(copy, "packId"), operationId);
+        case "rollback" -> host.rollback(grant, required(copy, "packId"),
+            compatibilityFingerprint(instance), operationId);
         case "remove" -> {
           host.remove(grant, required(copy, "coordinate"), operationId);
           yield Map.of("removed", true, "coordinate", required(copy, "coordinate"));
@@ -867,6 +868,7 @@ final class WebTerminalApi {
       throw new IllegalArgumentException("Provider 操作不受支持");
     ObjectNode details = JSON.createObjectNode().put("summary", "Provider " + action);
     if ("configure".equals(action)) {
+      boundedInt(request, "timeoutSeconds", 15, 1, 300);
       details
           .put("baseUrl", required(request, "baseUrl"))
           .put("model", required(request, "model"))
@@ -890,7 +892,7 @@ final class WebTerminalApi {
                 required(copy, "baseUrl"),
                 required(copy, "model"),
                 required(copy, "apiKeyEnv"),
-                copy.path("timeoutSeconds").asInt(15));
+                boundedInt(copy, "timeoutSeconds", 15, 1, 300));
           new PairingService().ensureConfigured(instance, profile);
           return (ObjectNode) provider.status(profile);
         });
@@ -907,11 +909,19 @@ final class WebTerminalApi {
         .put("summary", "External Brain " + action)
         .put("storesToken", false);
     if ("configure".equals(action)) {
+      boundedInt(request, "timeoutSeconds", 60, 1, 300);
+      boundedInt(request, "maxToolCallsPerTurn", 12, 1, 32);
+      boundedInt(request, "maxOutputTokens", 1024, 128, 4096);
+      boundedInt(request, "maxRequests", 24, 1, 1_000);
+      boundedInt(request, "maxInputTokens", 30_000, 128, 2_000_000);
+      boundedInt(request, "maxTotalOutputTokens", 8_000, 128, 500_000);
+      boundedInt(request, "maxWallClockMinutes", 15, 1, 480);
+      boundedInt(request, "maxRetries", 2, 0, 5);
       details.put("mode", required(request, "mode"))
           .put("endpoint", required(request, "endpoint"))
           .put("tokenEnv", required(request, "tokenEnv"))
-          .put("maxToolCallsPerTurn", request.path("maxToolCallsPerTurn").asInt(12))
-          .put("maxOutputTokens", request.path("maxOutputTokens").asInt(1024));
+          .put("maxToolCallsPerTurn", boundedInt(request, "maxToolCallsPerTurn", 12, 1, 32))
+          .put("maxOutputTokens", boundedInt(request, "maxOutputTokens", 1024, 128, 4096));
     }
     JsonNode copy = request.deepCopy();
     return operations.create("brain", action, instanceId, false, details, progress -> {
@@ -922,14 +932,14 @@ final class WebTerminalApi {
       } else {
         brain.configure(profile, required(copy, "mode"), required(copy, "endpoint"),
             required(copy, "tokenEnv"), copy.path("model").asText(""),
-            copy.path("timeoutSeconds").asInt(60),
-            copy.path("maxToolCallsPerTurn").asInt(12),
-            copy.path("maxOutputTokens").asInt(1024),
-            copy.path("maxRequests").asInt(24),
-            copy.path("maxInputTokens").asInt(30_000),
-            copy.path("maxTotalOutputTokens").asInt(8_000),
-            copy.path("maxWallClockMinutes").asInt(15),
-            copy.path("maxRetries").asInt(2));
+            boundedInt(copy, "timeoutSeconds", 60, 1, 300),
+            boundedInt(copy, "maxToolCallsPerTurn", 12, 1, 32),
+            boundedInt(copy, "maxOutputTokens", 1024, 128, 4096),
+            boundedInt(copy, "maxRequests", 24, 1, 1_000),
+            boundedInt(copy, "maxInputTokens", 30_000, 128, 2_000_000),
+            boundedInt(copy, "maxTotalOutputTokens", 8_000, 128, 500_000),
+            boundedInt(copy, "maxWallClockMinutes", 15, 1, 480),
+            boundedInt(copy, "maxRetries", 2, 0, 5));
       }
       new PairingService().ensureConfigured(instance, profile);
       return (ObjectNode) brain.status(profile);
@@ -944,15 +954,18 @@ final class WebTerminalApi {
     MinecraftInstance instance = root.instance(instanceId);
     ObjectNode details = JSON.createObjectNode().put("summary", "Search " + action)
         .put("storesToken", false);
-    if ("configure".equals(action)) details.put("endpoint", required(request, "endpoint"))
-        .put("tokenEnv", required(request, "tokenEnv"));
+    if ("configure".equals(action)) {
+      boundedInt(request, "timeoutSeconds", 15, 1, 30);
+      details.put("endpoint", required(request, "endpoint"))
+          .put("tokenEnv", required(request, "tokenEnv"));
+    }
     JsonNode copy = request.deepCopy();
     return operations.create("search", action, instanceId, false, details, progress -> {
       SearchConfigurationService search = new SearchConfigurationService();
       RuntimeProfile profile = root.profile(instance);
       if ("disable".equals(action)) search.disable(profile);
       else search.configure(profile, required(copy, "endpoint"), required(copy, "tokenEnv"),
-          copy.path("timeoutSeconds").asInt(15), textList(copy.path("allowedDomains")),
+          boundedInt(copy, "timeoutSeconds", 15, 1, 30), textList(copy.path("allowedDomains")),
           textList(copy.path("deniedDomains")));
       new PairingService().ensureConfigured(instance, profile);
       return (ObjectNode) search.status(profile);
@@ -968,7 +981,7 @@ final class WebTerminalApi {
             .put("summary", action.equals("attach") ? "附加到当前会话" : "启动游戏并等待 Mod 握手")
             .put("launcher", root.launcher(instance).type().name())
             .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY");
-    int waitSeconds = Math.max(5, Math.min(300, request.path("waitSeconds").asInt(90)));
+    int waitSeconds = boundedInt(request, "waitSeconds", 90, 5, 300);
     return operations.create(
         "session",
         action,
@@ -1320,10 +1333,27 @@ final class WebTerminalApi {
     return value.asLong();
   }
 
+  private static int boundedInt(JsonNode node, String key, int defaultValue, int minimum, int maximum) {
+    JsonNode value = node.get(key);
+    if (value == null) return defaultValue;
+    if (!value.isIntegralNumber() || !value.canConvertToInt())
+      throw new IllegalArgumentException(key + " must be an integer");
+    int parsed = value.asInt();
+    if (parsed < minimum || parsed > maximum)
+      throw new IllegalArgumentException(key + " must be " + minimum + ".." + maximum);
+    return parsed;
+  }
+
   private static List<String> textList(JsonNode node) {
-    if (!node.isArray()) return List.of();
+    if (node.isMissingNode()) return List.of();
+    if (!node.isArray() || node.size() > 128)
+      throw new IllegalArgumentException("Expected a bounded text array");
     java.util.ArrayList<String> values = new java.util.ArrayList<>();
-    node.forEach(value -> values.add(value.asText("")));
+    node.forEach(value -> {
+      if (!value.isTextual() || value.asText().isBlank() || value.asText().length() > 253)
+        throw new IllegalArgumentException("Array values must be non-empty bounded text");
+      values.add(value.asText());
+    });
     return List.copyOf(values);
   }
 

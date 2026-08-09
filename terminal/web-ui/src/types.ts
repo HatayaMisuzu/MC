@@ -255,7 +255,7 @@ export interface Operation {
   category: string
   action: string
   instanceId: string
-  state: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+  state: 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
   progress: number
   message: string
   startedAt: string

@@ -269,6 +269,10 @@ public final class CommandService implements SessionRegistry.Listener {
         }
     }
 
+    public Optional<String> companionForCommand(String commandId) throws SQLException {
+        return tasks.commandLink(commandId).map(link -> link.task().companionId());
+    }
+
     public void onBehaviorEvent(BehaviorEvent event) {
         try {
             TaskRecord task = event.commandId() == null

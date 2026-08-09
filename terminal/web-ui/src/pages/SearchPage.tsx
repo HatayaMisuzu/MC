@@ -15,6 +15,14 @@ interface SearchSourceView { sourceId: string; title: string; url: string; domai
 interface SearchSessionView { searchId: string; companionId: string; query: string; expiresAt: number; sources: SearchSourceView[] }
 interface SearchSessions { trustBoundary: string; sessions: SearchSessionView[] }
 const domains = (value: string) => value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean)
+const safeSourceUrl = (value: string): string | null => {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:' && !parsed.username && !parsed.password ? parsed.href : null
+  } catch {
+    return null
+  }
+}
 
 export function SearchPage() {
   const { selected, selectedId, requestPlan } = useTerminal()
@@ -69,12 +77,16 @@ export function SearchPage() {
     <section className="search-sources"><header className="panel-header"><h2>{t('search.sources')}</h2>
       <span>{t('search.sessionCount', { count: sessions.data?.sessions?.length ?? 0 })}</span></header>
       <p>{t('search.sourcesBoundary')}</p><div className="search-source-list">
-        {(sessions.data?.sessions ?? []).flatMap((session) => session.sources.map((source) =>
-          <article className="search-source" key={`${session.searchId}-${source.sourceId}`}>
+        {(sessions.data?.sessions ?? []).flatMap((session) => session.sources.map((source) => {
+          const safeUrl = safeSourceUrl(source.url)
+          return <article className="search-source" key={`${session.searchId}-${source.sourceId}`}>
             <div><strong>{source.title}</strong><span>{source.domain} · {session.companionId}</span></div>
             <p>{source.snippet || t('search.noSnippet')}</p>
-            <a href={source.url} target="_blank" rel="noopener noreferrer">{t('search.openSource')}</a>
-          </article>))}
+            {safeUrl
+              ? <a href={safeUrl} target="_blank" rel="noopener noreferrer">{t('search.openSource')}</a>
+              : <span>{source.url}</span>}
+          </article>
+        }))}
       </div>{!sessions.loading && !sessions.data?.sessions?.length ? <p>{t('search.noSessions')}</p> : null}
     </section>
   </div>

@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
 import com.mccompanion.minecraft.v121.SkillParameters;
 import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
+import com.mccompanion.minecraft.bridge.RuntimeCommandArguments;
+import com.mccompanion.minecraft.bridge.ConnectionEpochGate;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -17,7 +19,6 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -38,6 +39,8 @@ import org.slf4j.Logger;
 final class RuntimeBridge implements AutoCloseable {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String PROTOCOL = "mc-companion/1";
+    private static final int MAX_PENDING_PLAYER_REQUESTS = 128;
+    private static final long PLAYER_REQUEST_TTL_MILLIS = 30_000;
 
     private final MinecraftServer server;
     private final CompanionRegistry registry;
@@ -52,10 +55,12 @@ final class RuntimeBridge implements AutoCloseable {
     private final HttpClient client;
     private final AtomicLong outgoingSequence = new AtomicLong();
     private final AtomicBoolean connecting = new AtomicBoolean();
-    private final Map<String, String> observedBehaviorStates = new HashMap<>();
+    private final ConnectionEpochGate<WebSocket> connections = new ConnectionEpochGate<>();
+    private final Map<String, String> observedBehaviorStates = new ConcurrentHashMap<>();
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
-    private final Map<UUID, Long> playerRequestTimes = new HashMap<>();
-    private final Map<String, Long> ownerActivityTimes = new HashMap<>();
+    private final Map<String, Long> pendingPlayerRequestTimes = new ConcurrentHashMap<>();
+    private final Map<UUID, Long> playerRequestTimes = new ConcurrentHashMap<>();
+    private final Map<String, Long> ownerActivityTimes = new ConcurrentHashMap<>();
     private final ConversationDeliveryWindow deliveredConversationEvents =
             new ConversationDeliveryWindow(512);
     private volatile WebSocket socket;
@@ -111,10 +116,11 @@ final class RuntimeBridge implements AutoCloseable {
                 return;
             }
             missingTokenReported = false;
+            long attempt = connections.beginAttempt();
             client.newWebSocketBuilder()
                     .connectTimeout(Duration.ofSeconds(3))
                     .header("Authorization", "Bearer " + token)
-                    .buildAsync(uri, new Listener())
+                    .buildAsync(uri, new Listener(attempt))
                     .whenComplete((webSocket, failure) -> {
                         connecting.set(false);
                         if (failure != null && !closed) {
@@ -176,7 +182,8 @@ final class RuntimeBridge implements AutoCloseable {
         webSocket.sendText(write(hello), true);
     }
 
-    private void handle(String text) {
+    private void handle(long attempt, WebSocket source, String text) {
+        if (!connections.isCurrent(attempt, source)) return;
         final JsonNode message;
         try {
             message = JSON.readTree(text);
@@ -185,6 +192,7 @@ final class RuntimeBridge implements AutoCloseable {
             return;
         }
         String type = message.path("type").asText("");
+        if (!connections.isCurrent(attempt, source)) return;
         if (type.equals("hello_ack")) {
             if (!message.path("accepted").asBoolean(false)) {
                 logger.warn("Runtime rejected bridge handshake: {}", message.path("code").asText("UNKNOWN"));
@@ -193,7 +201,9 @@ final class RuntimeBridge implements AutoCloseable {
             }
             sessionId = message.path("sessionId").asText();
             outgoingSequence.set(0);
-            server.execute(() -> registry.setRuntimeConnected(true));
+            server.execute(() -> {
+                if (connections.isCurrent(attempt, source)) registry.setRuntimeConnected(true);
+            });
             logger.info("Runtime bridge connected: protocol={} safeIdleOnDisconnect=true", PROTOCOL);
             publishStatus();
             return;
@@ -201,7 +211,9 @@ final class RuntimeBridge implements AutoCloseable {
         if (type.equals("query") && message.path("name").asText().equals("list_companions")) {
             publishStatus();
         } else if (type.equals("command")) {
-            server.execute(() -> processCommand(message.path("payload")));
+            server.execute(() -> {
+                if (connections.isCurrent(attempt, source)) processCommand(message.path("payload"));
+            });
         } else if (type.equals("player_reply")) {
             deliverPlayerReply(message.path("payload"));
         } else if (type.equals("conversation_event")) {
@@ -215,6 +227,10 @@ final class RuntimeBridge implements AutoCloseable {
         if (socket == null || sessionId == null) return new CompanionCommands.TextRequestResult(false,
                 "Runtime 未连接；复杂任务不会被静默猜测执行。");
         long now = System.currentTimeMillis();
+        cleanupTransientState(now);
+        if (pendingPlayerRequests.size() >= MAX_PENDING_PLAYER_REQUESTS) {
+            return new CompanionCommands.TextRequestResult(false, "待处理请求已满，请稍后重试。");
+        }
         Long previous = playerRequestTimes.put(owner.getUUID(), now);
         if (previous != null && now - previous < 1500) return new CompanionCommands.TextRequestResult(false, "请求过快，请稍等片刻。");
         String companionId = registry.runtimeSnapshots(true).stream()
@@ -223,6 +239,7 @@ final class RuntimeBridge implements AutoCloseable {
         if (companionId == null) return new CompanionCommands.TextRequestResult(false, "你还没有可用的 Companion。");
         String requestId = UUID.randomUUID().toString();
         pendingPlayerRequests.put(requestId, owner.getUUID());
+        pendingPlayerRequestTimes.put(requestId, now);
         ObjectNode payload = JSON.createObjectNode().put("requestId", requestId).put("companionId", companionId)
                 .put("ownerId", owner.getUUID().toString()).put("text", text);
         sendEnvelope("player_request", payload);
@@ -257,6 +274,7 @@ final class RuntimeBridge implements AutoCloseable {
     private void deliverPlayerReply(JsonNode payload) {
         String requestId = payload.path("requestId").asText("");
         UUID ownerId = pendingPlayerRequests.remove(requestId);
+        pendingPlayerRequestTimes.remove(requestId);
         if (ownerId == null) return;
         String reply = payload.path("reply").asText("请求已处理。");
         if (reply.length() > 512) reply = reply.substring(0, 512);
@@ -321,7 +339,7 @@ final class RuntimeBridge implements AutoCloseable {
                     companionId, leaseId, epoch, arguments.path("expiresAt").asLong());
             case "RELEASE_LEASE" -> result = registry.runtimeReleaseLease(companionId, leaseId, epoch);
             case "START_BEHAVIOR" -> {
-                JsonNode parameters = arguments.path("parameters");
+                JsonNode parameters = RuntimeCommandArguments.skillParameters(arguments::path);
                 JsonNode target = parameters.path("target");
                 result = registry.runtimeStart(
                         companionId, leaseId, epoch,
@@ -477,6 +495,7 @@ final class RuntimeBridge implements AutoCloseable {
     }
 
     private void publishStatus() {
+        cleanupTransientState(System.currentTimeMillis());
         if (closed || socket == null || sessionId == null) return;
         server.execute(this::publishStatusOnServerThread);
     }
@@ -596,11 +615,17 @@ final class RuntimeBridge implements AutoCloseable {
         return server.getWorldData().getLevelName().replaceAll("[^A-Za-z0-9_.:-]", "_");
     }
 
-    private void disconnected(WebSocket expected, String reason) {
+    private void disconnected(long attempt, WebSocket expected, String reason) {
+        if (!connections.deactivate(attempt, expected)) return;
         if (socket == expected) socket = null;
         sessionId = null;
+        pendingPlayerRequests.clear();
+        pendingPlayerRequestTimes.clear();
+        playerRequestTimes.clear();
+        ownerActivityTimes.clear();
         if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
         server.execute(() -> {
+            if (!connections.isLatestAttempt(attempt) && socket != null && sessionId != null) return;
             registry.setRuntimeConnected(false);
             registry.runtimeDisconnected();
         });
@@ -609,6 +634,19 @@ final class RuntimeBridge implements AutoCloseable {
     private void closeSocket(int code, String reason) {
         WebSocket current = socket;
         if (current != null) current.sendClose(code, reason);
+    }
+
+    private void cleanupTransientState(long now) {
+        pendingPlayerRequestTimes.entrySet().removeIf(entry -> {
+            if (now - entry.getValue() <= PLAYER_REQUEST_TTL_MILLIS) return false;
+            pendingPlayerRequests.remove(entry.getKey());
+            return true;
+        });
+        playerRequestTimes.entrySet().removeIf(entry -> now - entry.getValue() > 60_000);
+        ownerActivityTimes.entrySet().removeIf(entry -> now - entry.getValue() > 10_000);
+        while (observedBehaviorStates.size() > 512) {
+            observedBehaviorStates.remove(observedBehaviorStates.keySet().iterator().next());
+        }
     }
 
     private static String write(JsonNode value) {
@@ -665,20 +703,34 @@ final class RuntimeBridge implements AutoCloseable {
     @Override
     public void close() {
         closed = true;
+        connections.invalidate();
         WebSocket current = socket;
         socket = null;
         sessionId = null;
         if (current != null) current.sendClose(WebSocket.NORMAL_CLOSURE, "server stopping");
         registry.runtimeDisconnected();
         registry.setRuntimeConnected(false);
+        pendingPlayerRequests.clear();
+        pendingPlayerRequestTimes.clear();
+        playerRequestTimes.clear();
+        ownerActivityTimes.clear();
         executor.shutdownNow();
     }
 
     private final class Listener implements WebSocket.Listener {
+        private final long attempt;
         private final StringBuilder partial = new StringBuilder();
+
+        private Listener(long attempt) {
+            this.attempt = attempt;
+        }
 
         @Override
         public void onOpen(WebSocket webSocket) {
+            if (closed || !connections.activate(attempt, webSocket)) {
+                webSocket.sendClose(1000, "connection superseded");
+                return;
+            }
             socket = webSocket;
             sendHello(webSocket);
             webSocket.request(1);
@@ -686,6 +738,7 @@ final class RuntimeBridge implements AutoCloseable {
 
         @Override
         public CompletionStage<?> onText(WebSocket webSocket, CharSequence data, boolean last) {
+            if (!connections.isCurrent(attempt, webSocket)) return null;
             if (partial.length() + data.length() > 1_048_576) {
                 webSocket.sendClose(1009, "message too large");
                 return null;
@@ -694,7 +747,7 @@ final class RuntimeBridge implements AutoCloseable {
             if (last) {
                 String text = partial.toString();
                 partial.setLength(0);
-                handle(text);
+                handle(attempt, webSocket, text);
             }
             webSocket.request(1);
             return null;
@@ -702,13 +755,13 @@ final class RuntimeBridge implements AutoCloseable {
 
         @Override
         public CompletionStage<?> onClose(WebSocket webSocket, int statusCode, String reason) {
-            disconnected(webSocket, reason == null || reason.isBlank() ? "closed" : reason);
+            disconnected(attempt, webSocket, reason == null || reason.isBlank() ? "closed" : reason);
             return null;
         }
 
         @Override
         public void onError(WebSocket webSocket, Throwable error) {
-            disconnected(webSocket, error.getClass().getSimpleName());
+            disconnected(attempt, webSocket, error.getClass().getSimpleName());
         }
     }
 }

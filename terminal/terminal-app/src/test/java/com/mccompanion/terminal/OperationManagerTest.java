@@ -9,8 +9,11 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -19,6 +22,31 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class OperationManagerTest {
   private static final ObjectMapper JSON = new ObjectMapper();
+
+  @Test
+  void concurrentConfirmationsConsumePlanOnceAndRecoverSameOperation() throws Exception {
+    try (OperationManager manager = new OperationManager()) {
+      AtomicInteger sideEffects = new AtomicInteger();
+      var plan = manager.create("install", "update", "instance-a", true,
+          JSON.createObjectNode(), ignored -> {
+            sideEffects.incrementAndGet();
+            return JSON.createObjectNode();
+          });
+      var callers = Executors.newFixedThreadPool(12);
+      try {
+        var futures = IntStream.range(0, 24)
+            .mapToObj(ignored -> callers.submit(() -> manager.execute(plan.id(), plan.id()).id()))
+            .toList();
+        var operationIds = new java.util.HashSet<String>();
+        for (var future : futures) operationIds.add(future.get(2, TimeUnit.SECONDS));
+        assertEquals(1, operationIds.size());
+        waitForState(manager, operationIds.iterator().next(), "SUCCEEDED");
+        assertEquals(1, sideEffects.get());
+      } finally {
+        callers.shutdownNow();
+      }
+    }
+  }
 
   @Test
   void expiredPlansAndTerminalOperationsAreRemovedWithoutAffectingRecentPolling() throws Exception {
@@ -118,6 +146,14 @@ class OperationManagerTest {
       assertTrue(error.startsWith("INTERNAL_ERROR:"));
       assertFalse(error.contains("private"));
       assertFalse(error.contains("Alice"));
+
+      var expected = manager.create("session", "attach", "instance-a", false,
+          JSON.createObjectNode(), ignored -> {
+            throw new java.io.IOException("NO_ACTIVE_GAME_SESSION: no authenticated session");
+          });
+      var expectedFailure = manager.execute(expected.id(), expected.id());
+      waitForState(manager, expectedFailure.id(), "FAILED");
+      assertEquals("NO_ACTIVE_GAME_SESSION", manager.requireOperation(expectedFailure.id()).error());
     }
   }
 

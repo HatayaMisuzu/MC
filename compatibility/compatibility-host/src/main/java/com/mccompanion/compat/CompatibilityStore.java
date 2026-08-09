@@ -98,12 +98,23 @@ public final class CompatibilityStore {
     }
 
     public StoredPack require(String coordinate) throws IOException {
-        CompatibilityPack.identifier(coordinate.substring(0, coordinate.lastIndexOf('@')), "pack.id");
+        validateCoordinate(coordinate);
         return locked(() -> {
             StoredPack value = readIndex().packs().get(coordinate);
             if (value == null) throw new IOException("PACK_NOT_FOUND");
             return value;
         });
+    }
+
+    private static void validateCoordinate(String coordinate) {
+        if (coordinate == null) throw new IllegalArgumentException("INVALID_PACK_COORDINATE");
+        int separator = coordinate.indexOf('@');
+        if (separator <= 0 || separator != coordinate.lastIndexOf('@')
+                || separator == coordinate.length() - 1) {
+            throw new IllegalArgumentException("INVALID_PACK_COORDINATE");
+        }
+        CompatibilityPack.identifier(coordinate.substring(0, separator), "pack.id");
+        CompatibilityPack.version(coordinate.substring(separator + 1));
     }
 
     public CompatibilityPack load(String coordinate) throws IOException {
@@ -194,30 +205,14 @@ public final class CompatibilityStore {
                     && current.state() != CompatibilityPack.PackState.SUPERSEDED) {
                 throw new IOException("PACK_NOT_ACTIVATABLE");
             }
-            CompatibilityPack pack = loadFromRecord(current);
-            for (String dependency : pack.manifest().dependencies()) {
-                if (index.packs().values().stream().noneMatch(value ->
-                        value.packId().equals(dependency) && value.state() == CompatibilityPack.PackState.ACTIVE)) {
-                    throw new IOException("PACK_DEPENDENCY_MISSING:" + dependency);
-                }
-            }
-            for (String conflict : pack.manifest().conflicts()) {
-                if (index.packs().values().stream().anyMatch(value ->
-                        value.packId().equals(conflict) && value.state() == CompatibilityPack.PackState.ACTIVE)) {
-                    throw new IOException("PACK_CONFLICT:" + conflict);
-                }
-            }
+            ActivationCandidate validated = validateActivation(index, current, environment, health);
             LinkedHashMap<String, StoredPack> packs = new LinkedHashMap<>(index.packs());
             packs.replaceAll((key, value) -> value.packId().equals(current.packId())
                     && value.state() == CompatibilityPack.PackState.ACTIVE
                     ? value.withState(CompatibilityPack.PackState.SUPERSEDED, clock.instant().toString()) : value);
-            StoredPack active = current.withActivation(environment.digest(), clock.instant().toString())
-                    .withState(CompatibilityPack.PackState.ACTIVE, clock.instant().toString());
+            StoredPack active = validated.record();
             packs.put(coordinate, active);
             StoreIndex candidate = new StoreIndex(Map.copyOf(packs), index.revision() + 1);
-            if (!health.healthy(active, pack, environment)) {
-                throw new IOException("PACK_HEALTH_CHECK_FAILED");
-            }
             return new Mutation<>(candidate, active);
         });
     }
@@ -235,7 +230,8 @@ public final class CompatibilityStore {
         });
     }
 
-    StoredPack rollback(String packId, String operationId) throws IOException {
+    StoredPack rollback(String packId, EnvironmentFingerprint environment,
+                        HealthCheck health, String operationId) throws IOException {
         CompatibilityPack.identifier(packId, "pack.id");
         return mutate("rollback", operationId, index -> {
             List<StoredPack> candidates = index.packs().values().stream()
@@ -245,16 +241,45 @@ public final class CompatibilityStore {
                             || value.state() == CompatibilityPack.PackState.VERIFIED))
                     .sorted(Comparator.comparing(StoredPack::updatedAt).reversed()).toList();
             if (candidates.isEmpty()) throw new IOException("ROLLBACK_POINT_NOT_FOUND");
+            StoredPack candidateRecord = candidates.getFirst();
+            StoredPack selected = validateActivation(index, candidateRecord, environment, health).record();
             String now = clock.instant().toString();
-            StoredPack selected = candidates.getFirst().withState(CompatibilityPack.PackState.ACTIVE, now);
             LinkedHashMap<String, StoredPack> packs = new LinkedHashMap<>(index.packs());
             packs.replaceAll((key, value) -> value.packId().equals(packId)
                     && value.state() == CompatibilityPack.PackState.ACTIVE
                     ? value.withState(CompatibilityPack.PackState.SUPERSEDED, now) : value);
             packs.put(selected.coordinate(), selected);
-            return new Mutation<>(new StoreIndex(Map.copyOf(packs), index.revision() + 1), selected);
+            StoreIndex candidate = new StoreIndex(Map.copyOf(packs), index.revision() + 1);
+            return new Mutation<>(candidate, selected);
         });
     }
+
+    private ActivationCandidate validateActivation(StoreIndex index, StoredPack current,
+                                                   EnvironmentFingerprint environment,
+                                                   HealthCheck health) throws IOException {
+        CompatibilityPack pack = loadFromRecord(current);
+        for (String dependency : pack.manifest().dependencies()) {
+            if (index.packs().values().stream().noneMatch(value ->
+                    value.packId().equals(dependency) && value.state() == CompatibilityPack.PackState.ACTIVE)) {
+                throw new IOException("PACK_DEPENDENCY_MISSING:" + dependency);
+            }
+        }
+        for (String conflict : pack.manifest().conflicts()) {
+            if (index.packs().values().stream().anyMatch(value ->
+                    value.packId().equals(conflict) && value.state() == CompatibilityPack.PackState.ACTIVE)) {
+                throw new IOException("PACK_CONFLICT:" + conflict);
+            }
+        }
+        String now = clock.instant().toString();
+        StoredPack active = current.withActivation(environment.digest(), now)
+                .withState(CompatibilityPack.PackState.ACTIVE, now);
+        if (!health.healthy(active, pack, environment)) {
+            throw new IOException("PACK_HEALTH_CHECK_FAILED");
+        }
+        return new ActivationCandidate(active, pack);
+    }
+
+    private record ActivationCandidate(StoredPack record, CompatibilityPack pack) { }
 
     void remove(String coordinate, String operationId) throws IOException {
         mutate("remove", operationId, index -> {

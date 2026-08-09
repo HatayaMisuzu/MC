@@ -136,9 +136,16 @@ public final class CompatibilityHost {
     }
 
     public CompatibilityStore.StoredPack rollback(
-            CompatibilityGrant grant, String packId, String operationId) throws IOException {
+            CompatibilityGrant grant, String packId, EnvironmentFingerprint environment,
+            String operationId) throws IOException {
         authorize(grant, "compat.rollback", CompatibilityPack.Risk.HIGH);
-        return store.rollback(packId, operation(operationId));
+        if (!instanceId.equals(environment.instanceId())) throw new SecurityException("INSTANCE_SCOPE_MISMATCH");
+        return store.rollback(packId, environment, (record, loaded, actual) -> {
+            CompatibilityResolver.MatchedPack checked = resolver.match(actual,
+                    new CompatibilityResolver.Candidate(loaded, record.state(), "", false));
+            return checked.level() != CompatibilityPack.MatchLevel.INCOMPATIBLE
+                    && checked.level() != CompatibilityPack.MatchLevel.UNKNOWN;
+        }, operation(operationId));
     }
 
     public void remove(CompatibilityGrant grant, String coordinate, String operationId) throws IOException {

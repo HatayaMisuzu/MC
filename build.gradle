@@ -476,7 +476,7 @@ tasks.register('gradle9CompatibilityProbe', Exec) {
 }
 
 tasks.named('check') {
-    dependsOn 'test', 'webTest', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck',
+    dependsOn 'test', 'webTest', 'webLint', 'webBuild', 'forbiddenApiCheck', 'independenceCheck', 'secretCheck',
             'documentationCheck', 'localizationCheck', 'dependencyPinningCheck', 'gameTestFixtureCheck'
 }
 
@@ -554,6 +554,13 @@ tasks.register('webBuild', Exec) {
     inputs.dir 'terminal/web-ui/src'
     inputs.files 'terminal/web-ui/index.html', 'terminal/web-ui/vite.config.ts', 'terminal/web-ui/tsconfig.json', 'terminal/web-ui/tsconfig.app.json'
     outputs.dir 'terminal/web-ui/dist'
+}
+
+tasks.register('webLint', Exec) {
+    group = 'verification'
+    dependsOn 'webInstall'
+    workingDir file('terminal/web-ui')
+    commandLine npmCommand, 'run', 'lint'
 }
 
 tasks.register('cleanTerminalPackage', Delete) {

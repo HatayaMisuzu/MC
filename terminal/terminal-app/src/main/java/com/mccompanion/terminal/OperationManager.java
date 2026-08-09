@@ -31,6 +31,7 @@ final class OperationManager implements AutoCloseable {
 
   private final Map<String, Plan> plans = new ConcurrentHashMap<>();
   private final Map<String, Operation> operations = new ConcurrentHashMap<>();
+  private final Map<String, String> operationByPlan = new ConcurrentHashMap<>();
   private final Map<String, ReentrantLock> instanceLocks = new ConcurrentHashMap<>();
   private final CopyOnWriteArrayList<BlockingQueue<ObjectNode>> subscribers =
       new CopyOnWriteArrayList<>();
@@ -94,20 +95,25 @@ final class OperationManager implements AutoCloseable {
     return plan;
   }
 
-  Operation execute(String planId, String confirmation) {
+  synchronized Operation execute(String planId, String confirmation) {
     cleanup();
+    if (!planId.equals(confirmation)) {
+      throw new IllegalArgumentException("Plan confirmation does not match");
+    }
+    String existingOperationId = operationByPlan.get(planId);
+    if (existingOperationId != null) {
+      Operation existing = operations.get(existingOperationId);
+      if (existing != null) return existing;
+      operationByPlan.remove(planId, existingOperationId);
+    }
     Plan plan = plans.get(planId);
     if (plan == null || plan.expiresAt().isBefore(clock.instant())) {
       if (plan != null) plans.remove(planId, plan);
       throw new IllegalArgumentException("Plan does not exist or has expired");
     }
-    if (!planId.equals(confirmation)) {
-      throw new IllegalArgumentException("Plan confirmation does not match");
-    }
     if (operations.size() >= MAX_OPERATIONS) {
       throw new IllegalStateException("OPERATION_CAPACITY_REACHED");
     }
-    plans.remove(planId, plan);
     String operationId = UUID.randomUUID().toString();
     Operation operation =
         new Operation(
@@ -123,6 +129,12 @@ final class OperationManager implements AutoCloseable {
             clock.instant(),
             null);
     operations.put(operationId, operation);
+    operationByPlan.put(planId, operationId);
+    if (!plans.remove(planId, plan)) {
+      operations.remove(operationId, operation);
+      operationByPlan.remove(planId, operationId);
+      throw new IllegalStateException("PLAN_ALREADY_CONSUMED");
+    }
     try {
       workers.execute(() -> run(plan, operationId));
     } catch (RejectedExecutionException saturated) {
@@ -178,14 +190,16 @@ final class OperationManager implements AutoCloseable {
                             null));
         update(id, "SUCCEEDED", 100, "Execution and verification succeeded", result, null);
       } catch (Exception failure) {
-        SafeProblemMapper.Problem problem = SafeProblemMapper.unexpected(failure);
+        SafeProblemMapper.Problem problem = SafeProblemMapper.operationFailure(failure);
         update(
             id,
             "FAILED",
             100,
             "Execution failed; the operation-specific rollback policy was applied",
             null,
-            problem.code() + ":" + problem.correlationId());
+            problem.correlationId() == null
+                ? problem.code()
+                : problem.code() + ":" + problem.correlationId());
       }
     } finally {
       instanceLock.unlock();
@@ -242,6 +256,7 @@ final class OperationManager implements AutoCloseable {
         operation ->
             operation.finishedAt() != null
                 && !operation.finishedAt().plus(TERMINAL_OPERATION_TTL).isAfter(now));
+    operationByPlan.entrySet().removeIf(entry -> !operations.containsKey(entry.getValue()));
   }
 
   private static boolean terminal(String state) {

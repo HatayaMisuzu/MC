@@ -65,14 +65,46 @@ export function executePlan(plan: OperationPlan): Promise<Operation> {
 export async function waitForOperation(
   id: string,
   onUpdate: (operation: Operation) => void,
+  signal?: AbortSignal,
 ): Promise<Operation> {
-  for (;;) {
-    const operation = await api<Operation>(`/api/operations/${encodeURIComponent(id)}`)
-    onUpdate(operation)
-    if (operation.state === 'SUCCEEDED' || operation.state === 'FAILED') return operation
-    await new Promise((resolve) => window.setTimeout(resolve, 250))
+  const deadline = Date.now() + 30 * 60 * 1000
+  let failures = 0
+  while (!signal?.aborted && Date.now() < deadline) {
+    try {
+      const operation = await api<Operation>(`/api/operations/${encodeURIComponent(id)}`, { signal })
+      failures = 0
+      onUpdate(operation)
+      if (operation.state === 'SUCCEEDED' || operation.state === 'FAILED'
+          || operation.state === 'CANCELLED') return operation
+      await delay(250, signal)
+    } catch (failure) {
+      if (signal?.aborted) throw failure
+      failures++
+      if (failures >= 6) throw failure
+      await delay(Math.min(4000, 250 * (2 ** (failures - 1))), signal)
+    }
   }
+  if (signal?.aborted) throw new DOMException('Operation wait cancelled', 'AbortError')
+  throw new ApiError(apiErrorMessage(currentLocale(), 'OPERATION_WAIT_TIMEOUT', 408),
+    408, 'OPERATION_WAIT_TIMEOUT')
 }
+
+const delay = (milliseconds: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Request cancelled', 'AbortError'))
+      return
+    }
+    const aborted = () => {
+      window.clearTimeout(timer)
+      reject(new DOMException('Request cancelled', 'AbortError'))
+    }
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener('abort', aborted)
+      resolve()
+    }, milliseconds)
+    signal?.addEventListener('abort', aborted, { once: true })
+  })
 
 export async function streamEvents(
   onEvent: (event: StreamEvent) => void,
@@ -82,32 +114,58 @@ export async function streamEvents(
   const query = instanceId
     ? `?instanceId=${encodeURIComponent(instanceId)}&view=control`
     : '?view=control'
-  const response = await fetch(`/api/events${query}`, {
-    credentials: 'same-origin',
-    headers: { Accept: 'text/event-stream', 'X-MCAC-CSRF': csrf },
-    signal,
-  })
-  if (!response.ok || !response.body) {
-    throw new ApiError(apiErrorMessage(currentLocale(), 'SSE_FAILED', response.status),
-      response.status, 'SSE_FAILED')
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (!signal.aborted) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary >= 0) {
-      const block = buffer.slice(0, boundary)
-      buffer = buffer.slice(boundary + 2)
-      const data = block.split('\n').filter((line) => line.startsWith('data: '))
-        .map((line) => line.slice(6)).join('')
-      if (data) onEvent(JSON.parse(data) as StreamEvent)
-      boundary = buffer.indexOf('\n\n')
+  let failures = 0
+  while (!signal.aborted && failures < 6) {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    try {
+      const response = await fetch(`/api/events${query}`, {
+        credentials: 'same-origin',
+        headers: { Accept: 'text/event-stream', 'X-MCAC-CSRF': csrf },
+        signal,
+      })
+      if (!response.ok || !response.body) {
+        throw new ApiError(apiErrorMessage(currentLocale(), 'SSE_FAILED', response.status),
+          response.status, 'SSE_FAILED')
+      }
+      reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!signal.aborted) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          const data = block.split('\n').filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trimStart()).join('\n')
+          if (data) {
+            try {
+              onEvent(JSON.parse(data) as StreamEvent)
+            } catch {
+              onEvent({ type: 'SSE_EVENT_ERROR', message: 'Malformed event was isolated' } as StreamEvent)
+            }
+          }
+          boundary = buffer.indexOf('\n\n')
+        }
+      }
+      if (buffer.trim()) {
+        onEvent({ type: 'SSE_EVENT_ERROR', message: 'Truncated event was isolated' } as StreamEvent)
+      }
+      if (signal.aborted) return
+      failures++
+    } catch (failure) {
+      if (signal.aborted) return
+      failures++
+      if (failures >= 6) throw failure
+    } finally {
+      await reader?.cancel().catch(() => undefined)
     }
+    await delay(Math.min(8000, 500 * (2 ** (failures - 1))), signal)
   }
+  if (!signal.aborted) throw new ApiError(apiErrorMessage(currentLocale(), 'SSE_RETRY_EXHAUSTED', 503),
+    503, 'SSE_RETRY_EXHAUSTED')
 }
 
 export async function streamLogSnapshots(
@@ -116,40 +174,64 @@ export async function streamLogSnapshots(
   onSnapshot: (snapshot: { kind: string; available: boolean; lines: string[] }) => void,
   signal: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(
-    `/api/logs/stream?instanceId=${encodeURIComponent(instanceId)}&kind=${kind}`,
-    {
-      credentials: 'same-origin',
-      headers: { Accept: 'text/event-stream', 'X-MCAC-CSRF': csrf },
-      signal,
-    },
-  )
-  if (!response.ok || !response.body) {
-    throw new ApiError(apiErrorMessage(currentLocale(), 'LOG_SSE_FAILED', response.status),
-      response.status, 'LOG_SSE_FAILED')
-  }
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  while (!signal.aborted) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let boundary = buffer.indexOf('\n\n')
-    while (boundary >= 0) {
-      const block = buffer.slice(0, boundary)
-      buffer = buffer.slice(boundary + 2)
-      const raw = block.split('\n').filter((line) => line.startsWith('data: '))
-        .map((line) => line.slice(6)).join('')
-      if (raw) {
-        const event = JSON.parse(raw) as StreamEvent
-        if (event.type === 'LOG_SNAPSHOT' && event.data) {
-          onSnapshot(event.data as { kind: string; available: boolean; lines: string[] })
+  let failures = 0
+  while (!signal.aborted && failures < 6) {
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    try {
+      const response = await fetch(
+        `/api/logs/stream?instanceId=${encodeURIComponent(instanceId)}&kind=${kind}`,
+        {
+          credentials: 'same-origin',
+          headers: { Accept: 'text/event-stream', 'X-MCAC-CSRF': csrf },
+          signal,
+        },
+      )
+      if (!response.ok || !response.body) {
+        throw new ApiError(apiErrorMessage(currentLocale(), 'LOG_SSE_FAILED', response.status),
+          response.status, 'LOG_SSE_FAILED')
+      }
+      reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      while (!signal.aborted) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+        let boundary = buffer.indexOf('\n\n')
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary)
+          buffer = buffer.slice(boundary + 2)
+          const raw = block.split('\n').filter((line) => line.startsWith('data:'))
+            .map((line) => line.slice(5).trimStart()).join('\n')
+          if (raw) {
+            try {
+              const event = JSON.parse(raw) as StreamEvent
+              if (event.type === 'LOG_SNAPSHOT' && event.data) {
+                onSnapshot(event.data as { kind: string; available: boolean; lines: string[] })
+              }
+            } catch {
+              onSnapshot({ kind, available: false, lines: ['Malformed log event was isolated.'] })
+            }
+          }
+          boundary = buffer.indexOf('\n\n')
         }
       }
-      boundary = buffer.indexOf('\n\n')
+      if (buffer.trim()) {
+        onSnapshot({ kind, available: false, lines: ['Truncated log event was isolated.'] })
+      }
+      if (signal.aborted) return
+      failures++
+    } catch (failure) {
+      if (signal.aborted) return
+      failures++
+      if (failures >= 6) throw failure
+    } finally {
+      await reader?.cancel().catch(() => undefined)
     }
+    await delay(Math.min(8000, 500 * (2 ** (failures - 1))), signal)
   }
+  if (!signal.aborted) throw new ApiError(apiErrorMessage(currentLocale(), 'LOG_SSE_RETRY_EXHAUSTED', 503),
+    503, 'LOG_SSE_RETRY_EXHAUSTED')
 }
 
 export const csrfReady = Boolean(csrf)

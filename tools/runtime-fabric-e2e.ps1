@@ -1043,8 +1043,10 @@ try {
             ConvertFrom-Json
         $restartRequestResult = $restartHttpBody.result.structuredContent
         if ($restartRequestResult.callId -ne $restartExecutionId -or
-            $restartRequestResult.observation.state -ne 'PAUSED') {
-            throw "Original MCP execution request did not finish at PAUSED: $($restartHttpBody | ConvertTo-Json -Compress -Depth 20)"
+            $restartRequestResult.code -ne 'TASK_GRAPH_ACCEPTED' -or
+            $restartRequestResult.observation.executionId -ne $restartExecutionId -or
+            $restartRequestResult.observation.executionHandle.id -ne $restartExecutionId) {
+            throw "Original MCP execution request did not return its asynchronous durable receipt: $($restartHttpBody | ConvertTo-Json -Compress -Depth 20)"
         }
     } finally {
         $restartRequest.request.Dispose()

@@ -3,7 +3,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$release = (Resolve-Path -LiteralPath $ReleaseDir).Path.TrimEnd('\')
+$pathSeparators = [char[]]@('\', '/')
+$release = (Resolve-Path -LiteralPath $ReleaseDir).Path.TrimEnd($pathSeparators)
 $errors = [System.Collections.Generic.List[string]]::new()
 
 function Add-Error([string]$message) { $script:errors.Add($message) }
@@ -96,7 +97,7 @@ function Test-Forbidden([string]$Relative) {
 }
 
 foreach ($file in (Get-ChildItem -LiteralPath $release -Recurse -File)) {
-    $relative = $file.FullName.Substring($release.Length).TrimStart('\').Replace('\', '/')
+    $relative = $file.FullName.Substring($release.Length).TrimStart($pathSeparators).Replace('\', '/')
     if (Test-Forbidden $relative) {
         Add-Error "forbidden internal/historical file in release: $relative"
     }
@@ -108,7 +109,7 @@ foreach ($file in (Get-ChildItem -LiteralPath $release -Recurse -File)) {
 $markdown = @(Get-ChildItem -LiteralPath $release -Recurse -File -Filter '*.md')
 foreach ($file in $markdown) {
     $text = Get-Content -Raw -Encoding UTF8 -LiteralPath $file.FullName
-    $relativeSource = $file.FullName.Substring($release.Length).TrimStart('\').Replace('\', '/')
+    $relativeSource = $file.FullName.Substring($release.Length).TrimStart($pathSeparators).Replace('\', '/')
     # runtime/legal/ contains JDK-shipped license pages, not product documentation;
     # they are static and must not become part of the release link contract.
     if ($relativeSource.StartsWith('runtime/legal/', [StringComparison]::OrdinalIgnoreCase)) { continue }
@@ -129,11 +130,11 @@ foreach ($file in $markdown) {
             continue
         }
         if (-not (Test-Path -LiteralPath $resolved -PathType Leaf)) {
-            $relativeTarget = $resolved.Substring($release.Length).TrimStart('\').Replace('\', '/')
+            $relativeTarget = $resolved.Substring($release.Length).TrimStart($pathSeparators).Replace('\', '/')
             Add-Error "${relativeSource}: missing link target: $target (resolved release path: $relativeTarget)"
             continue
         }
-        $relativeTarget = $resolved.Substring($release.Length).TrimStart('\').Replace('\', '/')
+        $relativeTarget = $resolved.Substring($release.Length).TrimStart($pathSeparators).Replace('\', '/')
         if (Test-Forbidden $relativeTarget) {
             Add-Error "${relativeSource}: link points to forbidden internal/historical file: $target"
         }

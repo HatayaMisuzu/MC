@@ -14,6 +14,7 @@ $required = @(
     'README.txt',
     'CHANGELOG.md',
     'KNOWN_LIMITATIONS.md',
+    'SECURITY.md',
     'docs/INDEX.md',
     'docs/PRODUCT_STATUS.md',
     'docs/RUNTIME_SETUP.md',
@@ -38,6 +39,7 @@ $required = @(
     'docs/compatibility/MCAC_COMPATIBILITY_LAYER_ENGINEERING.md',
     'docs/compatibility/FIRST_REAL_PACK_ACCEPTANCE.md',
     'docs/product/PRODUCT_TRUTH.json',
+    'docs/product/CURRENT_MAIN_TRUTH.json',
     'docs/product/BRAIN_ADAPTER_CAPABILITIES.json',
     'docs/product/BUILTIN_SKILL_SCOPE.md',
     'docs/product/TERMINOLOGY.md'

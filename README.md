@@ -10,8 +10,9 @@ MCAC 不是内置高层 Agent，也不是隐藏 Planner。
 现为 `HUMAN_PLAYTEST_PENDING`。2026-08-01 的一次真实纵向测试已验证
 PCL + Forge 1.20.1 + Runtime + Hermes + DeepSeek 官方 API 的握手/恢复、世界状态读取、
 Follow、Navigate 位置变化、安全空闲与重连；这不代表其他 Provider、Loader、全部工具、
-复杂地形或长期真人游玩已经验证。机器可读的当前产品事实位于
-[PRODUCT_TRUTH.json](docs/product/PRODUCT_TRUTH.json)，自动化证据与外部待验证项以
+复杂地形或长期真人游玩已经验证。机器可读的 frozen 0.3.1 发布事实位于
+[PRODUCT_TRUTH.json](docs/product/PRODUCT_TRUTH.json)，post-release `main` 的事实边界位于
+[CURRENT_MAIN_TRUTH.json](docs/product/CURRENT_MAIN_TRUTH.json)，自动化证据与外部待验证项以
 [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md) 为准。
 
 本版本以 Fabric 1.21.1 与 Forge 1.20.1 双 Full Runtime Bridge 为自动化产品目标；

@@ -4,6 +4,9 @@ The authoritative completion evidence is in `docs/RC_COMPLETION_MATRIX.md`. Thes
 kept explicit so Replay, local automation, bounded live-provider evidence, and human play are not
 confused. The automated baseline is frozen and published as
 `mcac-productization-baseline-0.3.1`; current readiness is `HUMAN_PLAYTEST_PENDING`.
+That frozen release's exact-SHA evidence is not inherited by post-release `main`; current-main
+evidence must be attached to the exact Git or GitHub Actions SHA described by
+`docs/product/CURRENT_MAIN_TRUTH.json`.
 
 - Fabric 1.21.1 and Forge 1.20.1 are the full Runtime Bridge RC targets. NeoForge 1.21.1 is detected,
   diagnosed, and packaged as `LOCAL_ONLY`; it does not claim the full body/Tool bridge.

@@ -35,7 +35,8 @@ foreach ($file in $markdown) {
 
 $required = @(
     'README.md', 'AGENTS.md', 'CODEX_EXECUTION.md', 'KNOWN_LIMITATIONS.md', 'CHANGELOG.md',
-    'NOTICE', 'docs/INDEX.md', 'docs/PRODUCT_STATUS.md', 'docs/product/PRODUCT_TRUTH.json',
+    'NOTICE', 'SECURITY.md', 'docs/INDEX.md', 'docs/PRODUCT_STATUS.md',
+    'docs/product/PRODUCT_TRUTH.json', 'docs/product/CURRENT_MAIN_TRUTH.json',
     'docs/ARCHITECTURE.md', 'docs/COMPATIBILITY.md', 'docs/RUNTIME_SETUP.md',
     'docs/RC_COMPLETION_MATRIX.md', 'docs/user/USER_GUIDE.zh-CN.md',
     'docs/user/USER_GUIDE.en-US.md', 'docs/developer/README.md', 'docs/archive/INDEX.md',
@@ -103,6 +104,10 @@ try {
 
 if ($null -ne $truth) {
     if ($truth.schemaVersion -ne 'mcac-product-truth/1') { Add-Error 'unsupported product truth schema' }
+    if ($truth.scope -ne 'FROZEN_RELEASE_BASELINE' -or
+            $truth.sourceCommit -ne '747c7e8046073d9534eae6ae775645341be4cdcd') {
+        Add-Error 'product truth must identify the frozen 0.3.1 release baseline'
+    }
     if ($truth.productVersion -ne '0.3.1') { Add-Error 'product truth version must be 0.3.1' }
     $readinessLabels = @('READY_FOR_LIVE_BRAIN_AND_HUMAN_TEST_RC',
         'LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING', 'HUMAN_PLAYTEST_PENDING')
@@ -137,6 +142,31 @@ if ($null -ne $truth) {
             $live[0].evidenceClass -ne 'LIVE_PROVIDER_VERTICAL_SLICE') {
         Add-Error 'verified live combination is missing or overstated'
     }
+}
+
+$currentTruthPath = Join-Path $root 'docs/product/CURRENT_MAIN_TRUTH.json'
+try {
+    $currentTruth = Get-Content -Raw -Encoding UTF8 -LiteralPath $currentTruthPath | ConvertFrom-Json
+    if ($currentTruth.schemaVersion -ne 'mcac-current-main-truth/1' -or
+            $currentTruth.scope -ne 'CURRENT_DEVELOPMENT_MAIN') {
+        Add-Error 'current-main truth schema or scope is invalid'
+    }
+    if ($currentTruth.frozenReleaseBaseline.productVersion -ne '0.3.1' -or
+            $currentTruth.frozenReleaseBaseline.sourceCommit -ne '747c7e8046073d9534eae6ae775645341be4cdcd' -or
+            $currentTruth.frozenReleaseBaseline.truthDocument -ne 'PRODUCT_TRUTH.json') {
+        Add-Error 'current-main truth does not preserve the frozen 0.3.1 baseline'
+    }
+    if ($currentTruth.inheritsFrozenReleaseExactShaVerification -ne $false -or
+            $currentTruth.exactCurrentCommitAuthority.local -ne 'git rev-parse HEAD' -or
+            $currentTruth.exactCurrentCommitAuthority.githubActions -ne 'github.sha') {
+        Add-Error 'current-main exact-SHA authority is invalid'
+    }
+    $currentPending = @($currentTruth.pendingExternalEvidence)
+    foreach ($label in @('LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING', 'HUMAN_PLAYTEST_PENDING')) {
+        if ($currentPending -notcontains $label) { Add-Error "current-main truth missing pending label: $label" }
+    }
+} catch {
+    Add-Error "CURRENT_MAIN_TRUTH.json is missing or invalid JSON: $($_.Exception.Message)"
 }
 
 $versionDocs = @(
@@ -175,7 +205,7 @@ $matrixHead = ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root 'docs/R
 foreach ($requiredText in @(
     'Overall status: `HUMAN_PLAYTEST_PENDING`', 'Automated productization baseline: `FROZEN`',
     'Product version: `0.3.1`', 'mcac-productization-baseline-0.3.0',
-    'Machine-readable current product facts:', '## Evidence scope',
+    'Machine-readable frozen 0.3.1 facts:', 'Machine-readable current-main scope:', '## Evidence scope',
     '### Historical live evidence', '### Current closeout evidence',
     'HUMAN_PLAYTEST_PENDING'
 )) {
@@ -292,7 +322,8 @@ foreach ($productionFile in @(
 $buildFile = Read-Repo 'build.gradle'
 if ($buildFile -match 'INSTANCE_AUDIT\.md') { Add-Error 'release packaging includes a personal instance audit' }
 foreach ($releaseDoc in @('README.md', 'KNOWN_LIMITATIONS.md', 'docs/PRODUCT_STATUS.md',
-    'docs/product/PRODUCT_TRUTH.json', 'docs/COMPATIBILITY.md', 'docs/ARCHITECTURE.md',
+    'docs/product/PRODUCT_TRUTH.json', 'docs/product/CURRENT_MAIN_TRUTH.json',
+    'docs/COMPATIBILITY.md', 'docs/ARCHITECTURE.md',
     'docs/MCP_PROTOCOL.md')) {
     if (-not $buildFile.Contains($releaseDoc)) { Add-Error "release packaging omits current document: $releaseDoc" }
 }

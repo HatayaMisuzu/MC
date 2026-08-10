@@ -1,6 +1,8 @@
 {
   "schemaVersion": "mcac-product-truth/1",
+  "scope": "FROZEN_RELEASE_BASELINE",
   "productVersion": "0.3.1",
+  "sourceCommit": "747c7e8046073d9534eae6ae775645341be4cdcd",
   "readiness": "HUMAN_PLAYTEST_PENDING",
   "automatedBaseline": "FROZEN",
   "loaders": {

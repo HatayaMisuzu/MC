@@ -156,12 +156,13 @@ function New-McpSession($profile){
 function Start-Wait($profile){
     $client=[Net.Http.HttpClient]::new()
     $client.Timeout=[TimeSpan]::FromSeconds(10)
+    $session=New-McpSession $profile
     $request=[Net.Http.HttpRequestMessage]::new(
         [Net.Http.HttpMethod]::Post,
         "http://127.0.0.1:$($profile.Port + 10000)/mcp")
     $request.Headers.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer',$profile.Token)
     $request.Headers.Add('MCP-Protocol-Version','2025-06-18')
-    $request.Headers.Add('Mcp-Session-Id',(New-McpSession $profile))
+    $request.Headers.Add('Mcp-Session-Id',$session)
     $request.Headers.Add('X-MCAC-Companion-Id',"telemetry-$($profile.Id)")
     $request.Headers.Add('X-MCAC-Brain-Session-Id',"telemetry-$($profile.Id)")
     $body=@{
@@ -182,7 +183,43 @@ function Start-Wait($profile){
         }
     } | ConvertTo-Json -Depth 12 -Compress
     $request.Content=[Net.Http.StringContent]::new($body,[Text.Encoding]::UTF8,'application/json')
-    return @{Client=$client;Request=$request;Task=$client.SendAsync($request)}
+    return @{Client=$client;Request=$request;Task=$client.SendAsync($request);Profile=$profile;Session=$session}
+}
+
+function Inspect-Wait($pending,[string]$executionId){
+    $request=[Net.Http.HttpRequestMessage]::new(
+        [Net.Http.HttpMethod]::Post,
+        "http://127.0.0.1:$($pending.Profile.Port + 10000)/mcp")
+    try{
+        $request.Headers.Authorization=[Net.Http.Headers.AuthenticationHeaderValue]::new(
+            'Bearer',$pending.Profile.Token)
+        $request.Headers.Add('MCP-Protocol-Version','2025-06-18')
+        $request.Headers.Add('Mcp-Session-Id',$pending.Session)
+        $request.Headers.Add('X-MCAC-Companion-Id',"telemetry-$($pending.Profile.Id)")
+        $request.Headers.Add('X-MCAC-Brain-Session-Id',"telemetry-$($pending.Profile.Id)")
+        $body=@{
+            jsonrpc='2.0'
+            id="inspect-$([Guid]::NewGuid().ToString('N'))"
+            method='tools/call'
+            params=@{
+                name='task_graph.inspect'
+                arguments=@{executionId=$executionId}
+            }
+        } | ConvertTo-Json -Depth 8 -Compress
+        $request.Content=[Net.Http.StringContent]::new($body,[Text.Encoding]::UTF8,'application/json')
+        $response=$pending.Client.SendAsync($request).GetAwaiter().GetResult()
+        try{
+            $json=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
+            if(-not $response.IsSuccessStatusCode -or $json.result.isError){
+                throw "Task Graph inspect failed: $($json | ConvertTo-Json -Depth 12 -Compress)"
+            }
+            return $json.result.structuredContent
+        }finally{
+            $response.Dispose()
+        }
+    }finally{
+        $request.Dispose()
+    }
 }
 
 function Complete-Wait($pending){
@@ -191,12 +228,25 @@ function Complete-Wait($pending){
         try{
             $json=$response.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json
             if(-not $response.IsSuccessStatusCode -or
-                $json.result.structuredContent.observation.state -ne 'SUCCEEDED'){
+                $json.result.isError -or
+                $json.result.structuredContent.code -ne 'TASK_GRAPH_ACCEPTED'){
                 throw "Task Graph wait failed: $($json | ConvertTo-Json -Depth 12 -Compress)"
             }
+            $executionId=$json.result.structuredContent.observation.executionId
         }finally{
             $response.Dispose()
         }
+        $deadline=[DateTime]::UtcNow.AddSeconds(10)
+        do{
+            $inspected=Inspect-Wait $pending $executionId
+            $state=$inspected.observation.state
+            if($state -eq 'SUCCEEDED'){return}
+            if($state -in @('FAILED','CANCELLED','RECONCILIATION_REQUIRED')){
+                throw "Task Graph wait reached unexpected terminal state: $state"
+            }
+            Start-Sleep -Milliseconds 100
+        }while([DateTime]::UtcNow -lt $deadline)
+        throw "Task Graph wait did not reach authoritative SUCCEEDED state: $executionId"
     }finally{
         $pending.Request.Dispose()
         $pending.Client.Dispose()

@@ -22,6 +22,15 @@ final class OwnerOnlyFileTest {
     }
 
     @Test
+    void createsAndVerifiesATemporaryOwnerOnlyFile() throws Exception {
+        Path sensitive = OwnerOnlyFile.createTempFile(temporary, ".sensitive-", ".state");
+        Files.writeString(sensitive, "not-a-real-secret");
+        OwnerOnlyFile.secure(sensitive);
+
+        assertTrue(OwnerOnlyFile.isOwnerOnly(sensitive));
+    }
+
+    @Test
     void neverTakesOverAnExistingPathThroughTheCreationApi() throws Exception {
         Path existing = OwnerOnlyFile.create(temporary.resolve("existing.state"));
 

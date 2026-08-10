@@ -1,12 +1,14 @@
 # MCAC product status
 
-Updated: 2026-08-02
+Updated: 2026-08-10
 
 MCAC 0.3.1 is the released repair baseline for the frozen automated productization scope.
 Its current readiness is `HUMAN_PLAYTEST_PENDING`. One bounded live-provider vertical slice is now
 verified; this is not a claim that every provider, Loader, Tool, terrain, or long-duration human-play
-scenario has passed. Machine-readable product facts are in
-[PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json), while exact module evidence is maintained only in
+scenario has passed. Machine-readable frozen-release facts are in
+[PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json). Post-release `main` does not inherit that release's
+exact-SHA verification; its stable scope and SHA authorities are in
+[CURRENT_MAIN_TRUTH.json](product/CURRENT_MAIN_TRUTH.json), while exact module evidence is maintained only in
 [RC_COMPLETION_MATRIX.md](RC_COMPLETION_MATRIX.md).
 
 "Released" here means the frozen automated baseline was published as the annotated tag and GitHub
@@ -35,6 +37,8 @@ trusted test runner supplies evidence through the scoped Host boundary.
 
 ## Current closure state
 
+- Current `main` is a post-release development line. Its exact-SHA validation comes only from Git
+  and Actions runs for that SHA; it does not inherit the frozen release's remote evidence.
 - Compatibility Host lifecycle and bilingual Terminal management are locally verified.
 - The `zh-CN` and `en-US` critical product paths pass in Chromium against the real packaged Java
   backend and an isolated test launcher instance.

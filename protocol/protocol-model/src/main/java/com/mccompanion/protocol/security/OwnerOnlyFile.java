@@ -118,7 +118,9 @@ public final class OwnerOnlyFile {
             AclFileAttributeView acl = Files.getFileAttributeView(file, AclFileAttributeView.class);
             if (acl != null) {
                 UserPrincipal current = currentPrincipal(file);
-                acl.setOwner(current);
+                if (!samePrincipal(acl.getOwner(), current)) {
+                    acl.setOwner(current);
+                }
                 if (!samePrincipal(acl.getOwner(), current)) {
                     throw new IOException("Unable to establish current-user ownership");
                 }

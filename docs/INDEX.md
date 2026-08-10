@@ -9,8 +9,10 @@ current candidate.
 ## Current authority
 
 - [Product status](PRODUCT_STATUS.md): reader-facing phase and support matrix.
-- [Machine-readable product truth](product/PRODUCT_TRUTH.json): version, readiness, Loader modes
+- [Frozen-release product truth](product/PRODUCT_TRUTH.json): 0.3.1 version, readiness, Loader modes
   and managed Runtime port range used by documentation validation.
+- [Current-main truth](product/CURRENT_MAIN_TRUTH.json): post-release scope, frozen baseline link,
+  exact-SHA authorities, and external evidence that remains pending.
 - [Brain Adapter capability matrix](product/BRAIN_ADAPTER_CAPABILITIES.json): machine-readable
   Hermes, OpenAI-compatible and Replay differences.
 - [RC completion matrix](RC_COMPLETION_MATRIX.md): the only completion/evidence matrix.

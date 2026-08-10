@@ -1,0 +1,24 @@
+{
+  "schemaVersion": "mcac-current-main-truth/1",
+  "scope": "CURRENT_DEVELOPMENT_MAIN",
+  "frozenReleaseBaseline": {
+    "productVersion": "0.3.1",
+    "sourceCommit": "747c7e8046073d9534eae6ae775645341be4cdcd",
+    "tag": "mcac-productization-baseline-0.3.1",
+    "truthDocument": "PRODUCT_TRUTH.json"
+  },
+  "inheritsFrozenReleaseExactShaVerification": false,
+  "exactCurrentCommitAuthority": {
+    "local": "git rev-parse HEAD",
+    "githubActions": "github.sha"
+  },
+  "currentHeadEvidenceRequired": [
+    "LAYER_1_MAIN_PUSH",
+    "LAYER_3_AUDIT",
+    "LAYER_3_CANDIDATE"
+  ],
+  "pendingExternalEvidence": [
+    "LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING",
+    "HUMAN_PLAYTEST_PENDING"
+  ]
+}

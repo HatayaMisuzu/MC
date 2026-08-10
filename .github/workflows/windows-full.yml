@@ -2,7 +2,7 @@ name: Layer 2 of 3 - ready PR Windows integration
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - '.github/workflows/windows-full.yml'
       - 'build.gradle'
@@ -15,12 +15,12 @@ on:
       - 'terminal/**'
       - 'compatibility/**'
       - 'minecraft/**'
-      - 'tools/terminal-entrypoint-test.ps1'
-      - 'tools/html-terminal-start-test.ps1'
-      - 'tools/release-golden-path.ps1'
-      - 'tools/verify-terminal-package.ps1'
-      - 'tools/release-documentation-check.ps1'
-      - 'tools/windows-final-artifact-test.ps1'
+      - 'tools/**'
+      - 'docs/**'
+      - 'README.md'
+      - 'KNOWN_LIMITATIONS.md'
+      - 'SECURITY.md'
+      - 'CHANGELOG.md'
       - 'mcac.cmd'
       - 'mcac.ps1'
       - '启动终端.cmd'

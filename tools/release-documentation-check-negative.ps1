@@ -4,7 +4,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $check = Join-Path $PSScriptRoot 'release-documentation-check.ps1'
-$work = Join-Path $env:TEMP ('mcac-release-doc-fixture-' + [Guid]::NewGuid().ToString('N'))
+$powershell = (Get-Process -Id $PID).Path
+$work = Join-Path ([System.IO.Path]::GetTempPath()) ('mcac-release-doc-fixture-' + [Guid]::NewGuid().ToString('N'))
 $base = Join-Path $work 'baseline'
 
 $required = @(
@@ -70,7 +71,7 @@ function Invoke-Check([string]$Dir) {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check -ReleaseDir $Dir 2>&1
+        $output = & $powershell -NoProfile -ExecutionPolicy Bypass -File $check -ReleaseDir $Dir 2>&1
         return @{ Code = $LASTEXITCODE; Output = ($output -join "`n") }
     }
     finally { $ErrorActionPreference = $previous }

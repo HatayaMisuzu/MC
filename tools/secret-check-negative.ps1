@@ -3,7 +3,8 @@ param(
 )
 
 $check = Join-Path $PSScriptRoot 'secret-check.ps1'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check `
+$powershell = (Get-Process -Id $PID).Path
+& $powershell -NoProfile -ExecutionPolicy Bypass -File $check `
     -RepositoryRoot $RepositoryRoot -IncludeTestFixture *> $null
 if ($LASTEXITCODE -eq 0) {
     Write-Error 'Secret check accepted its deliberately secret-shaped fixture.'

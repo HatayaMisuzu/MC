@@ -4,7 +4,8 @@ param(
 
 $check = Join-Path $PSScriptRoot 'documentation-check.ps1'
 $fixture = 'tools/test-fixtures/documentation/contradictory-product-truth.json'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $check `
+$powershell = (Get-Process -Id $PID).Path
+& $powershell -NoProfile -ExecutionPolicy Bypass -File $check `
     -RepositoryRoot $RepositoryRoot -ProductTruthOverride $fixture *> $null
 if ($LASTEXITCODE -eq 0) {
     Write-Error 'Documentation check accepted the deliberately contradictory product truth fixture.'

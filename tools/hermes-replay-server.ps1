@@ -168,7 +168,9 @@ try {
             $stream = $client.GetStream()
             $http = Read-HttpRequest $stream
             $request = if ($http.body) { $http.body | ConvertFrom-Json } else { $null }
-            if ($http.path -eq '/sessions') {
+            if ($http.path -eq '/health') {
+                $response = @{ status = 'ok' }
+            } elseif ($http.path -eq '/sessions') {
                 $nextSession++
                 $sessionId = 'replay{0:d8}' -f $nextSession
                 $sessions[$sessionId] = 0

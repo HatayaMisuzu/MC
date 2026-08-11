@@ -106,6 +106,27 @@ function Wait-TestTcpListener(
     throw "$label did not open its loopback listener on port $port in time."
 }
 
+function Wait-HermesReplayReady(
+    [Diagnostics.Process]$process,
+    [int]$port
+) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        $process.Refresh()
+        if ($process.HasExited) {
+            throw "Hermes replay exited before its HTTP listener was ready ($($process.ExitCode))."
+        }
+        try {
+            $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/health" -UseBasicParsing -TimeoutSec 1
+            if ($response.StatusCode -eq 200) { return }
+        } catch {
+            # The child process has not completed its HTTP accept loop yet.
+        }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Hermes replay did not answer its loopback health request in time."
+}
+
 function Invoke-CrashWindowHelper(
     [string]$java,
     [string]$runtimeClasspath,
@@ -1479,7 +1500,7 @@ try {
     $brainProvider = Start-TestProcess 'powershell.exe' $brainArgs $root $true
     $brainProviderOut = $brainProvider.StandardOutput.ReadToEndAsync()
     $brainProviderErr = $brainProvider.StandardError.ReadToEndAsync()
-    Wait-TestTcpListener $brainProvider 18768 'Hermes replay'
+    Wait-HermesReplayReady $brainProvider 18768
 
     $brainQuestion = Invoke-ExternalBrainRequest $pairingToken $companionId 'Bring me 16 iron ingots from that chest.'
     if (-not $brainQuestion.accepted -or $brainQuestion.result.kind -ne 'ASK_USER' -or

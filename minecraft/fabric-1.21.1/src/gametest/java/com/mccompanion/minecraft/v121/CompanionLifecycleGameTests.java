@@ -261,7 +261,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "block interaction test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "block interaction test created no live body");
-        BlockPos target = body.blockPosition().offset(1, 0, 0);
+        // Keep the target clearly inside the eye ray instead of grazing the chest's low collision shape.
+        BlockPos target = body.blockPosition().offset(1, 1, 0);
         body.serverLevel().setBlockAndUpdate(target, Blocks.CHEST.defaultBlockState());
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-block-interact";

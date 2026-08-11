@@ -16,6 +16,7 @@ $gameRun = Join-Path $fabric 'build\gametest'
 $gameOutFile = Join-Path $runtimeHome 'fabric-gametest.out.log'
 $gameErrFile = Join-Path $runtimeHome 'fabric-gametest.err.log'
 $runtimeDatabase = Join-Path $runtimeHome 'data\companion.db'
+$runtimeLogFile = Join-Path $runtimeHome 'logs\runtime.log'
 $crashWindowSource = Join-Path $root 'tools\fault-injection\SqliteTaskGraphCrashWindow.java'
 $crashWindowClasses = Join-Path $runtimeHome 'fault-injection-classes'
 $script:mcpSessions = @{}
@@ -1163,6 +1164,25 @@ try {
         'await', $runtimeDatabase, $crashCommandId, $crashExecutionId, '30'
     )
 
+    # The durable boundary becomes visible immediately before releaseQuietly records
+    # the injected SQLite failure. Wait for that real Runtime evidence so a fast helper
+    # process cannot kill the Runtime between the state transition and the log write.
+    $crashFailureDeadline = [DateTime]::UtcNow.AddSeconds(5)
+    $crashRuntimeLog = ''
+    do {
+        if (Test-Path -LiteralPath $runtimeLogFile -PathType Leaf) {
+            $crashRuntimeLog = Get-Content -Raw -LiteralPath $runtimeLogFile
+        }
+        $expectedCrashWindowSevereObserved =
+            $crashRuntimeLog -match 'SEVERE Unable to release control lease' -and
+            $crashRuntimeLog -match 'injected terminal lease hold'
+        if (-not $expectedCrashWindowSevereObserved) { Start-Sleep -Milliseconds 50 }
+    } while (-not $expectedCrashWindowSevereObserved -and
+        [DateTime]::UtcNow -lt $crashFailureDeadline)
+    if (-not $expectedCrashWindowSevereObserved) {
+        throw 'Crash-window Runtime did not record the expected injected lease-release failure.'
+    }
+
     $runtime.Kill()
     if (-not $runtime.WaitForExit(5000)) {
         throw 'Runtime process did not terminate at the injected live Tool-result crash boundary.'
@@ -1170,9 +1190,10 @@ try {
     $crashExitCode = $runtime.ExitCode
     $priorRuntimeStdout += $runtimeOut.GetAwaiter().GetResult()
     $crashRuntimeStderr = $runtimeErr.GetAwaiter().GetResult()
+    $crashRuntimeEvidence = $crashRuntimeStderr + "`n" + $crashRuntimeLog
     $expectedCrashWindowSevereObserved =
-        $crashRuntimeStderr -match 'SEVERE Unable to release control lease' -and
-        $crashRuntimeStderr -match 'injected terminal lease hold'
+        $crashRuntimeEvidence -match 'SEVERE Unable to release control lease' -and
+        $crashRuntimeEvidence -match 'injected terminal lease hold'
     if (-not $expectedCrashWindowSevereObserved) {
         throw 'Crash-window Runtime did not record the expected injected lease-release failure.'
     }

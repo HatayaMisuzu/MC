@@ -9,6 +9,9 @@ $start = [Diagnostics.ProcessStartInfo]::new()
 $start.FileName = Join-Path $release 'mcac.exe'
 $start.WorkingDirectory = $env:TEMP
 $start.UseShellExecute = $false
+$start.CreateNoWindow = $true
+$start.RedirectStandardOutput = $true
+$start.RedirectStandardError = $true
 $start.Environment['MCAC_WEB_STATE_FILE'] = $state
 $start.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
 $start.Environment['MCAC_NO_BROWSER'] = 'true'
@@ -30,6 +33,9 @@ try {
     $secondStart.FileName = Join-Path $release 'mcac.exe'
     $secondStart.WorkingDirectory = $env:TEMP
     $secondStart.UseShellExecute = $false
+    $secondStart.CreateNoWindow = $true
+    $secondStart.RedirectStandardOutput = $true
+    $secondStart.RedirectStandardError = $true
     $secondStart.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
     $secondStart.Environment['LOCALAPPDATA'] = $testLocalAppData
     $second = [Diagnostics.Process]::Start($secondStart)
@@ -84,6 +90,7 @@ finally {
         & taskkill.exe /PID $process.Id /T /F | Out-Null
         $process.WaitForExit(5000) | Out-Null
     }
+    $process.Dispose()
     Remove-Item -LiteralPath $state -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $testLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
 }

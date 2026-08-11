@@ -609,10 +609,16 @@ try {
                     arguments = @{ dimension = 'minecraft:overworld'; x = $unknownX; y = $unknownY; z = $unknownZ }
                 },
                 @{
-                    id = 'inspect-block'
-                    type = 'call_tool'
-                    tool = 'block.inspect'
-                    arguments = @{ position = @{ dimension = 'minecraft:overworld'; x = $unknownX; y = $unknownY; z = $unknownZ } }
+                    id = 'inspect-block-attempts'
+                    type = 'retry'
+                    maxAttempts = 2
+                    backoffMillis = 100
+                    node = @{
+                        id = 'inspect-block'
+                        type = 'call_tool'
+                        tool = 'block.inspect'
+                        arguments = @{ position = @{ dimension = 'minecraft:overworld'; x = $unknownX; y = $unknownY; z = $unknownZ } }
+                    }
                 },
                 @{
                     id = 'open'

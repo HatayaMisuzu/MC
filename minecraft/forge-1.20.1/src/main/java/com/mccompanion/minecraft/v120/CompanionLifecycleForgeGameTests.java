@@ -13,7 +13,6 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
-import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.Cow;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -746,11 +745,16 @@ public final class CompanionLifecycleForgeGameTests {
                         Blocks.AIR.defaultBlockState());
             }
         }
-        // This long-running test builds outside the tiny vanilla template. Use the
-        // already-connected owner as the explicit threat so adjacent GameTest cleanup
-        // cannot discard a temporary mob before the retreat primitive observes it.
-        Entity retreatThreat = owner;
-        owner.moveTo(body.getX() - 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        // This long-running test builds outside the tiny vanilla template. Use a
+        // registered player fixture so adjacent GameTest cleanup cannot discard the
+        // explicit threat before the retreat primitive observes it.
+        FakeConnection retreatConnection = new FakeConnection();
+        ServerPlayer retreatThreat = new ServerPlayer(
+                helper.getLevel().getServer(),
+                helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-retreat"));
+        retreatThreat.moveTo(body.getX() - 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(retreatConnection, retreatThreat);
         Vec3 retreatStart = body.position();
         helper.assertTrue(
                 registry.runtimeStart(
@@ -790,6 +794,7 @@ public final class CompanionLifecycleForgeGameTests {
                 companionId,
                 retreatStart,
                 retreatThreat,
+                retreatConnection,
                 body.serverLevel().getServer().getTickCount() + 480);
     }
 
@@ -801,7 +806,8 @@ public final class CompanionLifecycleForgeGameTests {
             CompanionPlayer body,
             String companionId,
             Vec3 retreatStart,
-            Entity retreatThreat,
+            ServerPlayer retreatThreat,
+            FakeConnection retreatConnection,
             int deadlineTick) {
         if (body.position().distanceToSqr(retreatStart) >= 9.0D
                 && body.distanceToSqr(retreatThreat) >= 36.0D) {
@@ -813,7 +819,8 @@ public final class CompanionLifecycleForgeGameTests {
                     body,
                     companionId,
                     retreatStart,
-                    retreatThreat);
+                    retreatThreat,
+                    retreatConnection);
             return;
         }
         helper.assertTrue(
@@ -837,6 +844,7 @@ public final class CompanionLifecycleForgeGameTests {
                         companionId,
                         retreatStart,
                         retreatThreat,
+                        retreatConnection,
                         deadlineTick));
     }
 
@@ -1424,7 +1432,8 @@ public final class CompanionLifecycleForgeGameTests {
             CompanionPlayer body,
             String companionId,
             Vec3 retreatStart,
-            Entity retreatThreat) {
+            ServerPlayer retreatThreat,
+            FakeConnection retreatConnection) {
         helper.assertTrue(
                 body.position().distanceToSqr(retreatStart) >= 9.0D,
                 "retreat did not move the body at least three blocks: start="
@@ -1438,6 +1447,9 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.distanceToSqr(retreatThreat) >= 36.0D,
                 "retreat did not establish a six-block safety margin");
+        retreatThreat.discard();
+        helper.getLevel().getServer().getPlayerList().remove(retreatThreat);
+        retreatConnection.disconnect(Component.literal("Forge retreat fixture complete"));
         helper.assertTrue(
                 registry.runtimeReleaseLease(companionId, "forge-primitive-lease", 2L).success(),
                 "primitive lease release failed");

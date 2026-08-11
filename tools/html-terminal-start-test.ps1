@@ -5,13 +5,15 @@ $release = (Resolve-Path -LiteralPath $ReleaseDir).Path
 $state = Join-Path $env:TEMP ('mcac-html-state-' + [Guid]::NewGuid().ToString('N') + '.json')
 $testLocalAppData = Join-Path $env:TEMP ('mcac-html-localappdata-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testLocalAppData | Out-Null
+$primaryOut = Join-Path $testLocalAppData 'primary.out.log'
+$primaryErr = Join-Path $testLocalAppData 'primary.err.log'
 $start = [Diagnostics.ProcessStartInfo]::new()
-$start.FileName = Join-Path $release 'mcac.exe'
+$start.FileName = $env:ComSpec
+$start.Arguments = '/d /s /c ""' + (Join-Path $release 'mcac.exe') + '" 1> "' +
+        $primaryOut + '" 2> "' + $primaryErr + '""'
 $start.WorkingDirectory = $env:TEMP
 $start.UseShellExecute = $false
 $start.CreateNoWindow = $true
-$start.RedirectStandardOutput = $true
-$start.RedirectStandardError = $true
 $start.Environment['MCAC_WEB_STATE_FILE'] = $state
 $start.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
 $start.Environment['MCAC_NO_BROWSER'] = 'true'
@@ -30,12 +32,13 @@ try {
     if ($server.bind -ne '127.0.0.1' -or $server.port -le 0) { throw 'HTML server did not bind loopback on a dynamic port' }
 
     $secondStart = [Diagnostics.ProcessStartInfo]::new()
-    $secondStart.FileName = Join-Path $release 'mcac.exe'
+    $secondStart.FileName = $env:ComSpec
+    $secondStart.Arguments = '/d /s /c ""' + (Join-Path $release 'mcac.exe') + '" 1> "' +
+            (Join-Path $testLocalAppData 'second.out.log') + '" 2> "' +
+            (Join-Path $testLocalAppData 'second.err.log') + '""'
     $secondStart.WorkingDirectory = $env:TEMP
     $secondStart.UseShellExecute = $false
     $secondStart.CreateNoWindow = $true
-    $secondStart.RedirectStandardOutput = $true
-    $secondStart.RedirectStandardError = $true
     $secondStart.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
     $secondStart.Environment['LOCALAPPDATA'] = $testLocalAppData
     $second = [Diagnostics.Process]::Start($secondStart)

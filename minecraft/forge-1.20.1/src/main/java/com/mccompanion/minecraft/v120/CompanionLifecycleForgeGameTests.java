@@ -13,6 +13,7 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.Container;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.animal.Cow;
 import net.minecraft.world.entity.item.ItemEntity;
@@ -745,11 +746,11 @@ public final class CompanionLifecycleForgeGameTests {
                         Blocks.AIR.defaultBlockState());
             }
         }
-        Zombie retreatThreat = EntityType.ZOMBIE.create(body.serverLevel());
-        helper.assertTrue(retreatThreat != null, "retreat fixture entity creation failed");
-        retreatThreat.moveTo(body.getX() - 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
-        retreatThreat.setNoAi(true);
-        body.serverLevel().addFreshEntity(retreatThreat);
+        // This long-running test builds outside the tiny vanilla template. Use the
+        // already-connected owner as the explicit threat so adjacent GameTest cleanup
+        // cannot discard a temporary mob before the retreat primitive observes it.
+        Entity retreatThreat = owner;
+        owner.moveTo(body.getX() - 1.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
         Vec3 retreatStart = body.position();
         helper.assertTrue(
                 registry.runtimeStart(
@@ -800,7 +801,7 @@ public final class CompanionLifecycleForgeGameTests {
             CompanionPlayer body,
             String companionId,
             Vec3 retreatStart,
-            Zombie retreatThreat,
+            Entity retreatThreat,
             int deadlineTick) {
         if (body.position().distanceToSqr(retreatStart) >= 9.0D
                 && body.distanceToSqr(retreatThreat) >= 36.0D) {
@@ -1423,7 +1424,7 @@ public final class CompanionLifecycleForgeGameTests {
             CompanionPlayer body,
             String companionId,
             Vec3 retreatStart,
-            Zombie retreatThreat) {
+            Entity retreatThreat) {
         helper.assertTrue(
                 body.position().distanceToSqr(retreatStart) >= 9.0D,
                 "retreat did not move the body at least three blocks: start="
@@ -1437,7 +1438,6 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.distanceToSqr(retreatThreat) >= 36.0D,
                 "retreat did not establish a six-block safety margin");
-        retreatThreat.discard();
         helper.assertTrue(
                 registry.runtimeReleaseLease(companionId, "forge-primitive-lease", 2L).success(),
                 "primitive lease release failed");

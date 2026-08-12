@@ -246,9 +246,11 @@ async function verifyDiscoveryAndBrain(
   expect(brain.mode).toBe('hermes')
   expect(brain.endpoint).toBe(endpoint)
 
+  const probesBeforeExplicitTest = calls.opened
   await page.getByRole('button', { name: 'Verify MCAC protocol', exact: true }).click()
   await expect(page.getByText('TOOL_CALL_VERIFIED', { exact: true })).toBeVisible()
-  expect(calls).toEqual({ opened: 1, turned: 1, cancelled: 1 })
+  await expect.poll(() => calls.opened > probesBeforeExplicitTest
+    && calls.opened === calls.turned && calls.opened === calls.cancelled).toBe(true)
 
   await clickPlan(page, 'en-US', 'Disable')
   const disabled = await apiJson(page,

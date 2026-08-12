@@ -38,13 +38,13 @@ OpenRouter was not used.
 
 | Layer | Current contract | State |
 |---|---|---|
-| 1. PR fast | Every PR update runs one shared `check` plus parallel history-secret and dependency-diff review; superseded updates are cancelled | `DEFINED_PENDING_REMOTE` |
-| 2. Ready-PR Windows integration | Relevant non-Draft PRs run Windows link/installer boundaries, browser product E2E, package verification, launchers, HTML startup, and clean-extraction Golden Path only when opened, reopened, or deliberately moved to Ready | `DEFINED_PENDING_REMOTE` |
+| 1. PR fast | Every PR update and push to `main` runs one shared `check` plus a parallel history-secret scan; PR updates also run dependency-diff review, and superseded updates are cancelled | `DEFINED_PENDING_REMOTE` |
+| 2. Ready-PR Windows integration | Relevant non-Draft PRs run Windows link/installer boundaries, browser product E2E, package verification, launchers, HTML startup, and clean-extraction Golden Path when opened, reopened, deliberately moved to Ready, or subsequently synchronized | `DEFINED_PENDING_REMOTE` |
 | 3. Audit and release candidate | Weekly/manual audit runs Heavy Loader/Runtime, Secret/CodeQL, and Gradle 9; manual `candidate` mode is exact-`main` only, waits for every audit job, then builds and uploads the single verified RC | `DEFINED_PENDING_REMOTE` |
 
-There is no automatic duplicate validation on ordinary `main` pushes and no per-commit candidate
-artifact. Iteration stays in Draft; Layer 2 is a deliberate integration boundary, and a substantial
-post-Ready change must return to Draft before another Ready transition. Failures are diagnosed from
+Layer 1 automatically validates ordinary `main` pushes, while no per-commit candidate artifact is
+produced. Iteration stays in Draft; Layer 2 is a deliberate integration boundary and reruns on
+subsequent synchronizations while the PR remains non-Draft. Failures are diagnosed from
 their evidence and receive focused revalidation instead of automatic full-chain restarts.
 
 The prior four-workflow model remains historical evidence: candidate

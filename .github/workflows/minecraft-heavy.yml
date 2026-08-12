@@ -225,6 +225,17 @@ jobs:
         timeout-minutes: 15
         shell: pwsh
         run: ./gradlew.bat releaseGoldenPathTest --no-daemon --no-parallel --stacktrace
+      - name: Upload candidate failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: layer-3-candidate-failure-evidence
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            build/release-golden-path/
+            terminal/web-ui/test-results/
+            build/reports/problems/
       - name: Upload the single verified candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

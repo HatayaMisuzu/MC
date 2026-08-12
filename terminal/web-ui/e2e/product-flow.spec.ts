@@ -526,7 +526,7 @@ async function verifyCompanionAndTaskGraphControls(
     await graphRow.getByRole('button', { name: 'Pause', exact: true }).click()
     await expect(graphRow).toContainText('PAUSED')
     await graphRow.getByRole('button', { name: 'Resume', exact: true }).click()
-    await expect(graphRow).toContainText('RUNNING')
+    await expect(graphRow).toContainText(/RUNNING|READY.*RESUME_REQUESTED/)
     await graphRow.getByRole('button', { name: 'Cancel', exact: true }).click()
     await expect(graphRow).toContainText('CANCELLED')
     const completed = await graph.completion

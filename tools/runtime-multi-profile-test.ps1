@@ -268,7 +268,8 @@ try{
         -WorkingDirectory $b.Dir -WindowStyle Hidden `
         -RedirectStandardOutput $b.Stdout -RedirectStandardError $b.Stderr -PassThru
 
-    $limit=[DateTime]::UtcNow.AddSeconds(20)
+    # Each Runtime may legally spend up to 15 seconds starting WebSocket before management startup.
+    $limit=[DateTime]::UtcNow.AddSeconds(45)
     $healthy=$false
     while([DateTime]::UtcNow -lt $limit){
         Assert-Alive $pa $a

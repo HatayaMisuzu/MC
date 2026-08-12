@@ -602,8 +602,11 @@ try {
     $runtimeOut = $runtime.StandardOutput.ReadToEndAsync()
     $runtimeErr = $runtime.StandardError.ReadToEndAsync()
 
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $runtimeStartupStarted = [DateTime]::UtcNow
+    # Runtime may legally spend up to 15 seconds starting WebSocket before management startup.
+    $deadline = $runtimeStartupStarted.AddSeconds(45)
     $runtimeHealthReady = $false
+    $lastRuntimeHealthError = $null
     while (-not $runtimeHealthReady) {
         if ($runtime.HasExited) { throw "Runtime exited before creating its pairing token ($($runtime.ExitCode))." }
         if (Test-Path -LiteralPath $token) {
@@ -615,14 +618,17 @@ try {
                 $runtimeHealthReady = $null -ne $runtimeHealth
             } catch {
                 # Token creation precedes the authenticated health listener by a short interval.
+                $lastRuntimeHealthError = $_.Exception.Message
             }
         }
         if ([DateTime]::UtcNow -gt $deadline) {
-            throw 'Runtime did not remain alive with an authenticated health endpoint.'
+            $elapsed = [Math]::Round(([DateTime]::UtcNow - $runtimeStartupStarted).TotalSeconds, 1)
+            throw "Runtime remained alive but did not expose authenticated health after ${elapsed}s. Last health error: $lastRuntimeHealthError"
         }
         Start-Sleep -Milliseconds 200
     }
-    Write-Output '[runtime-e2e] Runtime token and authenticated health ready; starting Fabric GameTest'
+    $startupElapsed = [Math]::Round(([DateTime]::UtcNow - $runtimeStartupStarted).TotalSeconds, 1)
+    Write-Output "[runtime-e2e] Runtime token and authenticated health ready in ${startupElapsed}s; starting Fabric GameTest"
 
     if (Test-Path -LiteralPath $gameRun) {
         Remove-Item -LiteralPath $gameRun -Recurse -Force
@@ -635,7 +641,8 @@ try {
     $game = Start-TestProcess 'cmd.exe' $gameArgs $fabric $false
 
     $gameLog = Join-Path $gameRun 'logs\latest.log'
-    $registrationDeadline = [DateTime]::UtcNow.AddSeconds(60)
+    # Cold Minecraft startup reached the live Runtime session at 59.94 seconds in a repeated sample.
+    $registrationDeadline = [DateTime]::UtcNow.AddSeconds(120)
     do {
         if ($game.HasExited) { throw "Fabric Runtime GameTest exited before companion registration ($($game.ExitCode))." }
         if ([DateTime]::UtcNow -gt $registrationDeadline) { throw 'Fabric companion did not register with Runtime in time.' }

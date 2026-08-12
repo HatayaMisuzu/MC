@@ -145,8 +145,11 @@ try {
     $runtimeOut = $runtime.StandardOutput.ReadToEndAsync()
     $runtimeErr = $runtime.StandardError.ReadToEndAsync()
 
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $runtimeStartupStarted = [DateTime]::UtcNow
+    # Runtime may legally spend up to 15 seconds starting WebSocket before management startup.
+    $deadline = $runtimeStartupStarted.AddSeconds(45)
     $runtimeHealthReady = $false
+    $lastRuntimeHealthError = $null
     while (-not $runtimeHealthReady) {
         if ($runtime.HasExited) { throw "Runtime exited early ($($runtime.ExitCode))." }
         if (Test-Path -LiteralPath $token) {
@@ -158,14 +161,17 @@ try {
                 $runtimeHealthReady = $null -ne $runtimeHealth
             } catch {
                 # Token creation precedes the authenticated health listener by a short interval.
+                $lastRuntimeHealthError = $_.Exception.Message
             }
         }
         if ([DateTime]::UtcNow -gt $deadline) {
-            throw 'Runtime did not remain alive with an authenticated health endpoint.'
+            $elapsed = [Math]::Round(([DateTime]::UtcNow - $runtimeStartupStarted).TotalSeconds, 1)
+            throw "Runtime remained alive but did not expose authenticated health after ${elapsed}s. Last health error: $lastRuntimeHealthError"
         }
         Start-Sleep -Milliseconds 200
     }
-    Write-Output '[runtime-forge-e2e] Runtime token and authenticated health ready'
+    $startupElapsed = [Math]::Round(([DateTime]::UtcNow - $runtimeStartupStarted).TotalSeconds, 1)
+    Write-Output "[runtime-forge-e2e] Runtime token and authenticated health ready in ${startupElapsed}s"
 
     if (Test-Path -LiteralPath $gameRun) {
         Remove-Item -LiteralPath $gameRun -Recurse -Force

@@ -7,6 +7,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 # Pairing tokens and the Runtime database require owner-only ACLs. Repository workspaces can
 # inherit broad Windows ACLs, so keep this disposable authenticated fixture in the user temp area.
 $runtimeHome = Join-Path ([System.IO.Path]::GetTempPath()) 'mcac-e2e-runtime-fabric'
+$repoEvidence = Join-Path $root 'build\e2e-runtime\evidence'
 $fabric = Join-Path $root 'minecraft\fabric-1.21.1'
 $runtimeBat = Join-Path $root 'runtime\runtime-app\build\install\runtime-app\bin\runtime-app.bat'
 $config = Join-Path $runtimeHome 'runtime.yml'
@@ -20,6 +21,7 @@ $runtimeLogFile = Join-Path $runtimeHome 'logs\runtime.log'
 $crashWindowSource = Join-Path $root 'tools\fault-injection\SqliteTaskGraphCrashWindow.java'
 $crashWindowClasses = Join-Path $runtimeHome 'fault-injection-classes'
 $script:mcpSessions = @{}
+$script:taskGraphWaitEvidence = [Collections.Generic.List[object]]::new()
 
 if (-not (Test-Path -LiteralPath $runtimeBat)) {
     throw 'Runtime distribution is missing; run :runtime:runtime-app:installDist first.'
@@ -28,6 +30,10 @@ if (Test-Path -LiteralPath $runtimeHome) {
     Remove-Item -LiteralPath $runtimeHome -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $runtimeHome | Out-Null
+if (Test-Path -LiteralPath $repoEvidence) {
+    Remove-Item -LiteralPath $repoEvidence -Recurse -Force
+}
+New-Item -ItemType Directory -Force -Path $repoEvidence | Out-Null
 $env:MCAC_E2E_REPLAY_TOKEN = 'local-replay-fixture'
 $env:MCAC_E2E_BRAIN_TOKEN = 'local-hermes-replay-fixture'
 @"
@@ -149,6 +155,51 @@ function Read-ProcessLog([string]$path) {
         try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
     } finally {
         $stream.Dispose()
+    }
+}
+
+function Publish-RuntimeEvidence {
+    $source = Join-Path $runtimeHome 'evidence'
+    if (-not (Test-Path -LiteralPath $source)) { return }
+    New-Item -ItemType Directory -Force -Path $repoEvidence | Out-Null
+    Get-ChildItem -LiteralPath $source | Copy-Item -Destination $repoEvidence -Recurse -Force
+}
+
+function Get-TestProcessEvidence([Collections.IDictionary]$processes) {
+    return @($processes.GetEnumerator() | ForEach-Object {
+        $process = $_.Value
+        if (-not $process) {
+            return [pscustomobject]@{ label = $_.Key; started = $false }
+        }
+        $process.Refresh()
+        [pscustomobject]@{
+            label = $_.Key
+            started = $true
+            id = $process.Id
+            hasExited = $process.HasExited
+            exitCode = if ($process.HasExited) { $process.ExitCode } else { $null }
+        }
+    })
+}
+
+function Write-CurrentDiagnosticEvidence(
+    [string]$destination,
+    [object]$processEvidence
+) {
+    New-Item -ItemType Directory -Force -Path $destination | Out-Null
+    [IO.File]::WriteAllText((Join-Path $destination 'task-graph-inspections.json'),
+        ($script:taskGraphWaitEvidence | ConvertTo-Json -Depth 50),
+        [Text.UTF8Encoding]::new($false))
+    if ($processEvidence) {
+        [IO.File]::WriteAllText((Join-Path $destination 'processes.json'),
+            ($processEvidence | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+    }
+    if (Test-Path -LiteralPath $runtimeLogFile) {
+        Copy-Item -LiteralPath $runtimeLogFile -Destination (Join-Path $destination 'runtime.log') -Force
+    }
+    $fabricLatest = Join-Path $gameRun 'logs\latest.log'
+    if (Test-Path -LiteralPath $fabricLatest) {
+        Copy-Item -LiteralPath $fabricLatest -Destination (Join-Path $destination 'fabric-latest.log') -Force
     }
 }
 
@@ -404,18 +455,44 @@ function Wait-TaskGraphExecution(
     [string]$brainSessionId,
     [string]$executionId
 ) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $started = [DateTime]::UtcNow
+    $deadline = $started.AddSeconds(20)
+    $diagnostic = [ordered]@{
+        wait = 'terminal'
+        executionId = $executionId
+        brainSessionId = $brainSessionId
+        companionId = $companionId
+        startedUtc = $started.ToString('o')
+        elapsedMilliseconds = 0
+        timedOut = $false
+        lastInspectionError = $null
+        lastInspect = $null
+    }
+    $script:taskGraphWaitEvidence.Add($diagnostic)
     do {
-        $inspected = Invoke-McpTool $pairingToken $companionId $brainSessionId 'task_graph.inspect' @{
-            executionId = $executionId
-        } "inspect-$([Guid]::NewGuid())"
+        try {
+            $inspected = Invoke-McpTool $pairingToken $companionId $brainSessionId 'task_graph.inspect' @{
+                executionId = $executionId
+            } "inspect-$([Guid]::NewGuid())"
+            $diagnostic['lastInspect'] = $inspected
+            $diagnostic['lastInspectionError'] = $null
+        } catch {
+            $diagnostic['elapsedMilliseconds'] = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+            $diagnostic['lastInspectionError'] = $_.Exception.Message
+            throw
+        }
         $state = $inspected.observation.state
         if ($state -in @('SUCCEEDED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) {
+            $diagnostic['elapsedMilliseconds'] = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
             return $inspected
         }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Task Graph $executionId did not reach a terminal state."
+    $diagnostic['elapsedMilliseconds'] = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+    $diagnostic['timedOut'] = $true
+    $lastState = if ($diagnostic['lastInspect']) { $diagnostic['lastInspect'].observation.state } else { 'unavailable' }
+    $currentNode = if ($diagnostic['lastInspect']) { $diagnostic['lastInspect'].observation.currentNodeId } else { 'unavailable' }
+    throw "Task Graph $executionId did not reach a terminal state (last=$lastState, currentNode=$currentNode, elapsedMs=$($diagnostic['elapsedMilliseconds']))."
 }
 
 function Wait-TaskGraphState(
@@ -425,20 +502,47 @@ function Wait-TaskGraphState(
     [string]$executionId,
     [string]$expectedState
 ) {
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $started = [DateTime]::UtcNow
+    $deadline = $started.AddSeconds(20)
     $last = $null
+    $diagnostic = [ordered]@{
+        wait = "state:$expectedState"
+        executionId = $executionId
+        brainSessionId = $brainSessionId
+        companionId = $companionId
+        startedUtc = $started.ToString('o')
+        elapsedMilliseconds = 0
+        timedOut = $false
+        lastInspectionError = $null
+        lastInspect = $null
+    }
+    $script:taskGraphWaitEvidence.Add($diagnostic)
     do {
-        $last = Invoke-McpTool $pairingToken $companionId $brainSessionId 'task_graph.inspect' @{
-            executionId = $executionId
-        } "state-$([Guid]::NewGuid())"
-        if ($last.observation.state -eq $expectedState) { return $last }
+        try {
+            $last = Invoke-McpTool $pairingToken $companionId $brainSessionId 'task_graph.inspect' @{
+                executionId = $executionId
+            } "state-$([Guid]::NewGuid())"
+            $diagnostic['lastInspect'] = $last
+            $diagnostic['lastInspectionError'] = $null
+        } catch {
+            $diagnostic['elapsedMilliseconds'] = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+            $diagnostic['lastInspectionError'] = $_.Exception.Message
+            throw
+        }
+        if ($last.observation.state -eq $expectedState) {
+            $diagnostic['elapsedMilliseconds'] = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+            return $last
+        }
         if ($last.observation.state -in @('SUCCEEDED', 'FAILED', 'CANCELLED', 'RECONCILIATION_REQUIRED')) {
             throw "Task Graph $executionId reached $($last.observation.state) before $expectedState."
         }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
     $actual = if ($last) { $last.observation.state } else { 'unavailable' }
-    throw "Task Graph $executionId did not reach $expectedState (last=$actual)."
+    $currentNode = if ($last) { $last.observation.currentNodeId } else { 'unavailable' }
+    $diagnostic['elapsedMilliseconds'] = [int]([DateTime]::UtcNow - $started).TotalMilliseconds
+    $diagnostic['timedOut'] = $true
+    throw "Task Graph $executionId did not reach $expectedState (last=$actual, currentNode=$currentNode, elapsedMs=$($diagnostic['elapsedMilliseconds']))."
 }
 
 function Wait-WaitingQuestion([string]$pairingToken, [string]$companionId) {
@@ -1656,14 +1760,28 @@ try {
     if (-not $expectedCrashWindowSevereObserved -or $unexpectedSevere.Count -gt 0) {
         throw 'Runtime emitted a SEVERE error during E2E.'
     }
+    Write-CurrentDiagnosticEvidence (Join-Path $runtimeHome 'evidence') ([ordered]@{
+        final = Get-TestProcessEvidence ([ordered]@{
+            game = $game; provider = $provider; hermesReplay = $brainProvider; runtime = $runtime
+        })
+    })
+    Publish-RuntimeEvidence
     Write-Output 'Runtime/Fabric E2E passed: External Brain 6/16 ASK_USER, same-session answer, navigate, withdraw, return, deliver, final inventory observation, and evidence-bound reply.'
 } catch {
+    $processEvidence = [ordered]@{
+        beforeCleanup = Get-TestProcessEvidence ([ordered]@{
+            game = $game; provider = $provider; hermesReplay = $brainProvider; runtime = $runtime
+        })
+    }
     foreach ($process in @($game, $provider, $brainProvider, $runtime)) {
         if ($process -and -not $process.HasExited) {
             $process.Kill()
             $null = $process.WaitForExit(5000)
         }
     }
+    $processEvidence['afterCleanup'] = Get-TestProcessEvidence ([ordered]@{
+        game = $game; provider = $provider; hermesReplay = $brainProvider; runtime = $runtime
+    })
     $failureEvidence = Join-Path $runtimeHome 'evidence'
     New-Item -ItemType Directory -Force -Path $failureEvidence | Out-Null
     [IO.File]::WriteAllText((Join-Path $failureEvidence 'fabric-gametest.out.log'),
@@ -1672,11 +1790,11 @@ try {
         (Read-ProcessLog $gameErrFile), [Text.UTF8Encoding]::new($false))
     if ($runtimeOut) {
         [IO.File]::WriteAllText((Join-Path $failureEvidence 'runtime-cli.out.log'),
-            $runtimeOut.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+            ($priorRuntimeStdout + $runtimeOut.GetAwaiter().GetResult()), [Text.UTF8Encoding]::new($false))
     }
     if ($runtimeErr) {
         [IO.File]::WriteAllText((Join-Path $failureEvidence 'runtime-cli.err.log'),
-            $runtimeErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
+            ($priorRuntimeStderr + $runtimeErr.GetAwaiter().GetResult()), [Text.UTF8Encoding]::new($false))
     }
     if ($providerOut) {
         [IO.File]::WriteAllText((Join-Path $failureEvidence 'provider-replay.out.log'),
@@ -1694,9 +1812,11 @@ try {
         [IO.File]::WriteAllText((Join-Path $failureEvidence 'hermes-replay.err.log'),
             $brainProviderErr.GetAwaiter().GetResult(), [Text.UTF8Encoding]::new($false))
     }
-    $failurePath = Join-Path $runtimeHome 'e2e-failure.txt'
+    Write-CurrentDiagnosticEvidence $failureEvidence $processEvidence
+    $failurePath = Join-Path $failureEvidence 'e2e-failure.txt'
     $failureText = $_.Exception.ToString() + [Environment]::NewLine + $_.ScriptStackTrace
     [IO.File]::WriteAllText($failurePath, $failureText, [Text.UTF8Encoding]::new($false))
+    Publish-RuntimeEvidence
     throw
 } finally {
     if ($crashWindowArmed -and $java -and $runtimeClasspath -and

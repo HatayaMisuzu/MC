@@ -14,8 +14,7 @@
   },
   "currentHeadEvidenceRequired": [
     "LAYER_1_MAIN_PUSH",
-    "LAYER_3_AUDIT",
-    "LAYER_3_CANDIDATE"
+    "LAYER_3_CANDIDATE_CLOSURE"
   ],
   "pendingExternalEvidence": [
     "LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING",

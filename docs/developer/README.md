@@ -34,15 +34,16 @@ honest unsupported result.
 ## Change and release workflow
 
 Keep implementation work focused on a coherent product change and verify only the affected risk
-locally. Draft PR updates use Layer 1 fast validation. Layer 2 Windows integration runs once when a
-relevant PR is opened as non-Draft or deliberately moved to Ready; it is not a per-push loop.
-Layer 3 is weekly or manual and owns Heavy Loader/Runtime coverage, CodeQL, Gradle compatibility,
-and release candidates.
+locally. Draft PR updates use Layer 1 fast validation. Layer 2 Windows integration runs when a
+relevant PR is opened as non-Draft or deliberately moved to Ready, and refreshes on later pushes
+while that PR remains non-Draft. Layer 3 is weekly or manual and owns Heavy Loader/Runtime coverage,
+CodeQL, Gradle compatibility, and release candidates.
 
 Ordinary commits and merges do not create candidates. To create one release candidate, manually
-dispatch `.github/workflows/minecraft-heavy.yml` from `main` with `mode=candidate`. The workflow
-first requires every Layer 3 audit job to pass, then rebuilds and verifies the exact-main package
-before uploading the only RC artifact.
+dispatch `.github/workflows/minecraft-heavy.yml` from `main` with `mode=candidate`. That single run
+executes every Layer 3 prerequisite and then rebuilds and verifies the exact-main package before
+uploading the only RC artifact. A separate `mode=audit` run is diagnostic coverage, not a required
+first half of candidate creation.
 
 Before that explicit candidate boundary, run only applicable tasks documented in the root
 [README](../../README.md) and update the sole [RC matrix](../RC_COMPLETION_MATRIX.md) when product

@@ -161,6 +161,12 @@ try {
             $currentTruth.exactCurrentCommitAuthority.githubActions -ne 'github.sha') {
         Add-Error 'current-main exact-SHA authority is invalid'
     }
+    $currentHeadEvidence = @($currentTruth.currentHeadEvidenceRequired)
+    if ($currentHeadEvidence.Count -ne 2 -or
+            $currentHeadEvidence -notcontains 'LAYER_1_MAIN_PUSH' -or
+            $currentHeadEvidence -notcontains 'LAYER_3_CANDIDATE_CLOSURE') {
+        Add-Error 'current-main evidence must require Layer 1 plus one self-contained Layer 3 candidate closure'
+    }
     $currentPending = @($currentTruth.pendingExternalEvidence)
     foreach ($label in @('LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING', 'HUMAN_PLAYTEST_PENDING')) {
         if ($currentPending -notcontains $label) { Add-Error "current-main truth missing pending label: $label" }

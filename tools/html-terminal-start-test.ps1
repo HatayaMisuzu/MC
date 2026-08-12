@@ -40,6 +40,7 @@ try {
     $secondStart.UseShellExecute = $false
     $secondStart.CreateNoWindow = $true
     $secondStart.Environment['MCAC_WEB_ROOT'] = Join-Path $release 'web'
+    $secondStart.Environment['MCAC_NO_BROWSER'] = 'true'
     $secondStart.Environment['LOCALAPPDATA'] = $testLocalAppData
     $second = [Diagnostics.Process]::Start($secondStart)
     Write-Output 'Second mcac.exe started for reuse check.'

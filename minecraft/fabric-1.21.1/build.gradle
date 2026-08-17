@@ -77,10 +77,10 @@ dependencies {
     // RuntimeBridge is part of the production Fabric JAR. Loom's development
     // classpath is not available to players, so its JSON runtime must travel as
     // Fabric nested JARs rather than being an undeclared host dependency.
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
-    include 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
-    include 'com.fasterxml.jackson.core:jackson-core:2.18.3'
-    include 'com.fasterxml.jackson.core:jackson-annotations:2.18.3'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.1'
+    include 'com.fasterxml.jackson.core:jackson-databind:2.22.1'
+    include 'com.fasterxml.jackson.core:jackson-core:2.22.1'
+    include 'com.fasterxml.jackson.core:jackson-annotations:2.22.1'
 
     gametestImplementation sourceSets.main.output
 

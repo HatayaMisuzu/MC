@@ -178,7 +178,10 @@ public final class InstallTransaction {
         Path backup = state.resolve(node.path("backup").asText()).normalize();
         requireInside(backup, state.resolve("backups"), "Interrupted backup is unsafe");
         Files.deleteIfExists(destination.resolveSibling(destination.getFileName() + ".mcac.tmp"));
-        if ("INSTALLED".equals(node.path("phase").asText())) Files.deleteIfExists(destination);
+        // Delete the destination unconditionally: in the PREPARED phase it does not exist yet
+        // (no side effect), and in the crash window after atomicMove but before the INSTALLED
+        // journal write it removes the new artifact so it cannot coexist with the restored backup.
+        Files.deleteIfExists(destination);
         if (Files.isDirectory(backup)) restoreBackup(game.resolve("mods"), backup, null);
         restorePreviousManifest(state.resolve("install-manifest.json"),
                 state.resolve("transaction-previous-manifest.json"));

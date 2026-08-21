@@ -17,6 +17,9 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** Adapter for a separately running Hermes controller using the bounded MCAC Brain Bridge protocol. */
@@ -135,6 +138,45 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
 
     @Override public void close() { client.close(); }
 
+
+    /**
+     * Reads up to {@code max} bytes from {@code input} with a hard wall-clock deadline.
+     * HttpRequest.timeout only covers the response headers; the body stream can stall
+     * indefinitely, which would pin the calling thread (and the companion lock) forever.
+     * A daemon watchdog closes the stream on timeout, forcing the pending read to fail.
+     */
+    private static byte[] readBodyWithTimeout(InputStream input, int max, Duration timeout)
+            throws IOException {
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "brain-body-read-watchdog");
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            var handle = watchdog.schedule(() -> {
+                if (closed.compareAndSet(false, true)) {
+                    try {
+                        input.close(); // forces a pending readNBytes to throw
+                    } catch (IOException ignored) {
+                    }
+                }
+            }, timeout.toMillis(), TimeUnit.MILLISECONDS);
+            try {
+                byte[] bytes = input.readNBytes(max + 1);
+                handle.cancel(false);
+                return bytes;
+            } catch (IOException failure) {
+                if (closed.get()) {
+                    throw new IOException("brain response body read timed out", failure);
+                }
+                throw failure;
+            }
+        } finally {
+            watchdog.shutdownNow();
+        }
+    }
+
     private JsonNode post(String relative, ObjectNode body) {
         URI target = base.resolve(relative);
         HttpRequest request = HttpRequest.newBuilder(target).timeout(timeout)
@@ -144,7 +186,7 @@ public final class HermesBrainAdapter implements ExternalBrainAdapter {
         try {
             HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream input = response.body()) {
-                byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
+                byte[] bytes = readBodyWithTimeout(input, MAX_RESPONSE_BYTES, timeout);
                 if (bytes.length > MAX_RESPONSE_BYTES) throw new IllegalStateException("HERMES_RESPONSE_TOO_LARGE");
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     health.set(new BrainHealth("UNAVAILABLE", "hermes",

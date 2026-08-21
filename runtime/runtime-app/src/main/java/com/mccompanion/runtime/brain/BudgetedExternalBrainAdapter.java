@@ -18,7 +18,10 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public final class BudgetedExternalBrainAdapter implements ExternalBrainAdapter {
     private static final Set<String> RETRIABLE_CODES = Set.of(
-            "BRAIN_IO_ERROR", "BRAIN_HTTP_429", "BRAIN_HTTP_502", "BRAIN_HTTP_503", "BRAIN_HTTP_504");
+            "BRAIN_IO_ERROR", "BRAIN_HTTP_429", "BRAIN_HTTP_502", "BRAIN_HTTP_503", "BRAIN_HTTP_504",
+            // Hermes adapter raises its own prefix; without these the retry/reconnect path
+            // (including safe-idle movement.stop) never fires in the default hermes mode.
+            "HERMES_IO_ERROR", "HERMES_HTTP_429", "HERMES_HTTP_502", "HERMES_HTTP_503", "HERMES_HTTP_504");
     private final ExternalBrainAdapter delegate;
     private final LiveBrainBudget budget;
     private final Clock clock;

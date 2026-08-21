@@ -15,6 +15,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.Iterator;
 import java.util.Locale;
 import java.util.Objects;
@@ -23,6 +26,43 @@ import java.util.regex.Pattern;
 
 public final class OpenAiCompatibleProvider implements IntentProvider, DecisionProvider, AutoCloseable {
     private static final int MAX_RESPONSE_BYTES = 1_048_576;
+
+    /**
+     * Reads up to {@code max} bytes with a hard wall-clock deadline: HttpRequest.timeout only
+     * covers response headers, so a stalled body would otherwise pin the calling thread forever.
+     */
+    private static byte[] readBodyWithTimeout(InputStream input, int max, Duration timeout)
+            throws IOException {
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "provider-body-read-watchdog");
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            var handle = watchdog.schedule(() -> {
+                if (closed.compareAndSet(false, true)) {
+                    try {
+                        input.close();
+                    } catch (IOException ignored) {
+                    }
+                }
+            }, timeout.toMillis(), TimeUnit.MILLISECONDS);
+            try {
+                byte[] bytes = input.readNBytes(max + 1);
+                handle.cancel(false);
+                return bytes;
+            } catch (IOException failure) {
+                if (closed.get()) {
+                    throw new IOException("provider response body read timed out", failure);
+                }
+                throw failure;
+            }
+        } finally {
+            watchdog.shutdownNow();
+        }
+    }
+
     private static final int MAX_HORIZONTAL_COORDINATE = 30_000_000;
     private static final int MIN_VERTICAL_COORDINATE = -2_048;
     private static final int MAX_VERTICAL_COORDINATE = 2_048;
@@ -103,7 +143,7 @@ public final class OpenAiCompatibleProvider implements IntentProvider, DecisionP
             throw new ProviderException("PROVIDER_ERROR", "Provider request was interrupted", exception);
         }
         try (InputStream input = response.body()) {
-            byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
+            byte[] bytes = readBodyWithTimeout(input, MAX_RESPONSE_BYTES, timeout);
             if (bytes.length > MAX_RESPONSE_BYTES) {
                 throw new ProviderException("PROVIDER_ERROR", "Provider response exceeded the size limit");
             }
@@ -192,7 +232,7 @@ public final class OpenAiCompatibleProvider implements IntentProvider, DecisionP
             throw new ProviderException("PROVIDER_ERROR", "Provider request was interrupted", exception);
         }
         try (InputStream input = response.body()) {
-            byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
+            byte[] bytes = readBodyWithTimeout(input, MAX_RESPONSE_BYTES, timeout);
             if (bytes.length > MAX_RESPONSE_BYTES) throw new ProviderException("PROVIDER_ERROR", "Provider response exceeded the size limit");
             if (response.statusCode() == 408 || response.statusCode() == 429 || response.statusCode() >= 500) {
                 throw new ProviderException("PROVIDER_RETRYABLE", "Provider temporarily returned HTTP " + response.statusCode());

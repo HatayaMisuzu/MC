@@ -189,6 +189,10 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             }
             if (result.toolCalls().size() > remaining) {
                 adapter.cancel(session.sessionId(), "TOOL_BUDGET_EXHAUSTED");
+                // The adapter cancelled the session; drop our own registration so the next
+                // turn opens a fresh session instead of failing forever (fail-closed, not fail-stuck).
+                sessions.remove(companionId);
+                semanticStates.remove(companionId);
                 if (audit != null) audit.state(session.sessionId(), "CANCELLED", "TOOL_BUDGET_EXHAUSTED");
                 return new BrainCoordinatorResult(session.sessionId(), BrainTurnResult.Kind.WAIT, "",
                         "TOOL_BUDGET_EXHAUSTED", observations);

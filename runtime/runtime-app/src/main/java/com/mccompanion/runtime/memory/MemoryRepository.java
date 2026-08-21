@@ -126,6 +126,9 @@ public final class MemoryRepository {
         if (Json.write(boundedValue).length() > 4_096) {
             throw new IllegalArgumentException("suggestion value exceeds 4096 characters");
         }
+        // Suggestions must pass the same sensitive-value screen as direct writes: the gateway
+        // pre-filter is weaker, and approval promotes the value to a verified fact verbatim.
+        rejectSensitive(kind, key, boundedValue, source);
         long now = clock.millis();
         long expires = Math.addExact(now, ttl.toMillis());
         String id = UUID.randomUUID().toString();

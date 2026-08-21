@@ -255,7 +255,12 @@ public final class MemoryToolGateway implements ToolGateway {
         node.fieldNames().forEachRemaining(field -> { if (!allowed.contains(field)) throw new IllegalArgumentException("unexpected argument: " + field); });
     }
     private static void rejectSensitive(String value) {
-        if (value.matches("(?is).*(sk-[a-z0-9_-]{12,}|bearer\\s+[a-z0-9._-]{12,}|[a-z]:\\\\|/(users|home)/).*")) {
+        // Keep in sync with MemoryRepository.SENSITIVE_VALUE (defense in depth before quarantine).
+        if (value.matches("(?is).*(sk-[a-z0-9_-]{12,}|bearer\\s+[a-z0-9._-]{12,}|"
+                + "\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|cookie|"
+                + "authorization|private[_-]?key)\"\\s*:|"
+                + "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}|"
+                + "[a-z]:\\\\|/(users|home)/).*")) {
             throw new IllegalArgumentException("sensitive values cannot be stored");
         }
     }

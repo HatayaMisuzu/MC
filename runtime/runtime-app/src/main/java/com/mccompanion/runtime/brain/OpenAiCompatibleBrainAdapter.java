@@ -23,6 +23,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 /** External OpenAI-compatible tool-calling Brain. MCAC validates and executes every returned tool call. */
@@ -71,6 +74,8 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         State state = sessions.get(request.sessionId());
         if (state == null) throw new IllegalStateException("BRAIN_SESSION_NOT_FOUND");
         synchronized (state) {
+        int historyWatermark = state.history.size();
+        try {
         for (ToolResult result : request.toolResults()) {
             ObjectNode tool = Json.object().put("role", "tool").put("tool_call_id", result.callId());
             ObjectNode clipping = Json.object();
@@ -134,12 +139,59 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         if (content.isBlank()) throw new IllegalStateException("BRAIN_EMPTY_RESPONSE");
         state.history.add(Json.object().put("role", "assistant").put("content", content));
         return BrainTurnResult.finalResponse(content);
+        } catch (RuntimeException failure) {
+            // Roll back entries appended by this turn so a transient HTTP failure cannot leave
+            // orphan tool messages (which would poison every subsequent request with a 400).
+            while (state.history.size() > historyWatermark) {
+                state.history.remove(state.history.size() - 1);
+            }
+            throw failure;
+        }
         }
     }
 
     @Override public void cancel(String sessionId, String reason) { sessions.remove(sessionId); }
     @Override public BrainHealth health() { return health.get(); }
     @Override public void close() { sessions.clear(); client.close(); }
+
+
+    /**
+     * Reads up to {@code max} bytes from {@code input} with a hard wall-clock deadline.
+     * HttpRequest.timeout only covers the response headers; the body stream can stall
+     * indefinitely, which would pin the calling thread (and the companion lock) forever.
+     * A daemon watchdog closes the stream on timeout, forcing the pending read to fail.
+     */
+    private static byte[] readBodyWithTimeout(InputStream input, int max, Duration timeout)
+            throws IOException {
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        ScheduledExecutorService watchdog = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "brain-body-read-watchdog");
+            t.setDaemon(true);
+            return t;
+        });
+        try {
+            var handle = watchdog.schedule(() -> {
+                if (closed.compareAndSet(false, true)) {
+                    try {
+                        input.close(); // forces a pending readNBytes to throw
+                    } catch (IOException ignored) {
+                    }
+                }
+            }, timeout.toMillis(), TimeUnit.MILLISECONDS);
+            try {
+                byte[] bytes = input.readNBytes(max + 1);
+                handle.cancel(false);
+                return bytes;
+            } catch (IOException failure) {
+                if (closed.get()) {
+                    throw new IOException("brain response body read timed out", failure);
+                }
+                throw failure;
+            }
+        } finally {
+            watchdog.shutdownNow();
+        }
+    }
 
     private JsonNode request(ObjectNode body) {
         HttpRequest request = HttpRequest.newBuilder(endpoint).timeout(timeout)
@@ -149,7 +201,7 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         try {
             HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
             try (InputStream input = response.body()) {
-                byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
+                byte[] bytes = readBodyWithTimeout(input, MAX_RESPONSE_BYTES, timeout);
                 if (bytes.length > MAX_RESPONSE_BYTES) throw new IllegalStateException("BRAIN_RESPONSE_TOO_LARGE");
                 if (response.statusCode() < 200 || response.statusCode() >= 300) {
                     health.set(new BrainHealth("UNAVAILABLE", "openai-compatible",
@@ -212,8 +264,29 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
     private static void trimHistory(List<ObjectNode> history) {
         while (history.size() > 40 || history.stream().mapToInt(value -> Json.write(value).length()).sum() > 48_000) {
             if (history.size() <= 1) break;
-            history.remove(1);
+            int candidate = 1;
+            // Never drop an assistant message carrying tool_calls while its tool results are
+            // still present: that would orphan the tool messages and permanently 400 the session.
+            while (candidate < history.size() - 1
+                    && hasToolCalls(history.get(candidate))
+                    && nextToolResultSpan(history, candidate) > 0) {
+                candidate += 1 + nextToolResultSpan(history, candidate);
+            }
+            history.remove(candidate);
         }
+    }
+
+    private static boolean hasToolCalls(ObjectNode message) {
+        return message.path("tool_calls").isArray() && !message.path("tool_calls").isEmpty();
+    }
+
+    private static int nextToolResultSpan(List<ObjectNode> history, int assistantIndex) {
+        int span = 0;
+        for (int i = assistantIndex + 1; i < history.size(); i++) {
+            if ("tool".equals(history.get(i).path("role").asText())) span++;
+            else break;
+        }
+        return span;
     }
 
     private static BrainQuestion parseQuestion(JsonNode value) {

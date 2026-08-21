@@ -21,9 +21,9 @@ final class PrivacyFilter {
 
   private static final Pattern SENSITIVE_ASSIGNMENT = Pattern.compile(
       "(?i)([\\\"']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|authorization|secret|password|passwd|cookie|session[_-]?id|account|username|player[_-]?name|instance[_-]?id|installation[_-]?id|profile[_-]?id|companion[_-]?id|brain[_-]?session[_-]?id|controller[_-]?id)[\\\"']?\\s*[:=]\\s*[\\\"']?)([^\\\"',\\s}\\]]+)");
-  private static final Pattern ABSOLUTE_PATH = Pattern.compile("(?i)[A-Z]:\\\\[^\\r\\n\"']+");
+  private static final Pattern ABSOLUTE_PATH = Pattern.compile("(?i)[A-Z]:[\\\\/][^\\r\\n\"']+");
   private static final Pattern POSIX_PATH = Pattern.compile(
-      "(?<![:\\w])/(?:Users|home|var|tmp|opt|srv|mnt|etc)/[^\\s\"']+");
+      "(?<!\\w)(?<!:(?!/))/(?:Users|home|var|tmp|opt|srv|mnt|etc)/[^\\s\"']+");
   private static final Pattern IPV4 = Pattern.compile(
       "(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?::[0-9]{1,5})?");
   private static final Pattern IPV6 = Pattern.compile(

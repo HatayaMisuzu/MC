@@ -619,9 +619,12 @@ public final class TaskGraphExecutor {
 
         private synchronized ObjectNode valueContext() {
             ObjectNode context = Json.object();
+            // inputs is immutable after construction and safe to share by reference; variables is
+            // mutated by parallel branches, so readers get a deep copy to avoid a data race while
+            // they evaluate expressions outside this lock.
             context.set("inputs", inputs);
-            context.set("variables", variables);
-            context.set("state", variables);
+            context.set("variables", variables.deepCopy());
+            context.set("state", context.get("variables"));
             ObjectNode outputValues = context.putObject("outputs");
             outputs.forEach(outputValues::set);
             return context;

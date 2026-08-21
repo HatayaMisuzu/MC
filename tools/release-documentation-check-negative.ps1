@@ -82,7 +82,12 @@ function Assert-Negative([string]$Name, [string]$Dir, [string]$ExpectedText) {
     if ($result.Code -eq 0) {
         throw "Negative case '$Name' was not detected by the release documentation check."
     }
-    if ($result.Output -notmatch [regex]::Escape($ExpectedText)) {
+    # Console output wraps at the window width, splitting the expected phrase
+    # across lines and even mid-word (e.g. 'di\nrectory'). Strip ALL whitespace
+    # from both sides before matching so the assertion tests the reason, not
+    # the terminal's line-width.
+    $normalized = ($result.Output -replace '\s+', '')
+    if ($normalized -notmatch [regex]::Escape(($ExpectedText -replace '\s+', ''))) {
         throw "Negative case '$Name' failed for the wrong reason. Expected text: $ExpectedText. Output: $($result.Output)"
     }
     Write-Host "Negative case passed: $Name"
@@ -107,6 +112,10 @@ try {
     $case = Join-Path $work 'case2-escaping-link'
     Copy-Item -LiteralPath $base -Destination $case -Recurse
     Add-Content -LiteralPath (Join-Path $case 'README.md') -Value "`n[Escape](../../outside.md)" -Encoding UTF8
+    # Keep README.txt identical to README.md so the escaping-link violation is the
+    # only one present; otherwise the README.txt drift error fires first and the
+    # assertion would match the wrong failure reason.
+    Copy-Item -LiteralPath (Join-Path $case 'README.md') -Destination (Join-Path $case 'README.txt') -Force
     Assert-Negative 'escaping link' $case 'escapes release directory'
 
     # 3. A forbidden internal file placed inside the release must fail the check.

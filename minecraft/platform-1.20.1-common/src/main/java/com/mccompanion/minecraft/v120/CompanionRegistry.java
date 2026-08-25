@@ -235,7 +235,7 @@ public final class CompanionRegistry {
         if (entry.mode == CompanionEntry.Mode.SKILL) {
             behaviorDirector.resumeSkill(entry, liveBodies.get(entry.companionId));
         } else if (entry.mode != CompanionEntry.Mode.IDLE) {
-            behaviorDirector.start(entry, liveBodies.get(entry.companionId));
+            behaviorDirector.resumeNavigation(entry, liveBodies.get(entry.companionId));
         }
         return Result.success("Resumed " + entry.profileName + " in " + entry.mode + " mode.");
     }
@@ -467,7 +467,7 @@ public final class CompanionRegistry {
                 "EatAndRecover", "DefendOwner", "RetreatFromDanger", "CraftItem", "SmeltItem",
                 "ExploreArea", "EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle", "Fish",
                 "FarmCrop", "BreedAnimals", "TradeWithVillager", "EnchantItem", "BrewPotion",
-                "GlideWithElytra").contains(capability);
+                "GlideWithElytra", "NavigateWithWorldChanges").contains(capability);
     }
 
     public RuntimeResult runtimePause(String companionId, String leaseId, long epoch) {
@@ -513,7 +513,7 @@ public final class CompanionRegistry {
         if (entry.mode == CompanionEntry.Mode.SKILL) {
             behaviorDirector.resumeSkill(entry, body);
         } else if (entry.mode != CompanionEntry.Mode.IDLE) {
-            behaviorDirector.start(entry, body);
+            behaviorDirector.resumeNavigation(entry, body);
         }
         return RuntimeResult.success(control.behaviorId, control.behaviorRevision, behaviorState(entry));
     }

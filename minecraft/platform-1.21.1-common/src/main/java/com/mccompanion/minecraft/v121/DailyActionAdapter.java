@@ -410,7 +410,7 @@ final class DailyActionAdapter implements DailyActionEngine.Adapter {
         return switch (result.status()) {
             case RUNNING, PAUSED -> success(result.code());
             case ARRIVED -> success("AT_TARGET");
-            case TARGET_UNLOADED, UNREACHABLE, STUCK, TIMEOUT, WORLD_CHANGED, CANCELLED -> reject("NAVIGATION_" + result.code());
+            case TARGET_UNLOADED, BUDGET_EXCEEDED, UNREACHABLE, STUCK, TIMEOUT, WORLD_CHANGED, CANCELLED -> reject("NAVIGATION_" + result.code());
             case IDLE -> uncertain("NAVIGATION_IDLE");
         };
     }
@@ -1510,7 +1510,8 @@ final class DailyActionAdapter implements DailyActionEngine.Adapter {
         }
 
         @Override public boolean openDoor(NavPoint point) {
-            return navigation.openDoorIfNeeded(body, point.plannerPoint());
+            return !navigation.requiresPassageOpening(body, point.plannerPoint())
+                    || navigation.openDoorIfNeeded(body, point.plannerPoint());
         }
 
         @Override public void applyMove(Vec direction, boolean jump) {

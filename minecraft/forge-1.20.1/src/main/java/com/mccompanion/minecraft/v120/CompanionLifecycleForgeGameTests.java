@@ -91,6 +91,435 @@ public final class CompanionLifecycleForgeGameTests {
     }
 
     @GameTest(
+            batch = "nav2Locomotion",
+            templateNamespace = "minecraft",
+            template = "bastion/mobs/empty",
+            timeoutTicks = 800)
+    public static void navigationSprintsThenUsesABoundedSafeDrop(GameTestHelper helper) {
+        FakeConnection ownerConnection = new FakeConnection();
+        ServerPlayer owner = new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-sprint-drop-owner"));
+        Vec3 spawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(ownerConnection, owner);
+        CompanionRegistry registry = MinecraftAiCompanionForge.integrationRegistryFor(
+                helper.getLevel().getServer());
+        helper.assertTrue(registry.create(owner, "ForgeSprintDrop").success(),
+                "Forge sprint/drop create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "Forge sprint/drop body missing");
+        BlockPos origin = moveToSealedArena(helper, owner, body, 65);
+        for (int x = -1; x <= 1; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, 1, 0), Blocks.STONE.defaultBlockState());
+        }
+        Vec3 highStart = Vec3.atBottomCenterOf(origin.offset(0, 2, 0));
+        owner.moveTo(highStart.x, highStart.y, highStart.z - 2.0D, 0.0F, 0.0F);
+        body.moveTo(highStart.x, highStart.y, highStart.z, 0.0F, 0.0F);
+        body.setDeltaMovement(Vec3.ZERO);
+        body.setOnGround(true);
+        float healthBefore = body.getHealth();
+        boolean[] sprintObserved = {false};
+        trackSprinting(helper, body, sprintObserved, 180);
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(6, -1, 0));
+        CompanionRegistry.Result started = registry.goTo(owner, target.x, target.y, target.z);
+        helper.assertTrue(started.success(), "Forge sprint/drop navigation failed: " + started.code());
+        awaitNavigationPosition(helper, body, target, 500, () -> {
+            helper.assertTrue(sprintObserved[0],
+                    "Forge flat safe route never applied real sprint state");
+            helper.assertTrue(body.getHealth() == healthBefore,
+                    "Forge bounded three-block drop damaged the companion");
+            helper.assertTrue(body.serverLevel().getBlockState(origin.offset(0, 1, 0)).is(Blocks.STONE)
+                            && body.serverLevel().getBlockState(origin.offset(2, -2, 0)).is(Blocks.COBBLESTONE),
+                    "Forge sprint/drop navigation mutated its platforms");
+            helper.assertTrue(registry.remove(owner).success(), "Forge sprint/drop cleanup failed");
+            helper.getLevel().getServer().getPlayerList().remove(owner);
+            ownerConnection.disconnect(Component.literal("Forge sprint/drop GameTest complete"));
+            helper.succeed();
+        });
+    }
+
+    @GameTest(
+            batch = "nav2Breaking",
+            templateNamespace = "minecraft",
+            template = "bastion/mobs/empty",
+            timeoutTicks = 1200)
+    public static void survivalNavigationEnforcesBreakBudgetThenVerifiesExactBlocksAndArrival(
+            GameTestHelper helper) {
+        FakeConnection ownerConnection = new FakeConnection();
+        ServerPlayer owner = new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-survival-break-owner"));
+        Vec3 spawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(ownerConnection, owner);
+        CompanionRegistry registry = MinecraftAiCompanionForge.integrationRegistryFor(
+                helper.getLevel().getServer());
+        helper.assertTrue(registry.create(owner, "ForgeSurvivalBreak").success(),
+                "Forge survival break create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "Forge survival break body missing");
+        BlockPos origin = moveToSealedArena(helper, owner, body, 193);
+        buildSealedBreakCorridor(body, origin);
+        BlockPos lower = origin.offset(3, 0, 0);
+        BlockPos upper = lower.above();
+        body.serverLevel().setBlockAndUpdate(lower, Blocks.DIRT.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(upper, Blocks.DIRT.defaultBlockState());
+        ItemStack shovel = new ItemStack(Items.IRON_SHOVEL);
+        body.getInventory().setItem(12, shovel);
+        int damageBefore = shovel.getDamageValue();
+        String companionId = body.getUUID().toString();
+        String lease = "forge-nav2-break-lease";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                        System.currentTimeMillis() + 120_000L).success(),
+                "Forge survival break lease acquisition failed");
+        BlockPos target = origin.offset(6, 0, 0);
+        SkillParameters insufficient = survivalBreakParameters(body, target, 1);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                        "forge-nav2-break-budget", "skill", null, null, null, insufficient).success(),
+                "Forge bounded survival navigation did not start");
+        awaitRuntimeBehaviorState(helper, registry, companionId, "PAUSED", 220, blocked -> {
+            helper.assertTrue(blocked.behaviorObservation() != null
+                            && "PATH_BUDGET_EXCEEDED".equals(blocked.behaviorObservation().failureCode()),
+                    "Forge insufficient break budget was not rejected honestly: "
+                            + blocked.behaviorObservation());
+            helper.assertTrue(body.serverLevel().getBlockState(lower).is(Blocks.DIRT)
+                            && body.serverLevel().getBlockState(upper).is(Blocks.DIRT),
+                    "Forge budget rejection partially mutated the corridor");
+            helper.assertTrue(registry.runtimeCancel(companionId, lease, 1L).success(),
+                    "Forge budget-rejected navigation could not be cancelled");
+            SkillParameters allowed = survivalBreakParameters(body, target, 2);
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                            "forge-nav2-break-allowed", "skill", null, null, null, allowed).success(),
+                    "Forge authorized survival navigation did not restart");
+            awaitRuntimeBehaviorState(helper, registry, companionId, "IDLE", 600, completed -> {
+                helper.assertTrue(body.serverLevel().getBlockState(lower).isAir()
+                                && body.serverLevel().getBlockState(upper).isAir(),
+                        "Forge authorized route did not break the exact obstruction");
+                helper.assertTrue(body.position().distanceToSqr(Vec3.atBottomCenterOf(target)) <= 2.25D,
+                        "Forge authorized route broke blocks but did not reach its target");
+                helper.assertTrue(completed.behaviorObservation() != null
+                                && "NAVIGATION_COMPLETE".equals(completed.behaviorObservation().failureCode())
+                                && "2".equals(completed.behaviorObservation().details().get("brokenBlocks"))
+                                && completed.behaviorObservation().details().getOrDefault("destroyedBlocks", "")
+                                .contains("minecraft:dirt@" + lower.getX() + ',' + lower.getY() + ',' + lower.getZ()),
+                        "Forge terminal navigation snapshot omitted exact break evidence: "
+                                + completed.behaviorObservation());
+                helper.assertTrue(body.getMainHandItem().is(Items.IRON_SHOVEL)
+                                && body.getMainHandItem().getDamageValue() >= damageBefore + 2,
+                        "Forge navigation did not select and consume real tool durability");
+                helper.assertTrue(body.serverLevel().getBlockState(origin.offset(3, 2, 0)).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(origin.offset(3, 0, 1)).is(Blocks.COBBLESTONE),
+                        "Forge survival navigation damaged a non-allowlisted corridor block");
+                helper.assertTrue(registry.remove(owner).success(), "Forge survival break cleanup failed");
+                helper.getLevel().getServer().getPlayerList().remove(owner);
+                ownerConnection.disconnect(Component.literal("Forge survival break GameTest complete"));
+                helper.succeed();
+            });
+        });
+    }
+
+    @GameTest(
+            batch = "nav2Placement",
+            templateNamespace = "minecraft",
+            template = "bastion/mobs/empty",
+            timeoutTicks = 6500)
+    public static void survivalNavigationBuildsBoundedBridgeAndJumpsSimpleGap(GameTestHelper helper) {
+        FakeConnection ownerConnection = new FakeConnection();
+        ServerPlayer owner = new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(),
+                new GameProfile(UUID.randomUUID(), "forge-survival-bridge-owner"));
+        Vec3 spawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        owner.moveTo(spawn.x, spawn.y, spawn.z, 0.0F, 0.0F);
+        helper.getLevel().getServer().getPlayerList().placeNewPlayer(ownerConnection, owner);
+        CompanionRegistry registry = MinecraftAiCompanionForge.integrationRegistryFor(
+                helper.getLevel().getServer());
+        helper.assertTrue(registry.create(owner, "ForgeSurvivalBridge").success(),
+                "Forge survival bridge create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "Forge survival bridge body missing");
+        BlockPos origin = moveToSealedArena(helper, owner, body, 257);
+        buildSealedBridgeCorridor(body, origin, true);
+        BlockPos firstBridge = origin.offset(1, -1, 0);
+        BlockPos secondBridge = origin.offset(2, -1, 0);
+        body.getInventory().setItem(14, new ItemStack(Items.COBBLESTONE, 2));
+        body.getInventory().setItem(15, new ItemStack(Items.DIAMOND_BLOCK));
+        int cobblestoneBefore = body.getInventory().countItem(Items.COBBLESTONE);
+        int valuableBefore = body.getInventory().countItem(Items.DIAMOND_BLOCK);
+        String companionId = body.getUUID().toString();
+        String lease = "forge-nav2-place-lease";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                        System.currentTimeMillis() + 120_000L).success(),
+                "Forge survival bridge lease acquisition failed");
+        BlockPos target = origin.offset(5, 0, 0);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                        "forge-nav2-place-budget", "skill", null, null, null,
+                        survivalPlaceParameters(body, target, 1)).success(),
+                "Forge bounded bridge navigation did not start");
+        awaitRuntimeBehaviorState(helper, registry, companionId, "PAUSED", 260, blocked -> {
+            helper.assertTrue(blocked.behaviorObservation() != null
+                            && "PATH_BUDGET_EXCEEDED".equals(blocked.behaviorObservation().failureCode()),
+                    "Forge insufficient placement budget was not rejected honestly: "
+                            + blocked.behaviorObservation());
+            helper.assertTrue(body.serverLevel().getBlockState(firstBridge).isAir()
+                            && body.serverLevel().getBlockState(secondBridge).isAir(),
+                    "Forge placement budget rejection partially built a bridge");
+            helper.assertTrue(registry.runtimeCancel(companionId, lease, 1L).success(),
+                    "Forge budget-rejected bridge could not be cancelled");
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                            "forge-nav2-place-allowed", "skill", null, null, null,
+                            survivalPlaceParameters(body, target, 2)).success(),
+                    "Forge authorized bridge navigation did not restart");
+            awaitRuntimeBehaviorState(helper, registry, companionId, "IDLE", 700, completed -> {
+                helper.assertTrue(body.serverLevel().getBlockState(firstBridge).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(secondBridge).is(Blocks.COBBLESTONE),
+                        "Forge authorized route did not build the exact bridge");
+                helper.assertTrue(body.position().distanceToSqr(Vec3.atBottomCenterOf(target)) <= 2.25D,
+                        "Forge authorized bridge route did not reach its target");
+                helper.assertTrue(body.getInventory().countItem(Items.COBBLESTONE) == cobblestoneBefore - 2
+                                && body.getInventory().countItem(Items.DIAMOND_BLOCK) == valuableBefore,
+                        "Forge bridge did not consume exactly the allowed disposable blocks");
+                helper.assertTrue(completed.behaviorObservation() != null
+                                && "NAVIGATION_COMPLETE".equals(completed.behaviorObservation().failureCode())
+                                && "2".equals(completed.behaviorObservation().details().get("placedBlocks"))
+                                && completed.behaviorObservation().details()
+                                .getOrDefault("placedBlockPositions", "")
+                                .contains("minecraft:cobblestone@" + firstBridge.getX() + ','
+                                        + firstBridge.getY() + ',' + firstBridge.getZ()),
+                        "Forge terminal bridge snapshot omitted exact evidence: "
+                                + completed.behaviorObservation());
+                helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                        "Forge survival bridge lease release failed");
+
+                buildSealedBridgeCorridor(body, origin, false);
+                Vec3 jumpStart = Vec3.atBottomCenterOf(origin);
+                owner.teleportTo(jumpStart.x, jumpStart.y, jumpStart.z - 2.0D);
+                body.teleportTo(jumpStart.x, jumpStart.y, jumpStart.z);
+                body.setDeltaMovement(Vec3.ZERO);
+                body.setOnGround(true);
+                boolean[] airborne = {false};
+                trackBridgeJumpAirborne(helper, body, airborne, 200);
+                Vec3 jumpTarget = Vec3.atBottomCenterOf(origin.offset(5, 0, 0));
+                helper.assertTrue(registry.goTo(owner, jumpTarget.x, jumpTarget.y, jumpTarget.z).success(),
+                        "Forge simple gap navigation failed to start");
+                awaitSuccessfulNavigationPosition(
+                        helper, registry, owner, body, jumpTarget, 420, () -> awaitNavigationIdle(
+                        helper, registry, owner, 40, () -> {
+                    helper.assertTrue(airborne[0], "Forge simple gap route never applied a real jump");
+                    helper.assertTrue(body.serverLevel().getBlockState(origin.offset(1, -1, 0)).isAir(),
+                            "Forge simple gap crossing filled or mutated the gap");
+                    runAuditedPassageAndLongDistanceAcceptance(
+                            helper, registry, owner, body, ownerConnection);
+                }));
+            });
+        });
+    }
+
+    private static SkillParameters survivalPlaceParameters(
+            CompanionPlayer body, BlockPos target, int maxPlaceBlocks) {
+        return new SkillParameters("NavigateWithWorldChanges", "", 1, false,
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "",
+                null, null, "", null, "", java.util.List.of(),
+                java.util.List.of("minecraft:cobblestone"), 0, maxPlaceBlocks, 8);
+    }
+
+    private static void buildSealedBridgeCorridor(
+            CompanionPlayer body, BlockPos origin, boolean lowRoof) {
+        for (int x = -1; x <= 7; x++) {
+            for (int y = 0; y <= 3; y++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+            for (int z : new int[] {-1, 1}) {
+                for (int y = -4; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0),
+                    x == 1 || x == 2 ? Blocks.AIR.defaultBlockState() : Blocks.STONE.defaultBlockState());
+            if (x == 1 || x == 2) {
+                for (int y = -4; y <= -2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+                }
+            }
+            if (lowRoof) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        for (int x : new int[] {-1, 7}) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -4; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        if (!lowRoof) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(2, -1, 0), Blocks.STONE.defaultBlockState());
+        }
+    }
+
+    private static void trackBridgeJumpAirborne(
+            GameTestHelper helper, CompanionPlayer body, boolean[] observed, int remaining) {
+        if (!body.onGround()) observed[0] = true;
+        if (observed[0] || remaining <= 0) return;
+        helper.runAfterDelay(1,
+                () -> trackBridgeJumpAirborne(helper, body, observed, remaining - 1));
+    }
+
+    private static void runAuditedPassageAndLongDistanceAcceptance(
+            GameTestHelper helper, CompanionRegistry registry, ServerPlayer owner,
+            CompanionPlayer body, FakeConnection ownerConnection) {
+        BlockPos doorOrigin = moveToSealedArena(helper, owner, body, 289);
+        for (int x = -1; x <= 7; x++) {
+            body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            for (int y = 0; y <= 1; y++) {
+                body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+            for (int z : new int[] {-1, 1}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            doorOrigin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-1, 7}) {
+            for (int z = -1; z <= 1; z++) for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        doorOrigin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        BlockPos door = doorOrigin.offset(3, 0, 0);
+        var lower = Blocks.IRON_DOOR.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST)
+                .setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.LOWER)
+                .setValue(BlockStateProperties.OPEN, false);
+        body.serverLevel().setBlockAndUpdate(door, lower);
+        body.serverLevel().setBlockAndUpdate(door.above(),
+                lower.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER));
+        Vec3 start = Vec3.atBottomCenterOf(doorOrigin);
+        owner.teleportTo(start.x, start.y, start.z - 2.0D);
+        body.teleportTo(start.x, start.y, start.z);
+        body.setDeltaMovement(Vec3.ZERO);
+        Vec3 target = Vec3.atBottomCenterOf(doorOrigin.offset(6, 0, 0));
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "Forge iron-door boundary navigation failed to start");
+        helper.runAfterDelay(12, () -> {
+            String status = registry.status(owner);
+            helper.assertTrue(status.contains("mode=PAUSED") && status.contains("failure=PATH_UNREACHABLE"),
+                    "Forge non-hand-openable passage did not fail honestly: " + status);
+            helper.assertTrue(!body.serverLevel().getBlockState(door).getValue(BlockStateProperties.OPEN),
+                    "Forge navigation silently opened an iron door");
+            helper.assertTrue(registry.stop(owner).success(), "Forge iron-door boundary cleanup failed");
+            runLongDistanceAcceptance(helper, registry, owner, body, ownerConnection);
+        });
+    }
+
+    private static void runLongDistanceAcceptance(
+            GameTestHelper helper, CompanionRegistry registry, ServerPlayer owner,
+            CompanionPlayer body, FakeConnection ownerConnection) {
+        BlockPos origin = moveToSealedArena(helper, owner, body, 321);
+        BlockPos targetBlock = origin.offset(196, 0, 0);
+        int startChunk = (origin.getX() - 2) >> 4;
+        int endChunk = (targetBlock.getX() + 2) >> 4;
+        int centerChunkZ = origin.getZ() >> 4;
+        for (int chunkX = startChunk; chunkX <= endChunk; chunkX++) {
+            for (int chunkZ = centerChunkZ - 1; chunkZ <= centerChunkZ + 1; chunkZ++) {
+                body.serverLevel().setChunkForced(chunkX, chunkZ, true);
+            }
+        }
+        body.serverLevel().setDayTime(1000L);
+        for (int x = -2; x <= 198; x++) {
+            for (int z = -4; z <= 4; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, 3, z), Blocks.SEA_LANTERN.defaultBlockState());
+            }
+            for (int z : new int[] {-5, 5}) {
+                for (int y = -1; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.STONE.defaultBlockState());
+                }
+            }
+        }
+        var corridor = new net.minecraft.world.phys.AABB(
+                origin.offset(-2, -1, -4), targetBlock.offset(2, 3, 4));
+        body.serverLevel().getEntities(body, corridor,
+                        entity -> entity != owner && entity.isAlive())
+                .forEach(entity -> entity.discard());
+        Vec3 start = Vec3.atBottomCenterOf(origin);
+        owner.teleportTo(start.x, start.y, start.z - 2.0D);
+        body.teleportTo(start.x, start.y, start.z);
+        body.setDeltaMovement(Vec3.ZERO);
+        body.setOnGround(true);
+        Vec3 target = Vec3.atBottomCenterOf(targetBlock);
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "Forge representative long-distance navigation failed to start");
+        awaitSuccessfulNavigationPosition(
+                helper, registry, owner, body, target, 5800, () -> awaitNavigationIdle(
+                helper, registry, owner, 40, () -> {
+            helper.assertTrue(body.serverLevel().getBlockState(origin.offset(98, -1, 0)).is(Blocks.STONE),
+                    "Forge long-distance route mutated its travel surface");
+            helper.assertTrue(registry.remove(owner).success(), "Forge navigation audit cleanup failed");
+            helper.getLevel().getServer().getPlayerList().remove(owner);
+            ownerConnection.disconnect(Component.literal("Forge navigation audit GameTest complete"));
+            helper.succeed();
+        }));
+    }
+
+    private static SkillParameters survivalBreakParameters(
+            CompanionPlayer body, BlockPos target, int maxBreakBlocks) {
+        return new SkillParameters("NavigateWithWorldChanges", "", 1, false,
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "",
+                null, null, "", null, "", java.util.List.of("minecraft:dirt"),
+                java.util.List.of(), maxBreakBlocks, 0, 8);
+    }
+
+    private static void buildSealedBreakCorridor(CompanionPlayer body, BlockPos origin) {
+        for (int x = -1; x <= 8; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            for (int z : new int[] {-1, 1}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-1, 8}) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+    }
+
+    private static void awaitRuntimeBehaviorState(
+            GameTestHelper helper, CompanionRegistry registry, String companionId,
+            String expectedState, int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> completed) {
+        CompanionRegistry.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        if (expectedState.equals(snapshot.behaviorState())) {
+            completed.accept(snapshot);
+            return;
+        }
+        helper.assertTrue(!"PAUSED".equals(snapshot.behaviorState()) && ticksRemaining > 0,
+                "Forge survival navigation stopped unexpectedly: expected=" + expectedState
+                        + " actual=" + snapshot.behaviorState() + " observation="
+                        + snapshot.behaviorObservation());
+        helper.runAfterDelay(1, () -> awaitRuntimeBehaviorState(helper, registry, companionId,
+                expectedState, ticksRemaining - 1, completed));
+    }
+
+    @GameTest(
             batch = "fullBridgeLifecycle",
             templateNamespace = "minecraft",
             template = "bastion/mobs/empty",
@@ -868,6 +1297,19 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(registry.create(owner, "ForgeCrafter").success(), "craft/smelt create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "craft/smelt body was not spawned");
+        BlockPos workOrigin = moveToSealedArena(helper, owner, body, 225);
+        owner.teleportTo(owner.getX(), owner.getY(), owner.getZ());
+        body.teleportTo(body.getX(), body.getY(), body.getZ());
+        for (int x = -3; x <= 8; x++) {
+            for (int z = -3; z <= 3; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        workOrigin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            workOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
                 .map(CompanionRegistry.RuntimeSnapshot::companionId)
@@ -881,8 +1323,8 @@ public final class CompanionLifecycleForgeGameTests {
                                 System.currentTimeMillis() + 300_000L)
                         .success(),
                 "craft/smelt lease acquisition failed");
-        BlockPos scanNear = helper.absolutePos(new BlockPos(2, 1, 1));
-        BlockPos scanFar = helper.absolutePos(new BlockPos(3, 1, 1));
+        BlockPos scanNear = body.blockPosition().offset(2, 0, 0);
+        BlockPos scanFar = body.blockPosition().offset(3, 0, 0);
         helper.getLevel().setBlockAndUpdate(scanNear, Blocks.GOLD_ORE.defaultBlockState());
         helper.getLevel().setBlockAndUpdate(scanFar, Blocks.GOLD_ORE.defaultBlockState());
         helper.assertTrue(
@@ -937,6 +1379,8 @@ public final class CompanionLifecycleForgeGameTests {
                     companionId,
                     "forge-craft-smelt-lease",
                     1L);
+            body.teleportTo(workOrigin.getX() + 0.5D, workOrigin.getY(), workOrigin.getZ() + 0.5D);
+            body.setDeltaMovement(Vec3.ZERO);
         }
         helper.assertTrue(body.addItem(new ItemStack(Items.OAK_LOG)), "craft input fixture add failed");
         helper.assertTrue(body.addItem(new ItemStack(Items.RAW_IRON)), "smelt input fixture add failed");
@@ -982,7 +1426,7 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.addItem(new ItemStack(Items.OAK_PLANKS, 8)),
                 "three-by-three craft input fixture add failed");
-        BlockPos craftingTable = helper.absolutePos(new BlockPos(2, 1, 2));
+        BlockPos craftingTable = body.blockPosition().offset(2, 0, 1);
         helper.getLevel().setBlockAndUpdate(craftingTable, Blocks.CRAFTING_TABLE.defaultBlockState());
         int chestBefore = body.getInventory().countItem(Items.CHEST);
         int tablePlanksBefore = body.getInventory().countItem(Items.OAK_PLANKS);
@@ -1022,7 +1466,7 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(
                 body.getInventory().countItem(Items.OAK_PLANKS) == tablePlanksBefore - 8,
                 "three-by-three craft did not consume eight planks");
-        BlockPos furnace = helper.absolutePos(new BlockPos(3, 1, 1));
+        BlockPos furnace = body.blockPosition().offset(3, 0, 0);
         helper.getLevel().setBlockAndUpdate(furnace, Blocks.FURNACE.defaultBlockState());
         int rawIronBefore = body.getInventory().countItem(Items.RAW_IRON);
         int ingotsBefore = body.getInventory().countItem(Items.IRON_INGOT);
@@ -1295,6 +1739,24 @@ public final class CompanionLifecycleForgeGameTests {
                 ownedProjectiles.size() > projectilesBefore,
                 "item-use primitive did not create a vanilla projectile");
         ownedProjectiles.forEach(Snowball::discard);
+
+        // Forge retires ordinary entity fixtures outside the GameTest-managed structure.
+        // Run only the entity-backed assertions at the managed origin, then the caller returns
+        // the body to its isolated crafting/smelting arena.
+        Vec3 managedSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        body.teleportTo(managedSpawn.x, managedSpawn.y, managedSpawn.z);
+        body.setDeltaMovement(Vec3.ZERO);
+        BlockPos managedOrigin = body.blockPosition();
+        for (int x = -2; x <= 3; x++) {
+            for (int z = -2; z <= 2; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        managedOrigin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            managedOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
 
         Cow cow = EntityType.COW.create(body.serverLevel());
         helper.assertTrue(cow != null, "entity-interaction fixture creation failed");
@@ -2088,6 +2550,54 @@ public final class CompanionLifecycleForgeGameTests {
                         target,
                         ticksRemaining - 1,
                         reached));
+    }
+
+    private static void awaitNavigationIdle(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            int ticksRemaining,
+            Runnable completed) {
+        String status = registry.status(owner);
+        if (status.contains("mode=IDLE")) {
+            completed.run();
+            return;
+        }
+        helper.assertTrue(!status.contains("mode=PAUSED"),
+                "Forge navigation reached the target but ended unsuccessfully: " + status);
+        helper.assertTrue(ticksRemaining > 0,
+                "Forge navigation reached the target but did not complete: " + status);
+        helper.runAfterDelay(1, () -> awaitNavigationIdle(
+                helper, registry, owner, ticksRemaining - 1, completed));
+    }
+
+    private static void awaitSuccessfulNavigationPosition(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        String status = registry.status(owner);
+        helper.assertTrue(!status.contains("mode=PAUSED"),
+                "Forge navigation stopped before reaching the target: " + status);
+        if (body.position().distanceToSqr(target) <= 2.25D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(ticksRemaining > 0,
+                "Forge navigation did not reach target: position=" + body.position()
+                        + " target=" + target + " status=" + status);
+        helper.runAfterDelay(1, () -> awaitSuccessfulNavigationPosition(
+                helper, registry, owner, body, target, ticksRemaining - 1, reached));
+    }
+
+    private static void trackSprinting(GameTestHelper helper, CompanionPlayer body,
+                                       boolean[] observed, int remaining) {
+        if (body.isSprinting()) observed[0] = true;
+        if (observed[0] || remaining <= 0) return;
+        helper.runAfterDelay(1, () -> trackSprinting(helper, body, observed, remaining - 1));
     }
 
     private static void insertDynamicObstacleAfterDoorOpens(

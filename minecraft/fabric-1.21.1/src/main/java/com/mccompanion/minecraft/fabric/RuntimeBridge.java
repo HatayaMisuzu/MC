@@ -165,6 +165,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("PlaceBlock", true)
                 .put("RetreatFromDanger", true)
                 .put("NavigateTo", true)
+                .put("NavigateWithWorldChanges", true)
                 .put("FollowOwner", true)
                 .put("WithdrawFromStorage", true)
                 .put("DepositToStorage", true)
@@ -444,8 +445,20 @@ final class RuntimeBridge implements AutoCloseable {
                 values.path("action").asText(""),
                 values.path("durationTicks").canConvertToInt()
                         ? values.path("durationTicks").asInt() : null,
-                values.path("partnerEntityId").asText("")); }
+                values.path("partnerEntityId").asText(""),
+                stringList(values.path("allowedBreakBlocks")),
+                stringList(values.path("allowedPlaceBlocks")),
+                values.path("maxBreakBlocks").asInt(0),
+                values.path("maxPlaceBlocks").asInt(0),
+                values.path("maxRiskUnits").asInt(8)); }
         catch (IllegalArgumentException invalid) { return null; }
+    }
+
+    private static java.util.List<String> stringList(JsonNode value) {
+        if (!value.isArray()) return java.util.List.of();
+        java.util.ArrayList<String> result = new java.util.ArrayList<>();
+        value.forEach(entry -> { if (entry.isTextual()) result.add(entry.asText()); });
+        return java.util.List.copyOf(result);
     }
 
     private void sendCommandAccepted(String commandId, CompanionRegistry.RuntimeResult result) {

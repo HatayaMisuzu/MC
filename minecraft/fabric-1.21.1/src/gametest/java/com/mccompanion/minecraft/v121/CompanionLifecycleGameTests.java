@@ -1877,6 +1877,419 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         });
     }
 
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600, batch = "nav2_locomotion")
+    public void navigationSprintsThenUsesABoundedSafeDrop(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(
+                helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SprintDropCompanion").success(),
+                "sprint/drop test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "sprint/drop test created no live body");
+        BlockPos origin = moveToIsolatedArena(owner, body, 640, 640, 1);
+        for (int x = -1; x <= 1; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, 2, 0), Blocks.STONE.defaultBlockState());
+        }
+        Vec3 highStart = Vec3.atBottomCenterOf(origin.offset(0, 3, 0));
+        owner.teleportTo(owner.serverLevel(), highStart.x, highStart.y, highStart.z - 2.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), highStart.x, highStart.y, highStart.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        body.setOnGround(true);
+        float healthBefore = body.getHealth();
+        boolean[] sprintObserved = {false};
+        trackSprinting(helper, body, sprintObserved, 160);
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(6, 0, 0));
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "sprint/drop navigation failed to start");
+        awaitPosition(helper, body, target, 400, () -> {
+            helper.assertTrue(sprintObserved[0],
+                    "flat safe route never applied real sprint state");
+            helper.assertTrue(body.getHealth() == healthBefore,
+                    "bounded three-block drop damaged the companion");
+            helper.assertTrue(body.serverLevel().getBlockState(origin.offset(0, 2, 0)).is(Blocks.STONE)
+                            && body.serverLevel().getBlockState(origin.offset(2, -1, 0)).is(Blocks.STONE),
+                    "sprint/drop navigation mutated its platforms");
+            removeFixture(helper, registry, owner, "sprint/drop cleanup failed");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000, batch = "nav2_breaking")
+    public void survivalNavigationEnforcesBreakBudgetThenVerifiesExactBlocksAndArrival(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(
+                helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SurvivalBreakCompanion").success(),
+                "survival break test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "survival break test created no live body");
+        BlockPos origin = moveToIsolatedArena(owner, body, 768, 768, 1);
+        buildSealedBreakCorridor(body, origin);
+        BlockPos lower = origin.offset(3, 0, 0);
+        BlockPos upper = lower.above();
+        body.serverLevel().setBlockAndUpdate(lower, Blocks.DIRT.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(upper, Blocks.DIRT.defaultBlockState());
+        ItemStack shovel = new ItemStack(Items.IRON_SHOVEL);
+        body.getInventory().setItem(12, shovel);
+        int damageBefore = shovel.getDamageValue();
+        String companionId = body.getUUID().toString();
+        String lease = "fabric-nav2-break-lease";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                        System.currentTimeMillis() + 120_000L).success(),
+                "survival break lease acquisition failed");
+        BlockPos target = origin.offset(6, 0, 0);
+        SkillParameters insufficient = survivalBreakParameters(body, target, 1);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                        "nav2-break-budget", "skill", null, null, null, insufficient).success(),
+                "bounded survival navigation did not start");
+        awaitRuntimeBehaviorState(helper, registry, companionId, "PAUSED", 180, blocked -> {
+            helper.assertTrue(blocked.behaviorObservation() != null
+                            && "PATH_BUDGET_EXCEEDED".equals(blocked.behaviorObservation().failureCode()),
+                    "insufficient break budget was not rejected honestly: " + blocked.behaviorObservation());
+            helper.assertTrue(body.serverLevel().getBlockState(lower).is(Blocks.DIRT)
+                            && body.serverLevel().getBlockState(upper).is(Blocks.DIRT),
+                    "budget rejection partially mutated the corridor");
+            helper.assertTrue(registry.runtimeCancel(companionId, lease, 1L).success(),
+                    "budget-rejected navigation could not be cancelled");
+            SkillParameters allowed = survivalBreakParameters(body, target, 2);
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                            "nav2-break-allowed", "skill", null, null, null, allowed).success(),
+                    "authorized survival navigation did not restart");
+            awaitRuntimeBehaviorState(helper, registry, companionId, "IDLE", 500, completed -> {
+                helper.assertTrue(body.serverLevel().getBlockState(lower).isAir()
+                                && body.serverLevel().getBlockState(upper).isAir(),
+                        "authorized route did not break the exact two-block obstruction");
+                helper.assertTrue(body.position().distanceToSqr(Vec3.atBottomCenterOf(target)) <= 2.25D,
+                        "authorized route broke blocks but did not reach its target");
+                helper.assertTrue(completed.behaviorObservation() != null
+                                && "NAVIGATION_COMPLETE".equals(completed.behaviorObservation().failureCode())
+                                && "2".equals(completed.behaviorObservation().details().get("brokenBlocks"))
+                                && completed.behaviorObservation().details().getOrDefault("destroyedBlocks", "")
+                                .contains("minecraft:dirt@" + lower.getX() + ',' + lower.getY() + ',' + lower.getZ()),
+                        "terminal navigation snapshot omitted exact verified break evidence: "
+                                + completed.behaviorObservation());
+                helper.assertTrue(body.getMainHandItem().is(Items.IRON_SHOVEL)
+                                && body.getMainHandItem().getDamageValue() >= damageBefore + 2,
+                        "navigation did not select and consume real tool durability");
+                helper.assertTrue(body.serverLevel().getBlockState(origin.offset(3, 2, 0)).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(origin.offset(3, 0, 1)).is(Blocks.COBBLESTONE),
+                        "survival navigation damaged a non-allowlisted corridor block");
+                removeFixture(helper, registry, owner, "survival break cleanup failed");
+                helper.succeed();
+            });
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 4000, batch = "nav2_placement")
+    public void survivalNavigationBuildsBoundedBridgeAndJumpsSimpleGap(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(
+                helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SurvivalBridgeCompanion").success(),
+                "survival bridge test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "survival bridge test created no live body");
+        BlockPos origin = moveToIsolatedArena(owner, body, 1024, 1024, 1);
+        buildSealedBridgeCorridor(body, origin, true);
+        BlockPos firstBridge = origin.offset(1, -1, 0);
+        BlockPos secondBridge = origin.offset(2, -1, 0);
+        body.getInventory().setItem(14, new ItemStack(Items.COBBLESTONE, 2));
+        body.getInventory().setItem(15, new ItemStack(Items.DIAMOND_BLOCK));
+        int cobblestoneBefore = body.getInventory().countItem(Items.COBBLESTONE);
+        int valuableBefore = body.getInventory().countItem(Items.DIAMOND_BLOCK);
+        String companionId = body.getUUID().toString();
+        String lease = "fabric-nav2-place-lease";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                        System.currentTimeMillis() + 120_000L).success(),
+                "survival bridge lease acquisition failed");
+        BlockPos target = origin.offset(5, 0, 0);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                        "nav2-place-budget", "skill", null, null, null,
+                        survivalPlaceParameters(body, target, 1)).success(),
+                "bounded bridge navigation did not start");
+        awaitRuntimeBehaviorState(helper, registry, companionId, "PAUSED", 220, blocked -> {
+            helper.assertTrue(blocked.behaviorObservation() != null
+                            && "PATH_BUDGET_EXCEEDED".equals(blocked.behaviorObservation().failureCode()),
+                    "insufficient placement budget was not rejected honestly: "
+                            + blocked.behaviorObservation());
+            helper.assertTrue(body.serverLevel().getBlockState(firstBridge).isAir()
+                            && body.serverLevel().getBlockState(secondBridge).isAir(),
+                    "placement budget rejection partially built a bridge");
+            helper.assertTrue(registry.runtimeCancel(companionId, lease, 1L).success(),
+                    "budget-rejected bridge could not be cancelled");
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                            "nav2-place-allowed", "skill", null, null, null,
+                            survivalPlaceParameters(body, target, 2)).success(),
+                    "authorized bridge navigation did not restart");
+            awaitRuntimeBehaviorState(helper, registry, companionId, "IDLE", 600, completed -> {
+                helper.assertTrue(body.serverLevel().getBlockState(firstBridge).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(secondBridge).is(Blocks.COBBLESTONE),
+                        "authorized route did not build the exact two-block bridge");
+                helper.assertTrue(body.position().distanceToSqr(Vec3.atBottomCenterOf(target)) <= 2.25D,
+                        "authorized bridge route did not reach its target");
+                helper.assertTrue(body.getInventory().countItem(Items.COBBLESTONE) == cobblestoneBefore - 2
+                                && body.getInventory().countItem(Items.DIAMOND_BLOCK) == valuableBefore,
+                        "bridge did not consume exactly the allowed disposable blocks");
+                helper.assertTrue(completed.behaviorObservation() != null
+                                && "NAVIGATION_COMPLETE".equals(completed.behaviorObservation().failureCode())
+                                && "2".equals(completed.behaviorObservation().details().get("placedBlocks"))
+                                && completed.behaviorObservation().details()
+                                .getOrDefault("placedBlockPositions", "")
+                                .contains("minecraft:cobblestone@" + firstBridge.getX() + ','
+                                        + firstBridge.getY() + ',' + firstBridge.getZ()),
+                        "terminal bridge snapshot omitted exact placement evidence: "
+                                + completed.behaviorObservation());
+                helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                        "survival bridge lease release failed");
+
+                buildSealedBridgeCorridor(body, origin, false);
+                Vec3 jumpStart = Vec3.atBottomCenterOf(origin);
+                owner.teleportTo(owner.serverLevel(), jumpStart.x, jumpStart.y, jumpStart.z - 2.0D,
+                        owner.getYRot(), owner.getXRot());
+                body.teleportTo(body.serverLevel(), jumpStart.x, jumpStart.y, jumpStart.z,
+                        body.getYRot(), body.getXRot());
+                body.setDeltaMovement(Vec3.ZERO);
+                body.setOnGround(true);
+                boolean[] airborne = {false};
+                trackAirborne(helper, body, airborne, 180);
+                Vec3 jumpTarget = Vec3.atBottomCenterOf(origin.offset(5, 0, 0));
+                helper.assertTrue(registry.goTo(owner, jumpTarget.x, jumpTarget.y, jumpTarget.z).success(),
+                        "simple gap navigation failed to start");
+                awaitSuccessfulNavigationPosition(
+                        helper, registry, owner, body, jumpTarget, 360, () -> awaitNavigationIdle(
+                        helper, registry, owner, 40, () -> {
+                    helper.assertTrue(airborne[0], "simple gap route never applied a real jump");
+                    helper.assertTrue(body.serverLevel().getBlockState(origin.offset(1, -1, 0)).isAir(),
+                            "simple gap crossing filled or mutated the gap");
+                    runAuditedPassageAndLongDistanceAcceptance(
+                            helper, registry, owner, body);
+                }));
+            });
+        });
+    }
+
+    private static SkillParameters survivalPlaceParameters(
+            CompanionPlayer body, BlockPos target, int maxPlaceBlocks) {
+        return new SkillParameters("NavigateWithWorldChanges", "", 1, false,
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "",
+                null, null, "", null, "", java.util.List.of(),
+                java.util.List.of("minecraft:cobblestone"), 0, maxPlaceBlocks, 8);
+    }
+
+    private static void buildSealedBridgeCorridor(
+            CompanionPlayer body, BlockPos origin, boolean lowRoof) {
+        for (int x = -1; x <= 7; x++) {
+            for (int y = 0; y <= 3; y++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+            for (int z : new int[] {-1, 1}) {
+                for (int y = -4; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0),
+                    x == 1 || x == 2 ? Blocks.AIR.defaultBlockState() : Blocks.STONE.defaultBlockState());
+            if (x == 1 || x == 2) {
+                for (int y = -4; y <= -2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+                }
+            }
+            if (lowRoof) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        for (int x : new int[] {-1, 7}) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -4; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        if (!lowRoof) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(2, -1, 0), Blocks.STONE.defaultBlockState());
+        }
+    }
+
+    private static void trackAirborne(GameTestHelper helper, CompanionPlayer body,
+                                      boolean[] observed, int remaining) {
+        if (!body.onGround()) observed[0] = true;
+        if (observed[0] || remaining <= 0) return;
+        helper.runAfterDelay(1, () -> trackAirborne(helper, body, observed, remaining - 1));
+    }
+
+    private static void runAuditedPassageAndLongDistanceAcceptance(
+            GameTestHelper helper, CompanionRegistry registry, ServerPlayer owner, CompanionPlayer body) {
+        BlockPos doorOrigin = moveToIsolatedArena(owner, body, 1216, 1216, 1);
+        for (int x = -1; x <= 7; x++) {
+            body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            for (int y = 0; y <= 1; y++) {
+                body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+            for (int z : new int[] {-1, 1}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            doorOrigin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-1, 7}) {
+            for (int z = -1; z <= 1; z++) for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        doorOrigin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        BlockPos door = doorOrigin.offset(3, 0, 0);
+        var lower = Blocks.IRON_DOOR.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST)
+                .setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.LOWER)
+                .setValue(BlockStateProperties.OPEN, false);
+        body.serverLevel().setBlockAndUpdate(door, lower);
+        body.serverLevel().setBlockAndUpdate(door.above(),
+                lower.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER));
+        Vec3 doorStart = Vec3.atBottomCenterOf(doorOrigin);
+        owner.teleportTo(owner.serverLevel(), doorStart.x, doorStart.y, doorStart.z - 2.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), doorStart.x, doorStart.y, doorStart.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        Vec3 blockedTarget = Vec3.atBottomCenterOf(doorOrigin.offset(6, 0, 0));
+        helper.assertTrue(registry.goTo(owner, blockedTarget.x, blockedTarget.y, blockedTarget.z).success(),
+                "iron-door boundary navigation failed to start");
+        helper.runAfterDelay(12, () -> {
+            String status = registry.status(owner);
+            helper.assertTrue(status.contains("mode=PAUSED") && status.contains("failure=PATH_UNREACHABLE"),
+                    "non-hand-openable passage did not fail honestly: " + status);
+            helper.assertTrue(!body.serverLevel().getBlockState(door).getValue(BlockStateProperties.OPEN),
+                    "navigation silently opened an iron door");
+            helper.assertTrue(registry.stop(owner).success(), "iron-door boundary cleanup failed");
+            runLongDistanceAcceptance(helper, registry, owner, body);
+        });
+    }
+
+    private static void runLongDistanceAcceptance(
+            GameTestHelper helper, CompanionRegistry registry, ServerPlayer owner, CompanionPlayer body) {
+        BlockPos origin = moveToIsolatedArena(owner, body, 1344, 1344, 1);
+        BlockPos targetBlock = origin.offset(208, 0, 0);
+        int startChunk = (origin.getX() - 2) >> 4;
+        int endChunk = (targetBlock.getX() + 2) >> 4;
+        int centerChunkZ = origin.getZ() >> 4;
+        for (int chunkX = startChunk; chunkX <= endChunk; chunkX++) {
+            for (int chunkZ = centerChunkZ - 1; chunkZ <= centerChunkZ + 1; chunkZ++) {
+                body.serverLevel().setChunkForced(chunkX, chunkZ, true);
+            }
+        }
+        for (int x = -2; x <= 210; x++) {
+            for (int z = -1; z <= 1; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        Vec3 start = Vec3.atBottomCenterOf(origin);
+        owner.teleportTo(owner.serverLevel(), start.x, start.y, start.z - 2.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), start.x, start.y, start.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        body.setOnGround(true);
+        Vec3 target = Vec3.atBottomCenterOf(targetBlock);
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "representative long-distance navigation failed to start");
+        awaitSuccessfulNavigationPosition(
+                helper, registry, owner, body, target, 2800, () -> awaitNavigationIdle(
+                helper, registry, owner, 40, () -> {
+            helper.assertTrue(body.serverLevel().getBlockState(origin.offset(104, -1, 0)).is(Blocks.STONE),
+                    "long-distance route mutated its travel surface");
+            removeFixture(helper, registry, owner, "survival navigation audit cleanup failed");
+            helper.succeed();
+        }));
+    }
+
+    private static SkillParameters survivalBreakParameters(
+            CompanionPlayer body, BlockPos target, int maxBreakBlocks) {
+        return new SkillParameters("NavigateWithWorldChanges", "", 1, false,
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "",
+                null, null, "", null, "", java.util.List.of("minecraft:dirt"),
+                java.util.List.of(), maxBreakBlocks, 0, 8);
+    }
+
+    private static void buildSealedBreakCorridor(CompanionPlayer body, BlockPos origin) {
+        for (int x = -1; x <= 8; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            for (int z : new int[] {-1, 1}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-1, 8}) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+    }
+
+    private static void awaitRuntimeBehaviorState(
+            GameTestHelper helper, CompanionRegistry registry, String companionId,
+            String expectedState, int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> completed) {
+        CompanionRegistry.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        if (expectedState.equals(snapshot.behaviorState())) {
+            completed.accept(snapshot);
+            return;
+        }
+        helper.assertTrue(!"PAUSED".equals(snapshot.behaviorState()) && ticksRemaining > 0,
+                "survival navigation stopped in an unexpected state: expected=" + expectedState
+                        + " actual=" + snapshot.behaviorState() + " observation="
+                        + snapshot.behaviorObservation());
+        helper.runAfterDelay(1, () -> awaitRuntimeBehaviorState(helper, registry, companionId,
+                expectedState, ticksRemaining - 1, completed));
+    }
+
+    private static void trackSprinting(GameTestHelper helper, CompanionPlayer body,
+                                       boolean[] observed, int remaining) {
+        if (body.isSprinting()) observed[0] = true;
+        if (observed[0] || remaining <= 0) return;
+        helper.runAfterDelay(1, () -> trackSprinting(helper, body, observed, remaining - 1));
+    }
+
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 500, batch = "swim_navigation")
     public void navigationSwimsThroughObservedWaterVolume(GameTestHelper helper) {
         if (Boolean.getBoolean("mccompanion.persistence.seed")
@@ -2253,6 +2666,47 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(ticksRemaining > 0,
                 "navigation did not reach target: position=" + body.position() + " target=" + target);
         helper.runAfterDelay(1, () -> awaitPosition(helper, body, target, ticksRemaining - 1, reached));
+    }
+
+    private static void awaitNavigationIdle(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            int ticksRemaining,
+            Runnable completed) {
+        String status = registry.status(owner);
+        if (status.contains("mode=IDLE")) {
+            completed.run();
+            return;
+        }
+        helper.assertTrue(!status.contains("mode=PAUSED"),
+                "navigation reached the target but ended unsuccessfully: " + status);
+        helper.assertTrue(ticksRemaining > 0,
+                "navigation reached the target but did not complete: " + status);
+        helper.runAfterDelay(1, () -> awaitNavigationIdle(
+                helper, registry, owner, ticksRemaining - 1, completed));
+    }
+
+    private static void awaitSuccessfulNavigationPosition(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        String status = registry.status(owner);
+        helper.assertTrue(!status.contains("mode=PAUSED"),
+                "navigation stopped before reaching the target: " + status);
+        if (body.position().distanceToSqr(target) <= 2.25D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(ticksRemaining > 0,
+                "navigation did not reach target: position=" + body.position()
+                        + " target=" + target + " status=" + status);
+        helper.runAfterDelay(1, () -> awaitSuccessfulNavigationPosition(
+                helper, registry, owner, body, target, ticksRemaining - 1, reached));
     }
 
     private static void awaitFollowPosition(

@@ -211,6 +211,7 @@ public final class DailyActionForgeGameTests {
         await(h, f, 120, filled -> {
             h.assertTrue(f.body.getInventory().countItem(Items.WATER_BUCKET) > before,
                     "fill did not create a real water bucket");
+            f.level.setBlockAndUpdate(target.below(), Blocks.STONE.defaultBlockState());
             f.level.setBlockAndUpdate(target, Blocks.AIR.defaultBlockState());
             start(h, f, new SkillParameters("UseWaterBucket", "minecraft:water_bucket", 1, false, f.dimension(),
                     target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "", null, null, "EMPTY", null));

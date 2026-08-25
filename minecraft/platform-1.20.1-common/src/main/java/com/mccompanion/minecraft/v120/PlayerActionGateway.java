@@ -32,6 +32,11 @@ final class PlayerActionGateway {
         body.applyWalkingInput(yaw, jumpRequested);
     }
 
+    void applyMoveInput(CompanionPlayer body, float yaw, boolean jumpRequested,
+                        boolean sprintRequested) {
+        body.applyWalkingInput(yaw, jumpRequested, sprintRequested);
+    }
+
     void stopInput(CompanionPlayer body) {
         body.stopWalking();
     }

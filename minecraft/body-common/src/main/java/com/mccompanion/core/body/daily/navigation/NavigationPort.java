@@ -37,7 +37,10 @@ public interface NavigationPort {
                     @Override
                     public GridPathPlanner.Traversal traversal(
                             GridPathPlanner.Point previous, GridPathPlanner.Point next) {
-                        return traversable(NavPoint.from(previous), NavPoint.from(next))
+                        int distance = Math.abs(next.x() - previous.x())
+                                + Math.abs(next.y() - previous.y())
+                                + Math.abs(next.z() - previous.z());
+                        return distance == 1 && traversable(NavPoint.from(previous), NavPoint.from(next))
                                 ? GridPathPlanner.Traversal.passable(1.0D)
                                 : GridPathPlanner.Traversal.blocked();
                     }
@@ -49,7 +52,7 @@ public interface NavigationPort {
 
     /** Opens an observed door/portal at the next cell through the platform's vanilla action. */
     default boolean openDoor(NavPoint point) {
-        return false;
+        return true;
     }
 
     /** Applies one bounded movement input; the adapter owns the Minecraft input details. */

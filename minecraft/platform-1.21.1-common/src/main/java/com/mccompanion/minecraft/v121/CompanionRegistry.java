@@ -242,8 +242,10 @@ public final class CompanionRegistry {
                 ? CompanionEntry.Mode.IDLE
                 : entry.resumeMode;
         savedData.changed();
-        if (entry.mode != CompanionEntry.Mode.IDLE) {
-            behaviorDirector.start(entry, liveBodies.get(entry.companionId));
+        if (entry.mode == CompanionEntry.Mode.SKILL) {
+            behaviorDirector.resumeSkill(entry, liveBodies.get(entry.companionId));
+        } else if (entry.mode != CompanionEntry.Mode.IDLE) {
+            behaviorDirector.resumeNavigation(entry, liveBodies.get(entry.companionId));
         }
         return Result.success("Resumed " + entry.profileName + " in " + entry.mode + " mode.");
     }
@@ -485,7 +487,8 @@ public final class CompanionRegistry {
                 "DeliverItem", "EatAndRecover", "WithdrawFromStorage", "DepositToStorage",
                 "CraftItem", "ExploreArea", "CollectResource", "MineResourceVein", "SmeltItem",
                 "DefendOwner", "LookAt", "InteractBlock", "InteractEntity", "MenuAction",
-                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "RetreatFromDanger")
+                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "RetreatFromDanger",
+                "NavigateWithWorldChanges")
                 .contains(capability);
     }
 
@@ -530,7 +533,7 @@ public final class CompanionRegistry {
         entry.skillRecoveryRequired = false;
         savedData.changed();
         if (entry.mode == CompanionEntry.Mode.SKILL) behaviorDirector.resumeSkill(entry, body);
-        else if (entry.mode != CompanionEntry.Mode.IDLE) behaviorDirector.start(entry, body);
+        else if (entry.mode != CompanionEntry.Mode.IDLE) behaviorDirector.resumeNavigation(entry, body);
         return RuntimeResult.success(control.behaviorId, control.behaviorRevision, behaviorState(entry));
     }
 

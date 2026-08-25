@@ -107,6 +107,15 @@ public final class ToolInputSchemaValidator {
         if (value.size() < minimum || value.size() > maximum) {
             add(violations, path, "ARRAY_SIZE", "array size is outside the declared bounds");
         }
+        if (schema.path("uniqueItems").asBoolean(false)) {
+            java.util.HashSet<JsonNode> unique = new java.util.HashSet<>();
+            for (JsonNode item : value) {
+                if (!unique.add(item)) {
+                    add(violations, path, "UNIQUE_ITEMS", "array items must be unique");
+                    break;
+                }
+            }
+        }
         if (schema.path("items").isObject()) {
             for (int index = 0; index < value.size() && violations.size() < MAX_VIOLATIONS; index++) {
                 validate(schema.path("items"), value.path(index), path + "[" + index + "]",

@@ -979,7 +979,7 @@ final class DailyActionController {
         DailyNavigator.NavigationResult result = navigator.tick(server.getTickCount());
         return switch (result.status()) {
             case RUNNING, PAUSED, ARRIVED -> DailyActionCommand.CommandResult.success();
-            case TARGET_UNLOADED, UNREACHABLE, STUCK, TIMEOUT, WORLD_CHANGED, CANCELLED ->
+            case TARGET_UNLOADED, BUDGET_EXCEEDED, UNREACHABLE, STUCK, TIMEOUT, WORLD_CHANGED, CANCELLED ->
                     DailyActionCommand.CommandResult.rejected("NAVIGATION_" + result.code());
             case IDLE -> DailyActionCommand.CommandResult.uncertain("NAVIGATION_IDLE");
         };
@@ -1002,7 +1002,10 @@ final class DailyActionController {
         @Override public boolean traversable(NavPoint from, NavPoint to) {
             return navigation.remainsTraversable(body, from.plannerPoint(), to.plannerPoint());
         }
-        @Override public boolean openDoor(NavPoint point) { return navigation.openDoorIfNeeded(body, point.plannerPoint()); }
+        @Override public boolean openDoor(NavPoint point) {
+            return !navigation.requiresPassageOpening(body, point.plannerPoint())
+                    || navigation.openDoorIfNeeded(body, point.plannerPoint());
+        }
         @Override public void applyMove(Vec direction, boolean jump) {
             gateway.applyMoveInput(body,(float)Math.toDegrees(Math.atan2(-direction.x(),direction.z())),jump||body.horizontalCollision);
         }

@@ -38,6 +38,7 @@ public final class CapabilityRegistry {
                 implemented("BreedAnimals", RiskLevel.LOW), implemented("TradeWithVillager", RiskLevel.MEDIUM),
                 implemented("EnchantItem", RiskLevel.MEDIUM), implemented("BrewPotion", RiskLevel.MEDIUM),
                 implemented("GlideWithElytra", RiskLevel.MEDIUM),
+                implemented("NavigateWithWorldChanges", RiskLevel.HIGH),
                 capability("BuildSmallBlueprint", RiskLevel.HIGH)));
     }
 

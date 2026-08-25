@@ -109,7 +109,9 @@ public final class DailyNavigator {
         }
 
         NavPoint next = NavPoint.from(route.get(routeIndex));
-        port.openDoor(next);
+        if (!port.openDoor(next)) {
+            return finish(Status.UNREACHABLE, "PASSAGE_INTERACTION_FAILED");
+        }
         Vec delta = next.center().subtract(port.currentPosition());
         double nextDistance = delta.lengthSquared();
         if (nextDistance + config.progressEpsilon() < bestDistanceSquared) {
@@ -187,10 +189,15 @@ public final class DailyNavigator {
         if (replans > config.maxReplans()) return finish(Status.UNREACHABLE, "REPLAN_LIMIT");
         GridPathPlanner.Plan plan = planGoalOrReachableNeighbor(current, goal.target());
         if (plan.status() != GridPathPlanner.Status.READY) {
-            return finish(plan.status() == GridPathPlanner.Status.TARGET_UNLOADED
-                    ? Status.TARGET_UNLOADED : Status.UNREACHABLE,
-                    plan.status() == GridPathPlanner.Status.TARGET_UNLOADED
-                            ? "TARGET_UNLOADED" : "UNREACHABLE");
+            return finish(switch (plan.status()) {
+                        case TARGET_UNLOADED -> Status.TARGET_UNLOADED;
+                        case BUDGET_EXCEEDED -> Status.BUDGET_EXCEEDED;
+                        default -> Status.UNREACHABLE;
+                    }, switch (plan.status()) {
+                        case TARGET_UNLOADED -> "TARGET_UNLOADED";
+                        case BUDGET_EXCEEDED -> "BUDGET_EXCEEDED";
+                        default -> "UNREACHABLE";
+                    });
         }
         replans++;
         route = plan.points();
@@ -238,7 +245,7 @@ public final class DailyNavigator {
     }
 
     public enum Status {
-        IDLE, RUNNING, PAUSED, ARRIVED, UNREACHABLE, TARGET_UNLOADED, STUCK, TIMEOUT,
+        IDLE, RUNNING, PAUSED, ARRIVED, UNREACHABLE, TARGET_UNLOADED, BUDGET_EXCEEDED, STUCK, TIMEOUT,
         WORLD_CHANGED, CANCELLED
     }
 

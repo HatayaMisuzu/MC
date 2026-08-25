@@ -4,7 +4,10 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
                               String dimension, Integer x, Integer y, Integer z,
                               String targetId, String face, String hand,
                               String sessionToken, Integer slot, Integer button, String menuAction,
-                              Integer durationTicks, String secondaryTargetId) {
+                              Integer durationTicks, String secondaryTargetId,
+                              java.util.List<String> allowedBreakBlocks,
+                              java.util.List<String> allowedPlaceBlocks,
+                              int maxBreakBlocks, int maxPlaceBlocks, int maxRiskUnits) {
     public SkillParameters {
         capability = capability == null ? "" : capability;
         itemId = itemId == null ? "" : itemId;
@@ -15,7 +18,26 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
         sessionToken = sessionToken == null ? "" : sessionToken;
         menuAction = menuAction == null ? "" : menuAction;
         secondaryTargetId = secondaryTargetId == null ? "" : secondaryTargetId;
+        allowedBreakBlocks = allowedBreakBlocks == null ? java.util.List.of()
+                : java.util.List.copyOf(allowedBreakBlocks);
+        allowedPlaceBlocks = allowedPlaceBlocks == null ? java.util.List.of()
+                : java.util.List.copyOf(allowedPlaceBlocks);
         if (quantity < 1 || quantity > 2304) throw new IllegalArgumentException("quantity must be 1..2304");
+        if (maxBreakBlocks < 0 || maxBreakBlocks > 8 || maxPlaceBlocks < 0 || maxPlaceBlocks > 8
+                || maxRiskUnits < 0 || maxRiskUnits > 16) {
+            throw new IllegalArgumentException("navigation budgets are outside safe bounds");
+        }
+    }
+
+    /** Compatibility constructor for the pre-navigation-policy wire shape. */
+    public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
+                           String dimension, Integer x, Integer y, Integer z,
+                           String targetId, String face, String hand,
+                           String sessionToken, Integer slot, Integer button, String menuAction,
+                           Integer durationTicks, String secondaryTargetId) {
+        this(capability, itemId, quantity, allowPartial, dimension, x, y, z, targetId, face, hand,
+                sessionToken, slot, button, menuAction, durationTicks, secondaryTargetId,
+                java.util.List.of(), java.util.List.of(), 0, 0, 8);
     }
 
     /** Compatibility constructor for the pre-partner-entity wire shape. */

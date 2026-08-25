@@ -323,6 +323,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         }
         if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
+        if (available.contains("NavigateWithWorldChanges")) values.add(definition("movement.navigate_survival",
+                "Complete survival navigation with bounded world changes in one call",
+                survivalNavigationSchema(), "HIGH", "WORLD_EDIT", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.step",
                 "Move a bounded relative step through normal navigation", stepSchema(), "LOW", "MOVE", false));
@@ -672,6 +675,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "movement.follow" -> noArguments(call, TaskType.FOLLOW);
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
+            case "movement.navigate_survival" -> survivalNavigate(call.arguments());
             case "movement.look" -> skill("LookAt", validatedLook(call.arguments()));
             case "block.break" -> breakBlock(call.arguments());
             case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
@@ -748,6 +752,74 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode target = Json.object().put("dimension", arguments.path("dimension").asText("minecraft:overworld"))
                 .put("x", x).put("y", y).put("z", z);
         return new Intent(TaskType.TRAVEL, Json.object().set("target", target), "movement.navigate");
+    }
+
+    private static Intent survivalNavigate(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("x", "y", "z", "dimension", "maxBreakBlocks",
+                "allowedBreakBlocks", "maxPlaceBlocks", "allowedPlaceBlocks", "maxRiskUnits"));
+        for (String field : List.of("x", "y", "z")) {
+            if (!arguments.path(field).isIntegralNumber() || !arguments.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException(field + " must be an integer");
+            }
+        }
+        int x = arguments.path("x").asInt();
+        int y = arguments.path("y").asInt();
+        int z = arguments.path("z").asInt();
+        if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000
+                || y < -2048 || y > 2048) {
+            throw new IllegalArgumentException("coordinates are outside safe bounds");
+        }
+        String dimension = arguments.has("dimension")
+                ? namespacedId(arguments.path("dimension").isTextual()
+                        ? arguments.path("dimension").asText() : "", "dimension")
+                : "minecraft:overworld";
+        int maxBreakBlocks = arguments.has("maxBreakBlocks")
+                ? boundedInteger(arguments.path("maxBreakBlocks"), "maxBreakBlocks", 0, 8) : 0;
+        JsonNode allowedBreakBlocks = validatedBlockIdList(arguments, "allowedBreakBlocks");
+        int maxPlaceBlocks = arguments.has("maxPlaceBlocks")
+                ? boundedInteger(arguments.path("maxPlaceBlocks"), "maxPlaceBlocks", 0, 8) : 0;
+        JsonNode allowedPlaceBlocks = validatedBlockIdList(arguments, "allowedPlaceBlocks");
+        if ((maxBreakBlocks > 0) != (!allowedBreakBlocks.isEmpty())) {
+            throw new IllegalArgumentException("maxBreakBlocks must be positive exactly when allowedBreakBlocks is nonempty");
+        }
+        if ((maxPlaceBlocks > 0) != (!allowedPlaceBlocks.isEmpty())) {
+            throw new IllegalArgumentException("maxPlaceBlocks must be positive exactly when allowedPlaceBlocks is nonempty");
+        }
+        if (maxBreakBlocks == 0 && maxPlaceBlocks == 0) {
+            throw new IllegalArgumentException("at least one world-change budget must be positive");
+        }
+        int maxRiskUnits = arguments.has("maxRiskUnits")
+                ? boundedInteger(arguments.path("maxRiskUnits"), "maxRiskUnits", 0, 16) : 8;
+        ObjectNode target = Json.object().put("dimension", dimension)
+                .put("x", x).put("y", y).put("z", z);
+        ObjectNode parameters = Json.object();
+        parameters.set("target", target);
+        parameters.put("maxBreakBlocks", maxBreakBlocks)
+                .put("maxPlaceBlocks", maxPlaceBlocks)
+                .put("maxRiskUnits", maxRiskUnits);
+        parameters.set("allowedBreakBlocks", allowedBreakBlocks.deepCopy());
+        parameters.set("allowedPlaceBlocks", allowedPlaceBlocks.deepCopy());
+        return skill("NavigateWithWorldChanges", parameters);
+    }
+
+    private static JsonNode validatedBlockIdList(JsonNode arguments, String field) {
+        if (!arguments.has(field)) return Json.MAPPER.createArrayNode();
+        JsonNode values = arguments.path(field);
+        if (!values.isArray() || values.size() < 1 || values.size() > 16) {
+            throw new IllegalArgumentException(field + " must contain 1..16 block ids");
+        }
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int index = 0; index < values.size(); index++) {
+            JsonNode block = values.path(index);
+            if (!block.isTextual()) {
+                throw new IllegalArgumentException(field + "[" + index + "] must be a namespaced block id");
+            }
+            String id = namespacedId(block.asText(), field + "[" + index + "]");
+            if (!seen.add(id)) {
+                throw new IllegalArgumentException(field + " must contain unique block ids");
+            }
+        }
+        return values;
     }
 
     private static JsonNode validatedLook(JsonNode arguments) {
@@ -1225,6 +1297,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         }
         if (name.equals("movement.navigate")) {
             root.putArray("required").add("x").add("y").add("z");
+        } else if (name.equals("movement.navigate_survival")) {
+            root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("movement.look")) {
             root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("movement.step")) {
@@ -1302,6 +1376,28 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
         properties.putObject("dimension").put("type", "string");
+        return properties;
+    }
+
+    private static ObjectNode survivalNavigationSchema() {
+        ObjectNode properties = Json.object();
+        for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
+        properties.putObject("dimension").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxBreakBlocks").put("type", "integer")
+                .put("minimum", 0).put("maximum", 8).put("default", 0);
+        ObjectNode allowed = properties.putObject("allowedBreakBlocks").put("type", "array")
+                .put("minItems", 1).put("maxItems", 16).put("uniqueItems", true);
+        allowed.putObject("items").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxPlaceBlocks").put("type", "integer")
+                .put("minimum", 0).put("maximum", 8).put("default", 0);
+        ObjectNode placeAllowed = properties.putObject("allowedPlaceBlocks").put("type", "array")
+                .put("minItems", 1).put("maxItems", 16).put("uniqueItems", true);
+        placeAllowed.putObject("items").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxRiskUnits").put("type", "integer")
+                .put("minimum", 0).put("maximum", 16).put("default", 8);
         return properties;
     }
 

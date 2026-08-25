@@ -41,6 +41,18 @@ class CapabilityVisibilityTest {
     }
 
     @Test
+    void exposesNavigateWithWorldChangesWhenTheConnectedBodyDeclaresIt() {
+        var capabilities = Json.object().put("NavigateWithWorldChanges", true);
+        var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
+
+        var snapshot = visibility.resolve(handshake("fabric", "1.21.1", capabilities), status);
+
+        assertEquals(List.of("NavigateWithWorldChanges"), snapshot.availableNames());
+        assertEquals("AVAILABLE_NOW",
+                snapshot.toJson().path("NavigateWithWorldChanges").path("state").asText());
+    }
+
+    @Test
     void exposesDailyActionCapabilitiesWhenTheConnectedBodyDeclaresThem() {
         var capabilities = Json.object().put("EquipItem", true).put("SleepAtBed", true)
                 .put("UseWaterBucket", true).put("UseVehicle", true).put("Fish", true)

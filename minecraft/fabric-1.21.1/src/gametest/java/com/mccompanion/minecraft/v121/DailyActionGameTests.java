@@ -163,6 +163,7 @@ public final class DailyActionGameTests implements FabricGameTest {
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 500, batch = "daily_sleep_main")
     public void sleepWakeAndOccupiedBedFailure(GameTestHelper helper) {
         Fixture f = fixture(helper, "daily-sleep");
+        moveFixtureToIsolatedArena(f, 1152, 1152);
         BlockPos bed = f.body.blockPosition().offset(1, 0, 0);
         f.body.serverLevel().setDayTime(13000L);
         placeBed(f, bed, false);
@@ -355,6 +356,7 @@ public final class DailyActionGameTests implements FabricGameTest {
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600, batch = "daily_farm")
     public void matureCropHarvestPickupAndReplant(GameTestHelper helper) {
         Fixture f = fixture(helper, "daily-farm");
+        moveFixtureToIsolatedArena(f, 896, 896);
         BlockPos crop = f.body.blockPosition().offset(2, 0, 0);
         f.body.serverLevel().setBlockAndUpdate(crop.below(), Blocks.FARMLAND.defaultBlockState());
         f.body.serverLevel().setBlockAndUpdate(
@@ -411,9 +413,9 @@ public final class DailyActionGameTests implements FabricGameTest {
             helper.assertTrue(snapshot.behaviorObservation() != null
                             && "BREEDING_FOOD_MISSING".equals(snapshot.behaviorObservation().failureCode()),
                     "insufficient breeding food was not rejected honestly: " + snapshot.behaviorObservation());
-            helper.assertTrue(f.body.serverLevel().getEntitiesOfClass(Cow.class,
-                    f.body.getBoundingBox().inflate(4), Animal::isBaby).isEmpty(),
-                    "insufficient food unexpectedly produced a baby");
+            helper.assertTrue(!first.isInLove() && !second.isInLove()
+                            && f.body.getInventory().countItem(Items.WHEAT) == 1,
+                    "insufficient food partially fed the requested pair");
             finish(helper, f);
         });
     }
@@ -843,6 +845,33 @@ public final class DailyActionGameTests implements FabricGameTest {
         helper.assertTrue(registry.runtimeAcquireLease(id, lease, 1L, System.currentTimeMillis() + 180_000L).success(),
                 name + " lease acquisition failed");
         return new Fixture(registry, owner, body, id, lease);
+    }
+
+    private static void moveFixtureToIsolatedArena(Fixture fixture, int x, int z) {
+        Vec3 spawn = new Vec3(x + 0.5D, 100.0D, z + 0.5D);
+        fixture.owner.teleportTo(fixture.owner.serverLevel(), spawn.x, spawn.y, spawn.z - 3.0D,
+                fixture.owner.getYRot(), fixture.owner.getXRot());
+        fixture.body.teleportTo(fixture.body.serverLevel(), spawn.x, spawn.y, spawn.z,
+                fixture.body.getYRot(), fixture.body.getXRot());
+        fixture.body.setDeltaMovement(Vec3.ZERO);
+        BlockPos origin = fixture.body.blockPosition();
+        int chunkX = origin.getX() >> 4;
+        int chunkZ = origin.getZ() >> 4;
+        for (int offsetX = -1; offsetX <= 1; offsetX++) {
+            for (int offsetZ = -1; offsetZ <= 1; offsetZ++) {
+                fixture.body.serverLevel().setChunkForced(chunkX + offsetX, chunkZ + offsetZ, true);
+            }
+        }
+        for (int offsetX = -3; offsetX <= 6; offsetX++) {
+            for (int offsetZ = -3; offsetZ <= 6; offsetZ++) {
+                fixture.body.serverLevel().setBlockAndUpdate(
+                        origin.offset(offsetX, -1, offsetZ), Blocks.STONE.defaultBlockState());
+                for (int offsetY = 0; offsetY <= 3; offsetY++) {
+                    fixture.body.serverLevel().setBlockAndUpdate(
+                            origin.offset(offsetX, offsetY, offsetZ), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
     }
 
     private static void start(Fixture f, String id, SkillParameters p) {

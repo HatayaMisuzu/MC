@@ -1,6 +1,7 @@
 package com.mccompanion.runtime.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.protocol.CapabilitySet;
 import com.mccompanion.protocol.CompanionBodyState;
 import com.mccompanion.protocol.CompanionStatus;
@@ -93,6 +94,163 @@ class RuntimeToolGatewayTest {
                 assertEquals("TOOL_UNAVAILABLE", unavailable.code());
             }
         }
+    }
+
+    @Test
+    void survivalNavigationExposesBoundedWorldChangeContractAndNormalizesAllWorldChangeModes() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("survival-navigation.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("survival-navigation.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                for (String companionId : List.of("c-combined", "c-placement", "c-break", "c-invalid")) {
+                    sessions.registerCompanion(session, new CompanionStatus(companionId, "owner", "survival",
+                                    "world", "minecraft:overworld", new PositionDto(0, 64, 0),
+                                    CompanionBodyState.SPAWNED, null, null, 0, 0, true,
+                                    CapabilitySet.empty(), Instant.now()),
+                            Json.object().put("dimension", "minecraft:overworld")
+                                    .set("position", Json.object().put("x", 0).put("y", 64).put("z", 0)));
+                }
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("NavigateWithWorldChanges"));
+                ToolContext context = new ToolContext("hermes", "survival-session", "c-combined");
+
+                List<ToolDefinition> definitions = gateway.definitions(context);
+                assertTrue(definitions.stream().anyMatch(value -> value.name().equals("movement.navigate_survival")));
+                assertFalse(definitions.stream().anyMatch(value -> value.name().equals("movement.navigate")));
+                ToolDefinition definition = definition(definitions, "movement.navigate_survival");
+                assertEquals("HIGH", definition.risk());
+                assertEquals("WORLD_EDIT", definition.permission());
+                assertEquals(Duration.ofMinutes(5), definition.timeout());
+                assertFalse(definition.idempotent());
+                assertEquals(List.of("x", "y", "z"), required(definition));
+                JsonNode schema = definition.inputSchema();
+                assertTrue(schema.path("additionalProperties").isBoolean());
+                assertFalse(schema.path("additionalProperties").asBoolean());
+                assertEquals(0, schema.path("properties").path("maxBreakBlocks").path("minimum").asInt());
+                assertEquals(8, schema.path("properties").path("maxBreakBlocks").path("maximum").asInt());
+                assertEquals(0, schema.path("properties").path("maxBreakBlocks").path("default").asInt());
+                JsonNode allowed = schema.path("properties").path("allowedBreakBlocks");
+                assertEquals(1, allowed.path("minItems").asInt());
+                assertEquals(16, allowed.path("maxItems").asInt());
+                assertTrue(allowed.path("uniqueItems").asBoolean());
+                assertEquals("^[a-z0-9_.-]+:[a-z0-9_./-]+$",
+                        allowed.path("items").path("pattern").asText());
+                assertEquals(0, schema.path("properties").path("maxPlaceBlocks").path("minimum").asInt());
+                assertEquals(8, schema.path("properties").path("maxPlaceBlocks").path("maximum").asInt());
+                assertEquals(0, schema.path("properties").path("maxPlaceBlocks").path("default").asInt());
+                JsonNode placeAllowed = schema.path("properties").path("allowedPlaceBlocks");
+                assertEquals(1, placeAllowed.path("minItems").asInt());
+                assertEquals(16, placeAllowed.path("maxItems").asInt());
+                assertTrue(placeAllowed.path("uniqueItems").asBoolean());
+                assertEquals(8, schema.path("properties").path("maxRiskUnits").path("default").asInt());
+
+                ObjectNode combined = Json.object().put("x", 3).put("y", 70).put("z", 4)
+                        .put("dimension", "examplemod:moon").put("maxBreakBlocks", 3)
+                        .put("maxPlaceBlocks", 2)
+                        .put("maxRiskUnits", 12)
+                        .set("allowedBreakBlocks", Json.MAPPER.createArrayNode()
+                                .add("minecraft:dirt").add("examplemod:soft_block"));
+                combined.set("allowedPlaceBlocks", Json.MAPPER.createArrayNode().add("minecraft:cobblestone"));
+                ToolResult accepted = gateway.execute(context,
+                        new ToolCall("survival-navigate-combined", "movement.navigate_survival", combined));
+                assertTrue(accepted.success(), accepted.observation().toString());
+                JsonNode outer = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("NavigateWithWorldChanges", outer.path("capability").asText());
+                JsonNode parameters = outer.path("parameters");
+                assertEquals(Json.object().put("dimension", "examplemod:moon")
+                                .put("x", 3).put("y", 70).put("z", 4), parameters.path("target"));
+                assertEquals(3, parameters.path("maxBreakBlocks").asInt());
+                assertEquals(2, parameters.path("maxPlaceBlocks").asInt());
+                assertEquals(12, parameters.path("maxRiskUnits").asInt());
+                assertEquals(combined.path("allowedBreakBlocks"), parameters.path("allowedBreakBlocks"));
+                assertEquals(combined.path("allowedPlaceBlocks"), parameters.path("allowedPlaceBlocks"));
+
+                ToolContext placementContext = new ToolContext("hermes", "survival-session", "c-placement");
+                ObjectNode placementOnly = Json.object().put("x", 4).put("y", 71).put("z", 5)
+                        .put("maxPlaceBlocks", 1);
+                placementOnly.set("allowedPlaceBlocks", Json.MAPPER.createArrayNode().add("minecraft:torch"));
+                accepted = gateway.execute(placementContext,
+                        new ToolCall("survival-navigate-placement", "movement.navigate_survival", placementOnly));
+                assertTrue(accepted.success(), accepted.observation().toString());
+                parameters = peer.lastCommand().path("arguments").path("parameters").path("parameters");
+                assertEquals(0, parameters.path("maxBreakBlocks").asInt());
+                assertTrue(parameters.path("allowedBreakBlocks").isEmpty());
+                assertEquals(1, parameters.path("maxPlaceBlocks").asInt());
+                assertEquals(placementOnly.path("allowedPlaceBlocks"), parameters.path("allowedPlaceBlocks"));
+
+                ToolContext breakContext = new ToolContext("hermes", "survival-session", "c-break");
+                ObjectNode breakOnly = Json.object().put("x", 6).put("y", 72).put("z", 7)
+                        .put("maxBreakBlocks", 1)
+                        .set("allowedBreakBlocks", Json.MAPPER.createArrayNode().add("minecraft:dirt"));
+                accepted = gateway.execute(breakContext,
+                        new ToolCall("survival-navigate-break", "movement.navigate_survival", breakOnly));
+                assertTrue(accepted.success(), accepted.observation().toString());
+                parameters = peer.lastCommand().path("arguments").path("parameters").path("parameters");
+                assertEquals(1, parameters.path("maxBreakBlocks").asInt());
+                assertEquals(breakOnly.path("allowedBreakBlocks"), parameters.path("allowedBreakBlocks"));
+                assertEquals(0, parameters.path("maxPlaceBlocks").asInt());
+                assertTrue(parameters.path("allowedPlaceBlocks").isEmpty());
+
+                ToolContext invalidContext = new ToolContext("hermes", "survival-session", "c-invalid");
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-no-budget",
+                        Json.object().put("x", 3).put("y", 70).put("z", 4));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-break-coupling",
+                        Json.object().put("x", 3).put("y", 70).put("z", 4).put("maxBreakBlocks", 1));
+                ObjectNode invalidBreakReverseCoupling = Json.object().put("x", 3).put("y", 70).put("z", 4)
+                        .put("maxPlaceBlocks", 1);
+                invalidBreakReverseCoupling.set("allowedBreakBlocks",
+                        Json.MAPPER.createArrayNode().add("minecraft:dirt"));
+                invalidBreakReverseCoupling.set("allowedPlaceBlocks",
+                        Json.MAPPER.createArrayNode().add("minecraft:torch"));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-break-reverse-coupling",
+                        invalidBreakReverseCoupling);
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-place-coupling",
+                        Json.object().put("x", 3).put("y", 70).put("z", 4).put("maxPlaceBlocks", 1));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-break-range",
+                        copy(breakOnly).put("maxBreakBlocks", 9));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-place-range",
+                        copy(placementOnly).put("maxPlaceBlocks", -1));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-risk-range",
+                        copy(breakOnly).put("maxRiskUnits", 17));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-block-id",
+                        with(copy(breakOnly), "allowedBreakBlocks",
+                                Json.MAPPER.createArrayNode().add("stone")));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "invalid-place-id",
+                        with(copy(placementOnly), "allowedPlaceBlocks",
+                                Json.MAPPER.createArrayNode().add("torch")));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "empty-allowed-blocks",
+                        with(copy(breakOnly), "allowedBreakBlocks", Json.MAPPER.createArrayNode()));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "duplicate-allowed-blocks",
+                        with(copy(breakOnly), "allowedBreakBlocks", Json.MAPPER.createArrayNode()
+                                .add("minecraft:dirt").add("minecraft:dirt")));
+                assertInvalidSurvivalNavigation(gateway, invalidContext, "unexpected-field",
+                        breakOnly.deepCopy().put("unexpected", true));
+            }
+        }
+    }
+
+    private static void assertInvalidSurvivalNavigation(RuntimeToolGateway gateway, ToolContext context,
+                                                        String callId, JsonNode arguments) {
+        ToolResult result = gateway.execute(context,
+                new ToolCall(callId, "movement.navigate_survival", arguments));
+        assertFalse(result.success(), callId);
+        assertEquals("INVALID_TOOL_ARGUMENTS", result.code(), callId);
+    }
+
+    private static ObjectNode copy(ObjectNode value) {
+        return value.deepCopy();
+    }
+
+    private static ObjectNode with(ObjectNode value, String field, JsonNode child) {
+        value.set(field, child);
+        return value;
     }
 
     @Test

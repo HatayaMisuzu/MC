@@ -9,7 +9,8 @@
       "com.mccompanion.minecraft.v121.RegistryFixtureInitializer"
     ],
     "fabric-gametest": [
-      "com.mccompanion.minecraft.v121.CompanionLifecycleGameTests"
+      "com.mccompanion.minecraft.v121.CompanionLifecycleGameTests",
+      "com.mccompanion.minecraft.v121.DailyActionGameTests"
     ]
   },
   "depends": {

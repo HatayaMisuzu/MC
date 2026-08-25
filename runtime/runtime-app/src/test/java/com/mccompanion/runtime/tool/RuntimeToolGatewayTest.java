@@ -96,6 +96,272 @@ class RuntimeToolGatewayTest {
     }
 
     @Test
+    void dailyActionToolsExposeStrictSchemasAndNormalizeTheStartBehaviorWire() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("daily-actions.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("daily-actions.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                sessions.registerCompanion(session, new CompanionStatus("c-daily", "owner", "daily", "world",
+                                "minecraft:overworld", new PositionDto(0, 64, 0), CompanionBodyState.SPAWNED,
+                                null, null, 0, 0, true, CapabilitySet.empty(), Instant.now()),
+                        Json.object().put("dimension", "minecraft:overworld")
+                                .set("position", Json.object().put("x", 0).put("y", 64).put("z", 0)));
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                List<String> capabilities = List.of("EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle",
+                        "Fish", "FarmCrop", "BreedAnimals", "TradeWithVillager", "EnchantItem", "BrewPotion",
+                        "GlideWithElytra");
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> capabilities);
+                ToolContext context = new ToolContext("hermes", "daily-session", "c-daily");
+                List<String> names = gateway.definitions(context).stream().map(ToolDefinition::name).toList();
+                assertTrue(names.containsAll(List.of("equipment.equip", "equipment.unequip", "equipment.best_tool",
+                        "equipment.best_weapon", "survival.sleep", "survival.wake", "bucket.fill_water",
+                        "bucket.empty_water", "vehicle.mount", "vehicle.travel", "vehicle.dismount",
+                        "fishing.fish", "farming.harvest_replant", "animal.breed", "villager.trade",
+                        "enchanting.apply", "brewing.brew", "elytra.glide")));
+                assertEquals("INVENTORY", definition(gateway.definitions(context), "equipment.equip").permission());
+                assertEquals(Duration.ofMinutes(5), definition(gateway.definitions(context), "fishing.fish").timeout());
+                assertFalse(definition(gateway.definitions(context), "vehicle.travel").idempotent());
+                assertEquals(List.of("item"), required(definition(gateway.definitions(context), "equipment.equip")));
+                assertTrue(java.util.stream.StreamSupport.stream(
+                        definition(gateway.definitions(context), "equipment.equip").inputSchema()
+                                .path("properties").path("slot").path("enum").spliterator(), false)
+                        .anyMatch(value -> value.asText().equals("AUTO")));
+                assertEquals(List.of("crop", "count"), required(definition(gateway.definitions(context), "farming.harvest_replant")));
+                assertEquals(List.of("item", "option", "station"),
+                        required(definition(gateway.definitions(context), "enchanting.apply")));
+
+                var invalidArguments = Json.object();
+                invalidArguments.set("water", Json.object().put("x", 0).put("y", 64).put("z", 0));
+                invalidArguments.put("unexpected", true);
+                ToolResult invalid = gateway.execute(context, new ToolCall("daily-invalid", "fishing.fish",
+                        invalidArguments));
+                assertFalse(invalid.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", invalid.code());
+
+                ToolResult equip = gateway.execute(context, new ToolCall("daily-equip", "equipment.equip",
+                        Json.object().put("item", "minecraft:diamond_helmet").put("slot", "HEAD")));
+                assertTrue(equip.success(), equip.observation().toString());
+                JsonNode parameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("EquipItem", parameters.path("capability").asText());
+                assertEquals("minecraft:diamond_helmet", parameters.path("parameters").path("item").asText());
+                assertEquals("HEAD", parameters.path("parameters").path("hand").asText());
+                assertEquals("EQUIP", parameters.path("parameters").path("action").asText());
+                assertFalse(parameters.path("parameters").has("slotName"));
+            }
+        }
+    }
+
+    @Test
+    void everyDailyActionMacroNormalizesItsCompleteWirePayloadOnAnIndependentTask() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("daily-wire.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("daily-wire.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                List<WireCase> cases = dailyWireCases();
+                for (int index = 0; index < cases.size(); index++) {
+                    String companionId = "daily-wire-" + index;
+                    sessions.registerCompanion(session, new CompanionStatus(companionId, "owner", companionId,
+                                    "world", "minecraft:overworld", new PositionDto(0, 64, 0),
+                                    CompanionBodyState.SPAWNED, null, null, 0, 0, true,
+                                    CapabilitySet.empty(), Instant.now()),
+                            Json.object().put("dimension", "minecraft:overworld")
+                                    .set("position", Json.object().put("x", 0).put("y", 64).put("z", 0)));
+                }
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle", "Fish",
+                                "FarmCrop", "BreedAnimals", "TradeWithVillager", "EnchantItem", "BrewPotion",
+                                "GlideWithElytra"));
+
+                for (int index = 0; index < cases.size(); index++) {
+                    WireCase wireCase = cases.get(index);
+                    ToolContext context = new ToolContext("hermes", "daily-wire-session-" + index,
+                            "daily-wire-" + index);
+                    ToolResult result = gateway.execute(context,
+                            new ToolCall("daily-wire-call-" + index, wireCase.tool(), wireCase.arguments()));
+                    assertTrue(result.success(), wireCase.tool() + ": " + result.observation());
+                    JsonNode outer = peer.lastCommand().path("arguments").path("parameters");
+                    assertEquals(wireCase.capability(), outer.path("capability").asText(), wireCase.tool());
+                    assertEquals(wireCase.parameters(), outer.path("parameters"), wireCase.tool());
+                }
+
+                assertInvalidDailyCall(gateway, "invalid-uuid", "vehicle.mount",
+                        Json.object().put("entityId", "not-a-uuid"));
+                assertInvalidDailyCall(gateway, "invalid-coordinate", "elytra.glide",
+                        Json.object().set("target", position(30_000_001, 64, 0)));
+                assertInvalidDailyCall(gateway, "invalid-count", "farming.harvest_replant",
+                        Json.object().put("crop", "minecraft:wheat").put("count", 0));
+                assertInvalidDailyCall(gateway, "invalid-timeout", "fishing.fish",
+                        Json.object().put("timeout", 2401));
+                assertInvalidDailyCall(gateway, "invalid-fishing-item", "fishing.fish",
+                        Json.object().put("item", "minecraft:carrot_on_a_stick"));
+                assertInvalidDailyCall(gateway, "invalid-bucket-item", "bucket.fill_water",
+                        Json.object().put("item", "minecraft:water_bucket")
+                                .set("source", position(0, 64, 0)));
+                assertInvalidDailyCall(gateway, "missing-vehicle-destination", "vehicle.travel",
+                        Json.object());
+                assertInvalidDailyCall(gateway, "invalid-option", "enchanting.apply",
+                        Json.object().put("item", "minecraft:diamond_sword").put("option", 3)
+                                .set("station", position(0, 64, 0)));
+                assertInvalidDailyCall(gateway, "invalid-extra", "animal.breed",
+                        Json.object().put("entityType", "minecraft:cow").put("unexpected", true));
+                assertInvalidDailyCall(gateway, "invalid-breed-repeat", "animal.breed",
+                        Json.object().put("entityType", "minecraft:cow").put("times", 2));
+                assertInvalidDailyCall(gateway, "invalid-nested-extra", "survival.sleep",
+                        Json.object().set("bed", position(0, 64, 0).put("unexpected", true)));
+                assertInvalidDailyCall(gateway, "invalid-dimension", "survival.sleep",
+                        Json.object().set("bed", position(0, 64, 0).put("dimension", "not a dimension")));
+                assertInvalidDailyCall(gateway, "ambiguous-vehicle", "vehicle.mount",
+                        Json.object().put("entityId", "123e4567-e89b-12d3-a456-426614174000")
+                                .put("vehicleType", "minecraft:oak_boat"));
+            }
+        }
+    }
+
+    private static void assertInvalidDailyCall(RuntimeToolGateway gateway, String callId, String tool,
+                                               JsonNode arguments) {
+        ToolResult result = gateway.execute(new ToolContext("hermes", "invalid-session-" + callId,
+                        "c-invalid-" + callId), new ToolCall(callId, tool, arguments));
+        assertFalse(result.success(), tool);
+        assertEquals("INVALID_TOOL_ARGUMENTS", result.code(), tool);
+    }
+
+    private static List<WireCase> dailyWireCases() {
+        JsonNode bed = position(1, 64, 2);
+        JsonNode station = position(2, 64, 2);
+        JsonNode target = position(8, 70, -3);
+        String first = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
+        String second = "4d9d5793-5f34-4fe6-b5dc-28edf95999aa";
+        return List.of(
+                wire("equipment.equip", Json.object().put("item", "minecraft:diamond_helmet").put("slot", "HEAD"),
+                        "EquipItem", Json.object().put("action", "EQUIP").put("item", "minecraft:diamond_helmet").put("hand", "HEAD")),
+                wire("equipment.unequip", Json.object().put("slot", "OFF_HAND"),
+                        "EquipItem", Json.object().put("action", "UNEQUIP").put("hand", "OFF_HAND")),
+                wire("equipment.best_tool", Json.object().put("block", "minecraft:stone"),
+                        "EquipItem", Json.object().put("item", "minecraft:stone").put("action", "BEST_TOOL")),
+                wire("equipment.best_weapon", Json.object().put("preference", "MELEE"),
+                        "EquipItem", Json.object().put("item", "").put("action", "BEST_WEAPON_MELEE")),
+                wire("survival.sleep", Json.object().set("bed", bed),
+                        "SleepAtBed", Json.object().put("action", "SLEEP").put("quantity", 16).set("target", bed)),
+                wire("survival.wake", Json.object(),
+                        "SleepAtBed", Json.object().put("action", "WAKE")),
+                wire("bucket.fill_water", Json.object().put("item", "minecraft:bucket").set("source", bed),
+                        "UseWaterBucket", Json.object().put("action", "FILL").put("item", "minecraft:bucket")
+                                .set("target", bed)),
+                wire("bucket.empty_water", Json.object().put("item", "minecraft:water_bucket").set("target", bed),
+                        "UseWaterBucket", Json.object().put("action", "EMPTY").put("item", "minecraft:water_bucket")
+                                .set("target", bed)),
+                wire("vehicle.mount", Json.object().put("entityId", first),
+                        "UseVehicle", Json.object().put("action", "MOUNT").put("entityId", first)),
+                wire("vehicle.travel", Json.object().set("destination", target),
+                        "UseVehicle", Json.object().put("action", "TRAVEL").set("target", target)),
+                wire("vehicle.dismount", Json.object(),
+                        "UseVehicle", Json.object().put("action", "DISMOUNT")),
+                wire("fishing.fish", Json.object().put("item", "minecraft:fishing_rod").put("times", 2)
+                                .put("timeout", 2400).set("water", bed),
+                        "Fish", Json.object().put("action", "FISH").put("item", "minecraft:fishing_rod")
+                                .put("quantity", 2).put("durationTicks", 2400).set("target", bed)),
+                wire("farming.harvest_replant", Json.object().put("crop", "minecraft:wheat").put("count", 3)
+                                .put("radius", 4).set("origin", station),
+                        "FarmCrop", Json.object().put("action", "HARVEST_REPLANT").put("item", "minecraft:wheat")
+                                .put("quantity", 3).put("button", 4).set("target", station)),
+                wire("animal.breed", Json.object().put("entityId", first).put("partnerEntityId", second).put("times", 1),
+                        "BreedAnimals", Json.object().put("action", "BREED").put("entityId", first)
+                                .put("partnerEntityId", second).put("quantity", 1)),
+                wire("villager.trade", Json.object().put("villagerId", first).put("offer", 2).put("count", 3),
+                        "TradeWithVillager", Json.object().put("action", "TRADE").put("entityId", first)
+                                .put("slot", 2).put("quantity", 3)),
+                wire("enchanting.apply", Json.object().put("item", "minecraft:diamond_sword").put("option", 1)
+                                .set("station", station),
+                        "EnchantItem", Json.object().put("action", "ENCHANT").put("item", "minecraft:diamond_sword")
+                                .put("slot", 1).set("target", station)),
+                wire("brewing.brew", Json.object().put("ingredient", "minecraft:nether_wart").put("bottles", 3)
+                                .put("timeout", 2400).set("station", station),
+                        "BrewPotion", Json.object().put("action", "BREW").put("item", "minecraft:nether_wart")
+                                .put("quantity", 3).put("durationTicks", 2400).set("target", station)),
+                wire("elytra.glide", Json.object().put("timeout", 2400).set("target", target),
+                        "GlideWithElytra", Json.object().put("action", "GLIDE").put("durationTicks", 2400)
+                                .set("target", target)));
+    }
+
+    @Test
+    void dailyActionSchemasValidateAllTaskGraphAlternativesBeforeDispatch() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("daily-graphs.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("daily-graphs.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CommandService commands = new CommandService(sessions, companions,
+                        new TaskRepository(database, new TaskEventStore(database)), new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions,
+                        ignored -> List.of("UseVehicle", "BreedAnimals", "Fish", "SleepAtBed"));
+                gateway.attachTaskGraphRuntime(new TaskGraphRuntime(gateway,
+                        new TaskGraphExecutionRepository(database)));
+                ToolContext context = new ToolContext("hermes", "daily-graph-session", "c-daily-graph");
+                String first = "123e4567-e89b-12d3-a456-426614174000";
+                String second = "123e4567-e89b-12d3-a456-426614174001";
+
+                assertDailyGraphValidity(gateway, context, "vehicle-by-type", "vehicle.mount", "MOVE",
+                        Json.object().put("vehicleType", "minecraft:oak_boat"), true);
+                assertDailyGraphValidity(gateway, context, "vehicle-by-id", "vehicle.mount", "MOVE",
+                        Json.object().put("entityId", first), true);
+                assertDailyGraphValidity(gateway, context, "vehicle-ambiguous", "vehicle.mount", "MOVE",
+                        Json.object().put("entityId", first).put("vehicleType", "minecraft:oak_boat"), false);
+                assertDailyGraphValidity(gateway, context, "breed-by-type", "animal.breed", "INTERACT",
+                        Json.object().put("entityType", "minecraft:cow"), true);
+                assertDailyGraphValidity(gateway, context, "breed-by-id", "animal.breed", "INTERACT",
+                        Json.object().put("entityId", first).put("partnerEntityId", second), true);
+                assertDailyGraphValidity(gateway, context, "breed-ambiguous", "animal.breed", "INTERACT",
+                        Json.object().put("entityType", "minecraft:cow").put("entityId", first)
+                                .put("partnerEntityId", second), false);
+                assertDailyGraphValidity(gateway, context, "fish-const", "fishing.fish", "INTERACT",
+                        Json.object().put("item", "minecraft:stick"), false);
+                assertDailyGraphValidity(gateway, context, "sleep-nested-extra", "survival.sleep", "SURVIVAL",
+                        Json.object().set("bed", position(0, 64, 0).put("unexpected", true)), false);
+                assertDailyGraphValidity(gateway, context, "sleep-dimension-pattern", "survival.sleep", "SURVIVAL",
+                        Json.object().set("bed", position(0, 64, 0).put("dimension", "not a dimension")), false);
+            }
+        }
+    }
+
+    private static void assertDailyGraphValidity(RuntimeToolGateway gateway, ToolContext context,
+                                                 String id, String tool, String permission,
+                                                 JsonNode arguments, boolean expectedValid) {
+        var graph = Json.object().put("version", "mcac-task-graph/1").put("id", id);
+        graph.putArray("permissions").add(permission);
+        graph.set("root", Json.object().put("id", "action").put("type", "call_tool")
+                .put("tool", tool).set("arguments", arguments));
+        ToolResult result = gateway.execute(context, new ToolCall("validate-" + id,
+                "task_graph.validate", Json.object().set("graph", graph)));
+        assertEquals(expectedValid, result.success(), id + ": " + result.observation());
+        assertEquals(expectedValid, result.observation().path("valid").asBoolean(), id);
+    }
+
+    private static WireCase wire(String tool, JsonNode arguments, String capability, JsonNode parameters) {
+        return new WireCase(tool, arguments, capability, parameters);
+    }
+
+    private static com.fasterxml.jackson.databind.node.ObjectNode position(int x, int y, int z) {
+        return Json.object().put("dimension", "minecraft:overworld").put("x", x).put("y", y).put("z", z);
+    }
+
+    private record WireCase(String tool, JsonNode arguments, String capability, JsonNode parameters) { }
+
+    @Test
     void validatesExternalTaskGraphsWithoutExecutingThem() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("graph.db"));
              RuntimeLog log = new RuntimeLog(temporary.resolve("graph.log"), false, new Redactor())) {

@@ -1,6 +1,7 @@
 package com.mccompanion.minecraft.v120;
 
 import com.mccompanion.core.body.BodyControlArbiter;
+import com.mccompanion.core.body.daily.DailyActionEngine;
 import com.mccompanion.core.navigation.GridPathPlanner;
 import java.util.HashMap;
 import java.util.List;
@@ -58,6 +59,7 @@ final class BehaviorDirector {
     private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
     private final ReflexController reflexController = new ReflexController();
     private final BodyControlArbiter controlArbiter = new BodyControlArbiter();
+    private final DailyActionController dailyActions;
     private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
     private final Map<UUID, PrimitiveProgress> primitives = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
@@ -67,21 +69,52 @@ final class BehaviorDirector {
         this.server = server;
         this.savedData = savedData;
         this.logger = logger;
+        this.dailyActions = new DailyActionController(server, actionGateway);
     }
 
     void start(CompanionEntry entry, CompanionPlayer body) {
+        supersedeDailyAction(entry, body);
+        observations.remove(entry.companionId);
         navigation.put(entry.companionId, new NavigationProgress(server.getTickCount()));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
+        supersedeDailyAction(entry, body);
         observations.remove(entry.companionId);
+        if (DailyActionController.supports(parameters.capability())) {
+            dailyActions.start(entry.companionId, entry.runtimeBehaviorId, body, parameters);
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
         primitives.put(entry.companionId, new PrimitiveProgress(parameters, server.getTickCount()));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
+    private void supersedeDailyAction(CompanionEntry entry, CompanionPlayer body) {
+        if (!dailyActions.active(entry.companionId)) return;
+        dailyActions.cancel(entry.companionId, body, "SUPERSEDED");
+        actionGateway.completeBehavior(body, false, "SUPERSEDED", server.getTickCount());
+    }
+
+    void validateSkill(CompanionPlayer body, SkillParameters parameters) {
+        if (DailyActionController.supports(parameters.capability())) dailyActions.validate(body, parameters);
+    }
+
+    boolean canResumeSkill(UUID companionId) {
+        return dailyActions.active(companionId) || primitives.containsKey(companionId);
+    }
+
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
-        if (!primitives.containsKey(entry.companionId)) {
+        if (dailyActions.active(entry.companionId)) {
+            DailyActionEngine.Observation dailyObservation = dailyActions.resume(entry.companionId, body);
+            if (dailyObservation != null) {
+                observations.put(entry.companionId, dailyObservation(dailyObservation));
+            }
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
+        if (!canResumeSkill(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
@@ -92,10 +125,18 @@ final class BehaviorDirector {
         actionGateway.stopInput(body);
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
         navigation.remove(entry.companionId);
-        if (success || !(code.equals("RUNTIME_PAUSE")
-                || code.equals("RUNTIME_DISCONNECTED")
-                || code.equals("RUNTIME_OFFLINE")
-                || code.equals("LEASE_EXPIRED"))) {
+        if (dailyActions.active(entry.companionId)) {
+            DailyActionEngine.Observation dailyObservation;
+            if (success || !isSuspension(code)) {
+                dailyObservation = dailyActions.cancel(entry.companionId, body, code);
+            } else {
+                dailyObservation = dailyActions.pause(entry.companionId, body, code);
+            }
+            if (dailyObservation != null) {
+                observations.put(entry.companionId, dailyObservation(dailyObservation));
+            }
+        }
+        if (success || !isSuspension(code)) {
             primitives.remove(entry.companionId);
         }
         if ((success || !isSuspension(code))
@@ -139,6 +180,7 @@ final class BehaviorDirector {
     void forget(UUID companionId) {
         navigation.remove(companionId);
         primitives.remove(companionId);
+        dailyActions.cancel(companionId, null, "FORGOTTEN");
         observations.remove(companionId);
         MenuSessionTracker.invalidate(companionId);
         actionGateway.discard(companionId);
@@ -170,6 +212,10 @@ final class BehaviorDirector {
             return;
         }
         if (entry.mode == CompanionEntry.Mode.SKILL) {
+            if (dailyActions.active(entry.companionId)) {
+                tickDaily(entry, body);
+                return;
+            }
             tickPrimitive(entry, body);
             return;
         }
@@ -197,6 +243,43 @@ final class BehaviorDirector {
         }
 
         tickNavigation(entry, body, target, arrivalDistanceSquared);
+    }
+
+    private void tickDaily(CompanionEntry entry, CompanionPlayer body) {
+        DailyActionEngine.TickResult result;
+        try {
+            result = dailyActions.tick(entry.companionId, body);
+        } catch (RuntimeException failure) {
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            entry.hasTarget = false;
+            savedData.changed();
+            stop(entry, body, false, "DAILY_ACTION_ERROR");
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "DAILY_ACTION_ERROR", "", 0, 0, java.util.List.of(),
+                    java.util.Map.of("exception", failure.getClass().getSimpleName())));
+            return;
+        }
+        DailyActionEngine.Observation observation = result.observation();
+        observations.put(entry.companionId, dailyObservation(observation));
+        switch (result.session().status()) {
+            case COMPLETE, BLOCKED, UNCERTAIN, CANCELLED -> {
+                boolean success = result.session().status() == DailyActionEngine.Status.COMPLETE;
+                stop(entry, body, success, observation.code());
+                entry.mode = CompanionEntry.Mode.IDLE;
+                entry.resumeMode = CompanionEntry.Mode.IDLE;
+                entry.hasTarget = false;
+                savedData.changed();
+            }
+            default -> { }
+        }
+    }
+
+    private static CompanionRegistry.BehaviorObservation dailyObservation(
+            DailyActionEngine.Observation daily) {
+        var mapped = com.mccompanion.core.body.daily.DailyActionOutcome.forRuntime(daily);
+        return new CompanionRegistry.BehaviorObservation(
+                mapped.code(), "", 0, 0, java.util.List.of(), mapped.details());
     }
 
     private void tickNavigation(
@@ -1544,7 +1627,8 @@ final class BehaviorDirector {
     private static boolean isSuspension(String code) {
         return code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
                 || code.equals("RUNTIME_OFFLINE") || code.equals("LEASE_EXPIRED")
-                || code.equals("PAUSED_BY_OWNER");
+                || code.equals("PAUSED_BY_OWNER") || code.equals("LOW_HEALTH")
+                || code.equals("ENVIRONMENT_HAZARD") || code.equals("DROWNING_RISK");
     }
 
     private static final class NavigationProgress {

@@ -4,7 +4,7 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
                               String dimension, Integer x, Integer y, Integer z,
                               String targetId, String face, String hand,
                               String sessionToken, Integer slot, Integer button, String menuAction,
-                              Integer durationTicks) {
+                              Integer durationTicks, String secondaryTargetId) {
     public SkillParameters {
         capability = capability == null ? "" : capability;
         itemId = itemId == null ? "" : itemId;
@@ -14,7 +14,18 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
         hand = hand == null || hand.isBlank() ? "MAIN_HAND" : hand;
         sessionToken = sessionToken == null ? "" : sessionToken;
         menuAction = menuAction == null ? "" : menuAction;
+        secondaryTargetId = secondaryTargetId == null ? "" : secondaryTargetId;
         if (quantity < 1 || quantity > 2304) throw new IllegalArgumentException("quantity must be 1..2304");
+    }
+
+    /** Compatibility constructor for the pre-partner-entity wire shape. */
+    public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
+                           String dimension, Integer x, Integer y, Integer z,
+                           String targetId, String face, String hand,
+                           String sessionToken, Integer slot, Integer button, String menuAction,
+                           Integer durationTicks) {
+        this(capability, itemId, quantity, allowPartial, dimension, x, y, z, targetId, face, hand,
+                sessionToken, slot, button, menuAction, durationTicks, "");
     }
 
     public SkillParameters(String capability, String itemId, int quantity, boolean allowPartial) {

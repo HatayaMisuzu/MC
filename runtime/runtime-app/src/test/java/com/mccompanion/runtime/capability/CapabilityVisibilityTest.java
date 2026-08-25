@@ -41,6 +41,22 @@ class CapabilityVisibilityTest {
     }
 
     @Test
+    void exposesDailyActionCapabilitiesWhenTheConnectedBodyDeclaresThem() {
+        var capabilities = Json.object().put("EquipItem", true).put("SleepAtBed", true)
+                .put("UseWaterBucket", true).put("UseVehicle", true).put("Fish", true)
+                .put("FarmCrop", true).put("BreedAnimals", true).put("TradeWithVillager", true)
+                .put("EnchantItem", true).put("BrewPotion", true).put("GlideWithElytra", true);
+        var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
+
+        var snapshot = visibility.resolve(handshake("fabric", "1.21.1", capabilities), status);
+
+        assertEquals(List.of("BreedAnimals", "BrewPotion", "EnchantItem", "EquipItem", "FarmCrop",
+                        "Fish", "GlideWithElytra", "SleepAtBed", "TradeWithVillager", "UseVehicle",
+                        "UseWaterBucket").stream().sorted().toList(),
+                snapshot.availableNames().stream().filter(name -> capabilities.has(name)).sorted().toList());
+    }
+
+    @Test
     void distinguishesImplementedConnectedBlockedAndUnsupportedStates() {
         var disconnected = visibility.resolve(null, Json.object());
         assertEquals("IMPLEMENTED", disconnected.toJson().path("NavigateTo").path("state").asText());

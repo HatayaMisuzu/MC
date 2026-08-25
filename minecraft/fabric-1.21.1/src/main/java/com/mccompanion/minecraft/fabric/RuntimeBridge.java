@@ -176,6 +176,17 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("DefendOwner", true)
                 .put("DeliverItem", true)
                 .put("EatAndRecover", true)
+                .put("EquipItem", true)
+                .put("SleepAtBed", true)
+                .put("UseWaterBucket", true)
+                .put("UseVehicle", true)
+                .put("Fish", true)
+                .put("FarmCrop", true)
+                .put("BreedAnimals", true)
+                .put("TradeWithVillager", true)
+                .put("EnchantItem", true)
+                .put("BrewPotion", true)
+                .put("GlideWithElytra", true)
                 .put("runtime_safe_idle", true);
         ObjectNode hello = JSON.createObjectNode().put("protocol", PROTOCOL).put("type", "hello");
         hello.set("payload", payload);
@@ -432,7 +443,8 @@ final class RuntimeBridge implements AutoCloseable {
                 values.path("button").canConvertToInt() ? values.path("button").asInt() : null,
                 values.path("action").asText(""),
                 values.path("durationTicks").canConvertToInt()
-                        ? values.path("durationTicks").asInt() : null); }
+                        ? values.path("durationTicks").asInt() : null,
+                values.path("partnerEntityId").asText("")); }
         catch (IllegalArgumentException invalid) { return null; }
     }
 
@@ -469,11 +481,16 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("tick", server.getTickCount())
                 .put("progress", 0.0D)
                 .put("occurredAt", Instant.now().toString());
-        payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        ObjectNode eventSnapshot = payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)
+                        && (value.behaviorId() == null || result.behaviorId().equals(value.behaviorId())))
+                .findFirst()
+                .ifPresent(value -> {
+                    appendRuntimeSnapshot(eventSnapshot, value);
+                    appendBehaviorObservation(eventSnapshot, value.behaviorObservation());
+                });
         sendEnvelope("behavior_event", payload);
-        if (result.behaviorId() != null) {
-            observedBehaviorStates.put(companionId + ':' + result.behaviorId(), result.state().toUpperCase(Locale.ROOT));
-        }
     }
 
     private long currentEpoch(String companionId) {
@@ -524,6 +541,18 @@ final class RuntimeBridge implements AutoCloseable {
             ObjectNode inventory = status.putObject("inventory").put("freeSlots", snapshot.freeInventorySlots());
             ObjectNode counts = inventory.putObject("counts");
             snapshot.inventory().forEach(counts::put);
+            putFacts(status, "equipment", snapshot.equipment());
+            putFacts(status, "vehicle", snapshot.vehicle());
+            putFacts(status, "menu", snapshot.menu());
+            putFacts(status, "sleep", snapshot.sleep());
+            putFacts(status, "fishing", snapshot.fish());
+            putFacts(status, "glide", snapshot.glide());
+            putFacts(status, "bucket", snapshot.bucket());
+            putFacts(status, "crop", snapshot.crop());
+            putFacts(status, "breed", snapshot.breed());
+            putFacts(status, "trade", snapshot.trade());
+            putFacts(status, "enchant", snapshot.enchant());
+            putFacts(status, "brew", snapshot.brew());
             ArrayNode knownContainers = status.putArray("observedContainers");
             snapshot.visibleContainers().forEach(container -> knownContainers.addObject()
                     .put("type", container.type()).put("dimension", container.dimension())
@@ -547,18 +576,68 @@ final class RuntimeBridge implements AutoCloseable {
         String previous = observedBehaviorStates.put(key, current);
         if (previous == null || previous.equals(current)) return;
         if (current.equals("IDLE")) {
+            String failure = terminalFailure(snapshot);
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("positionX", snapshot.x()).put("positionY", snapshot.y()).put("positionZ", snapshot.z())
                     .put("evidence", snapshot.evidenceSummary());
+            appendRuntimeSnapshot(evidence, snapshot);
             appendBehaviorObservation(evidence, snapshot.behaviorObservation());
-            sendObservedBehaviorEvent(snapshot, "completed", "completed", 1.0D, null, evidence);
+            if (failure == null) {
+                sendObservedBehaviorEvent(snapshot, "completed", "completed", 1.0D, null, evidence);
+            } else {
+                evidence.put("failureCode", failure);
+                sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, failure, evidence);
+            }
         } else if (current.equals("PAUSED") && previous.equals("RUNNING")) {
             String failure = failureCode(snapshot.evidenceSummary());
             ObjectNode evidence = JSON.createObjectNode().put("controlEpoch", snapshot.controlEpoch())
                     .put("failureCode", failure).put("evidence", snapshot.evidenceSummary());
+            appendRuntimeSnapshot(evidence, snapshot);
             appendBehaviorObservation(evidence, snapshot.behaviorObservation());
             sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D, failure, evidence);
         }
+    }
+
+    /**
+     * Copies the already observed body state into terminal behavior events.  Keep the legacy
+     * positionX/Y/Z and controlEpoch fields above: Runtime uses them for reconciliation.  The
+     * structured fields mirror companion_list so a terminal TaskEvent is self-contained and
+     * never has to infer success from the command acknowledgement.
+     */
+    private void appendRuntimeSnapshot(ObjectNode evidence, CompanionRegistry.RuntimeSnapshot snapshot) {
+        evidence.put("worldId", worldId())
+                .put("ownerId", snapshot.ownerId())
+                .put("displayName", snapshot.displayName())
+                .put("dimension", snapshot.dimension())
+                .put("bodyState", snapshot.bodyState().toLowerCase(Locale.ROOT))
+                .put("behaviorId", snapshot.behaviorId())
+                .put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT))
+                .put("behaviorRevision", snapshot.behaviorRevision())
+                .put("runtimeConnected", snapshot.runtimeConnected());
+        evidence.putObject("position").put("x", snapshot.x()).put("y", snapshot.y()).put("z", snapshot.z());
+        evidence.putObject("vitals").put("health", snapshot.health()).put("maxHealth", snapshot.maxHealth())
+                .put("food", snapshot.foodLevel()).put("air", snapshot.airSupply())
+                .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava());
+        ObjectNode inventory = evidence.putObject("inventory").put("freeSlots", snapshot.freeInventorySlots());
+        ObjectNode counts = inventory.putObject("counts");
+        snapshot.inventory().forEach(counts::put);
+        putFacts(evidence, "equipment", snapshot.equipment());
+        putFacts(evidence, "vehicle", snapshot.vehicle());
+        putFacts(evidence, "menu", snapshot.menu());
+        putFacts(evidence, "sleep", snapshot.sleep());
+        putFacts(evidence, "fishing", snapshot.fish());
+        putFacts(evidence, "glide", snapshot.glide());
+        putFacts(evidence, "bucket", snapshot.bucket());
+        putFacts(evidence, "crop", snapshot.crop());
+        putFacts(evidence, "breed", snapshot.breed());
+        putFacts(evidence, "trade", snapshot.trade());
+        putFacts(evidence, "enchant", snapshot.enchant());
+        putFacts(evidence, "brew", snapshot.brew());
+        ArrayNode containers = evidence.putArray("observedContainers");
+        snapshot.visibleContainers().forEach(container -> containers.addObject()
+                .put("type", container.type()).put("dimension", container.dimension())
+                .put("x", container.x()).put("y", container.y()).put("z", container.z())
+                .put("verified", true));
     }
 
     private static void appendBehaviorObservation(ObjectNode evidence,
@@ -573,6 +652,13 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("block", candidate.block()).put("dimension", candidate.dimension())
                 .put("x", candidate.x()).put("y", candidate.y()).put("z", candidate.z())
                 .put("distanceSquared", candidate.distanceSquared()));
+        ObjectNode details = evidence.putObject("details");
+        observation.details().forEach(details::put);
+    }
+
+    private static void putFacts(ObjectNode parent, String name, java.util.Map<String, String> facts) {
+        ObjectNode object = parent.putObject(name);
+        facts.forEach(object::put);
     }
 
     private void sendObservedBehaviorEvent(CompanionRegistry.RuntimeSnapshot snapshot, String event, String state,
@@ -594,6 +680,18 @@ final class RuntimeBridge implements AutoCloseable {
         start += "failure=".length();
         int end = evidence.indexOf(' ', start);
         return evidence.substring(start, end < 0 ? evidence.length() : end);
+    }
+
+    private static String terminalFailure(CompanionRegistry.RuntimeSnapshot snapshot) {
+        String evidence = snapshot.evidenceSummary();
+        if (evidence != null && evidence.contains("success=true")) return null;
+        String failure = failureCode(evidence);
+        if (!failure.equals("ACTION_BLOCKED") && !failure.equals("NONE")) return failure;
+        CompanionRegistry.BehaviorObservation observation = snapshot.behaviorObservation();
+        if (observation == null || observation.failureCode().isBlank()
+                || observation.failureCode().equals("NONE")
+                || observation.failureCode().equals("VERIFIED")) return null;
+        return observation.failureCode();
     }
 
     private void sendEnvelope(String type, JsonNode payload) {

@@ -52,6 +52,9 @@ public final class ToolInputSchemaValidator {
             }
             if (!matched) add(violations, path, "ENUM", "value is not an allowed enum member");
         }
+        if (schema.has("const") && !schema.path("const").equals(value)) {
+            add(violations, path, "CONST", "value does not match the declared constant");
+        }
         String type = schema.path("type").asText("");
         if (!type.isBlank() && !matchesType(type, value)) {
             add(violations, path, "TYPE", "expected " + type);
@@ -121,6 +124,15 @@ public final class ToolInputSchemaValidator {
         int length = value.asText().length();
         if (length < minimum || length > maximum) {
             add(violations, path, "STRING_LENGTH", "string length is outside the declared bounds");
+        }
+        if (schema.path("pattern").isTextual()) {
+            try {
+                if (!Pattern.compile(schema.path("pattern").asText()).matcher(value.asText()).find()) {
+                    add(violations, path, "PATTERN", "string does not match the declared pattern");
+                }
+            } catch (RuntimeException invalidPattern) {
+                add(violations, path, "PATTERN", "schema pattern is invalid");
+            }
         }
     }
 

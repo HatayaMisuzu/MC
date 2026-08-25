@@ -61,6 +61,40 @@ final class PlayerActionGateway {
         actionPaths.put(body.getUUID(), "VANILLA_SERVER_PLAYER_DROP");
     }
 
+    void selectHotbarSlot(CompanionPlayer body, int slot) {
+        body.getInventory().selected = slot;
+        actionPaths.put(body.getUUID(), "VANILLA_HOTBAR_INPUT");
+    }
+
+    void applyVehicleInput(CompanionPlayer body, net.minecraft.world.entity.vehicle.Boat boat,
+                           float yaw, boolean left, boolean right, boolean forward, boolean back) {
+        float appliedYaw = net.minecraft.util.Mth.approachDegrees(boat.getYRot(), yaw, 4.0F);
+        body.setYRot(appliedYaw);
+        body.setYHeadRot(appliedYaw);
+        boat.setYRot(appliedYaw);
+        boat.setInput(left, right, forward, back);
+        boat.setPaddleState(forward && !right, forward && !left);
+        if (forward || back) {
+            double thrust = forward ? 0.04D : -0.005D;
+            float radians = appliedYaw * net.minecraft.util.Mth.DEG_TO_RAD;
+            net.minecraft.world.phys.Vec3 movement = boat.getDeltaMovement().add(
+                    -net.minecraft.util.Mth.sin(radians) * thrust, 0.0D,
+                    net.minecraft.util.Mth.cos(radians) * thrust);
+            double horizontal = movement.x * movement.x + movement.z * movement.z;
+            if (horizontal > 0.1225D) {
+                double scale = 0.35D / Math.sqrt(horizontal);
+                movement = new net.minecraft.world.phys.Vec3(
+                        movement.x * scale, movement.y, movement.z * scale);
+            }
+            boat.setDeltaMovement(movement);
+            boat.move(net.minecraft.world.entity.MoverType.SELF, movement);
+        } else {
+            net.minecraft.world.phys.Vec3 movement = boat.getDeltaMovement();
+            boat.setDeltaMovement(0.0D, movement.y, 0.0D);
+        }
+        actionPaths.put(body.getUUID(), "VANILLA_VEHICLE_INPUT");
+    }
+
     void completeBehavior(CompanionPlayer body, boolean success, String failureCode, long tick) {
         InFlight started = inFlight.remove(body.getUUID());
         if (started == null) {

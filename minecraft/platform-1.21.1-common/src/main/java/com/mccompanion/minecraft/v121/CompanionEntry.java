@@ -28,6 +28,7 @@ final class CompanionEntry {
     long runtimeEpoch;
     String runtimeBehaviorId;
     long runtimeBehaviorRevision;
+    boolean skillRecoveryRequired;
 
     CompanionEntry(UUID companionId, UUID ownerId, String profileName) {
         this.companionId = Objects.requireNonNull(companionId, "companionId");

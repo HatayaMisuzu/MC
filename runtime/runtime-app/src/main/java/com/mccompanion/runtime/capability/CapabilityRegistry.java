@@ -32,6 +32,12 @@ public final class CapabilityRegistry {
                 implemented("CraftItem", RiskLevel.LOW), implemented("SmeltItem", RiskLevel.LOW),
                 implemented("DeliverItem", RiskLevel.LOW), implemented("EatAndRecover", RiskLevel.LOW),
                 implemented("DefendOwner", RiskLevel.MEDIUM), implemented("RetreatFromDanger", RiskLevel.LOW),
+                implemented("EquipItem", RiskLevel.MEDIUM), implemented("SleepAtBed", RiskLevel.LOW),
+                implemented("UseWaterBucket", RiskLevel.MEDIUM), implemented("UseVehicle", RiskLevel.MEDIUM),
+                implemented("Fish", RiskLevel.LOW), implemented("FarmCrop", RiskLevel.MEDIUM),
+                implemented("BreedAnimals", RiskLevel.LOW), implemented("TradeWithVillager", RiskLevel.MEDIUM),
+                implemented("EnchantItem", RiskLevel.MEDIUM), implemented("BrewPotion", RiskLevel.MEDIUM),
+                implemented("GlideWithElytra", RiskLevel.MEDIUM),
                 capability("BuildSmallBlueprint", RiskLevel.HIGH)));
     }
 

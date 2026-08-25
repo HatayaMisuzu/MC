@@ -173,6 +173,17 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("RetreatFromDanger", true)
                 .put("CraftItem", true)
                 .put("SmeltItem", true)
+                .put("EquipItem", true)
+                .put("SleepAtBed", true)
+                .put("UseWaterBucket", true)
+                .put("UseVehicle", true)
+                .put("Fish", true)
+                .put("FarmCrop", true)
+                .put("BreedAnimals", true)
+                .put("TradeWithVillager", true)
+                .put("EnchantItem", true)
+                .put("BrewPotion", true)
+                .put("GlideWithElytra", true)
                 .put("player_text_gateway", true)
                 .put("owner_activity_handoff", true)
                 .put("runtime_safe_idle", true);
@@ -435,7 +446,8 @@ final class RuntimeBridge implements AutoCloseable {
                     values.path("action").asText(""),
                     values.path("durationTicks").canConvertToInt()
                             ? values.path("durationTicks").asInt()
-                            : null);
+                            : null,
+                    values.path("partnerEntityId").asText(""));
         } catch (IllegalArgumentException invalid) {
             return null;
         }
@@ -473,7 +485,15 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("tick", server.getTickCount())
                 .put("progress", 0.0D)
                 .put("occurredAt", Instant.now().toString());
-        payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        ObjectNode eventSnapshot = payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)
+                        && (value.behaviorId() == null || result.behaviorId().equals(value.behaviorId())))
+                .findFirst()
+                .ifPresent(value -> {
+                    appendRuntimeSnapshot(eventSnapshot, value);
+                    appendBehaviorObservation(eventSnapshot, value.behaviorObservation());
+                });
         sendEnvelope("behavior_event", payload);
     }
 
@@ -534,6 +554,12 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("freeSlots", snapshot.freeInventorySlots())
                     .putObject("counts");
             snapshot.inventory().forEach(counts::put);
+            putFacts(status,"equipment",snapshot.equipment());putFacts(status,"vehicle",snapshot.vehicle());
+            putFacts(status,"menu",snapshot.menu());putFacts(status,"sleep",snapshot.sleep());
+            putFacts(status,"fishing",snapshot.fish());putFacts(status,"glide",snapshot.glide());
+            putFacts(status,"bucket",snapshot.bucket());putFacts(status,"crop",snapshot.crop());
+            putFacts(status,"breed",snapshot.breed());putFacts(status,"trade",snapshot.trade());
+            putFacts(status,"enchant",snapshot.enchant());putFacts(status,"brew",snapshot.brew());
             // Connected Tool availability is negotiated by the hello capability flags. The status
             // protocol field is a map of structured CapabilityDescriptor values, not booleans.
             status.putObject("capabilities");
@@ -554,7 +580,12 @@ final class RuntimeBridge implements AutoCloseable {
         String previous = observedBehaviorStates.put(key, current);
         if (previous == null || previous.equals(current)) return;
         if (current.equals("IDLE")) {
-            sendObservedBehaviorEvent(snapshot, "completed", "completed", 1.0D, null);
+            String failure = terminalFailure(snapshot);
+            sendObservedBehaviorEvent(snapshot,
+                    failure == null ? "completed" : "blocked",
+                    failure == null ? "completed" : "blocked",
+                    failure == null ? 1.0D : 0.0D,
+                    failure);
         } else if (current.equals("PAUSED") && previous.equals("RUNNING")) {
             sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D,
                     failureCode(snapshot.evidenceSummary()));
@@ -573,6 +604,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("positionY", snapshot.y())
                 .put("positionZ", snapshot.z())
                 .put("evidence", snapshot.evidenceSummary());
+        appendRuntimeSnapshot(evidence, snapshot);
         appendBehaviorObservation(evidence, snapshot.behaviorObservation());
         if (failureCode != null) evidence.put("failureCode", failureCode);
         ObjectNode payload = JSON.createObjectNode()
@@ -594,6 +626,42 @@ final class RuntimeBridge implements AutoCloseable {
         registry.recordRuntimeLifecyclePublished(snapshot.behaviorId());
     }
 
+    /**
+     * Copies the already observed body state into terminal behavior events. Keep the legacy
+     * positionX/Y/Z and controlEpoch fields for Runtime reconciliation, while mirroring the
+     * companion_list shape so a terminal TaskEvent is self-contained.
+     */
+    private void appendRuntimeSnapshot(ObjectNode evidence, CompanionRegistry.RuntimeSnapshot snapshot) {
+        evidence.put("worldId", worldId())
+                .put("ownerId", snapshot.ownerId())
+                .put("displayName", snapshot.displayName())
+                .put("dimension", snapshot.dimension())
+                .put("bodyState", snapshot.bodyState().toLowerCase(Locale.ROOT))
+                .put("behaviorId", snapshot.behaviorId())
+                .put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT))
+                .put("behaviorRevision", snapshot.behaviorRevision())
+                .put("runtimeConnected", snapshot.runtimeConnected());
+        evidence.putObject("position").put("x", snapshot.x()).put("y", snapshot.y()).put("z", snapshot.z());
+        evidence.putObject("vitals").put("health", snapshot.health()).put("maxHealth", snapshot.maxHealth())
+                .put("food", snapshot.foodLevel()).put("air", snapshot.airSupply())
+                .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava());
+        ObjectNode inventory = evidence.putObject("inventory").put("freeSlots", snapshot.freeInventorySlots());
+        ObjectNode counts = inventory.putObject("counts");
+        snapshot.inventory().forEach(counts::put);
+        putFacts(evidence, "equipment", snapshot.equipment());
+        putFacts(evidence, "vehicle", snapshot.vehicle());
+        putFacts(evidence, "menu", snapshot.menu());
+        putFacts(evidence, "sleep", snapshot.sleep());
+        putFacts(evidence, "fishing", snapshot.fish());
+        putFacts(evidence, "glide", snapshot.glide());
+        putFacts(evidence, "bucket", snapshot.bucket());
+        putFacts(evidence, "crop", snapshot.crop());
+        putFacts(evidence, "breed", snapshot.breed());
+        putFacts(evidence, "trade", snapshot.trade());
+        putFacts(evidence, "enchant", snapshot.enchant());
+        putFacts(evidence, "brew", snapshot.brew());
+    }
+
     private static void appendBehaviorObservation(
             ObjectNode evidence,
             CompanionRegistry.BehaviorObservation observation) {
@@ -610,7 +678,11 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("y", candidate.y())
                 .put("z", candidate.z())
                 .put("distanceSquared", candidate.distanceSquared()));
+        ObjectNode details = evidence.putObject("details");
+        observation.details().forEach(details::put);
     }
+
+    private static void putFacts(ObjectNode parent,String name,java.util.Map<String,String> facts){ObjectNode object=parent.putObject(name);facts.forEach(object::put);}
 
     private static String failureCode(String evidence) {
         if (evidence == null) return "ACTION_BLOCKED";
@@ -619,6 +691,18 @@ final class RuntimeBridge implements AutoCloseable {
         start += "failure=".length();
         int end = evidence.indexOf(' ', start);
         return evidence.substring(start, end < 0 ? evidence.length() : end);
+    }
+
+    private static String terminalFailure(CompanionRegistry.RuntimeSnapshot snapshot) {
+        String evidence = snapshot.evidenceSummary();
+        if (evidence != null && evidence.contains("success=true")) return null;
+        String failure = failureCode(evidence);
+        if (!failure.equals("ACTION_BLOCKED") && !failure.equals("NONE")) return failure;
+        CompanionRegistry.BehaviorObservation observation = snapshot.behaviorObservation();
+        if (observation == null || observation.failureCode().isBlank()
+                || observation.failureCode().equals("NONE")
+                || observation.failureCode().equals("VERIFIED")) return null;
+        return observation.failureCode();
     }
 
     private void deliverConversationEvent(JsonNode payload) {

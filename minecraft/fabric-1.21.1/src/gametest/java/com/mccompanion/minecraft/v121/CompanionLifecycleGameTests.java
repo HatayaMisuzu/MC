@@ -2501,6 +2501,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         BlockPos unknownContainerPos = recovered.blockPosition().offset(-2, 0, 0);
                         recovered.serverLevel().setBlockAndUpdate(unknownContainerPos,
                                 RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
+                        recovered.getInventory().add(new ItemStack(Items.IRON_HELMET));
                         int ownerIronBaseline = count(owner, Items.IRON_INGOT);
                         LOGGER.info("runtime_e2e_ready companion={} chest={},{},{} unknown={},{},{}",
                                 recovered.getUUID(), shortageChestPos.getX(), shortageChestPos.getY(), shortageChestPos.getZ(),

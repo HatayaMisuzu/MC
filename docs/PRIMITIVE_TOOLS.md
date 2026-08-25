@@ -70,6 +70,34 @@ capture their actual Mod protocol payloads, including unknown namespaced IDs. Ex
 GameTests verify the shared movement, mining, pickup, and container executors; direct per-alias
 Runtime/Fabric E2E remains part of the RC gap.
 
+## Daily player action macros
+
+Ordinary player actions that need several body ticks or menu transitions are exposed as bounded
+macro Tools, not as LLM-driven click loops:
+
+| Capability | Tools |
+|---|---|
+| Equipment | `equipment.equip`, `equipment.unequip`, `equipment.best_tool`, `equipment.best_weapon` |
+| Sleep | `survival.sleep`, `survival.wake` |
+| Water bucket | `bucket.fill_water`, `bucket.empty_water` |
+| Vehicles | `vehicle.mount`, `vehicle.travel`, `vehicle.dismount` |
+| Fishing and farming | `fishing.fish`, `farming.harvest_replant` |
+| Animals and villagers | `animal.breed`, `villager.trade` |
+| Stations | `enchanting.apply`, `brewing.brew` |
+| Elytra | `elytra.glide` |
+
+All 18 Tools are capability-gated by the connected Loader handshake, non-idempotent, bound to the
+existing durable task/lease lifecycle, and limited to five minutes. Schemas require typed positions,
+UUIDs, slots, options and bounded quantities; breeding deliberately supports one verified cycle per
+call because vanilla parents cannot immediately breed again.
+
+The shared daily-action engine owns target identity, deterministic phases, pause/cancel handling,
+timeouts and postconditions. Loader modules adapt those commands to the target Minecraft version's
+real `ServerPlayer`, inventory menu, vehicle, fishing hook and station-menu APIs. A successful Tool
+result therefore contains observed body/world facts; an unverified effect is returned as
+`UNCERTAIN_EFFECT`. Task Graphs may compose these Tools directly, but do not perform per-tick menu or
+fish-bobber control.
+
 Still required for RC:
 
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;

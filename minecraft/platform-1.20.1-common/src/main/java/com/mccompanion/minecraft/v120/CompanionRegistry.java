@@ -44,6 +44,9 @@ public final class CompanionRegistry {
                 entry.mode = CompanionEntry.Mode.PAUSED;
                 savedData.changed();
             }
+            entry.skillRecoveryRequired = entry.mode == CompanionEntry.Mode.PAUSED
+                    && entry.resumeMode == CompanionEntry.Mode.SKILL
+                    && entry.runtimeBehaviorId != null && !entry.runtimeBehaviorId.isBlank();
             if (entry.spawned) {
                 spawnBody(entry, null);
             }
@@ -281,6 +284,7 @@ public final class CompanionRegistry {
                     }
                 }
             }
+            BehaviorObservation observation = behaviorDirector.behaviorObservation(entry.companionId);
             snapshots.add(new RuntimeSnapshot(
                     entry.companionId.toString(),
                     entry.ownerId.toString(),
@@ -304,7 +308,17 @@ public final class CompanionRegistry {
                     freeSlots,
                     java.util.Map.copyOf(inventory),
                     behaviorDirector.evidenceSummary(entry.companionId),
-                    behaviorDirector.behaviorObservation(entry.companionId)));
+                    observation,
+                    equipmentFacts(body), vehicleFacts(body), menuFacts(body),
+                    java.util.Map.of("sleeping", Boolean.toString(body != null && body.isSleeping())),
+                    fishFacts(body), java.util.Map.of("fallFlying", Boolean.toString(body != null && body.isFallFlying()),
+                            "onGround", Boolean.toString(body != null && body.onGround())),
+                    actionFacts(observation, java.util.Set.of("FILL", "EMPTY"), "bucket", "target"),
+                    actionFacts(observation, java.util.Set.of("HARVEST_REPLANT"), "crop", "seed"),
+                    actionFacts(observation, java.util.Set.of("BREED"), "breed", "baby", "targetId", "secondary"),
+                    actionFacts(observation, java.util.Set.of("TRADE"), "trade", "offer", "inventory", "resources", "inputs"),
+                    actionFacts(observation, java.util.Set.of("ENCHANT"), "enchant", "lapis", "experience", "inputs"),
+                    actionFacts(observation, java.util.Set.of("BREW"), "brew", "brewing", "inputs")));
         }
         return java.util.List.copyOf(snapshots);
     }
@@ -373,14 +387,33 @@ public final class CompanionRegistry {
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
         if (leaseFailure != null) return leaseFailure;
-        String controlFailure = behaviorDirector.claimRuntime(entry,
-                "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + behaviorId,
-                "RUNTIME_START");
-        if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         CompanionPlayer body = liveBodies.get(entry.companionId);
         if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
         if (behaviorId == null || behaviorId.isBlank()) return RuntimeResult.failure("INVALID_BEHAVIOR_ID");
         String normalized = behaviorType == null ? "" : behaviorType.toLowerCase(Locale.ROOT);
+        if ((normalized.equals("goto") || normalized.equals("travel"))
+                && (x == null || y == null || z == null
+                || !Double.isFinite(x) || !Double.isFinite(y) || !Double.isFinite(z))) {
+            return RuntimeResult.failure("INVALID_TARGET");
+        }
+        if (normalized.equals("return")) {
+            ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+            if (owner == null) return RuntimeResult.failure("OWNER_OFFLINE");
+            if (owner.serverLevel() != body.serverLevel()) return RuntimeResult.failure("WORLD_CHANGED");
+        } else if (normalized.equals("skill")) {
+            if (skill == null || !runtimeSkillSupported(skill.capability())) {
+                return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
+            }
+            try { behaviorDirector.validateSkill(body, skill); }
+            catch (IllegalArgumentException invalid) { return RuntimeResult.failure("INVALID_SKILL_PARAMETERS"); }
+        } else if (!normalized.equals("follow") && !normalized.equals("goto")
+                && !normalized.equals("travel")) {
+            return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
+        }
+        String controlFailure = behaviorDirector.claimRuntime(entry,
+                "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + behaviorId,
+                "RUNTIME_START");
+        if (controlFailure != null) return RuntimeResult.failure(controlFailure);
         if (normalized.equals("follow")) {
             entry.mode = CompanionEntry.Mode.FOLLOW;
             entry.resumeMode = CompanionEntry.Mode.FOLLOW;
@@ -407,29 +440,6 @@ public final class CompanionRegistry {
             entry.targetY = owner.getY();
             entry.targetZ = owner.getZ();
         } else if (normalized.equals("skill") && skill != null) {
-            if (!java.util.Set.of(
-                            "LookAt",
-                            "InteractBlock",
-                            "InteractEntity",
-                            "MenuAction",
-                            "UseItem",
-                            "DropItem",
-                            "AttackEntity",
-                            "PlaceBlock",
-                            "CollectResource",
-                            "MineResourceVein",
-                            "WithdrawFromStorage",
-                            "DepositToStorage",
-                            "DeliverItem",
-                            "EatAndRecover",
-                            "DefendOwner",
-                            "RetreatFromDanger",
-                            "CraftItem",
-                            "SmeltItem",
-                            "ExploreArea")
-                    .contains(skill.capability())) {
-                return RuntimeResult.failure("CAPABILITY_UNAVAILABLE");
-            }
             entry.mode = CompanionEntry.Mode.SKILL;
             entry.resumeMode = CompanionEntry.Mode.SKILL;
             entry.hasTarget = false;
@@ -440,6 +450,7 @@ public final class CompanionRegistry {
         control.behaviorRevision++;
         entry.runtimeBehaviorId = behaviorId;
         entry.runtimeBehaviorRevision = control.behaviorRevision;
+        entry.skillRecoveryRequired = false;
         savedData.changed();
         if (entry.mode == CompanionEntry.Mode.SKILL) {
             behaviorDirector.startSkill(entry, body, skill);
@@ -447,6 +458,16 @@ public final class CompanionRegistry {
             behaviorDirector.start(entry, body);
         }
         return RuntimeResult.success(behaviorId, control.behaviorRevision, "RUNNING");
+    }
+
+    private static boolean runtimeSkillSupported(String capability) {
+        return java.util.Set.of("LookAt", "InteractBlock", "InteractEntity", "MenuAction",
+                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "CollectResource",
+                "MineResourceVein", "WithdrawFromStorage", "DepositToStorage", "DeliverItem",
+                "EatAndRecover", "DefendOwner", "RetreatFromDanger", "CraftItem", "SmeltItem",
+                "ExploreArea", "EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle", "Fish",
+                "FarmCrop", "BreedAnimals", "TradeWithVillager", "EnchantItem", "BrewPotion",
+                "GlideWithElytra").contains(capability);
     }
 
     public RuntimeResult runtimePause(String companionId, String leaseId, long epoch) {
@@ -474,16 +495,20 @@ public final class CompanionRegistry {
         RuntimeControl control = entry == null ? null : runtimeControls.get(entry.companionId);
         RuntimeResult leaseFailure = checkLease(control, leaseId, epoch);
         if (leaseFailure != null) return leaseFailure;
+        CompanionPlayer body = liveBodies.get(entry.companionId);
+        if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
+        if (entry.mode != CompanionEntry.Mode.PAUSED) return RuntimeResult.failure("NOT_PAUSED");
+        if (entry.resumeMode == CompanionEntry.Mode.SKILL && entry.skillRecoveryRequired) {
+            return RuntimeResult.failure("RECOVERY_REQUIRED");
+        }
         String controlFailure = behaviorDirector.claimRuntime(entry,
                 "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + entry.runtimeBehaviorId,
                 "RUNTIME_RESUME");
         if (controlFailure != null) return RuntimeResult.failure(controlFailure);
-        CompanionPlayer body = liveBodies.get(entry.companionId);
-        if (body == null) return RuntimeResult.failure("COMPANION_NOT_SPAWNED");
-        if (entry.mode != CompanionEntry.Mode.PAUSED) return RuntimeResult.failure("NOT_PAUSED");
         entry.mode = entry.resumeMode == CompanionEntry.Mode.PAUSED ? CompanionEntry.Mode.IDLE : entry.resumeMode;
         control.behaviorRevision++;
         entry.runtimeBehaviorRevision = control.behaviorRevision;
+        entry.skillRecoveryRequired = false;
         savedData.changed();
         if (entry.mode == CompanionEntry.Mode.SKILL) {
             behaviorDirector.resumeSkill(entry, body);
@@ -508,6 +533,7 @@ public final class CompanionRegistry {
         control.behaviorId = null;
         entry.runtimeBehaviorId = null;
         entry.runtimeBehaviorRevision = control.behaviorRevision;
+        entry.skillRecoveryRequired = false;
         behaviorDirector.releaseRuntime(entry,
                 "runtime-lease:" + leaseId + ":" + epoch + ":behavior:" + behaviorId,
                 "RUNTIME_CANCEL");
@@ -686,6 +712,12 @@ public final class CompanionRegistry {
         };
     }
 
+    private static java.util.Map<String,String> equipmentFacts(CompanionPlayer body){if(body==null)return java.util.Map.of();java.util.Map<String,String>facts=new java.util.TreeMap<>();for(net.minecraft.world.entity.EquipmentSlot slot:net.minecraft.world.entity.EquipmentSlot.values()){var stack=body.getItemBySlot(slot);if(!stack.isEmpty())facts.put(slot.getName(),net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem())+":"+stack.getCount()+":"+stack.getDamageValue()+":"+(stack.hasTag()?stack.getTag().hashCode():0));}return java.util.Map.copyOf(facts);}
+    private static java.util.Map<String,String> vehicleFacts(CompanionPlayer body){if(body==null||body.getVehicle()==null)return java.util.Map.of("seated","false");var v=body.getVehicle();return java.util.Map.of("seated","true","id",v.getUUID().toString(),"type",net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(v.getType()).toString(),"x",Double.toString(v.getX()),"y",Double.toString(v.getY()),"z",Double.toString(v.getZ()));}
+    private static java.util.Map<String,String> menuFacts(CompanionPlayer body){if(body==null||body.containerMenu==body.inventoryMenu)return java.util.Map.of("open","false");java.util.Map<String,String>facts=new java.util.TreeMap<>();facts.put("open","true");facts.put("type",body.containerMenu.getClass().getSimpleName());for(int i=0;i<body.containerMenu.slots.size();i++){var stack=body.containerMenu.getSlot(i).getItem();if(!stack.isEmpty())facts.put("slot."+i,net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem())+":"+stack.getCount()+":"+(stack.hasTag()?stack.getTag().hashCode():0));}if(body.containerMenu instanceof net.minecraft.world.inventory.MerchantMenu m&&!m.getOffers().isEmpty()){var offer=m.getOffers().get(0);facts.put("offerUses",Integer.toString(offer.getUses()));facts.put("offerOutput",net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(offer.getResult().getItem()).toString());}if(body.containerMenu instanceof net.minecraft.world.inventory.EnchantmentMenu e){facts.put("enchantCost",Integer.toString(e.costs[0]));facts.put("lapis",Integer.toString(e.getGoldCount()));}if(body.containerMenu instanceof net.minecraft.world.inventory.BrewingStandMenu b){facts.put("brewingTicks",Integer.toString(b.getBrewingTicks()));facts.put("fuel",Integer.toString(b.getFuel()));}return java.util.Map.copyOf(facts);}
+    private static java.util.Map<String,String> fishFacts(CompanionPlayer body){if(body==null||body.fishing==null)return java.util.Map.of("hookAlive","false");return java.util.Map.of("hookAlive","true","hookId",body.fishing.getUUID().toString(),"openWater",Boolean.toString(body.fishing.isOpenWaterFishing()));}
+    private static java.util.Map<String,String> actionFacts(BehaviorObservation observation,java.util.Set<String> actions,String...prefixes){if(observation==null||!actions.contains(observation.details().getOrDefault("action","")))return java.util.Map.of();java.util.Map<String,String>values=new java.util.TreeMap<>();values.put("action",observation.details().get("action"));observation.details().forEach((key,value)->{for(String prefix:prefixes)if(key.startsWith(prefix)){values.put(key,value);break;}});return java.util.Map.copyOf(values);}
+
     private boolean spawnBody(CompanionEntry entry, ServerPlayer spawnBeside) {
         if (liveBodies.containsKey(entry.companionId)) {
             return true;
@@ -789,7 +821,14 @@ public final class CompanionRegistry {
             String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
             float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
             int freeInventorySlots, java.util.Map<String, Integer> inventory, String evidenceSummary,
-            BehaviorObservation behaviorObservation) {
+            BehaviorObservation behaviorObservation, java.util.Map<String,String> equipment,
+            java.util.Map<String,String> vehicle, java.util.Map<String,String> menu,
+            java.util.Map<String,String> sleep, java.util.Map<String,String> fish,
+            java.util.Map<String,String> glide, java.util.Map<String,String> bucket,
+            java.util.Map<String,String> crop, java.util.Map<String,String> breed,
+            java.util.Map<String,String> trade, java.util.Map<String,String> enchant,
+            java.util.Map<String,String> brew) {
+        public RuntimeSnapshot {equipment=equipment==null?java.util.Map.of():java.util.Map.copyOf(equipment);vehicle=vehicle==null?java.util.Map.of():java.util.Map.copyOf(vehicle);menu=menu==null?java.util.Map.of():java.util.Map.copyOf(menu);sleep=sleep==null?java.util.Map.of():java.util.Map.copyOf(sleep);fish=fish==null?java.util.Map.of():java.util.Map.copyOf(fish);glide=glide==null?java.util.Map.of():java.util.Map.copyOf(glide);bucket=bucket==null?java.util.Map.of():java.util.Map.copyOf(bucket);crop=crop==null?java.util.Map.of():java.util.Map.copyOf(crop);breed=breed==null?java.util.Map.of():java.util.Map.copyOf(breed);trade=trade==null?java.util.Map.of():java.util.Map.copyOf(trade);enchant=enchant==null?java.util.Map.of():java.util.Map.copyOf(enchant);brew=brew==null?java.util.Map.of():java.util.Map.copyOf(brew);}
     }
 
     public record BehaviorObservation(
@@ -797,13 +836,20 @@ public final class CompanionRegistry {
             String itemId,
             int requested,
             int available,
-            java.util.List<ScanCandidate> candidates) {
+            java.util.List<ScanCandidate> candidates,
+            java.util.Map<String, String> details) {
         public BehaviorObservation {
             candidates = candidates == null ? java.util.List.of() : java.util.List.copyOf(candidates);
+            details = details == null ? java.util.Map.of() : java.util.Map.copyOf(details);
+        }
+
+        public BehaviorObservation(String failureCode, String itemId, int requested, int available,
+                                   java.util.List<ScanCandidate> candidates) {
+            this(failureCode, itemId, requested, available, candidates, java.util.Map.of());
         }
 
         public BehaviorObservation(String failureCode, String itemId, int requested, int available) {
-            this(failureCode, itemId, requested, available, java.util.List.of());
+            this(failureCode, itemId, requested, available, java.util.List.of(), java.util.Map.of());
         }
     }
 

@@ -398,7 +398,69 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Drop a bounded quantity from the connected body through vanilla player rules",
                 dropSchema(), "MEDIUM", "INVENTORY", false));
         if (available.contains("EatAndRecover")) values.add(definition("item.eat_and_recover", "Eat food using normal game interaction", foodSchema(), "LOW", "SURVIVAL", false));
+        addDailyActionDefinitions(values, available);
         return List.copyOf(values);
+    }
+
+    private static void addDailyActionDefinitions(List<ToolDefinition> values, Set<String> available) {
+        if (available.contains("EquipItem")) {
+            values.add(definition("equipment.equip", "Equip one declared item through the vanilla inventory/equipment path",
+                    equipmentSchema(true), "MEDIUM", "INVENTORY", false));
+            values.add(definition("equipment.unequip", "Unequip one declared item through the vanilla inventory/equipment path",
+                    equipmentSchema(false), "MEDIUM", "INVENTORY", false));
+            values.add(definition("equipment.best_tool", "Select the best available tool for one declared target",
+                    bestToolSchema(), "MEDIUM", "INVENTORY", false));
+            values.add(definition("equipment.best_weapon", "Select the best available weapon for one declared target",
+                    bestWeaponSchema(), "MEDIUM", "INVENTORY", false));
+        }
+        if (available.contains("SleepAtBed")) {
+            values.add(definition("survival.sleep", "Navigate to and sleep in a declared or nearby usable bed",
+                    sleepSchema(), "LOW", "SURVIVAL", false));
+            values.add(definition("survival.wake", "Wake from the current vanilla bed sleep state",
+                    emptyObjectSchema(), "LOW", "SURVIVAL", false));
+        }
+        if (available.contains("UseWaterBucket")) {
+            values.add(definition("bucket.fill_water", "Fill a held bucket from one declared water position",
+                    positionActionSchema("source", "minecraft:bucket"), "MEDIUM", "INTERACT", false));
+            values.add(definition("bucket.empty_water", "Empty a held water bucket at one declared position",
+                    positionActionSchema("target", "minecraft:water_bucket"), "MEDIUM", "INTERACT", false));
+        }
+        if (available.contains("UseVehicle")) {
+            values.add(definition("vehicle.mount", "Mount one externally selected live vehicle",
+                    vehicleSchema(false), "MEDIUM", "MOVE", false));
+            values.add(definition("vehicle.travel", "Drive or ride one mounted vehicle toward a bounded destination",
+                    vehicleSchema(true), "MEDIUM", "MOVE", false));
+            values.add(definition("vehicle.dismount", "Dismount the current vanilla vehicle safely",
+                    emptyObjectSchema(), "MEDIUM", "MOVE", false));
+        }
+        if (available.contains("Fish")) {
+            values.add(definition("fishing.fish", "Fish with a declared rod and wait for a bounded catch cycle",
+                    fishingSchema(), "LOW", "INTERACT", false));
+        }
+        if (available.contains("FarmCrop")) {
+            values.add(definition("farming.harvest_replant", "Harvest and replant a bounded crop area through vanilla block actions",
+                    farmingSchema(), "MEDIUM", "INTERACT", false));
+        }
+        if (available.contains("BreedAnimals")) {
+            values.add(definition("animal.breed", "Breed two externally selected compatible animals",
+                    breedingSchema(), "LOW", "INTERACT", false));
+        }
+        if (available.contains("TradeWithVillager")) {
+            values.add(definition("villager.trade", "Execute one explicitly selected villager trade offer",
+                    tradeSchema(), "MEDIUM", "INVENTORY", false));
+        }
+        if (available.contains("EnchantItem")) {
+            values.add(definition("enchanting.apply", "Apply one explicitly selected enchanting option",
+                    enchantingSchema(), "MEDIUM", "INVENTORY", false));
+        }
+        if (available.contains("BrewPotion")) {
+            values.add(definition("brewing.brew", "Brew a bounded number of bottles with one declared ingredient",
+                    brewingSchema(), "MEDIUM", "CRAFT", false));
+        }
+        if (available.contains("GlideWithElytra")) {
+            values.add(definition("elytra.glide", "Glide toward a bounded direction/destination with a declared timeout",
+                    glideSchema(), "MEDIUM", "MOVE", false));
+        }
     }
 
     @Override public ToolResult execute(ToolContext context, ToolCall call) {
@@ -634,6 +696,24 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "inventory.deliver" -> skill("DeliverItem", validatedItemQuantity(call.arguments(), false));
             case "inventory.drop" -> skill("DropItem", validatedDrop(call.arguments()));
             case "item.eat_and_recover" -> skill("EatAndRecover", validatedFood(call.arguments()));
+            case "equipment.equip" -> skill("EquipItem", validatedEquipment(call.arguments(), true));
+            case "equipment.unequip" -> skill("EquipItem", validatedEquipment(call.arguments(), false));
+            case "equipment.best_tool" -> skill("EquipItem", validatedItemTarget(call.arguments(), "BEST_TOOL"));
+            case "equipment.best_weapon" -> skill("EquipItem", validatedItemTarget(call.arguments(), "BEST_WEAPON"));
+            case "survival.sleep" -> skill("SleepAtBed", validatedSleep(call.arguments()));
+            case "survival.wake" -> skill("SleepAtBed", Json.object().put("action", "WAKE"));
+            case "bucket.fill_water" -> skill("UseWaterBucket", validatedBucket(call.arguments(), "FILL"));
+            case "bucket.empty_water" -> skill("UseWaterBucket", validatedBucket(call.arguments(), "EMPTY"));
+            case "vehicle.mount" -> skill("UseVehicle", validatedVehicle(call.arguments(), "MOUNT"));
+            case "vehicle.travel" -> skill("UseVehicle", validatedVehicle(call.arguments(), "TRAVEL"));
+            case "vehicle.dismount" -> skill("UseVehicle", Json.object().put("action", "DISMOUNT"));
+            case "fishing.fish" -> skill("Fish", validatedFishing(call.arguments()));
+            case "farming.harvest_replant" -> skill("FarmCrop", validatedFarming(call.arguments()));
+            case "animal.breed" -> skill("BreedAnimals", validatedBreeding(call.arguments()));
+            case "villager.trade" -> skill("TradeWithVillager", validatedTrade(call.arguments()));
+            case "enchanting.apply" -> skill("EnchantItem", validatedEnchanting(call.arguments()));
+            case "brewing.brew" -> skill("BrewPotion", validatedBrewing(call.arguments()));
+            case "elytra.glide" -> skill("GlideWithElytra", validatedGlide(call.arguments()));
             case "task.pause" -> noArgumentsStop(call, "pause");
             case "task.resume" -> noArgumentsStop(call, "resume");
             case "task.cancel" -> noArgumentsStop(call, "cancel");
@@ -784,6 +864,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     }
 
     private static ObjectNode validatedBoundedPosition(JsonNode position) {
+        if (position == null || !position.isObject()) {
+            throw new IllegalArgumentException("position must be an object");
+        }
+        rejectUnexpected(position, Set.of("dimension", "x", "y", "z"));
         ObjectNode target = Json.object();
         for (String field : List.of("x", "y", "z")) {
             if (!position.path(field).isIntegralNumber() || !position.path(field).canConvertToInt()) {
@@ -795,7 +879,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000 || y < -2048 || y > 2048) {
             throw new IllegalArgumentException("position is outside safe world bounds");
         }
-        target.put("dimension", position.path("dimension").asText("minecraft:overworld"));
+        target.put("dimension", namespacedId(
+                position.path("dimension").asText("minecraft:overworld"), "position.dimension"));
         return target;
     }
 
@@ -916,6 +1001,170 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         return arguments;
     }
 
+    private static JsonNode validatedEquipment(JsonNode arguments, boolean equip) {
+        rejectUnexpected(arguments, equip ? Set.of("item", "slot") : Set.of("slot"));
+        if (!equip && !arguments.has("slot")) throw new IllegalArgumentException("slot is required");
+        ObjectNode values = Json.object().put("action", equip ? "EQUIP" : "UNEQUIP");
+        if (equip) values.put("item", namespacedId(arguments.path("item").asText(""), "item"));
+        Set<String> slots = equip
+                ? Set.of("AUTO", "MAIN_HAND", "OFF_HAND", "HEAD", "CHEST", "LEGS", "FEET")
+                : Set.of("MAIN_HAND", "OFF_HAND", "HEAD", "CHEST", "LEGS", "FEET");
+        String slot = enumValue(arguments.path("slot").asText(equip ? "AUTO" : "HEAD"), "slot", slots);
+        values.put("hand", slot);
+        return values;
+    }
+
+    private static JsonNode validatedItemTarget(JsonNode arguments, String action) {
+        if (action.equals("BEST_TOOL")) {
+            rejectUnexpected(arguments, Set.of("block"));
+            return Json.object().put("item", namespacedId(arguments.path("block").asText("")))
+                    .put("action", action);
+        }
+        rejectUnexpected(arguments, Set.of("preference"));
+        String preference = enumValue(arguments.path("preference").asText("ANY"), "preference",
+                Set.of("ANY", "MELEE", "RANGED"));
+        return Json.object().put("item", "").put("action", action + "_" + preference);
+    }
+
+    private static JsonNode validatedBucket(JsonNode arguments, String action) {
+        rejectUnexpected(arguments, Set.of("source", "target", "item"));
+        String field = action.equals("FILL") ? "source" : "target";
+        JsonNode position = arguments.path(field);
+        if (!position.isObject()) throw new IllegalArgumentException(field + " must be an object");
+        ObjectNode values = Json.object().set("target", validatedBoundedPosition(position));
+        if (arguments.has("item")) {
+            String item = namespacedId(arguments.path("item").asText(""));
+            String expected = action.equals("FILL") ? "minecraft:bucket" : "minecraft:water_bucket";
+            if (!item.equals(expected)) throw new IllegalArgumentException("item must be " + expected);
+            values.put("item", item);
+        }
+        values.put("action", action);
+        return values;
+    }
+
+    private static JsonNode validatedSleep(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("bed", "radius"));
+        ObjectNode values = Json.object().put("action", "SLEEP")
+                .put("quantity", arguments.has("radius")
+                        ? boundedInteger(arguments.path("radius"), "radius", 1, 16) : 16);
+        if (arguments.has("bed")) values.set("target", validatedBoundedPosition(arguments.path("bed")));
+        return values;
+    }
+
+    private static JsonNode validatedVehicle(JsonNode arguments, String action) {
+        rejectUnexpected(arguments, action.equals("TRAVEL")
+                ? Set.of("entityId", "vehicleType", "destination") : Set.of("entityId", "vehicleType"));
+        ObjectNode values = Json.object().put("action", action);
+        if (action.equals("MOUNT") && arguments.has("entityId") == arguments.has("vehicleType")) {
+            throw new IllegalArgumentException("exactly one of entityId or vehicleType is required");
+        }
+        if (action.equals("TRAVEL") && !arguments.has("destination")) {
+            throw new IllegalArgumentException("destination is required");
+        }
+        if (arguments.has("entityId")) values.put("entityId", uuid(arguments.path("entityId").asText(""), "entityId"));
+        if (arguments.has("vehicleType")) values.put("item", namespacedId(arguments.path("vehicleType").asText(""), "vehicleType"));
+        if (arguments.has("destination")) values.set("target", validatedBoundedPosition(arguments.path("destination")));
+        return values;
+    }
+
+    private static JsonNode validatedFishing(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "water", "times", "timeout"));
+        String item = namespacedId(arguments.path("item").asText("minecraft:fishing_rod"));
+        if (!item.equals("minecraft:fishing_rod")) {
+            throw new IllegalArgumentException("item must be minecraft:fishing_rod");
+        }
+        ObjectNode values = Json.object().put("item", item)
+                .put("action", "FISH");
+        if (arguments.has("water")) values.set("target", validatedBoundedPosition(arguments.path("water")));
+        if (arguments.has("times")) values.put("quantity", boundedInteger(arguments.path("times"), "times", 1, 64));
+        if (arguments.has("timeout")) values.put("durationTicks", boundedInteger(arguments.path("timeout"), "timeout", 1, 2400));
+        return values;
+    }
+
+    private static JsonNode validatedFarming(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("crop", "count", "radius", "origin"));
+        ObjectNode values = Json.object().put("item", namespacedId(arguments.path("crop").asText("")))
+                .put("action", "HARVEST_REPLANT");
+        values.put("quantity", boundedInteger(arguments.path("count"), "count", 1, 64));
+        if (arguments.has("radius")) values.put("button", boundedInteger(arguments.path("radius"), "radius", 1, 16));
+        if (arguments.has("origin")) values.set("target", validatedBoundedPosition(arguments.path("origin")));
+        return values;
+    }
+
+    private static JsonNode validatedBreeding(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("entityType", "entityId", "partnerEntityId", "times"));
+        boolean hasFirst = arguments.has("entityId"), hasPartner = arguments.has("partnerEntityId");
+        if (hasFirst != hasPartner) {
+            throw new IllegalArgumentException("entityId and partnerEntityId must be supplied together");
+        }
+        if (arguments.has("entityType") && (hasFirst || hasPartner)) {
+            throw new IllegalArgumentException("entityType cannot be combined with explicit entity IDs");
+        }
+        if (!arguments.has("entityType") && !hasFirst) {
+            throw new IllegalArgumentException("entityType or both entity IDs are required");
+        }
+        ObjectNode values = Json.object().put("action", "BREED");
+        if (arguments.has("entityType")) values.put("item", namespacedId(arguments.path("entityType").asText("")));
+        if (hasFirst) values.put("entityId", uuid(arguments.path("entityId").asText(""), "entityId"));
+        if (hasPartner) values.put("partnerEntityId", uuid(arguments.path("partnerEntityId").asText(""), "partnerEntityId"));
+        if (arguments.has("times")) values.put("quantity", boundedInteger(arguments.path("times"), "times", 1, 1));
+        return values;
+    }
+
+    private static JsonNode validatedTrade(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("villagerId", "offer", "count"));
+        ObjectNode values = Json.object().put("entityId", uuid(arguments.path("villagerId").asText(""), "villagerId"))
+                .put("slot", boundedInteger(arguments.path("offer"), "offer", 0, 127))
+                .put("action", "TRADE");
+        if (arguments.has("count")) values.put("quantity", boundedInteger(arguments.path("count"), "count", 1, 64));
+        return values;
+    }
+
+    private static JsonNode validatedEnchanting(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "option", "station"));
+        ObjectNode values = Json.object().put("item", namespacedId(arguments.path("item").asText("")))
+                .put("slot", boundedInteger(arguments.path("option"), "option", 0, 2))
+                .put("action", "ENCHANT");
+        values.set("target", validatedBoundedPosition(arguments.path("station")));
+        return values;
+    }
+
+    private static JsonNode validatedBrewing(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("ingredient", "bottles", "timeout", "station"));
+        ObjectNode values = Json.object().put("item", namespacedId(arguments.path("ingredient").asText("")))
+                .put("quantity", boundedInteger(arguments.path("bottles"), "bottles", 1, 3))
+                .put("action", "BREW");
+        values.set("target", validatedBoundedPosition(arguments.path("station")));
+        if (arguments.has("timeout")) values.put("durationTicks", boundedInteger(arguments.path("timeout"), "timeout", 1, 2400));
+        return values;
+    }
+
+    private static JsonNode validatedGlide(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("target", "timeout"));
+        ObjectNode values = Json.object().put("action", "GLIDE");
+        values.set("target", validatedBoundedPosition(arguments.path("target")));
+        if (arguments.has("timeout")) values.put("durationTicks", boundedInteger(arguments.path("timeout"), "timeout", 1, 2400));
+        return values;
+    }
+
+    private static int boundedInteger(JsonNode value, String label, int minimum, int maximum) {
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToInt()) {
+            throw new IllegalArgumentException(label + " must be an integer");
+        }
+        int result = value.asInt();
+        if (result < minimum || result > maximum) {
+            throw new IllegalArgumentException(label + " must be " + minimum + ".." + maximum);
+        }
+        return result;
+    }
+
+    private static String uuid(String value, String label) {
+        try { return java.util.UUID.fromString(value).toString(); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException(label + " must be a UUID"); }
+    }
+
+    private static String namespacedId(String value) { return namespacedId(value, "item"); }
+
     private static JsonNode validatedCraft(JsonNode arguments) {
         rejectUnexpected(arguments, Set.of("item", "quantity", "allowPartial", "station"));
         String item = arguments.path("item").asText("");
@@ -966,7 +1215,14 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private static ToolDefinition definition(String name, String description, JsonNode schema,
                                              String risk, String permission, boolean idempotent) {
         ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
-        root.set("properties", schema);
+        if (schema != null && schema.isObject() && "object".equals(schema.path("type").asText())
+                && schema.path("properties").isObject()) {
+            root.set("properties", schema.path("properties").deepCopy());
+            if (schema.has("required")) root.set("required", schema.path("required").deepCopy());
+            if (schema.has("oneOf")) root.set("oneOf", schema.path("oneOf").deepCopy());
+        } else {
+            root.set("properties", schema);
+        }
         if (name.equals("movement.navigate")) {
             root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("movement.look")) {
@@ -1030,7 +1286,13 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 || name.startsWith("inventory.") || name.startsWith("combat.")
                 || name.startsWith("safety.") || name.equals("entity.collect")
                 || name.equals("item.smelt") || name.equals("item.craft")
-                || name.equals("item.eat_and_recover")) {
+                || name.equals("item.eat_and_recover")
+                || name.startsWith("equipment.") || name.startsWith("survival.")
+                || name.startsWith("bucket.") || name.startsWith("vehicle.")
+                || name.startsWith("fishing.") || name.startsWith("farming.")
+                || name.startsWith("animal.") || name.startsWith("villager.")
+                || name.startsWith("enchanting.") || name.startsWith("brewing.")
+                || name.startsWith("elytra.")) {
             return Duration.ofMinutes(5);
         }
         return Duration.ofSeconds(30);
@@ -1349,6 +1611,170 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         properties.putObject("item").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
         return properties;
+    }
+
+    private static ObjectNode emptyObjectSchema() {
+        return Json.object().put("type", "object").put("additionalProperties", false);
+    }
+
+    private static ObjectNode equipmentSchema(boolean itemRequired) {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        var slots = properties.putObject("slot").put("type", "string").putArray("enum");
+        if (itemRequired) slots.add("AUTO");
+        slots.add("MAIN_HAND").add("OFF_HAND").add("HEAD").add("CHEST").add("LEGS").add("FEET");
+        if (itemRequired) root.putArray("required").add("item");
+        else root.putArray("required").add("slot");
+        return root;
+    }
+
+    private static ObjectNode bestToolSchema() {
+        ObjectNode root = emptyObjectSchema();
+        root.putObject("properties").putObject("block").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        root.putArray("required").add("block");
+        return root;
+    }
+
+    private static ObjectNode bestWeaponSchema() {
+        ObjectNode root = emptyObjectSchema();
+        root.putObject("properties").putObject("preference").put("type", "string").putArray("enum")
+                .add("ANY").add("MELEE").add("RANGED");
+        return root;
+    }
+
+    private static ObjectNode sleepSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("bed", positionSchema());
+        integerProperty(properties, "radius", 1, 16);
+        return root;
+    }
+
+    private static ObjectNode positionActionSchema(String field, String allowedItem) {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set(field, positionSchema());
+        if (allowedItem != null && !allowedItem.isBlank()) {
+            properties.putObject("item").put("type", "string").put("const", allowedItem);
+        }
+        root.putArray("required").add(field);
+        return root;
+    }
+
+    private static ObjectNode vehicleSchema(boolean travel) {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        properties.putObject("vehicleType").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.set("destination", positionSchema());
+        if (travel) root.putArray("required").add("destination");
+        else {
+            var alternatives = root.putArray("oneOf");
+            alternatives.addObject().putArray("required").add("entityId");
+            alternatives.addObject().putArray("required").add("vehicleType");
+        }
+        return root;
+    }
+
+    private static ObjectNode fishingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("item").put("type", "string")
+                .put("const", "minecraft:fishing_rod");
+        properties.set("water", positionSchema());
+        integerProperty(properties, "times", 1, 64);
+        integerProperty(properties, "timeout", 1, 2400);
+        return root;
+    }
+
+    private static ObjectNode farmingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("crop").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        integerProperty(properties, "count", 1, 64);
+        integerProperty(properties, "radius", 1, 16);
+        properties.set("origin", positionSchema());
+        root.putArray("required").add("crop").add("count");
+        return root;
+    }
+
+    private static ObjectNode breedingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("entityType").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        properties.putObject("partnerEntityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        integerProperty(properties, "times", 1, 1);
+        var alternatives = root.putArray("oneOf");
+        alternatives.addObject().putArray("required").add("entityType");
+        alternatives.addObject().putArray("required").add("entityId").add("partnerEntityId");
+        return root;
+    }
+
+    private static ObjectNode tradeSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("villagerId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        integerProperty(properties, "offer", 0, 127);
+        integerProperty(properties, "count", 1, 64);
+        root.putArray("required").add("villagerId").add("offer");
+        return root;
+    }
+
+    private static ObjectNode enchantingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("station", positionSchema());
+        properties.putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        integerProperty(properties, "option", 0, 2);
+        root.putArray("required").add("item").add("option").add("station");
+        return root;
+    }
+
+    private static ObjectNode brewingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("station", positionSchema());
+        properties.putObject("ingredient").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        integerProperty(properties, "bottles", 1, 3);
+        integerProperty(properties, "timeout", 1, 2400);
+        root.putArray("required").add("ingredient").add("bottles").add("station");
+        return root;
+    }
+
+    private static ObjectNode glideSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("target", positionSchema());
+        integerProperty(properties, "timeout", 1, 2400);
+        root.putArray("required").add("target");
+        return root;
+    }
+
+    private static void integerProperty(ObjectNode properties, String name, int minimum, int maximum) {
+        properties.putObject(name).put("type", "integer").put("minimum", minimum).put("maximum", maximum);
+    }
+
+    private static ObjectNode positionSchema() {
+        ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("dimension").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
+        root.putArray("required").add("x").add("y").add("z");
+        return root;
     }
 
     private static ObjectNode craftSchema() {

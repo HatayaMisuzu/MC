@@ -376,6 +376,18 @@ public final class CompanionRegistry {
         return java.util.List.copyOf(bindings);
     }
 
+    /** Main-inventory and exact active-task world bindings; no area or global-world scan. */
+    public java.util.List<InventoryWorldEventBinding> inventoryWorldEventBindings() {
+        java.util.List<InventoryWorldEventBinding> bindings = new ArrayList<>();
+        for (CompanionEntry entry : savedData.entries()) {
+            CompanionPlayer body = liveBodies.get(entry.companionId);
+            if (body == null || !body.isAlive()) continue;
+            bindings.add(new InventoryWorldEventBinding(entry.companionId.toString(), body,
+                    entry.runtimeBehaviorId, behaviorDirector.eventParameters(entry.companionId)));
+        }
+        return java.util.List.copyOf(bindings);
+    }
+
     private static java.util.List<ContainerSnapshot> visibleContainers(CompanionPlayer body) {
         java.util.List<ContainerSnapshot> visible = new ArrayList<>();
         BlockPos origin = body.blockPosition();
@@ -857,6 +869,9 @@ public final class CompanionRegistry {
 
     public record SurvivalEventBinding(String companionId, CompanionPlayer body, String behaviorId,
             com.mccompanion.minecraft.bridge.SurvivalEventTracker.Lifecycle lifecycle) { }
+
+    public record InventoryWorldEventBinding(String companionId, CompanionPlayer body,
+                                             String behaviorId, SkillParameters parameters) { }
 
     public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {
         static RuntimeResult success(String behaviorId, long revision, String state) {

@@ -11,8 +11,10 @@ import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import com.mccompanion.minecraft.bridge.RuntimeCommandArguments;
 import com.mccompanion.minecraft.bridge.ConnectionEpochGate;
 import com.mccompanion.minecraft.bridge.EntityEventTracker;
+import com.mccompanion.minecraft.bridge.InventoryWorldEventTracker;
 import com.mccompanion.minecraft.bridge.SurvivalEventTracker;
 import com.mccompanion.minecraft.v120.EntityEventObservationService;
+import com.mccompanion.minecraft.v120.InventoryWorldEventObservationService;
 import com.mccompanion.minecraft.v120.SurvivalEventObservationService;
 import java.io.IOException;
 import java.net.URI;
@@ -70,6 +72,8 @@ final class RuntimeBridge implements AutoCloseable {
     private final EntityEventObservationService entityEventObservations;
     private final SurvivalEventTracker survivalEvents = new SurvivalEventTracker();
     private final SurvivalEventObservationService survivalEventObservations;
+    private final InventoryWorldEventTracker inventoryWorldEvents = new InventoryWorldEventTracker();
+    private final InventoryWorldEventObservationService inventoryWorldEventObservations;
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -82,6 +86,7 @@ final class RuntimeBridge implements AutoCloseable {
         this.settings = BridgeSettings.load(logger);
         this.entityEventObservations = new EntityEventObservationService(server);
         this.survivalEventObservations = new SurvivalEventObservationService();
+        this.inventoryWorldEventObservations = new InventoryWorldEventObservationService();
         this.executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-forge-runtime-bridge");
             thread.setDaemon(true);
@@ -163,6 +168,8 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
                 .put("player_entity_events", true)
+                .put("survival_events", true)
+                .put("inventory_world_events", true)
                 .put("NavigateTo", true)
                 .put("NavigateWithWorldChanges", true)
                 .put("FollowOwner", true)
@@ -568,6 +575,16 @@ final class RuntimeBridge implements AutoCloseable {
             }
         }
         survivalEvents.retainCompanions(observedSurvivalCompanions);
+        java.util.Set<String> observedInventoryWorldCompanions = new java.util.HashSet<>();
+        for (CompanionRegistry.InventoryWorldEventBinding binding : registry.inventoryWorldEventBindings()) {
+            observedInventoryWorldCompanions.add(binding.companionId());
+            InventoryWorldEventTracker.Snapshot snapshot = inventoryWorldEventObservations.snapshot(
+                    binding, server.getTickCount(), observedAt);
+            for (InventoryWorldEventTracker.Event event : inventoryWorldEvents.observe(snapshot)) {
+                sendInventoryWorldEvent(event);
+            }
+        }
+        inventoryWorldEvents.retainCompanions(observedInventoryWorldCompanions);
     }
 
     private void sendEntityEvent(EntityEventTracker.Event event) {
@@ -605,6 +622,41 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava())
                 .put("onGround", snapshot.onGround()).put("fallDistance", snapshot.fallDistance());
         sendEnvelope("survival_event", payload);
+    }
+
+    private void sendInventoryWorldEvent(InventoryWorldEventTracker.Event event) {
+        InventoryWorldEventTracker.Snapshot snapshot = event.snapshot();
+        boolean inventoryCategory = event.type().ordinal()
+                <= InventoryWorldEventTracker.Type.RESOURCE_TARGET_REACHED.ordinal();
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", event.eventId()).put("eventType", event.type().name())
+                .put("category", inventoryCategory ? "INVENTORY" : "WORLD")
+                .put("priority", event.priority().name())
+                .put("source", "MINECRAFT_INVENTORY_WORLD_OBSERVER")
+                .put("companionId", snapshot.companionId()).put("tick", snapshot.tick())
+                .put("occurredAt", snapshot.observedAt().toString())
+                .put("previousValue", event.previousValue()).put("currentValue", event.currentValue());
+        if (snapshot.behaviorId() != null) payload.put("behaviorId", snapshot.behaviorId());
+        ObjectNode inventory = payload.putObject("inventory")
+                .put("slots", snapshot.inventorySlots()).put("freeSlots", snapshot.freeInventorySlots());
+        ObjectNode counts = inventory.putObject("counts");
+        snapshot.inventory().forEach(counts::put);
+        if (snapshot.resourceGoal() != null) inventory.putObject("goal")
+                .put("itemId", snapshot.resourceGoal().itemId())
+                .put("requiredCount", snapshot.resourceGoal().requiredCount())
+                .put("currentCount", snapshot.inventory().getOrDefault(snapshot.resourceGoal().itemId(), 0));
+        payload.putObject("world").put("dimension", snapshot.dimension())
+                .put("timeOfDay", snapshot.timeOfDay().name()).put("weather", snapshot.weather().name());
+        if (snapshot.target() != null) {
+            InventoryWorldEventTracker.Target target = snapshot.target();
+            payload.putObject("target").put("identity", target.identity())
+                    .put("kind", target.kind().name()).put("present", target.present())
+                    .put("blockId", target.blockId() == null ? "" : target.blockId())
+                    .put("blockFingerprint", target.blockFingerprint())
+                    .put("containerType", target.containerType() == null ? "" : target.containerType())
+                    .put("containerFingerprint", target.containerFingerprint());
+        }
+        sendEnvelope("inventory_world_event", payload);
     }
 
     private void publishStatusOnServerThread() {

@@ -23,6 +23,12 @@ final class RuntimeEventBrainDispatcherPolicyTest {
                 "DEATH", RuntimeEvent.Priority.CRITICAL)));
         assertFalse(RuntimeEventBrainDispatcher.wakeEligible(survival(
                 "RESPAWN", RuntimeEvent.Priority.HIGH)));
+        assertTrue(RuntimeEventBrainDispatcher.wakeEligible(inventoryWorld(
+                RuntimeEvent.Category.INVENTORY, "INVENTORY_FULL", RuntimeEvent.Priority.CRITICAL, null)));
+        assertTrue(RuntimeEventBrainDispatcher.wakeEligible(inventoryWorld(
+                RuntimeEvent.Category.INVENTORY, "INVENTORY_FULL", RuntimeEvent.Priority.CRITICAL, "task-1")));
+        assertFalse(RuntimeEventBrainDispatcher.wakeEligible(inventoryWorld(
+                RuntimeEvent.Category.WORLD, "WEATHER_CHANGED", RuntimeEvent.Priority.MEDIUM, null)));
     }
 
     private static RuntimeEvent event(String type, RuntimeEvent.Priority priority, String taskId) {
@@ -37,6 +43,15 @@ final class RuntimeEventBrainDispatcherPolicyTest {
         Instant now = Instant.parse("2026-08-27T00:00:00Z");
         return new RuntimeEvent("event-" + type, RuntimeEvent.Category.SURVIVAL, type, priority,
                 "MINECRAFT_SURVIVAL_OBSERVER", "companion", null, null,
+                Json.object().put("companionId", "companion"), "dedup-" + type, null, null,
+                now, now, now.plusSeconds(60), Json.object());
+    }
+
+    private static RuntimeEvent inventoryWorld(RuntimeEvent.Category category, String type,
+                                                RuntimeEvent.Priority priority, String taskId) {
+        Instant now = Instant.parse("2026-08-27T00:00:00Z");
+        return new RuntimeEvent("event-" + type, category, type, priority,
+                "MINECRAFT_INVENTORY_WORLD_OBSERVER", "companion", taskId, null,
                 Json.object().put("companionId", "companion"), "dedup-" + type, null, null,
                 now, now, now.plusSeconds(60), Json.object());
     }

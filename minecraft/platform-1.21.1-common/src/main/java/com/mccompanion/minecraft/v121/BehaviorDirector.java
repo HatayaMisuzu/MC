@@ -73,6 +73,8 @@ final class BehaviorDirector {
     private final Map<UUID, DefendProgress> defends = new HashMap<>();
     private final Map<UUID, InteractionProgress> interactions = new HashMap<>();
     private final Map<UUID, MenuProgress> menuActions = new HashMap<>();
+    private final Map<UUID, SkillParameters> eventParameters = new HashMap<>();
+    private final Map<UUID, Long> eventParameterExpiryTicks = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
     private final Map<UUID, Map<BodyControlArbiter.Authority, String>> controlTokens = new HashMap<>();
 
@@ -86,6 +88,8 @@ final class BehaviorDirector {
     void start(CompanionEntry entry, CompanionPlayer body) {
         supersedeDailyAction(entry, body);
         observations.remove(entry.companionId);
+        eventParameters.remove(entry.companionId);
+        eventParameterExpiryTicks.remove(entry.companionId);
         navigation.put(entry.companionId, new RouteExecutionController.Session(server.getTickCount(),
                 body.serverLevel().dimension().location().toString()));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
@@ -104,6 +108,8 @@ final class BehaviorDirector {
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
         supersedeDailyAction(entry, body);
         observations.remove(entry.companionId);
+        eventParameters.put(entry.companionId, parameters);
+        eventParameterExpiryTicks.put(entry.companionId, Long.MAX_VALUE);
         interactions.remove(entry.companionId);
         menuActions.remove(entry.companionId);
         survivalNavigations.remove(entry.companionId);
@@ -260,6 +266,7 @@ final class BehaviorDirector {
             interactions.remove(entry.companionId);
             menuActions.remove(entry.companionId);
             retreats.remove(entry.companionId);
+            eventParameterExpiryTicks.put(entry.companionId, (long) server.getTickCount() + 10L);
         }
         if ((success || !isSuspension(code))
                 && controlArbiter.snapshot(entry.companionId).authority()
@@ -311,6 +318,8 @@ final class BehaviorDirector {
         defends.remove(companionId);
         interactions.remove(companionId);
         menuActions.remove(companionId);
+        eventParameters.remove(companionId);
+        eventParameterExpiryTicks.remove(companionId);
         dailyActions.forget(companionId);
         actionGateway.discard(companionId);
         MenuSessionTracker.invalidate(companionId);
@@ -331,6 +340,16 @@ final class BehaviorDirector {
         var daily = dailyActions.observation(companionId);
         if (daily != null) return dailyObservation(daily);
         return observations.get(companionId);
+    }
+
+    SkillParameters eventParameters(UUID companionId) {
+        Long expiry = eventParameterExpiryTicks.get(companionId);
+        if (expiry != null && expiry != Long.MAX_VALUE && server.getTickCount() > expiry) {
+            eventParameterExpiryTicks.remove(companionId);
+            eventParameters.remove(companionId);
+            return null;
+        }
+        return eventParameters.get(companionId);
     }
 
     EntityEventTracker.TargetBinding entityEventTarget(CompanionEntry entry) {

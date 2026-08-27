@@ -329,6 +329,25 @@ public final class CompanionRegistry {
         return entry == null ? null : liveBodies.get(entry.companionId);
     }
 
+    /** Stable target identity currently used by the real body behavior, if it is entity-bound. */
+    public com.mccompanion.minecraft.bridge.EntityEventTracker.TargetBinding entityEventTarget(
+            String companionId) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        return entry == null ? null : behaviorDirector.entityEventTarget(entry);
+    }
+
+    /** Cheap bounded observation bindings; unlike runtimeSnapshots this does not scan inventory or blocks. */
+    public java.util.List<EntityEventBinding> entityEventBindings() {
+        java.util.List<EntityEventBinding> bindings = new ArrayList<>();
+        for (CompanionEntry entry : savedData.entries()) {
+            CompanionPlayer body = liveBodies.get(entry.companionId);
+            if (body == null || !body.isAlive()) continue;
+            bindings.add(new EntityEventBinding(entry.companionId.toString(), body,
+                    entry.runtimeBehaviorId, behaviorDirector.entityEventTarget(entry)));
+        }
+        return java.util.List.copyOf(bindings);
+    }
+
     public RuntimeResult runtimeAcquireLease(
             String companionId,
             String proposedLeaseId,
@@ -861,6 +880,9 @@ public final class CompanionRegistry {
             int z,
             double distanceSquared) {
     }
+
+    public record EntityEventBinding(String companionId, CompanionPlayer body, String behaviorId,
+                                     com.mccompanion.minecraft.bridge.EntityEventTracker.TargetBinding target) { }
 
     public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {
         static RuntimeResult success(String behaviorId, long revision, String state) {

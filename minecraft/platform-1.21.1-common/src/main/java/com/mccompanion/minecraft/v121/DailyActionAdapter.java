@@ -207,6 +207,23 @@ final class DailyActionAdapter implements DailyActionEngine.Adapter {
 
     boolean has(UUID companionId) { return sessions.containsKey(companionId); }
 
+    com.mccompanion.minecraft.bridge.EntityEventTracker.TargetBinding entityEventTarget(UUID companionId) {
+        String sessionId = sessions.get(companionId);
+        if (sessionId == null) return null;
+        try {
+            DailyActionEngine.Session session = engine.inspect(sessionId);
+            String targetId = switch (session.phase()) {
+                case APPROACH_SECOND_ANIMAL, FEED_SECOND -> session.secondaryTargetId();
+                default -> session.selectedTargetId();
+            };
+            if (targetId == null || targetId.isBlank()) return null;
+            return new com.mccompanion.minecraft.bridge.EntityEventTracker.TargetBinding(
+                    targetId, com.mccompanion.minecraft.bridge.EntityEventTracker.TargetKind.CURRENT);
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
+    }
+
     boolean tick(CompanionEntry entry, CompanionPlayer body) {
         String id = sessions.get(entry.companionId);
         if (id == null) return false;

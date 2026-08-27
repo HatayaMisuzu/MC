@@ -27,6 +27,8 @@ import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
 import com.mccompanion.runtime.brain.BrainContextAssembler;
+import com.mccompanion.runtime.event.PlayerEntityEventNormalizer;
+import com.mccompanion.runtime.event.RuntimeEventService;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.mccompanion.runtime.tool.RegistryToolGateway;
 import org.java_websocket.WebSocket;
@@ -63,6 +65,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final BrainContextAssembler brainContexts;
     private final TaskGraphRuntime taskGraphRuntime;
     private volatile RegistryToolGateway registryQueries;
+    private volatile RuntimeEventService runtimeEvents;
+    private final PlayerEntityEventNormalizer playerEntityEvents;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
@@ -101,6 +105,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.clock = clock;
+        this.playerEntityEvents = new PlayerEntityEventNormalizer();
         this.planningExecutor = boundedPlanningExecutor();
         setConnectionLostTimeout(30);
         setReuseAddr(true);
@@ -116,6 +121,11 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     public void attachRegistryQueries(RegistryToolGateway gateway) {
         if (registryQueries != null) throw new IllegalStateException("Registry query gateway is already attached");
         registryQueries = java.util.Objects.requireNonNull(gateway, "gateway");
+    }
+
+    public void attachRuntimeEvents(RuntimeEventService service) {
+        if (runtimeEvents != null) throw new IllegalStateException("Runtime event service is already attached");
+        runtimeEvents = java.util.Objects.requireNonNull(service, "service");
     }
 
     @Override
@@ -251,10 +261,21 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             }
             case "player_request" -> handlePlayerRequest(session, payload);
             case "owner_activity" -> handleOwnerActivity(session, payload);
+            case "player_entity_event" -> handlePlayerEntityEvent(session, payload);
             case "conversation_delivery_ack" -> acknowledgeConversationDelivery(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }
             default -> sendError(session.peer(), session, "UNKNOWN_MESSAGE_TYPE", "Unsupported message type");
         }
+    }
+
+    private void handlePlayerEntityEvent(RuntimeSession session, JsonNode payload) throws SQLException {
+        String companionId = required(payload, "companionId");
+        requireAuthority(session, companionId);
+        RuntimeEventService service = runtimeEvents;
+        if (service == null) throw new IllegalStateException("RUNTIME_EVENT_SERVICE_UNAVAILABLE");
+        PlayerEntityEventNormalizer.Normalized normalized = playerEntityEvents.normalize(
+                payload, commands.activeTaskFor(companionId));
+        service.admit(normalized.event(), normalized.policy());
     }
 
     private void acknowledgeConversationDelivery(RuntimeSession session, JsonNode payload) throws SQLException {

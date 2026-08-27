@@ -5,6 +5,7 @@ import com.mccompanion.core.navigation.GridPathPlanner;
 import com.mccompanion.core.navigation.RouteExecutionController;
 import com.mccompanion.core.navigation.SurvivalNavigationPolicy;
 import com.mccompanion.minecraft.navigation.MinecraftSurvivalNavigationExecution;
+import com.mccompanion.minecraft.bridge.EntityEventTracker;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -330,6 +331,35 @@ final class BehaviorDirector {
         var daily = dailyActions.observation(companionId);
         if (daily != null) return dailyObservation(daily);
         return observations.get(companionId);
+    }
+
+    EntityEventTracker.TargetBinding entityEventTarget(CompanionEntry entry) {
+        CompanionEntry.Mode effective = entry.mode == CompanionEntry.Mode.PAUSED ? entry.resumeMode : entry.mode;
+        if (effective == CompanionEntry.Mode.FOLLOW) {
+            return new EntityEventTracker.TargetBinding(
+                    entry.ownerId.toString(), EntityEventTracker.TargetKind.FOLLOW);
+        }
+        EntityEventTracker.TargetBinding dailyTarget = dailyActions.entityEventTarget(entry.companionId);
+        if (dailyTarget != null) return dailyTarget;
+        RetreatProgress retreat = retreats.get(entry.companionId);
+        if (retreat != null && retreat.threatId != null) return currentTarget(retreat.threatId);
+        DefendProgress defend = defends.get(entry.companionId);
+        if (defend != null && !defend.threatId.equals(new UUID(0L, 0L))) return currentTarget(defend.threatId);
+        InteractionProgress interaction = interactions.get(entry.companionId);
+        if (interaction != null && interaction.entityId != null) return currentTarget(interaction.entityId);
+        SkillProgress skill = skills.get(entry.companionId);
+        return skill == null ? null : targetId(skill.parameters.targetId());
+    }
+
+    private static EntityEventTracker.TargetBinding targetId(String value) {
+        if (value == null || value.isBlank()) return null;
+        try { return currentTarget(UUID.fromString(value)); }
+        catch (IllegalArgumentException ignored) { return null; }
+    }
+
+    private static EntityEventTracker.TargetBinding currentTarget(UUID targetId) {
+        return new EntityEventTracker.TargetBinding(
+                targetId.toString(), EntityEventTracker.TargetKind.CURRENT);
     }
 
     private static CompanionRegistry.BehaviorObservation dailyObservation(

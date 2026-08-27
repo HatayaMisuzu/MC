@@ -6,6 +6,7 @@ import com.mccompanion.core.navigation.GridPathPlanner;
 import com.mccompanion.core.navigation.RouteExecutionController;
 import com.mccompanion.core.navigation.SurvivalNavigationPolicy;
 import com.mccompanion.minecraft.navigation.MinecraftSurvivalNavigationExecution;
+import com.mccompanion.minecraft.bridge.EntityEventTracker;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -239,6 +240,28 @@ final class BehaviorDirector {
 
     CompanionRegistry.BehaviorObservation behaviorObservation(UUID companionId) {
         return observations.get(companionId);
+    }
+
+    EntityEventTracker.TargetBinding entityEventTarget(CompanionEntry entry) {
+        CompanionEntry.Mode effective = entry.mode == CompanionEntry.Mode.PAUSED ? entry.resumeMode : entry.mode;
+        if (effective == CompanionEntry.Mode.FOLLOW) {
+            return new EntityEventTracker.TargetBinding(
+                    entry.ownerId.toString(), EntityEventTracker.TargetKind.FOLLOW);
+        }
+        EntityEventTracker.TargetBinding dailyTarget = dailyActions.entityEventTarget(entry.companionId);
+        if (dailyTarget != null) return dailyTarget;
+        PrimitiveProgress progress = primitives.get(entry.companionId);
+        if (progress == null) return null;
+        if (progress.entityId != null) return currentTarget(progress.entityId);
+        String targetId = progress.parameters.targetId();
+        if (targetId == null || targetId.isBlank()) return null;
+        try { return currentTarget(UUID.fromString(targetId)); }
+        catch (IllegalArgumentException ignored) { return null; }
+    }
+
+    private static EntityEventTracker.TargetBinding currentTarget(UUID targetId) {
+        return new EntityEventTracker.TargetBinding(
+                targetId.toString(), EntityEventTracker.TargetKind.CURRENT);
     }
 
     void tick(CompanionEntry entry, CompanionPlayer body) {

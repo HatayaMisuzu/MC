@@ -86,6 +86,8 @@ public final class MinecraftAiCompanionForge {
         CompanionRegistry current = registryFor(event.getServer());
         if (current != null) {
             current.tick();
+            RuntimeBridge bridge = runtimeBridge;
+            if (bridge != null) bridge.tick();
             ForgePersistenceRestartProbe.tick(event.getServer(), current, LOGGER);
         }
     }

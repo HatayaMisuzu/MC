@@ -75,6 +75,8 @@ public final class MinecraftAiCompanionFabric implements ModInitializer {
         CompanionRegistry current = registryFor(server);
         if (current != null) {
             current.tick();
+            RuntimeBridge bridge = runtimeBridge;
+            if (bridge != null) bridge.tick();
         }
     }
 

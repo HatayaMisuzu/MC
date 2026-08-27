@@ -270,6 +270,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     taskGraphRuntime,
                     log);
             webSocket.attachRegistryQueries(registryTools);
+            webSocket.attachRuntimeEvents(runtimeEvents);
             webSocket.startAndAwait(Duration.ofSeconds(15));
             runtimeEvents.start(new RuntimeEventBrainDispatcher(externalBrain,
                     new BrainContextAssembler(companions, sessions, capabilityVisibility,

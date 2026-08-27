@@ -48,6 +48,65 @@ class RuntimeApplicationTest {
     @TempDir Path temporary;
 
     @Test
+    void authenticatedHostileEntityEventUsesDurableQueueAndWakesBrain() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("hostile-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("A hostile entered the companion's threat range.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"entity-event-world","capabilities":{"player_entity_events":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"entity-event-companion","ownerId":"event-owner",
+                      "displayName":"Entity Event Companion","worldId":"entity-event-world",
+                      "dimension":"minecraft:overworld","position":{"x":0,"y":64,"z":0},
+                      "bodyState":"spawned","behaviorRevision":0,"controlEpoch":0,
+                      "runtimeConnected":true,"capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("entity-event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            client.send("""
+                    {"type":"player_entity_event","sessionId":"%s","sequence":1,"payload":{
+                      "eventId":"hostile-edge-1","eventType":"HOSTILE_ENTERED_THREAT_RANGE",
+                      "priority":"LOW","source":"UNTRUSTED","companionId":"entity-event-companion",
+                      "tick":42,"occurredAt":"%s","target":{"entityId":"zombie-uuid",
+                      "entityType":"minecraft:zombie","displayName":"Zombie","player":false,
+                      "hostile":true,"alive":true,"distanceSquared":9.0}}}
+                    """.formatted(sessionId, Instant.now()));
+
+            client.awaitConversationReplies(List.of(
+                    "A hostile entered the companion's threat range."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("HOSTILE_ENTERED_THREAT_RANGE", event.path("eventType").asText());
+            assertEquals("CRITICAL", event.path("priority").asText());
+            assertEquals("zombie-uuid", event.path("target").path("entityId").asText());
+            assertTrue(event.path("rules").path("criticalMayInterrupt").asBoolean());
+            assertFalse(event.has("taskId"), "unbound critical threat must not fabricate a task binding");
+            client.closeBlocking();
+        }
+    }
+
+    @Test
     void blockedTaskEventWakesExternalBrainAndQueuesOwnerVisibleReply() throws Exception {
         RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("task-event-brain-wake"));
         config.server.port = 0;

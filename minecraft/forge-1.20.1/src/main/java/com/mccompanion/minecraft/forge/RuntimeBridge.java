@@ -10,6 +10,8 @@ import com.mccompanion.minecraft.v120.SkillParameters;
 import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import com.mccompanion.minecraft.bridge.RuntimeCommandArguments;
 import com.mccompanion.minecraft.bridge.ConnectionEpochGate;
+import com.mccompanion.minecraft.bridge.EntityEventTracker;
+import com.mccompanion.minecraft.v120.EntityEventObservationService;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -62,6 +64,8 @@ final class RuntimeBridge implements AutoCloseable {
     private final Map<String, Long> ownerActivityTimes = new ConcurrentHashMap<>();
     private final ConversationDeliveryWindow deliveredConversationEvents =
             new ConversationDeliveryWindow(512);
+    private final EntityEventTracker entityEvents = new EntityEventTracker();
+    private final EntityEventObservationService entityEventObservations;
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -72,6 +76,7 @@ final class RuntimeBridge implements AutoCloseable {
         this.registry = registry;
         this.logger = logger;
         this.settings = BridgeSettings.load(logger);
+        this.entityEventObservations = new EntityEventObservationService(server);
         this.executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-forge-runtime-bridge");
             thread.setDaemon(true);
@@ -152,6 +157,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("recipe_query", true)
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
+                .put("player_entity_events", true)
                 .put("NavigateTo", true)
                 .put("NavigateWithWorldChanges", true)
                 .put("FollowOwner", true)
@@ -535,6 +541,39 @@ final class RuntimeBridge implements AutoCloseable {
         server.execute(this::publishStatusOnServerThread);
     }
 
+    /** Runs on the Minecraft server thread and observes only bounded areas around live bodies. */
+    void tick() {
+        if (closed || socket == null || sessionId == null || server.getTickCount() % 5 != 0) return;
+        java.util.Set<String> observedCompanions = new java.util.HashSet<>();
+        Instant observedAt = Instant.now();
+        for (CompanionRegistry.EntityEventBinding binding : registry.entityEventBindings()) {
+            observedCompanions.add(binding.companionId());
+            EntityEventTracker.Snapshot snapshot = entityEventObservations.snapshot(
+                    binding.body(), binding.behaviorId(), binding.target(), server.getTickCount(), observedAt);
+            for (EntityEventTracker.Event event : entityEvents.observe(snapshot)) sendEntityEvent(event);
+        }
+        entityEvents.retainCompanions(observedCompanions);
+    }
+
+    private void sendEntityEvent(EntityEventTracker.Event event) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", event.eventId())
+                .put("eventType", event.type().name())
+                .put("priority", event.priority().name())
+                .put("source", "MINECRAFT_ENTITY_OBSERVER")
+                .put("companionId", event.companionId())
+                .put("tick", event.tick())
+                .put("occurredAt", event.occurredAt().toString());
+        if (event.behaviorId() != null) payload.put("behaviorId", event.behaviorId());
+        EntityEventTracker.EntityFact target = event.target();
+        payload.putObject("target")
+                .put("entityId", target.identity()).put("entityType", target.type())
+                .put("displayName", target.displayName() == null ? "" : target.displayName())
+                .put("player", target.player()).put("hostile", target.hostile())
+                .put("alive", target.alive()).put("distanceSquared", target.distanceSquared());
+        sendEnvelope("player_entity_event", payload);
+    }
+
     private void publishStatusOnServerThread() {
         if (socket == null || sessionId == null) return;
         ArrayNode companions = JSON.createArrayNode();
@@ -780,6 +819,7 @@ final class RuntimeBridge implements AutoCloseable {
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
+        entityEvents.clear();
         if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
         server.execute(() -> {
             if (!connections.isLatestAttempt(attempt) && socket != null && sessionId != null) return;

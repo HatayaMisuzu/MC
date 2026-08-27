@@ -24,10 +24,8 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
     }
 
     @Override public RuntimeEventService.DispatchResult dispatch(RuntimeEvent event) throws Exception {
+        if (!wakeEligible(event)) return RuntimeEventService.DispatchResult.SUPPRESSED;
         if (brain == null) return RuntimeEventService.DispatchResult.DEFERRED;
-        if (!event.taskBound() && event.priority() != RuntimeEvent.Priority.CRITICAL) {
-            return RuntimeEventService.DispatchResult.SUPPRESSED;
-        }
         if (event.priority() == RuntimeEvent.Priority.CRITICAL) {
             brain.pauseActiveForCriticalEvent(CONTROLLER_ID, event.companionId(), event.eventType());
         }
@@ -55,5 +53,12 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
             conversations.deliverPending(event.companionId());
         }
         return RuntimeEventService.DispatchResult.DELIVERED;
+    }
+
+    static boolean wakeEligible(RuntimeEvent event) {
+        if (event.taskBound()) return true;
+        if (event.priority() != RuntimeEvent.Priority.CRITICAL) return false;
+        return event.category() != RuntimeEvent.Category.PLAYER_ENTITY
+                || event.eventType().equals("HOSTILE_ENTERED_THREAT_RANGE");
     }
 }

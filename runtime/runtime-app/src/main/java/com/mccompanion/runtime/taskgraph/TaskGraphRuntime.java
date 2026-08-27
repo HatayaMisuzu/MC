@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,6 +64,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
     private final Map<String, Running> active = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> timedWaits = new ConcurrentHashMap<>();
     private final Object admissionLock = new Object();
+    private volatile LifecycleListener lifecycleListener = (record, transition, details) -> { };
 
     public TaskGraphRuntime(ToolGateway tools, TaskGraphExecutionRepository repository) {
         this(tools, repository, null);
@@ -332,6 +334,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                             record.state(), record.currentNodeId(), record.completedNodes(), record.toolResults(),
                             record.variables(), record.outputs(), checkpoints, evidence, record.waitingQuestion(),
                             record.result(), "EXTERNAL_CHECKPOINT");
+                    notifyEventListener(saved, "CHECKPOINT", event);
                     return new ToolResult(call.callId(), call.name(), true, "OK",
                             inspectJson(saved), true);
                 } catch (IllegalStateException stale) {
@@ -667,6 +670,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
         ToolContext context = running.context();
         TaskGraphExecutionControl control = running.control();
         AtomicLong revision = new AtomicLong(record.revision());
+        String[] lastCheckpoint = {lastCheckpointIdentity(record.checkpoints())};
         try {
             TaskGraphExecutionResult result = new TaskGraphExecutor(
                     tools, validator, executableNodeTypes, parallelWorkers)
@@ -680,6 +684,19 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                     snapshot.waitingQuestion(),
                                     snapshot.result(), snapshot.resultCode());
                             revision.set(saved.revision());
+                            if (!TERMINAL.contains(saved.state())) {
+                                notifyEventListener(saved, "PROGRESS", Json.object()
+                                        .put("currentNodeId", saved.currentNodeId() == null
+                                                ? "" : saved.currentNodeId())
+                                        .put("state", saved.state()));
+                            }
+                            String checkpointIdentity = lastCheckpointIdentity(saved.checkpoints());
+                            if (checkpointIdentity != null
+                                    && !java.util.Objects.equals(lastCheckpoint[0], checkpointIdentity)) {
+                                lastCheckpoint[0] = checkpointIdentity;
+                                notifyEventListener(saved, "CHECKPOINT",
+                                        saved.checkpoints().get(saved.checkpoints().size() - 1));
+                            }
                             notifyTerminalLifecycle(saved);
                         } catch (SQLException failure) {
                             throw new IllegalStateException("TASK_GRAPH_PERSISTENCE_ERROR", failure);
@@ -958,8 +975,12 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     private boolean notifyLifecycle(TaskGraphExecutionRecord record, String transition) {
-        if (conversations == null) return true;
         String reasonCode = boundedReasonCode(record);
+        JsonNode details = Json.object().put("source", "TASK_GRAPH_RUNTIME")
+                .put("executionId", record.executionId()).put("state", record.state())
+                .put("transition", transition).put("reasonCode", reasonCode);
+        notifyEventListener(record, transition, details);
+        if (conversations == null) return true;
         String message = switch (transition) {
             case "STARTED" -> "Task started.";
             case "PAUSED" -> "Task paused. Use the Terminal to resume or cancel.";
@@ -971,9 +992,6 @@ public final class TaskGraphRuntime implements AutoCloseable {
         };
         String identity = record.executionId() + ':' + record.revision() + ':' + transition;
         String eventId = "task-graph-" + Digests.sha256(identity).substring(0, 32);
-        JsonNode details = Json.object().put("source", "TASK_GRAPH_RUNTIME")
-                .put("executionId", record.executionId()).put("state", record.state())
-                .put("transition", transition).put("reasonCode", reasonCode);
         try {
             conversations.appendOnce(eventId, record.companionId(), null, null,
                     "ASSISTANT", "TASK_GRAPH_LIFECYCLE", message, details);
@@ -989,6 +1007,30 @@ public final class TaskGraphRuntime implements AutoCloseable {
         String code = record.resultCode();
         if (code == null || !code.matches("[A-Z0-9_]{1,64}")) return record.state();
         return code;
+    }
+
+    public void setLifecycleListener(LifecycleListener listener) {
+        this.lifecycleListener = Objects.requireNonNull(listener, "listener");
+    }
+
+    private void notifyEventListener(TaskGraphExecutionRecord record, String transition, JsonNode details) {
+        try {
+            lifecycleListener.onLifecycle(record, transition,
+                    details == null ? Json.object() : details.deepCopy());
+        } catch (RuntimeException failure) {
+            LOGGER.warn("Task Graph event listener stopped safely: execution={} transition={}",
+                    record.executionId(), transition, failure);
+        }
+    }
+
+    private static String lastCheckpointIdentity(JsonNode checkpoints) {
+        if (checkpoints == null || !checkpoints.isArray() || checkpoints.isEmpty()) return null;
+        return Digests.sha256(Json.canonical(checkpoints.get(checkpoints.size() - 1)));
+    }
+
+    @FunctionalInterface
+    public interface LifecycleListener {
+        void onLifecycle(TaskGraphExecutionRecord record, String transition, JsonNode details);
     }
 
     private Map<String, ToolDefinition> ordinaryDefinitions(ToolContext context) {

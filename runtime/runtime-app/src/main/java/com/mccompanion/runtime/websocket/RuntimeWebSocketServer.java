@@ -26,6 +26,7 @@ import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
+import com.mccompanion.runtime.brain.BrainContextAssembler;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.mccompanion.runtime.tool.RegistryToolGateway;
 import org.java_websocket.WebSocket;
@@ -59,6 +60,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final MemoryRepository memories;
     private final ConversationService conversations;
     private final ExternalBrainCoordinator externalBrain;
+    private final BrainContextAssembler brainContexts;
     private final TaskGraphRuntime taskGraphRuntime;
     private volatile RegistryToolGateway registryQueries;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
@@ -94,6 +96,8 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.memories = memories;
         this.conversations = conversations;
         this.externalBrain = externalBrain;
+        this.brainContexts = new BrainContextAssembler(companions, sessions, capabilityVisibility,
+                memories, conversations, commands);
         this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.clock = clock;
@@ -332,7 +336,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 if (!sessions.isAuthoritative(session, companionId) || !ownerId.equals(companion.ownerId())) {
                     throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
                 }
-                var active = commands.activeTaskFor(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
                 if (waiting.isPresent() && taskGraphRuntime != null
@@ -364,18 +367,13 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         waiting = java.util.Optional.empty();
                     }
                 }
-                var recentConversation = conversations.recentTranscript(companionId, 12);
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
                     conversations.hear(companionId, null,
                             "MESSAGE", text, Json.object().put("channel", "GAME"));
                 }
-                var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
-                JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
-                AgentContext context = new AgentContext(companionId, verifiedWorld, recentConversation,
-                        active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
-                        memories.verifiedLandmarkKeys(companionId),
-                        visible.availableNames(), memories.preferenceContext(companionId, 24),
-                        memories.latestCapsuleContext(companionId), 5);
+                BrainContextAssembler.Prepared prepared = brainContexts.prepare(companionId);
+                var visible = prepared.capabilities();
+                AgentContext context = prepared.context();
                 if (externalBrain == null) {
                     reply.put("accepted", false).put("source", "external-brain")
                             .put("code", "EXTERNAL_BRAIN_UNAVAILABLE")

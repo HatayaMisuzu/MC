@@ -25,7 +25,8 @@ public final class RuntimeDatabase implements AutoCloseable {
             "memory_fact", "memory_suggestion", "memory_fact_history", "memory_settings",
             "episode_capsule", "conversation_event", "waiting_question",
             "brain_session", "brain_tool_call", "brain_semantic_state", "brain_behavior_settings",
-            "brain_completion_claim", "proactive_message_admission",
+            "brain_completion_claim", "proactive_message_admission", "runtime_event",
+            "runtime_event_dedup",
             "task_graph_execution", "skill_version", "skill_trial_lease",
             "mcp_request", "mcp_session", "mcp_event",
             "search_session", "schema_migration");
@@ -867,6 +868,69 @@ public final class RuntimeDatabase implements AutoCloseable {
                 "UPDATE brain_tool_call SET durable_active=1 WHERE observation_json LIKE '%\"executionMode\":\"ASYNCHRONOUS\"%'"
                         + " AND observation_json LIKE '%\"completionVerified\":false%'",
                 "CREATE INDEX brain_tool_call_durable_idx ON brain_tool_call(session_id,durable_active,updated_at)");
+        List<String> runtimeEvents = List.of(
+                """
+                CREATE TABLE runtime_event (
+                  event_id TEXT PRIMARY KEY,
+                  category TEXT NOT NULL,
+                  event_type TEXT NOT NULL,
+                  priority INTEGER NOT NULL,
+                  source TEXT NOT NULL,
+                  companion_id TEXT NOT NULL,
+                  task_id TEXT,
+                  task_graph_execution_id TEXT,
+                  target_json TEXT NOT NULL,
+                  dedup_key TEXT NOT NULL,
+                  coalesce_key TEXT,
+                  cooldown_key TEXT,
+                  payload_json TEXT NOT NULL,
+                  occurrence_count INTEGER NOT NULL,
+                  occurred_at INTEGER NOT NULL,
+                  observed_at INTEGER NOT NULL,
+                  available_at INTEGER NOT NULL,
+                  expires_at INTEGER NOT NULL,
+                  state TEXT NOT NULL,
+                  attempt_count INTEGER NOT NULL,
+                  delivered_at INTEGER,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  CHECK(priority BETWEEN 0 AND 3),
+                  CHECK(occurrence_count > 0),
+                  CHECK(attempt_count >= 0),
+                  CHECK(NOT(task_id IS NOT NULL AND task_graph_execution_id IS NOT NULL)),
+                  UNIQUE(companion_id,dedup_key)
+                )
+                """,
+                """
+                CREATE INDEX runtime_event_dispatch_idx
+                ON runtime_event(state,available_at,priority DESC,occurred_at)
+                """,
+                """
+                CREATE INDEX runtime_event_scope_idx
+                ON runtime_event(companion_id,state,updated_at DESC)
+                """,
+                """
+                CREATE INDEX runtime_event_coalesce_idx
+                ON runtime_event(companion_id,coalesce_key,state)
+                """,
+                """
+                CREATE INDEX runtime_event_cooldown_idx
+                ON runtime_event(companion_id,cooldown_key,state,delivered_at DESC)
+                """,
+                """
+                CREATE TABLE runtime_event_dedup (
+                  companion_id TEXT NOT NULL,
+                  dedup_key TEXT NOT NULL,
+                  event_id TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(companion_id,dedup_key),
+                  FOREIGN KEY(event_id) REFERENCES runtime_event(event_id) ON DELETE CASCADE
+                )
+                """,
+                """
+                CREATE INDEX runtime_event_dedup_retention_idx
+                ON runtime_event_dedup(created_at)
+                """);
         return List.of(
                 new Migration(1, "initial runtime schema", statements),
                 new Migration(2, "durable command correlation and single active task", taskSafety),
@@ -902,6 +966,7 @@ public final class RuntimeDatabase implements AutoCloseable {
                 new Migration(31, "persist structured completion-claim evidence conditions",
                         completionClaimConditions),
                 new Migration(32, "persist active durable execution tracking across Runtime restart",
-                        durableBrainTracking));
+                        durableBrainTracking),
+                new Migration(33, "persist bounded event-driven Brain wake admissions", runtimeEvents));
     }
 }

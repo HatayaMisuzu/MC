@@ -12,6 +12,12 @@ import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.workspace.SkillRepository;
 import com.mccompanion.runtime.workspace.AgentWorkspace;
 import com.mccompanion.runtime.security.Digests;
+import com.mccompanion.runtime.intent.Intent;
+import com.mccompanion.runtime.task.TaskType;
+import com.mccompanion.protocol.BehaviorEvent;
+import com.mccompanion.protocol.BehaviorEventType;
+import com.mccompanion.protocol.CommandAccepted;
+import com.mccompanion.protocol.ProtocolBehaviorState;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.junit.jupiter.api.Test;
@@ -40,6 +46,72 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class RuntimeApplicationTest {
     @TempDir Path temporary;
+
+    @Test
+    void blockedTaskEventWakesExternalBrainAndQueuesOwnerVisibleReply() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("task-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("Existing navigation is blocked; I did not start another goal.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"event-world","capabilities":{"NavigateTo":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"event-companion","ownerId":"event-owner","displayName":"Event Companion",
+                      "worldId":"event-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            var started = application.commands().execute("event-start", "event-companion",
+                    new Intent(TaskType.TRAVEL,
+                            Json.object().put("dimension", "minecraft:overworld")
+                                    .put("x", 8).put("y", 64).put("z", 0), "go to the marker"));
+            assertTrue(started.accepted());
+            client.awaitCommand("start_behavior", 5);
+            var task = application.commands().task(started.taskId()).orElseThrow();
+            application.commands().onCommandAccepted(new CommandAccepted(
+                    "event-start", false, task.behaviorId(), 1, Instant.now()));
+            application.commands().onBehaviorEvent(new BehaviorEvent(
+                    "blocked-event", task.behaviorId(), "event-start", "event-companion",
+                    BehaviorEventType.BLOCKED, ProtocolBehaviorState.BLOCKED, 2, 20, 0.0,
+                    "PATH_UNREACHABLE", "The target cannot be reached", Instant.now(),
+                    Json.object().put("controlEpoch", task.controlEpoch())
+                            .put("dimension", "minecraft:overworld")));
+
+            client.awaitConversationReplies(List.of(
+                    "Existing navigation is blocked; I did not start another goal."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("TASK_BLOCKED", event.path("eventType").asText());
+            assertEquals(started.taskId(), event.path("taskId").asText());
+            assertTrue(event.path("rules").path("doNotInventNewGoal").asBoolean());
+            assertEquals("BLOCKED", application.commands().task(started.taskId())
+                    .orElseThrow().state().name());
+            client.closeBlocking();
+        }
+    }
 
     @Test
     void startsCliWhenLegacyProviderAndExternalBrainAreDisabled() throws Exception {

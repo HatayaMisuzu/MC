@@ -11,6 +11,7 @@ import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.conversation.IncomingMessageResolution;
 import com.mccompanion.runtime.conversation.WaitingQuestion;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.event.RuntimeEvent;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -65,6 +66,20 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
     }
 
+    /** Delivers one admitted event without treating it as a new user-authored goal. */
+    public BrainCoordinatorResult continueEvent(String controllerId, RuntimeEvent event,
+                                                AgentContext context) {
+        java.util.Objects.requireNonNull(event, "event");
+        if (!event.taskBound() && event.priority() != RuntimeEvent.Priority.CRITICAL) {
+            throw new IllegalArgumentException("ordinary event requires an existing task binding");
+        }
+        Object lock = companionLocks.computeIfAbsent(event.companionId(), ignored -> new Object());
+        synchronized (lock) {
+            return continueTurnLocked(controllerId, event.companionId(), eventMessage(event), context,
+                    boundExecutionObservations(event));
+        }
+    }
+
     public BrainCoordinatorResult answer(String controllerId, WaitingQuestion question,
                                          IncomingMessageResolution resolution, AgentContext context) {
         if (question == null || question.brainSessionId() == null) {
@@ -96,6 +111,12 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
 
     private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
                                                        String userMessage, AgentContext context) {
+        return continueTurnLocked(controllerId, companionId, userMessage, context, List.of());
+    }
+
+    private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
+                                                       String userMessage, AgentContext context,
+                                                       List<ToolResult> injectedObservations) {
         requireController(controllerId);
         BrainBehaviorSettings behaviorSettings = audit == null
                 ? BrainBehaviorSettings.defaults(companionId) : audit.behaviorSettings(companionId);
@@ -103,6 +124,11 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         BrainSession session = sessions.get(companionId);
         List<ToolResult> recovered = interruptedObservations.remove(companionId);
         if (recovered == null) recovered = List.of();
+        if (injectedObservations != null && !injectedObservations.isEmpty()) {
+            List<ToolResult> combined = new ArrayList<>(recovered);
+            combined.addAll(injectedObservations);
+            recovered = List.copyOf(combined);
+        }
         if (session == null) {
             ToolContext provisional = new ToolContext(controllerId, "opening", companionId);
             BrainSessionRequest opening = new BrainSessionRequest(controllerId, companionId, baseContext,
@@ -329,6 +355,13 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         return accepted;
     }
 
+    /** Critical observed events may preempt current bounded Tools without inventing a new plan. */
+    public boolean pauseActiveForCriticalEvent(String controllerId, String companionId,
+                                               String eventType) {
+        String reason = "CRITICAL_EVENT_" + (eventType == null ? "UNKNOWN" : eventType);
+        return pauseActiveForUserInstruction(controllerId, companionId, reason);
+    }
+
     public void releaseController(String controllerId) {
         requireController(controllerId);
         List<BrainSession> cancelledSessions = List.copyOf(sessions.values());
@@ -479,6 +512,46 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             }
             if (companionTools.isEmpty()) activeTools.remove(companionId, companionTools);
         });
+    }
+
+    private List<ToolResult> boundExecutionObservations(RuntimeEvent event) {
+        String kind = event.taskId() != null ? "TASK"
+                : event.taskGraphExecutionId() != null ? "TASK_GRAPH" : null;
+        String id = event.taskId() != null ? event.taskId() : event.taskGraphExecutionId();
+        if (kind == null || id == null) return List.of();
+        List<ToolResult> observations = new ArrayList<>();
+        for (ActiveTool active : activeFor(event.companionId())) {
+            if (active.handle() == null || !kind.equals(active.handle().kind())
+                    || !id.equals(active.handle().id())) continue;
+            tools.inspectDurable(active.context(), active.handle()).filter(ToolResult::terminal)
+                    .ifPresent(observation -> {
+                        observations.add(observation);
+                        releaseCompletedDurable(event.companionId(), observation);
+                    });
+        }
+        return List.copyOf(observations);
+    }
+
+    private static String eventMessage(RuntimeEvent event) {
+        var value = Json.object().put("type", "runtime_event")
+                .put("eventId", event.eventId()).put("category", event.category().name())
+                .put("eventType", event.eventType()).put("priority", event.priority().name())
+                .put("source", event.source()).put("companionId", event.companionId())
+                .put("occurredAt", event.occurredAt().toString())
+                .put("observedAt", event.observedAt().toString())
+                .put("occurrenceCount", event.occurrenceCount());
+        if (event.taskId() != null) value.put("taskId", event.taskId());
+        if (event.taskGraphExecutionId() != null) {
+            value.put("taskGraphExecutionId", event.taskGraphExecutionId());
+        }
+        value.set("target", event.target());
+        value.set("payload", event.payload());
+        value.set("rules", Json.object()
+                .put("continueOnlyBoundGoal", true)
+                .put("doNotInventNewGoal", true)
+                .put("criticalMayInterrupt", event.priority() == RuntimeEvent.Priority.CRITICAL)
+                .put("ordinaryEventsWaitForCheckpoint", true));
+        return Json.write(value);
     }
 
     private void cancelActive(ActiveTool active, String reason) {

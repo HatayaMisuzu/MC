@@ -348,6 +348,25 @@ public final class CompanionRegistry {
         return java.util.List.copyOf(bindings);
     }
 
+    /** Bounded lifecycle/vital bindings, including death-pending and sleeping entries. */
+    public java.util.List<SurvivalEventBinding> survivalEventBindings() {
+        java.util.List<SurvivalEventBinding> bindings = new ArrayList<>();
+        for (CompanionEntry entry : savedData.entries()) {
+            CompanionPlayer body = liveBodies.get(entry.companionId);
+            com.mccompanion.minecraft.bridge.SurvivalEventTracker.Lifecycle lifecycle;
+            if (entry.deathPendingRecovery) {
+                lifecycle = com.mccompanion.minecraft.bridge.SurvivalEventTracker.Lifecycle.DEAD;
+            } else if (body != null && body.isAlive()) {
+                lifecycle = com.mccompanion.minecraft.bridge.SurvivalEventTracker.Lifecycle.ACTIVE;
+            } else {
+                lifecycle = com.mccompanion.minecraft.bridge.SurvivalEventTracker.Lifecycle.SLEEPING;
+            }
+            bindings.add(new SurvivalEventBinding(entry.companionId.toString(), body,
+                    entry.runtimeBehaviorId, lifecycle));
+        }
+        return java.util.List.copyOf(bindings);
+    }
+
     public RuntimeResult runtimeAcquireLease(
             String companionId,
             String proposedLeaseId,
@@ -883,6 +902,9 @@ public final class CompanionRegistry {
 
     public record EntityEventBinding(String companionId, CompanionPlayer body, String behaviorId,
                                      com.mccompanion.minecraft.bridge.EntityEventTracker.TargetBinding target) { }
+
+    public record SurvivalEventBinding(String companionId, CompanionPlayer body, String behaviorId,
+            com.mccompanion.minecraft.bridge.SurvivalEventTracker.Lifecycle lifecycle) { }
 
     public record RuntimeResult(boolean success, String code, String behaviorId, long behaviorRevision, String state) {
         static RuntimeResult success(String behaviorId, long revision, String state) {

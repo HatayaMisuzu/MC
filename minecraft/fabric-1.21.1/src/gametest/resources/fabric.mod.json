@@ -11,7 +11,8 @@
     "fabric-gametest": [
       "com.mccompanion.minecraft.v121.CompanionLifecycleGameTests",
       "com.mccompanion.minecraft.v121.DailyActionGameTests",
-      "com.mccompanion.minecraft.v121.EntityEventGameTests"
+      "com.mccompanion.minecraft.v121.EntityEventGameTests",
+      "com.mccompanion.minecraft.v121.SurvivalEventGameTests"
     ]
   },
   "depends": {

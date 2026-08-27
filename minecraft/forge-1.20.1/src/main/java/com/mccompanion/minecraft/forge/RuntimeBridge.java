@@ -11,7 +11,9 @@ import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import com.mccompanion.minecraft.bridge.RuntimeCommandArguments;
 import com.mccompanion.minecraft.bridge.ConnectionEpochGate;
 import com.mccompanion.minecraft.bridge.EntityEventTracker;
+import com.mccompanion.minecraft.bridge.SurvivalEventTracker;
 import com.mccompanion.minecraft.v120.EntityEventObservationService;
+import com.mccompanion.minecraft.v120.SurvivalEventObservationService;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -66,6 +68,8 @@ final class RuntimeBridge implements AutoCloseable {
             new ConversationDeliveryWindow(512);
     private final EntityEventTracker entityEvents = new EntityEventTracker();
     private final EntityEventObservationService entityEventObservations;
+    private final SurvivalEventTracker survivalEvents = new SurvivalEventTracker();
+    private final SurvivalEventObservationService survivalEventObservations;
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -77,6 +81,7 @@ final class RuntimeBridge implements AutoCloseable {
         this.logger = logger;
         this.settings = BridgeSettings.load(logger);
         this.entityEventObservations = new EntityEventObservationService(server);
+        this.survivalEventObservations = new SurvivalEventObservationService();
         this.executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-forge-runtime-bridge");
             thread.setDaemon(true);
@@ -553,6 +558,16 @@ final class RuntimeBridge implements AutoCloseable {
             for (EntityEventTracker.Event event : entityEvents.observe(snapshot)) sendEntityEvent(event);
         }
         entityEvents.retainCompanions(observedCompanions);
+        java.util.Set<String> observedSurvivalCompanions = new java.util.HashSet<>();
+        for (CompanionRegistry.SurvivalEventBinding binding : registry.survivalEventBindings()) {
+            observedSurvivalCompanions.add(binding.companionId());
+            SurvivalEventTracker.Snapshot snapshot = survivalEventObservations.snapshot(
+                    binding, server.getTickCount(), observedAt);
+            for (SurvivalEventTracker.Event event : survivalEvents.observe(snapshot)) {
+                sendSurvivalEvent(event);
+            }
+        }
+        survivalEvents.retainCompanions(observedSurvivalCompanions);
     }
 
     private void sendEntityEvent(EntityEventTracker.Event event) {
@@ -572,6 +587,24 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("player", target.player()).put("hostile", target.hostile())
                 .put("alive", target.alive()).put("distanceSquared", target.distanceSquared());
         sendEnvelope("player_entity_event", payload);
+    }
+
+    private void sendSurvivalEvent(SurvivalEventTracker.Event event) {
+        SurvivalEventTracker.Snapshot snapshot = event.snapshot();
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", event.eventId()).put("eventType", event.type().name())
+                .put("priority", event.priority().name()).put("source", "MINECRAFT_SURVIVAL_OBSERVER")
+                .put("companionId", snapshot.companionId()).put("tick", snapshot.tick())
+                .put("occurredAt", snapshot.observedAt().toString())
+                .put("previousHealth", event.previousHealth()).put("damageAmount", event.damageAmount());
+        if (snapshot.behaviorId() != null) payload.put("behaviorId", snapshot.behaviorId());
+        payload.putObject("vitals")
+                .put("lifecycle", snapshot.lifecycle().name())
+                .put("health", snapshot.health()).put("maxHealth", snapshot.maxHealth())
+                .put("air", snapshot.air()).put("maxAir", snapshot.maxAir())
+                .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava())
+                .put("onGround", snapshot.onGround()).put("fallDistance", snapshot.fallDistance());
+        sendEnvelope("survival_event", payload);
     }
 
     private void publishStatusOnServerThread() {
@@ -820,6 +853,7 @@ final class RuntimeBridge implements AutoCloseable {
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
         entityEvents.clear();
+        survivalEvents.clear();
         if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
         server.execute(() -> {
             if (!connections.isLatestAttempt(attempt) && socket != null && sessionId != null) return;
@@ -928,6 +962,8 @@ final class RuntimeBridge implements AutoCloseable {
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
+        entityEvents.clear();
+        survivalEvents.clear();
         executor.shutdownNow();
     }
 

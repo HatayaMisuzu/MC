@@ -41,45 +41,34 @@ public final class RuntimeEventRepository {
         if (event.expiresAt().toEpochMilli() <= now) {
             return new Admission(false, "EVENT_STALE", event.eventId(), false, 0);
         }
+        return admitTransaction(event, policy, now, false);
+    }
+
+    /** Atomically invalidates the old lifecycle and persists its death edge. */
+    public Admission admitDeath(RuntimeEvent event, RuntimeEvent.AdmissionPolicy policy) throws SQLException {
+        Objects.requireNonNull(event, "event");
+        Objects.requireNonNull(policy, "policy");
+        if (event.category() != RuntimeEvent.Category.SURVIVAL || !event.eventType().equals("DEATH")) {
+            throw new IllegalArgumentException("death admission requires a SURVIVAL/DEATH event");
+        }
+        long now = clock.millis();
+        if (event.expiresAt().toEpochMilli() <= now) {
+            return new Admission(false, "EVENT_STALE", event.eventId(), false, 0);
+        }
+        return admitTransaction(event, policy, now, true);
+    }
+
+    private Admission admitTransaction(RuntimeEvent event, RuntimeEvent.AdmissionPolicy policy,
+                                        long now, boolean invalidateBeforeDeath) throws SQLException {
         try (Connection connection = database.open()) {
             connection.setAutoCommit(false);
             try {
-                prune(connection, now, event.companionId());
-                Admission duplicate = duplicate(connection, event);
-                if (duplicate != null) {
-                    connection.commit();
-                    return duplicate;
+                if (invalidateBeforeDeath) {
+                    staleBeforeDeath(connection, event.companionId(), event.occurredAt(), now);
                 }
-                Admission coalesced = coalesce(connection, event, policy, now);
-                if (coalesced != null) {
-                    connection.commit();
-                    return coalesced;
-                }
-                if (coolingDown(connection, event, policy, now)) {
-                    connection.commit();
-                    return new Admission(false, "EVENT_COOLDOWN", event.eventId(), false, 0);
-                }
-                int pending = pendingCount(connection, event.companionId());
-                if (pending >= pendingCapacity && !evictLowerPriority(connection, event)) {
-                    connection.commit();
-                    return new Admission(false, "EVENT_QUEUE_FULL", event.eventId(), false, pending);
-                }
-                long availableAt = Math.addExact(now, policy.debounce().toMillis());
-                try (PreparedStatement insert = connection.prepareStatement("""
-                        INSERT INTO runtime_event(
-                          event_id,category,event_type,priority,source,companion_id,task_id,
-                          task_graph_execution_id,target_json,dedup_key,coalesce_key,cooldown_key,
-                          payload_json,occurrence_count,occurred_at,observed_at,available_at,expires_at,
-                          state,attempt_count,created_at,updated_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',0,?,?)
-                        """)) {
-                    bindEvent(insert, event, availableAt, now);
-                    insert.executeUpdate();
-                }
-                rememberDedup(connection, event.companionId(), event.dedupKey(), event.eventId(), now);
+                Admission admission = admit(connection, event, policy, now);
                 connection.commit();
-                return new Admission(true, "EVENT_ADMITTED", event.eventId(), false,
-                        pendingCount(event.companionId()));
+                return admission;
             } catch (SQLException | RuntimeException failure) {
                 connection.rollback();
                 throw failure;
@@ -87,6 +76,37 @@ public final class RuntimeEventRepository {
                 connection.setAutoCommit(true);
             }
         }
+    }
+
+    private Admission admit(Connection connection, RuntimeEvent event,
+                            RuntimeEvent.AdmissionPolicy policy, long now) throws SQLException {
+        prune(connection, now, event.companionId());
+        Admission duplicate = duplicate(connection, event);
+        if (duplicate != null) return duplicate;
+        Admission coalesced = coalesce(connection, event, policy, now);
+        if (coalesced != null) return coalesced;
+        if (coolingDown(connection, event, policy, now)) {
+            return new Admission(false, "EVENT_COOLDOWN", event.eventId(), false, 0);
+        }
+        int pending = pendingCount(connection, event.companionId());
+        if (pending >= pendingCapacity && !evictLowerPriority(connection, event)) {
+            return new Admission(false, "EVENT_QUEUE_FULL", event.eventId(), false, pending);
+        }
+        long availableAt = Math.addExact(now, policy.debounce().toMillis());
+        try (PreparedStatement insert = connection.prepareStatement("""
+                INSERT INTO runtime_event(
+                  event_id,category,event_type,priority,source,companion_id,task_id,
+                  task_graph_execution_id,target_json,dedup_key,coalesce_key,cooldown_key,
+                  payload_json,occurrence_count,occurred_at,observed_at,available_at,expires_at,
+                  state,attempt_count,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',0,?,?)
+                """)) {
+            bindEvent(insert, event, availableAt, now);
+            insert.executeUpdate();
+        }
+        rememberDedup(connection, event.companionId(), event.dedupKey(), event.eventId(), now);
+        return new Admission(true, "EVENT_ADMITTED", event.eventId(), false,
+                pendingCount(connection, event.companionId()));
     }
 
     public Optional<RuntimeEvent> claimReady() throws SQLException {
@@ -136,6 +156,21 @@ public final class RuntimeEventRepository {
         terminal(eventId, "SUPPRESSED", clock.millis());
     }
 
+    /** Prevents any pre-death event from waking or retrying after lifecycle invalidation. */
+    private static int staleBeforeDeath(Connection connection, String companionId,
+                                        Instant deathOccurredAt, long now) throws SQLException {
+        try (PreparedStatement update = connection.prepareStatement("""
+                UPDATE runtime_event SET state='STALE',updated_at=?
+                WHERE companion_id=? AND state IN ('PENDING','DISPATCHING')
+                  AND event_type NOT IN ('DEATH','RESPAWN') AND occurred_at<=?
+                """)) {
+            update.setLong(1, now);
+            update.setString(2, companionId);
+            update.setLong(3, deathOccurredAt.toEpochMilli());
+            return update.executeUpdate();
+        }
+    }
+
     public void defer(String eventId, Duration delay) throws SQLException {
         Objects.requireNonNull(delay, "delay");
         if (delay.isNegative() || delay.compareTo(Duration.ofMinutes(5)) > 0) {
@@ -150,7 +185,9 @@ public final class RuntimeEventRepository {
             update.setLong(2, now);
             update.setString(3, eventId);
             update.setLong(4, now);
-            if (update.executeUpdate() != 1) throw new IllegalStateException("EVENT_DEFER_CONFLICT");
+            if (update.executeUpdate() != 1 && !hasState(connection, eventId, "STALE")) {
+                throw new IllegalStateException("EVENT_DEFER_CONFLICT");
+            }
         }
     }
 
@@ -210,7 +247,20 @@ public final class RuntimeEventRepository {
             update.setLong(2, now);
             update.setLong(3, now);
             update.setString(4, eventId);
-            if (update.executeUpdate() != 1) throw new IllegalStateException("EVENT_DELIVERY_CONFLICT");
+            if (update.executeUpdate() != 1 && !hasState(connection, eventId, "STALE")) {
+                throw new IllegalStateException("EVENT_DELIVERY_CONFLICT");
+            }
+        }
+    }
+
+    private static boolean hasState(Connection connection, String eventId, String state) throws SQLException {
+        try (PreparedStatement query = connection.prepareStatement(
+                "SELECT 1 FROM runtime_event WHERE event_id=? AND state=? LIMIT 1")) {
+            query.setString(1, eventId);
+            query.setString(2, state);
+            try (ResultSet row = query.executeQuery()) {
+                return row.next();
+            }
         }
     }
 

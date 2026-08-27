@@ -61,6 +61,15 @@ public final class RuntimeEventService implements CommandService.TaskLifecycleLi
         return repository.admit(event, policy);
     }
 
+    public RuntimeEventRepository.Admission admitSurvival(
+            SurvivalEventNormalizer.Normalized normalized) throws SQLException {
+        Objects.requireNonNull(normalized, "normalized");
+        if (normalized.invalidatePreDeath()) {
+            return repository.admitDeath(normalized.event(), normalized.policy());
+        }
+        return repository.admit(normalized.event(), normalized.policy());
+    }
+
     @Override public void onTaskUpdated(TaskRecord task, JsonNode observation) {
         try {
             TaskTransition transition = taskTransition(task, observation);

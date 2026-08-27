@@ -107,6 +107,66 @@ class RuntimeApplicationTest {
     }
 
     @Test
+    void authenticatedCriticalSurvivalEventPersistsAndWakesBrain() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("survival-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("The companion has entered a critical low-health state.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"survival-event-world","capabilities":{"survival_events":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"survival-event-companion","ownerId":"event-owner",
+                      "displayName":"Survival Event Companion","worldId":"survival-event-world",
+                      "dimension":"minecraft:overworld","position":{"x":0,"y":64,"z":0},
+                      "bodyState":"spawned","behaviorRevision":0,"controlEpoch":0,
+                      "runtimeConnected":true,"capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("survival-event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            client.send("""
+                    {"type":"survival_event","sessionId":"%s","sequence":1,"payload":{
+                      "eventId":"low-health-edge-1","eventType":"LOW_HEALTH",
+                      "priority":"LOW","source":"UNTRUSTED","companionId":"survival-event-companion",
+                      "tick":42,"occurredAt":"%s","previousHealth":10.0,"damageAmount":0.0,
+                      "vitals":{"lifecycle":"ACTIVE","health":5.0,"maxHealth":20.0,
+                      "air":300,"maxAir":300,"onFire":false,"inLava":false,
+                      "onGround":true,"fallDistance":0.0}}}
+                    """.formatted(sessionId, Instant.now()));
+
+            client.awaitConversationReplies(List.of(
+                    "The companion has entered a critical low-health state."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("LOW_HEALTH", event.path("eventType").asText());
+            assertEquals("CRITICAL", event.path("priority").asText());
+            assertEquals(5.0D, event.path("target").path("vitals").path("health").asDouble());
+            assertTrue(event.path("rules").path("criticalMayInterrupt").asBoolean());
+            assertFalse(event.has("taskId"), "unbound critical survival edge must not fabricate a task binding");
+            client.closeBlocking();
+        }
+    }
+
+    @Test
     void blockedTaskEventWakesExternalBrainAndQueuesOwnerVisibleReply() throws Exception {
         RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("task-event-brain-wake"));
         config.server.port = 0;

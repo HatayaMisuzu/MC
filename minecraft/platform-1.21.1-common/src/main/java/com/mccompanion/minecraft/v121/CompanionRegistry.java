@@ -538,7 +538,8 @@ public final class CompanionRegistry {
                 "CraftItem", "ExploreArea", "CollectResource", "MineResourceVein", "SmeltItem",
                 "DefendOwner", "LookAt", "InteractBlock", "InteractEntity", "MenuAction",
                 "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "RetreatFromDanger",
-                "NavigateWithWorldChanges")
+                "NavigateWithWorldChanges", "FollowEntity", "ApproachEntity",
+                "KeepDistanceFromEntity", "ChaseEntity", "EscortEntity", "FleeFromEntity", "FaceEntity")
                 .contains(capability);
     }
 

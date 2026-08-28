@@ -5,6 +5,7 @@ import com.mccompanion.core.navigation.SurvivalMovementPolicy;
 import com.mccompanion.core.navigation.SurvivalNavigationPolicy;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -34,6 +35,12 @@ public final class MinecraftSurvivalNavigation {
         return plan(body, ownerId, target, SurvivalNavigationPolicy.locomotionOnly(), budget);
     }
 
+    public static GridPathPlanner.Plan plan(ServerPlayer body, UUID ownerId, UUID targetEntityId,
+                                            Vec3 target, GridPathPlanner.Budget budget) {
+        return plan(body, ignored(ownerId, targetEntityId), target,
+                SurvivalNavigationPolicy.locomotionOnly(), budget);
+    }
+
     public static GridPathPlanner.Plan plan(ServerPlayer body, UUID ownerId, Vec3 target,
                                             SurvivalNavigationPolicy policy) {
         return plan(body, ownerId, target, policy, policy.budget());
@@ -42,6 +49,12 @@ public final class MinecraftSurvivalNavigation {
     public static GridPathPlanner.Plan plan(ServerPlayer body, UUID ownerId, Vec3 target,
                                             SurvivalNavigationPolicy policy,
                                             GridPathPlanner.Budget budget) {
+        return plan(body, ignored(ownerId, null), target, policy, budget);
+    }
+
+    private static GridPathPlanner.Plan plan(ServerPlayer body, Set<UUID> ignoredEntityIds, Vec3 target,
+                                             SurvivalNavigationPolicy policy,
+                                             GridPathPlanner.Budget budget) {
         GridPathPlanner.Point start = point(body.blockPosition());
         GridPathPlanner.Point goal = point(BlockPos.containing(target));
         ServerLevel level = body.serverLevel();
@@ -52,7 +65,7 @@ public final class MinecraftSurvivalNavigation {
 
             @Override public GridPathPlanner.Traversal traversal(
                     GridPathPlanner.Point from, GridPathPlanner.Point to) {
-                return classify(level, body, ownerId, policy, from, to);
+                return classify(level, body, ignoredEntityIds, policy, from, to);
             }
         }, GridPathPlanner.DEFAULT_LIMITS, budget);
     }
@@ -63,12 +76,20 @@ public final class MinecraftSurvivalNavigation {
         return remainsTraversable(body, ownerId, SurvivalNavigationPolicy.locomotionOnly(), from, next);
     }
 
+    public static boolean remainsTraversable(ServerPlayer body, UUID ownerId, UUID targetEntityId,
+                                             GridPathPlanner.Point from,
+                                             GridPathPlanner.RouteStep next) {
+        return body.serverLevel().hasChunkAt(block(next.point()))
+                && classify(body.serverLevel(), body, ignored(ownerId, targetEntityId),
+                SurvivalNavigationPolicy.locomotionOnly(), from, next.point()).passable();
+    }
+
     public static boolean remainsTraversable(ServerPlayer body, UUID ownerId,
                                              SurvivalNavigationPolicy policy,
                                              GridPathPlanner.Point from,
                                              GridPathPlanner.RouteStep next) {
         return body.serverLevel().hasChunkAt(block(next.point()))
-                && classify(body.serverLevel(), body, ownerId, policy, from, next.point()).passable();
+                && classify(body.serverLevel(), body, ignored(ownerId, null), policy, from, next.point()).passable();
     }
 
     public static boolean openDoorIfNeeded(ServerPlayer body, GridPathPlanner.Point point) {
@@ -115,7 +136,7 @@ public final class MinecraftSurvivalNavigation {
     }
 
     private static GridPathPlanner.Traversal classify(ServerLevel level, ServerPlayer body,
-                                                      UUID ownerId, SurvivalNavigationPolicy policy,
+                                                      Set<UUID> ignoredEntityIds, SurvivalNavigationPolicy policy,
                                                       GridPathPlanner.Point from,
                                                       GridPathPlanner.Point to) {
         int vertical = to.y() - from.y();
@@ -136,14 +157,14 @@ public final class MinecraftSurvivalNavigation {
         AABB occupiedVolume = new AABB(position)
                 .expandTowards(0.0D, 1.0D, 0.0D).inflate(0.25D, 0.0D, 0.25D);
         boolean blockingEntity = !level.getEntities(body, occupiedVolume,
-                entity -> blockingEntity(entity, ownerId)).isEmpty();
+                entity -> blockingEntity(entity, ignoredEntityIds)).isEmpty();
         int nearbyEntities = Math.min(4, level.getEntities(body, occupiedVolume.inflate(1.0D),
-                entity -> blockingEntity(entity, ownerId)).size());
+                entity -> blockingEntity(entity, ignoredEntityIds)).size());
         int nearbyHazards = adjacentHazards(level, position);
         boolean dropClear = vertical >= -1 || clearDropColumn(level, position, from.y(), to.y());
         boolean gapJumpAllowed = horizontal == 2 && vertical == 0 && supported
                 && feetPassable && headPassable && !water && !climbable
-                && jumpGapClear(level, body, ownerId, from, to);
+                && jumpGapClear(level, body, ignoredEntityIds, from, to);
         boolean sprintAllowed = vertical == 0 && (horizontal == 1 || gapJumpAllowed) && body.onGround()
                 && body.getFoodData().getFoodLevel() > 6 && body.getHealth() > 6.0F
                 && !body.isUsingItem() && !water && !climbable && nearbyHazards == 0
@@ -195,9 +216,9 @@ public final class MinecraftSurvivalNavigation {
                 breakActions, breakCost, placeActions, placeCost, gapJumpAllowed));
     }
 
-    private static boolean blockingEntity(Entity entity, UUID ownerId) {
+    private static boolean blockingEntity(Entity entity, Set<UUID> ignoredEntityIds) {
         return entity.isAlive() && entity.isPickable()
-                && (ownerId == null || !entity.getUUID().equals(ownerId));
+                && !ignoredEntityIds.contains(entity.getUUID());
     }
 
     private static boolean clearDropColumn(ServerLevel level, BlockPos landing,
@@ -214,7 +235,7 @@ public final class MinecraftSurvivalNavigation {
         return true;
     }
 
-    private static boolean jumpGapClear(ServerLevel level, ServerPlayer body, UUID ownerId,
+    private static boolean jumpGapClear(ServerLevel level, ServerPlayer body, Set<UUID> ignoredEntityIds,
                                         GridPathPlanner.Point from, GridPathPlanner.Point to) {
         int dx = Integer.signum(to.x() - from.x());
         int dz = Integer.signum(to.z() - from.z());
@@ -232,7 +253,13 @@ public final class MinecraftSurvivalNavigation {
                 || isHazard(middleBelow)) return false;
         AABB arc = new AABB(middle).expandTowards(0.0D, 2.0D, 0.0D)
                 .inflate(0.35D, 0.0D, 0.35D);
-        return level.getEntities(body, arc, entity -> blockingEntity(entity, ownerId)).isEmpty();
+        return level.getEntities(body, arc, entity -> blockingEntity(entity, ignoredEntityIds)).isEmpty();
+    }
+
+    private static Set<UUID> ignored(UUID ownerId, UUID targetEntityId) {
+        if (ownerId == null) return targetEntityId == null ? Set.of() : Set.of(targetEntityId);
+        if (targetEntityId == null || targetEntityId.equals(ownerId)) return Set.of(ownerId);
+        return Set.of(ownerId, targetEntityId);
     }
 
     public static boolean canExecuteGapJump(ServerPlayer body) {

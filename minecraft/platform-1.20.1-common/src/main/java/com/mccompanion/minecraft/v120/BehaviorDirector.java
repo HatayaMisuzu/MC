@@ -1,6 +1,8 @@
 package com.mccompanion.minecraft.v120;
 
 import com.mccompanion.core.body.BodyControlArbiter;
+import com.mccompanion.core.body.interaction.EntityInteractionController;
+import com.mccompanion.core.body.interaction.EntityTargetIdentity;
 import com.mccompanion.core.body.daily.DailyActionEngine;
 import com.mccompanion.core.navigation.GridPathPlanner;
 import com.mccompanion.core.navigation.RouteExecutionController;
@@ -65,6 +67,9 @@ final class BehaviorDirector {
     private final Map<UUID, MinecraftSurvivalNavigationExecution> survivalNavigations = new HashMap<>();
     private final Map<UUID, SkillParameters> survivalNavigationParameters = new HashMap<>();
     private final Map<UUID, PrimitiveProgress> primitives = new HashMap<>();
+    private final Map<UUID, EntityBehaviorProgress> entityBehaviors = new HashMap<>();
+    private final Map<UUID, EntityEventTracker.TargetBinding> recentEntityTargets = new HashMap<>();
+    private final Map<UUID, Long> recentEntityTargetExpiryTicks = new HashMap<>();
     private final Map<UUID, SkillParameters> eventParameters = new HashMap<>();
     private final Map<UUID, Long> eventParameterExpiryTicks = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
@@ -78,7 +83,7 @@ final class BehaviorDirector {
     }
 
     void start(CompanionEntry entry, CompanionPlayer body) {
-        supersedeDailyAction(entry, body);
+        supersedeActive(entry, body);
         observations.remove(entry.companionId);
         eventParameters.remove(entry.companionId);
         eventParameterExpiryTicks.remove(entry.companionId);
@@ -98,12 +103,17 @@ final class BehaviorDirector {
     }
 
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
-        supersedeDailyAction(entry, body);
+        supersedeActive(entry, body);
         observations.remove(entry.companionId);
         eventParameters.put(entry.companionId, parameters);
         eventParameterExpiryTicks.put(entry.companionId, Long.MAX_VALUE);
         survivalNavigations.remove(entry.companionId);
         survivalNavigationParameters.remove(entry.companionId);
+        if (supportsEntityBehavior(parameters.capability())) {
+            entityBehaviors.put(entry.companionId, createEntityBehavior(body, parameters));
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
         if (DailyActionController.supports(parameters.capability())) {
             dailyActions.start(entry.companionId, entry.runtimeBehaviorId, body, parameters);
             actionGateway.startBehavior(body, entry.mode, server.getTickCount());
@@ -123,14 +133,22 @@ final class BehaviorDirector {
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
-    private void supersedeDailyAction(CompanionEntry entry, CompanionPlayer body) {
-        if (!dailyActions.active(entry.companionId)) return;
-        dailyActions.cancel(entry.companionId, body, "SUPERSEDED");
+    private void supersedeActive(CompanionEntry entry, CompanionPlayer body) {
+        actionGateway.stopInput(body);
+        if (dailyActions.active(entry.companionId)) dailyActions.cancel(entry.companionId, body, "SUPERSEDED");
         actionGateway.completeBehavior(body, false, "SUPERSEDED", server.getTickCount());
+        navigation.remove(entry.companionId);
+        survivalNavigations.remove(entry.companionId);
+        survivalNavigationParameters.remove(entry.companionId);
+        primitives.remove(entry.companionId);
+        entityBehaviors.remove(entry.companionId);
+        recentEntityTargets.remove(entry.companionId);
+        recentEntityTargetExpiryTicks.remove(entry.companionId);
     }
 
     void validateSkill(CompanionPlayer body, SkillParameters parameters) {
-        if (DailyActionController.supports(parameters.capability())) dailyActions.validate(body, parameters);
+        if (supportsEntityBehavior(parameters.capability())) validateEntityBehaviorParameters(parameters);
+        else if (DailyActionController.supports(parameters.capability())) dailyActions.validate(body, parameters);
         else if (parameters.capability().equals("NavigateWithWorldChanges")) {
             validateSurvivalNavigation(body, parameters);
         }
@@ -138,7 +156,7 @@ final class BehaviorDirector {
 
     boolean canResumeSkill(UUID companionId) {
         return dailyActions.active(companionId) || primitives.containsKey(companionId)
-                || survivalNavigations.containsKey(companionId);
+                || survivalNavigations.containsKey(companionId) || entityBehaviors.containsKey(companionId);
     }
 
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
@@ -183,7 +201,10 @@ final class BehaviorDirector {
             }
         }
         if (success || !isSuspension(code)) {
+            EntityBehaviorProgress entityBehavior = entityBehaviors.get(entry.companionId);
+            if (entityBehavior != null) rememberEntityEventTarget(entry.companionId, entityBehavior);
             primitives.remove(entry.companionId);
+            entityBehaviors.remove(entry.companionId);
             eventParameterExpiryTicks.put(entry.companionId, (long) server.getTickCount() + 10L);
         }
         if ((success || !isSuspension(code))
@@ -229,6 +250,9 @@ final class BehaviorDirector {
         survivalNavigations.remove(companionId);
         survivalNavigationParameters.remove(companionId);
         primitives.remove(companionId);
+        entityBehaviors.remove(companionId);
+        recentEntityTargets.remove(companionId);
+        recentEntityTargetExpiryTicks.remove(companionId);
         eventParameters.remove(companionId);
         eventParameterExpiryTicks.remove(companionId);
         dailyActions.cancel(companionId, null, "FORGOTTEN");
@@ -262,6 +286,8 @@ final class BehaviorDirector {
     }
 
     EntityEventTracker.TargetBinding entityEventTarget(CompanionEntry entry) {
+        EntityBehaviorProgress entityBehavior = entityBehaviors.get(entry.companionId);
+        if (entityBehavior != null && entityBehavior.identity != null) return entityBehaviorTarget(entityBehavior);
         CompanionEntry.Mode effective = entry.mode == CompanionEntry.Mode.PAUSED ? entry.resumeMode : entry.mode;
         if (effective == CompanionEntry.Mode.FOLLOW) {
             return new EntityEventTracker.TargetBinding(
@@ -270,12 +296,18 @@ final class BehaviorDirector {
         EntityEventTracker.TargetBinding dailyTarget = dailyActions.entityEventTarget(entry.companionId);
         if (dailyTarget != null) return dailyTarget;
         PrimitiveProgress progress = primitives.get(entry.companionId);
-        if (progress == null) return null;
-        if (progress.entityId != null) return currentTarget(progress.entityId);
-        String targetId = progress.parameters.targetId();
-        if (targetId == null || targetId.isBlank()) return null;
-        try { return currentTarget(UUID.fromString(targetId)); }
-        catch (IllegalArgumentException ignored) { return null; }
+        if (progress != null) {
+            if (progress.entityId != null) return currentTarget(progress.entityId);
+            String targetId = progress.parameters.targetId();
+            if (targetId != null && !targetId.isBlank()) {
+                try { return currentTarget(UUID.fromString(targetId)); }
+                catch (IllegalArgumentException ignored) { }
+            }
+        }
+        Long expiry = recentEntityTargetExpiryTicks.get(entry.companionId);
+        if (expiry != null && server.getTickCount() <= expiry) return recentEntityTargets.get(entry.companionId);
+        recentEntityTargetExpiryTicks.remove(entry.companionId);
+        return recentEntityTargets.remove(entry.companionId);
     }
 
     private static EntityEventTracker.TargetBinding currentTarget(UUID targetId) {
@@ -295,6 +327,10 @@ final class BehaviorDirector {
             return;
         }
         if (entry.mode == CompanionEntry.Mode.SKILL) {
+            if (entityBehaviors.containsKey(entry.companionId)) {
+                tickEntityBehavior(entry, body, entityBehaviors.get(entry.companionId));
+                return;
+            }
             MinecraftSurvivalNavigationExecution survival = survivalNavigations.get(entry.companionId);
             if (survival != null) {
                 tickSurvivalNavigation(entry, body, survival);
@@ -464,6 +500,25 @@ final class BehaviorDirector {
             CompanionPlayer body,
             Vec3 target,
             double arrivalDistanceSquared) {
+        tickNavigation(entry, body, target, arrivalDistanceSquared, false);
+    }
+
+    private RouteExecutionController.Status tickNavigation(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            Vec3 target,
+            double arrivalDistanceSquared,
+            boolean continuous) {
+        return tickNavigation(entry, body, target, arrivalDistanceSquared, continuous, null);
+    }
+
+    private RouteExecutionController.Status tickNavigation(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            Vec3 target,
+            double arrivalDistanceSquared,
+            boolean continuous,
+            UUID ignoredTargetId) {
         RouteExecutionController.Session session = navigation.computeIfAbsent(entry.companionId,
                 ignored -> new RouteExecutionController.Session(server.getTickCount(),
                         body.serverLevel().dimension().location().toString()));
@@ -479,20 +534,23 @@ final class BehaviorDirector {
                     @Override public GridPathPlanner.Plan plan(
                             RouteExecutionController.Position destination, GridPathPlanner.Budget budget) {
                         return navigationAdapter.plan(body,
-                                new Vec3(destination.x(), destination.y(), destination.z()), budget);
+                                new Vec3(destination.x(), destination.y(), destination.z()), budget,
+                                ignoredTargetId);
                     }
 
                     @Override public boolean remainsTraversable(
                             GridPathPlanner.Point from, GridPathPlanner.RouteStep next) {
-                        return navigationAdapter.remainsTraversable(body, from, next);
+                        return navigationAdapter.remainsTraversable(body, from, next, ignoredTargetId);
                     }
                 });
         if (result.status() == RouteExecutionController.Status.BLOCKED) {
             pauseSafely(entry, body, result.code());
-            return;
+            return result.status();
         }
-        if (result.status() == RouteExecutionController.Status.PAUSED) return;
+        if (result.status() == RouteExecutionController.Status.PAUSED) return result.status();
         if (result.status() == RouteExecutionController.Status.ARRIVED) {
+            actionGateway.stopInput(body);
+            if (continuous) return result.status();
             stop(entry, body, true, "NONE");
             if (entry.mode == CompanionEntry.Mode.GOTO) {
                 entry.mode = CompanionEntry.Mode.IDLE;
@@ -500,13 +558,13 @@ final class BehaviorDirector {
                 entry.hasTarget = false;
                 savedData.changed();
             }
-            return;
+            return result.status();
         }
         if (result.direct()) {
             actionGateway.applyMoveInput(body,
                     (float) Math.toDegrees(Math.atan2(-result.delta().x(), result.delta().z())),
                     result.delta().y() > 0.6D || body.horizontalCollision);
-            return;
+            return result.status();
         }
 
         GridPathPlanner.RouteStep routeStep = result.step();
@@ -514,7 +572,7 @@ final class BehaviorDirector {
         if (navigationAdapter.requiresPassageOpening(body, waypointPoint)) {
             if (!navigationAdapter.openDoorIfNeeded(body, waypointPoint)) {
                 pauseSafely(entry, body, "PASSAGE_INTERACTION_FAILED");
-                return;
+                return RouteExecutionController.Status.BLOCKED;
             }
             actionGateway.markVanillaGameModeAction(body);
         }
@@ -528,17 +586,240 @@ final class BehaviorDirector {
         boolean gapJump = routeStep.movement() == GridPathPlanner.Movement.JUMP_GAP;
         if (gapJump && !navigationAdapter.canExecuteGapJump(body)) {
             pauseSafely(entry, body, "GAP_JUMP_UNSAFE");
-            return;
+            return RouteExecutionController.Status.BLOCKED;
         }
         actionGateway.applyMoveInput(body, yaw,
                 waypointPoint.y() > body.blockPosition().getY()
                         || body.horizontalCollision
                         || gapJump && navigationAdapter.gapTakeoffReady(body, waypointPoint),
                 routeStep.movement() == GridPathPlanner.Movement.SPRINT || gapJump);
+        return result.status();
     }
 
     private static RouteExecutionController.Position position(Vec3 value) {
         return new RouteExecutionController.Position(value.x, value.y, value.z);
+    }
+
+    private static boolean supportsEntityBehavior(String capability) {
+        return switch (capability) {
+            case "FollowEntity", "ApproachEntity", "KeepDistanceFromEntity", "ChaseEntity",
+                    "EscortEntity", "FleeFromEntity", "FaceEntity" -> true;
+            default -> false;
+        };
+    }
+
+    private static EntityInteractionController.Behavior entityBehavior(String capability) {
+        return switch (capability) {
+            case "FollowEntity" -> EntityInteractionController.Behavior.FOLLOW;
+            case "ApproachEntity" -> EntityInteractionController.Behavior.APPROACH;
+            case "KeepDistanceFromEntity" -> EntityInteractionController.Behavior.KEEP_DISTANCE;
+            case "ChaseEntity" -> EntityInteractionController.Behavior.CHASE;
+            case "EscortEntity" -> EntityInteractionController.Behavior.ESCORT;
+            case "FleeFromEntity" -> EntityInteractionController.Behavior.FLEE;
+            case "FaceEntity" -> EntityInteractionController.Behavior.FACE;
+            default -> throw new IllegalArgumentException("unsupported entity behavior");
+        };
+    }
+
+    private static void validateEntityBehaviorParameters(SkillParameters parameters) {
+        EntityInteractionController.Behavior behavior = entityBehavior(parameters.capability());
+        EntityInteractionController.Config defaults = EntityInteractionController.Config.defaults(behavior);
+        new EntityInteractionController.Config(
+                parameters.minimumDistance() == null ? defaults.minimumDistance() : parameters.minimumDistance(),
+                parameters.maximumDistance() == null ? defaults.maximumDistance() : parameters.maximumDistance(),
+                parameters.lostTimeoutTicks() == null ? defaults.lostTimeoutTicks() : parameters.lostTimeoutTicks());
+        String kind = parameters.targetReferenceKind().isBlank()
+                ? (parameters.targetId().isBlank() ? "" : "UUID") : parameters.targetReferenceKind();
+        try { EntityTargetIdentity.Source.valueOf(kind); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("invalid entity target reference"); }
+        if ((kind.equals("UUID") || kind.equals("VERIFIED_PLAYER")) && parameters.targetId().isBlank()
+                || kind.equals("ENTITY_ID") && parameters.targetRuntimeId() == null
+                || kind.equals("NAME") && parameters.targetName().isBlank()) {
+            throw new IllegalArgumentException("entity target reference is incomplete");
+        }
+        if (!parameters.targetId().isBlank()) UUID.fromString(parameters.targetId());
+    }
+
+    private EntityBehaviorProgress createEntityBehavior(CompanionPlayer body, SkillParameters parameters) {
+        EntityInteractionController.Behavior behavior = entityBehavior(parameters.capability());
+        EntityInteractionController.Config defaults = EntityInteractionController.Config.defaults(behavior);
+        EntityInteractionController.Config config;
+        try {
+            config = new EntityInteractionController.Config(
+                    parameters.minimumDistance() == null ? defaults.minimumDistance() : parameters.minimumDistance(),
+                    parameters.maximumDistance() == null ? defaults.maximumDistance() : parameters.maximumDistance(),
+                    parameters.lostTimeoutTicks() == null ? defaults.lostTimeoutTicks() : parameters.lostTimeoutTicks());
+        } catch (IllegalArgumentException invalid) {
+            return EntityBehaviorProgress.failed(parameters, behavior, "ENTITY_DISTANCE_INVALID");
+        }
+        TargetResolution resolution = resolveInitialTarget(body, parameters);
+        if (resolution.failureCode != null) {
+            return EntityBehaviorProgress.failed(parameters, behavior, resolution.failureCode);
+        }
+        return new EntityBehaviorProgress(parameters, resolution.identity,
+                new EntityInteractionController.Session(behavior, config), null);
+    }
+
+    private TargetResolution resolveInitialTarget(CompanionPlayer body, SkillParameters parameters) {
+        String rawKind = parameters.targetReferenceKind().isBlank()
+                ? (parameters.targetId().isBlank() ? "" : "UUID") : parameters.targetReferenceKind();
+        EntityTargetIdentity.Source source;
+        try { source = EntityTargetIdentity.Source.valueOf(rawKind); }
+        catch (IllegalArgumentException invalid) { return TargetResolution.failed("TARGET_REFERENCE_INVALID"); }
+        Entity entity;
+        UUID uuid;
+        try {
+            switch (source) {
+                case UUID -> {
+                    uuid = UUID.fromString(parameters.targetId());
+                    entity = findEntity(uuid);
+                }
+                case VERIFIED_PLAYER -> {
+                    uuid = UUID.fromString(parameters.targetId());
+                    entity = server.getPlayerList().getPlayer(uuid);
+                    if (!(entity instanceof ServerPlayer)) return TargetResolution.failed("TARGET_PLAYER_NOT_VERIFIED");
+                }
+                case ENTITY_ID -> {
+                    if (parameters.targetRuntimeId() == null) return TargetResolution.failed("TARGET_REFERENCE_INVALID");
+                    entity = body.serverLevel().getEntity(parameters.targetRuntimeId());
+                    if (entity == null) return TargetResolution.failed("TARGET_NOT_FOUND");
+                    uuid = entity.getUUID();
+                }
+                case NAME -> {
+                    entity = resolveUniqueName(body, parameters.targetName());
+                    if (entity == null) return TargetResolution.failed("TARGET_NAME_NOT_UNIQUE");
+                    uuid = entity.getUUID();
+                }
+                default -> throw new IllegalStateException("unsupported target source");
+            }
+        } catch (IllegalArgumentException invalid) {
+            return TargetResolution.failed("TARGET_REFERENCE_INVALID");
+        }
+        if (uuid.equals(body.getUUID())) return TargetResolution.failed("TARGET_IS_COMPANION");
+        String name = entity == null ? "" : entity.getDisplayName().getString();
+        boolean player = entity instanceof ServerPlayer;
+        return TargetResolution.resolved(new EntityTargetIdentity(uuid, source, name, player));
+    }
+
+    private Entity resolveUniqueName(CompanionPlayer body, String requestedName) {
+        if (requestedName == null || requestedName.isBlank()) return null;
+        Map<UUID, Entity> matches = new HashMap<>();
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (matchesName(player, requestedName)) matches.put(player.getUUID(), player);
+        }
+        for (Entity entity : body.serverLevel().getAllEntities()) {
+            if (entity != body && matchesName(entity, requestedName)) matches.put(entity.getUUID(), entity);
+        }
+        return matches.size() == 1 ? matches.values().iterator().next() : null;
+    }
+
+    private static boolean matchesName(Entity entity, String requestedName) {
+        return entity.getName().getString().equalsIgnoreCase(requestedName)
+                || entity.getDisplayName().getString().equalsIgnoreCase(requestedName);
+    }
+
+    private Entity findEntity(UUID targetId) {
+        ServerPlayer player = server.getPlayerList().getPlayer(targetId);
+        if (player != null) return player;
+        for (var level : server.getAllLevels()) {
+            Entity entity = level.getEntity(targetId);
+            if (entity != null) return entity;
+        }
+        return null;
+    }
+
+    private void tickEntityBehavior(CompanionEntry entry, CompanionPlayer body, EntityBehaviorProgress progress) {
+        if (progress.failureCode != null) {
+            finishEntityBehavior(entry, body, progress, false, progress.failureCode);
+            return;
+        }
+        Entity target = findEntity(progress.identity.uuid());
+        EntityInteractionController.TargetState targetState;
+        if (target == null) targetState = EntityInteractionController.TargetState.TEMPORARILY_MISSING;
+        else if (!target.isAlive()) targetState = EntityInteractionController.TargetState.DEAD;
+        else if (target.level() != body.level()) targetState = EntityInteractionController.TargetState.OTHER_WORLD;
+        else targetState = EntityInteractionController.TargetState.PRESENT;
+        EntityInteractionController.Position targetPosition = targetState == EntityInteractionController.TargetState.PRESENT
+                ? interactionPosition(target.position()) : null;
+        EntityInteractionController.Result result = progress.session.tick(new EntityInteractionController.Input(
+                server.getTickCount(), targetState, interactionPosition(body.position()), targetPosition,
+                target != null && target.level() == body.level() && body.hasLineOfSight(target)));
+        recordEntityBehaviorObservation(entry, progress, result, target);
+        if (result.status() == EntityInteractionController.Status.FAILED) {
+            finishEntityBehavior(entry, body, progress, false, result.code());
+            return;
+        }
+        if (result.status() == EntityInteractionController.Status.COMPLETE) {
+            finishEntityBehavior(entry, body, progress, true, result.code());
+            return;
+        }
+        if (target == null || target.level() != body.level()) {
+            actionGateway.stopInput(body);
+            return;
+        }
+        switch (result.action()) {
+            case HOLD -> actionGateway.stopInput(body);
+            case FACE -> {
+                actionGateway.stopInput(body);
+                actionGateway.lookAt(body, target.getEyePosition());
+            }
+            case MOVE_TOWARD -> {
+                Vec3 offset = body.position().subtract(target.position());
+                offset = new Vec3(offset.x, 0.0D, offset.z);
+                if (offset.lengthSqr() < 0.0001D) offset = new Vec3(1.0D, 0.0D, 0.0D);
+                double standOff = Math.max(1.0D, progress.session.config().maximumDistance() - 0.5D);
+                Vec3 destination = target.position().add(offset.normalize().scale(standOff));
+                tickNavigation(entry, body, destination, 0.5D * 0.5D, true, progress.identity.uuid());
+            }
+            case MOVE_AWAY -> {
+                Vec3 away = body.position().subtract(target.position());
+                away = new Vec3(away.x, 0.0D, away.z);
+                if (away.lengthSqr() < 0.0001D) away = new Vec3(1.0D, 0.0D, 0.0D);
+                double stride = Math.max(6.0D, progress.session.config().minimumDistance());
+                tickNavigation(entry, body, body.position().add(away.normalize().scale(stride)),
+                        ARRIVAL_DISTANCE_SQUARED, true, progress.identity.uuid());
+            }
+        }
+    }
+
+    private static EntityInteractionController.Position interactionPosition(Vec3 position) {
+        return new EntityInteractionController.Position(position.x, position.y, position.z);
+    }
+
+    private void finishEntityBehavior(CompanionEntry entry, CompanionPlayer body,
+                                      EntityBehaviorProgress progress, boolean success, String code) {
+        rememberEntityEventTarget(entry.companionId, progress);
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        entry.hasTarget = false;
+        stop(entry, body, success, code);
+        savedData.changed();
+    }
+
+    private void recordEntityBehaviorObservation(CompanionEntry entry, EntityBehaviorProgress progress,
+                                                 EntityInteractionController.Result result, Entity target) {
+        Map<String, String> details = new java.util.TreeMap<>();
+        details.put("behavior", progress.session.behavior().name());
+        details.put("targetId", progress.identity.uuid().toString());
+        details.put("targetSource", progress.identity.source().name());
+        details.put("distanceSquared", Double.toString(result.distanceSquared()));
+        details.put("action", result.action().name());
+        details.put("targetPresent", Boolean.toString(target != null));
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result.code(), "", 0, 0, java.util.List.of(), details));
+    }
+
+    private void rememberEntityEventTarget(UUID companionId, EntityBehaviorProgress progress) {
+        if (progress == null || progress.identity == null) return;
+        recentEntityTargets.put(companionId, entityBehaviorTarget(progress));
+        recentEntityTargetExpiryTicks.put(companionId, (long) server.getTickCount() + 10L);
+    }
+
+    private static EntityEventTracker.TargetBinding entityBehaviorTarget(EntityBehaviorProgress progress) {
+        EntityEventTracker.TargetKind kind = progress.session.behavior() == EntityInteractionController.Behavior.FOLLOW
+                || progress.session.behavior() == EntityInteractionController.Behavior.ESCORT
+                ? EntityEventTracker.TargetKind.FOLLOW : EntityEventTracker.TargetKind.CURRENT;
+        return new EntityEventTracker.TargetBinding(progress.identity.uuid().toString(), kind);
     }
 
     private void tickPrimitive(CompanionEntry entry, CompanionPlayer body) {
@@ -1755,6 +2036,47 @@ final class BehaviorDirector {
                 || code.equals("RUNTIME_OFFLINE") || code.equals("LEASE_EXPIRED")
                 || code.equals("PAUSED_BY_OWNER") || code.equals("LOW_HEALTH")
                 || code.equals("ENVIRONMENT_HAZARD") || code.equals("DROWNING_RISK");
+    }
+
+    private static final class EntityBehaviorProgress {
+        private final SkillParameters parameters;
+        private final EntityTargetIdentity identity;
+        private final EntityInteractionController.Session session;
+        private final String failureCode;
+
+        private EntityBehaviorProgress(SkillParameters parameters, EntityTargetIdentity identity,
+                                       EntityInteractionController.Session session, String failureCode) {
+            this.parameters = parameters;
+            this.identity = identity;
+            this.session = session;
+            this.failureCode = failureCode;
+        }
+
+        private static EntityBehaviorProgress failed(SkillParameters parameters,
+                                                     EntityInteractionController.Behavior behavior,
+                                                     String failureCode) {
+            return new EntityBehaviorProgress(parameters, null,
+                    new EntityInteractionController.Session(behavior,
+                            EntityInteractionController.Config.defaults(behavior)), failureCode);
+        }
+    }
+
+    private static final class TargetResolution {
+        private final EntityTargetIdentity identity;
+        private final String failureCode;
+
+        private TargetResolution(EntityTargetIdentity identity, String failureCode) {
+            this.identity = identity;
+            this.failureCode = failureCode;
+        }
+
+        private static TargetResolution resolved(EntityTargetIdentity identity) {
+            return new TargetResolution(identity, null);
+        }
+
+        private static TargetResolution failed(String code) {
+            return new TargetResolution(null, code);
+        }
     }
 
     private static final class PrimitiveProgress {

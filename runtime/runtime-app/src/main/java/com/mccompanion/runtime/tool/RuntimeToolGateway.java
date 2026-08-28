@@ -321,7 +321,27 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             values.add(definition("task_graph.cancel", "Cancel a session-owned task graph execution",
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
         }
-        if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
+        if (available.contains("FollowOwner") || available.contains("FollowEntity")) values.add(definition(
+                "movement.follow", "Continuously follow the owner or one explicitly selected entity",
+                entityBehaviorSchema(false), "LOW", "MOVE", false));
+        if (available.contains("ApproachEntity")) values.add(definition("movement.approach",
+                "Approach one explicitly selected entity while locally tracking its movement",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("KeepDistanceFromEntity")) values.add(definition("movement.keep_distance",
+                "Continuously maintain a bounded distance band from one explicitly selected entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("ChaseEntity")) values.add(definition("movement.chase",
+                "Continuously chase one explicitly selected moving entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("EscortEntity")) values.add(definition("movement.escort",
+                "Continuously escort one explicitly selected moving entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("FleeFromEntity")) values.add(definition("movement.flee",
+                "Continuously keep a safe distance from one explicitly selected entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("FaceEntity")) values.add(definition("movement.face_entity",
+                "Continuously face one explicitly selected moving entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
         if (available.contains("NavigateWithWorldChanges")) values.add(definition("movement.navigate_survival",
                 "Complete survival navigation with bounded world changes in one call",
@@ -672,7 +692,15 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     private static Intent intent(ToolCall call) {
         return switch (call.name()) {
-            case "movement.follow" -> noArguments(call, TaskType.FOLLOW);
+            case "movement.follow" -> call.arguments().size() == 0
+                    ? noArguments(call, TaskType.FOLLOW)
+                    : skill("FollowEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.approach" -> skill("ApproachEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.keep_distance" -> skill("KeepDistanceFromEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.chase" -> skill("ChaseEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.escort" -> skill("EscortEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.flee" -> skill("FleeFromEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.face_entity" -> skill("FaceEntity", validatedEntityBehavior(call.arguments()));
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
             case "movement.navigate_survival" -> survivalNavigate(call.arguments());
@@ -825,6 +853,71 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private static JsonNode validatedLook(JsonNode arguments) {
         Intent target = navigate(arguments);
         return Json.object().set("target", target.arguments().path("target"));
+    }
+
+    private static JsonNode validatedEntityBehavior(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("target", "minimumDistance", "maximumDistance", "lostTimeoutTicks"));
+        JsonNode target = arguments.path("target");
+        if (!target.isObject()) throw new IllegalArgumentException("target must be an object");
+        rejectUnexpected(target, Set.of("uuid", "entityId", "playerIdentity", "name"));
+        int references = (target.has("uuid") ? 1 : 0) + (target.has("entityId") ? 1 : 0)
+                + (target.has("playerIdentity") ? 1 : 0) + (target.has("name") ? 1 : 0);
+        if (references != 1) throw new IllegalArgumentException("target must contain exactly one identity reference");
+        ObjectNode values = Json.object();
+        if (target.has("uuid")) {
+            values.put("entityId", normalizedUuid(target.path("uuid"), "target.uuid"));
+            values.put("targetReferenceKind", "UUID");
+        } else if (target.has("entityId")) {
+            if (!target.path("entityId").canConvertToInt() || target.path("entityId").asInt() < 0) {
+                throw new IllegalArgumentException("target.entityId must be a non-negative Minecraft entity id");
+            }
+            values.put("targetRuntimeId", target.path("entityId").asInt());
+            values.put("targetReferenceKind", "ENTITY_ID");
+        } else if (target.has("playerIdentity")) {
+            values.put("entityId", normalizedUuid(target.path("playerIdentity"), "target.playerIdentity"));
+            values.put("targetReferenceKind", "VERIFIED_PLAYER");
+        } else {
+            String name = target.path("name").asText("").strip();
+            if (name.isEmpty() || name.length() > 64 || name.chars().anyMatch(Character::isISOControl)) {
+                throw new IllegalArgumentException("target.name must contain 1..64 visible characters");
+            }
+            values.put("targetName", name);
+            values.put("targetReferenceKind", "NAME");
+        }
+        if (arguments.has("minimumDistance")) {
+            values.put("minimumDistance", boundedDistance(arguments.path("minimumDistance"), "minimumDistance"));
+        }
+        if (arguments.has("maximumDistance")) {
+            values.put("maximumDistance", boundedDistance(arguments.path("maximumDistance"), "maximumDistance"));
+        }
+        if (values.has("minimumDistance") && values.has("maximumDistance")
+                && values.path("minimumDistance").asDouble() > values.path("maximumDistance").asDouble()) {
+            throw new IllegalArgumentException("minimumDistance must not exceed maximumDistance");
+        }
+        if (arguments.has("lostTimeoutTicks")) {
+            if (!arguments.path("lostTimeoutTicks").canConvertToInt()) {
+                throw new IllegalArgumentException("lostTimeoutTicks must be an integer");
+            }
+            int timeout = arguments.path("lostTimeoutTicks").asInt();
+            if (timeout < 1 || timeout > 1200) throw new IllegalArgumentException("lostTimeoutTicks must be 1..1200");
+            values.put("lostTimeoutTicks", timeout);
+        }
+        return values;
+    }
+
+    private static String normalizedUuid(JsonNode value, String field) {
+        if (!value.isTextual()) throw new IllegalArgumentException(field + " must be a UUID");
+        try { return java.util.UUID.fromString(value.asText()).toString(); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException(field + " must be a UUID"); }
+    }
+
+    private static double boundedDistance(JsonNode value, String field) {
+        if (!value.isNumber()) throw new IllegalArgumentException(field + " must be a number");
+        double distance = value.asDouble();
+        if (!Double.isFinite(distance) || distance < 0.0D || distance > 64.0D) {
+            throw new IllegalArgumentException(field + " must be between 0 and 64");
+        }
+        return distance;
     }
 
     private static JsonNode validatedBlockInteraction(JsonNode arguments) {
@@ -1427,6 +1520,27 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     private static ObjectNode lookSchema() {
         return coordinateSchema();
+    }
+
+    private static ObjectNode entityBehaviorSchema(boolean targetRequired) {
+        ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = root.putObject("properties");
+        ObjectNode target = properties.putObject("target");
+        target.put("type", "object").put("additionalProperties", false);
+        ObjectNode targetProperties = target.putObject("properties");
+        targetProperties.putObject("uuid").put("type", "string").put("format", "uuid");
+        targetProperties.putObject("entityId").put("type", "integer").put("minimum", 0);
+        targetProperties.putObject("playerIdentity").put("type", "string").put("format", "uuid");
+        targetProperties.putObject("name").put("type", "string").put("minLength", 1).put("maxLength", 64);
+        var alternatives = target.putArray("oneOf");
+        for (String field : List.of("uuid", "entityId", "playerIdentity", "name")) {
+            alternatives.addObject().putArray("required").add(field);
+        }
+        properties.putObject("minimumDistance").put("type", "number").put("minimum", 0).put("maximum", 64);
+        properties.putObject("maximumDistance").put("type", "number").put("minimum", 0).put("maximum", 64);
+        properties.putObject("lostTimeoutTicks").put("type", "integer").put("minimum", 1).put("maximum", 1200);
+        if (targetRequired) root.putArray("required").add("target");
+        return root;
     }
 
     private static ObjectNode blockBreakSchema() {

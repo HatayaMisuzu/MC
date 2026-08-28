@@ -764,6 +764,79 @@ class RuntimeToolGatewayTest {
     }
 
     @Test
+    void entityMovementToolsExposeStableTargetReferencesAndDispatchAllSevenBehaviors() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("entity-movement.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("entity-movement.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                List<String> ids = List.of("entity-follow", "entity-approach", "entity-distance", "entity-chase",
+                        "entity-escort", "entity-flee", "entity-face", "owner-follow", "entity-invalid");
+                for (String companionId : ids) {
+                    sessions.registerCompanion(session, new CompanionStatus(companionId, "owner", companionId,
+                                    "world", "minecraft:overworld", new PositionDto(0, 64, 0),
+                                    CompanionBodyState.SPAWNED, null, null, 0, 0, true,
+                                    CapabilitySet.empty(), Instant.now()),
+                            Json.object().put("dimension", "minecraft:overworld")
+                                    .set("position", Json.object().put("x", 0).put("y", 64).put("z", 0)));
+                }
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("FollowOwner", "FollowEntity", "ApproachEntity",
+                                "KeepDistanceFromEntity", "ChaseEntity", "EscortEntity",
+                                "FleeFromEntity", "FaceEntity"));
+                ToolContext definitionContext = new ToolContext("hermes", "entity-session", "entity-follow");
+                var definitions = gateway.definitions(definitionContext);
+                List<String> names = definitions.stream().map(ToolDefinition::name).toList();
+                assertTrue(names.containsAll(List.of("movement.follow", "movement.approach",
+                        "movement.keep_distance", "movement.chase", "movement.escort",
+                        "movement.flee", "movement.face_entity")));
+                assertEquals(List.of(), required(definition(definitions, "movement.follow")));
+                assertEquals(List.of("target"), required(definition(definitions, "movement.chase")));
+
+                String uuid = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
+                List<String> tools = List.of("movement.follow", "movement.approach", "movement.keep_distance",
+                        "movement.chase", "movement.escort", "movement.flee", "movement.face_entity");
+                List<String> capabilities = List.of("FollowEntity", "ApproachEntity", "KeepDistanceFromEntity",
+                        "ChaseEntity", "EscortEntity", "FleeFromEntity", "FaceEntity");
+                for (int index = 0; index < tools.size(); index++) {
+                    ObjectNode arguments = Json.object().put("lostTimeoutTicks", 80);
+                    arguments.set("target", Json.object().put("uuid", uuid));
+                    if (tools.get(index).equals("movement.keep_distance")) {
+                        arguments.put("minimumDistance", 3.0D).put("maximumDistance", 7.0D);
+                    }
+                    ToolResult result = gateway.execute(
+                            new ToolContext("hermes", "entity-session", ids.get(index)),
+                            new ToolCall("entity-" + index, tools.get(index), arguments));
+                    assertTrue(result.success(), result.observation().toString());
+                    JsonNode parameters = peer.lastCommand().path("arguments").path("parameters");
+                    assertEquals(capabilities.get(index), parameters.path("capability").asText());
+                    assertEquals("UUID", parameters.path("parameters").path("targetReferenceKind").asText());
+                    assertEquals(uuid, parameters.path("parameters").path("entityId").asText());
+                }
+
+                ToolResult legacyOwner = gateway.execute(
+                        new ToolContext("hermes", "entity-session", "owner-follow"),
+                        new ToolCall("owner", "movement.follow", Json.object()));
+                assertTrue(legacyOwner.success(), legacyOwner.observation().toString());
+                assertEquals("follow", peer.lastCommand().path("arguments").path("behaviorType").asText());
+
+                ToolResult ambiguous = gateway.execute(
+                        new ToolContext("hermes", "entity-session", "entity-invalid"),
+                        new ToolCall("ambiguous", "movement.chase", Json.object().set("target",
+                                Json.object().put("uuid", uuid).put("name", "Alex"))));
+                assertFalse(ambiguous.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", ambiguous.code());
+            }
+        }
+    }
+
+    @Test
     void boundedActionPrimitivesDispatchThroughExistingBodyExecutors() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("action-primitives.db"));
              RuntimeLog log = new RuntimeLog(temporary.resolve("action-primitives.log"), false, new Redactor())) {

@@ -16,6 +16,11 @@ final class SurvivalNavigationAdapter {
         return MinecraftSurvivalNavigation.plan(body, body.ownerId(), target, budget);
     }
 
+    GridPathPlanner.Plan plan(CompanionPlayer body, Vec3 target, GridPathPlanner.Budget budget,
+                              java.util.UUID ignoredTargetId) {
+        return MinecraftSurvivalNavigation.plan(body, body.ownerId(), ignoredTargetId, target, budget);
+    }
+
     GridPathPlanner.Plan plan(CompanionPlayer body, Vec3 target, SurvivalNavigationPolicy policy) {
         return MinecraftSurvivalNavigation.plan(body, body.ownerId(), target, policy);
     }
@@ -29,6 +34,12 @@ final class SurvivalNavigationAdapter {
     boolean remainsTraversable(CompanionPlayer body, GridPathPlanner.Point from,
                                GridPathPlanner.RouteStep next) {
         return MinecraftSurvivalNavigation.remainsTraversable(body, body.ownerId(), from, next);
+    }
+
+    boolean remainsTraversable(CompanionPlayer body, GridPathPlanner.Point from,
+                               GridPathPlanner.RouteStep next, java.util.UUID ignoredTargetId) {
+        return MinecraftSurvivalNavigation.remainsTraversable(
+                body, body.ownerId(), ignoredTargetId, from, next);
     }
 
     boolean remainsTraversable(CompanionPlayer body, SurvivalNavigationPolicy policy,

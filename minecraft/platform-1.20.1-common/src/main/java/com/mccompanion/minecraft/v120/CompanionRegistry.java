@@ -517,7 +517,9 @@ public final class CompanionRegistry {
                 "EatAndRecover", "DefendOwner", "RetreatFromDanger", "CraftItem", "SmeltItem",
                 "ExploreArea", "EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle", "Fish",
                 "FarmCrop", "BreedAnimals", "TradeWithVillager", "EnchantItem", "BrewPotion",
-                "GlideWithElytra", "NavigateWithWorldChanges").contains(capability);
+                "GlideWithElytra", "NavigateWithWorldChanges", "FollowEntity", "ApproachEntity",
+                "KeepDistanceFromEntity", "ChaseEntity", "EscortEntity", "FleeFromEntity", "FaceEntity")
+                .contains(capability);
     }
 
     public RuntimeResult runtimePause(String companionId, String leaseId, long epoch) {

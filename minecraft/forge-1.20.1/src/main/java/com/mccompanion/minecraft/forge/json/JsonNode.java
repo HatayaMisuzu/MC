@@ -37,6 +37,7 @@ public class JsonNode implements Iterable<JsonNode> {
     public boolean isNull() { return value.isJsonNull(); }
     public boolean isEmpty() { return size() == 0; }
     public boolean isTextual() { return value.isJsonPrimitive() && value.getAsJsonPrimitive().isString(); }
+    public boolean isNumber() { return value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber(); }
     public boolean isIntegralNumber() {
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return false;
         double number = value.getAsDouble();

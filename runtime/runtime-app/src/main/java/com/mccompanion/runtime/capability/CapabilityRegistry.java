@@ -22,6 +22,10 @@ public final class CapabilityRegistry {
     public static CapabilityRegistry standard() {
         return new CapabilityRegistry(List.of(
                 implemented("NavigateTo", RiskLevel.LOW), implemented("FollowOwner", RiskLevel.LOW),
+                implemented("FollowEntity", RiskLevel.LOW), implemented("ApproachEntity", RiskLevel.LOW),
+                implemented("KeepDistanceFromEntity", RiskLevel.LOW), implemented("ChaseEntity", RiskLevel.LOW),
+                implemented("EscortEntity", RiskLevel.LOW), implemented("FleeFromEntity", RiskLevel.LOW),
+                implemented("FaceEntity", RiskLevel.LOW),
                 implemented("LookAt", RiskLevel.LOW), implemented("InteractBlock", RiskLevel.LOW),
                 implemented("InteractEntity", RiskLevel.LOW), implemented("MenuAction", RiskLevel.LOW),
                 implemented("UseItem", RiskLevel.LOW), implemented("DropItem", RiskLevel.MEDIUM),

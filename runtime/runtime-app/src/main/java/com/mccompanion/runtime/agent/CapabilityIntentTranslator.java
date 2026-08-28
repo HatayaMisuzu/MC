@@ -14,6 +14,9 @@ public final class CapabilityIntentTranslator {
         return switch (step.capability()) {
             case "FollowOwner" -> Optional.of(new Intent(TaskType.FOLLOW, Json.object(), requestText));
             case "NavigateTo" -> Optional.ofNullable(navigate(step.parameters(), requestText));
+            case "FollowEntity", "ApproachEntity", "KeepDistanceFromEntity", "ChaseEntity",
+                    "EscortEntity", "FleeFromEntity", "FaceEntity" ->
+                    Optional.ofNullable(entitySkill(step, requestText));
             case "WithdrawFromStorage", "DepositToStorage", "CraftItem", "DeliverItem", "EatAndRecover" ->
                     Optional.of(skill(step, requestText));
             default -> Optional.empty();
@@ -23,6 +26,48 @@ public final class CapabilityIntentTranslator {
     private static Intent skill(PlanStep step, String requestText) {
         ObjectNode arguments = Json.object().put("capability", step.capability());
         arguments.set("parameters", step.parameters());
+        return new Intent(TaskType.SKILL, arguments, requestText);
+    }
+
+    private static Intent entitySkill(PlanStep step, String requestText) {
+        if (!step.parameters().isObject()) return null;
+        ObjectNode values = step.parameters().deepCopy();
+        JsonNode target = values.remove("target");
+        if (target == null) {
+            if (!values.path("targetReferenceKind").isTextual()) return null;
+            return skill(step.capability(), values, requestText);
+        }
+        if (!target.isObject()) return null;
+        int references = (target.has("uuid") ? 1 : 0) + (target.has("entityId") ? 1 : 0)
+                + (target.has("playerIdentity") ? 1 : 0) + (target.has("name") ? 1 : 0);
+        if (references != 1 || target.size() != 1) return null;
+        try {
+            if (target.has("uuid")) {
+                values.put("entityId", java.util.UUID.fromString(target.path("uuid").asText()).toString());
+                values.put("targetReferenceKind", "UUID");
+            } else if (target.has("entityId") && target.path("entityId").canConvertToInt()
+                    && target.path("entityId").asInt() >= 0) {
+                values.put("targetRuntimeId", target.path("entityId").asInt());
+                values.put("targetReferenceKind", "ENTITY_ID");
+            } else if (target.has("playerIdentity")) {
+                values.put("entityId", java.util.UUID.fromString(
+                        target.path("playerIdentity").asText()).toString());
+                values.put("targetReferenceKind", "VERIFIED_PLAYER");
+            } else if (target.has("name") && target.path("name").isTextual()
+                    && !target.path("name").asText().isBlank()
+                    && target.path("name").asText().strip().length() <= 64) {
+                values.put("targetName", target.path("name").asText().strip());
+                values.put("targetReferenceKind", "NAME");
+            } else return null;
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
+        return skill(step.capability(), values, requestText);
+    }
+
+    private static Intent skill(String capability, JsonNode parameters, String requestText) {
+        ObjectNode arguments = Json.object().put("capability", capability);
+        arguments.set("parameters", parameters);
         return new Intent(TaskType.SKILL, arguments, requestText);
     }
 

@@ -45,7 +45,7 @@ public final class CapabilityRegistry {
                 implemented("EnchantItem", RiskLevel.MEDIUM), implemented("BrewPotion", RiskLevel.MEDIUM),
                 implemented("GlideWithElytra", RiskLevel.MEDIUM),
                 implemented("NavigateWithWorldChanges", RiskLevel.HIGH),
-                capability("BuildSmallBlueprint", RiskLevel.HIGH)));
+                implemented("BuildSmallBlueprint", RiskLevel.HIGH)));
     }
 
     private static CapabilityDefinition capability(String name, RiskLevel risk) {

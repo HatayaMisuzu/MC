@@ -1149,22 +1149,24 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.succeedWhen(() -> {
             var snapshot = registry.runtimeSnapshots(false).stream()
                     .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
-            helper.assertValueEqual(snapshot.behaviorState(), "PAUSED",
-                    "active task was not interrupted after safety retreat");
+            helper.assertValueEqual(snapshot.behaviorState(), "RUNNING",
+                    "original task was not resumed after safety retreat");
             helper.assertTrue(snapshot.behaviorObservation() != null,
                     "safety retreat has not reached a terminal observation");
-            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
-                    "retreat observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "LOCAL_THREAT_RESUMED",
+                    "recovery observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorId(), "unsafe-travel",
+                    "recovery replaced the interrupted behavior identity");
             // The reflex measures its three-block displacement from the exact tick on which it
             // preempts travel. Depending on server scheduling, travel may first move toward the
             // threat, so the net delta from this earlier setup position can be smaller.
             helper.assertTrue(body.position().distanceToSqr(start) >= 0.25D,
                     "retreat did not create a verified movement delta");
-            helper.assertTrue(zombie.distanceToSqr(body) >= 36.0D
+            helper.assertTrue(zombie.distanceToSqr(body) >= 49.0D
                             && zombie.distanceToSqr(body) > initialThreatDistance,
-                    "retreat did not reach the verified six-block hostile clearance");
-            helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
-                    "retreat did not produce successful movement evidence");
+                    "recovery did not reach the verified seven-block melee clearance");
+            helper.assertTrue(!registry.locallyHandlesSafetyEvent(companionId, "LOW_HEALTH"),
+                    "completed recovery left its local-handling marker latched");
             zombie.discard();
             removeFixture(helper, registry, owner, "retreat test cleanup failed");
         });

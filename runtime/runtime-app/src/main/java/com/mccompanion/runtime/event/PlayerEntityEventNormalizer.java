@@ -71,6 +71,8 @@ public final class PlayerEntityEventNormalizer {
                 .put("eventType", eventType);
         eventPayload.set("target", target.deepCopy());
 
+        eventPayload.put("localSafetyHandling", payload.path("localSafetyHandling").asBoolean(false));
+
         String digest = Digests.sha256(bodyEventId);
         String presenceKey = eventType.startsWith("PLAYER_")
                 ? "player-presence:" + companionId + ':' + entityId : null;

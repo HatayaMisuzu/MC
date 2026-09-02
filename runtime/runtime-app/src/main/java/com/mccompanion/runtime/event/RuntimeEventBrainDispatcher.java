@@ -56,6 +56,14 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
     }
 
     static boolean wakeEligible(RuntimeEvent event) {
+        // Authenticated Body events still pass admission/deduplication and remain inspectable.
+        // Only these bounded, locally handled conditions avoid interrupting the durable task.
+        if (event.payload().path("localSafetyHandling").asBoolean(false)
+                && (event.category() == RuntimeEvent.Category.SURVIVAL
+                    && java.util.Set.of("LOW_HEALTH", "DAMAGE", "HEALTH_RECOVERED").contains(event.eventType())
+                || event.category() == RuntimeEvent.Category.PLAYER_ENTITY
+                    && java.util.Set.of("HOSTILE_ENTERED_THREAT_RANGE", "CURRENT_TARGET_DIED").contains(event.eventType())))
+            return false;
         if (event.taskBound()) return true;
         if (event.priority() != RuntimeEvent.Priority.CRITICAL) return false;
         return event.category() != RuntimeEvent.Category.PLAYER_ENTITY

@@ -350,6 +350,11 @@ public final class CompanionRegistry {
     }
 
     /** Bounded lifecycle/vital bindings, including death-pending and sleeping entries. */
+    public boolean locallyHandlesSafetyEvent(String companionId, String type) {
+        CompanionEntry entry = entryByCompanion(companionId);
+        return entry != null && behaviorDirector.locallyHandlesSafetyEvent(entry, type);
+    }
+
     public java.util.List<SurvivalEventBinding> survivalEventBindings() {
         java.util.List<SurvivalEventBinding> bindings = new ArrayList<>();
         for (CompanionEntry entry : savedData.entries()) {

@@ -51,20 +51,24 @@ public final class CombatGameTests implements FabricGameTest {
         zombie.setNoAi(true);
         zombie.setTarget(f.body);
         f.body.addItem(new ItemStack(Items.SHIELD));
-        f.body.addItem(new ItemStack(Items.IRON_SWORD));
-        var otherThreat = f.mob(EntityType.ZOMBIE, 3, 1);
+        f.body.addItem(new ItemStack(Items.WOODEN_SWORD));
+        var otherThreat = f.mob(EntityType.ZOMBIE, 4, 1);
         otherThreat.setNoAi(true);
         f.start("ShieldCombat", zombie);
-        f.await(100, () -> f.body.isBlocking(), () -> {
+        f.await(100, () -> f.body.isBlocking() && spawnProtection(f.body) <= 0, () -> {
             // Query after the fixture entities have entered the world's ticking entity index.
             helper.assertTrue(new ReflexController().nearestRetreatThreat(f.body, zombie.getUUID())
                     .orElse(null) == otherThreat, "explicit combat exemption suppressed another hostile reflex");
             otherThreat.discard();
             helper.assertTrue(f.body.getOffhandItem().is(Items.SHIELD), "shield was not equipped through menu");
             float health = f.body.getHealth();
+            helper.assertTrue(f.body.isBlocking(), "shield not active at damage input");
             zombie.doHurtTarget(f.body);
             helper.assertTrue(f.body.getHealth() == health, "raised shield failed to block frontal melee");
             f.await(100, () -> !f.body.isUsingItem() && zombie.getHealth() < zombie.getMaxHealth(), () -> {
+                float unblockedHealth = f.body.getHealth();
+                helper.assertTrue(zombie.doHurtTarget(f.body) && f.body.getHealth() < unblockedHealth,
+                        "unshielded control took no damage; shield evidence would be inconclusive");
                 f.await(100, () -> f.body.isBlocking(), () -> {
                     helper.assertTrue(f.registry.runtimeCancel(f.id, f.lease, 1).success(), "shield cancellation rejected");
                     helper.assertTrue(!f.body.isUsingItem() && f.body.zza == 0, "cancel left shield or movement held");
@@ -128,7 +132,15 @@ public final class CombatGameTests implements FabricGameTest {
         });
     }
 
-    private static final class Fixture {
+    private static int spawnProtection(ServerPlayer player) {
+        try {
+            var field = ServerPlayer.class.getDeclaredField("spawnInvulnerableTime");
+            field.setAccessible(true);
+            return field.getInt(player);
+        } catch (ReflectiveOperationException error) { throw new IllegalStateException(error); }
+    }
+
+    static final class Fixture {
         final GameTestHelper helper;
         final CompanionRegistry registry;
         final ServerPlayer owner;
@@ -143,6 +155,7 @@ public final class CombatGameTests implements FabricGameTest {
 
         Fixture(GameTestHelper helper, int coordinate) {
             this.helper = helper;
+            helper.getLevel().getServer().setDifficulty(net.minecraft.world.Difficulty.NORMAL, true);
             owner = new ServerPlayer(helper.getLevel().getServer(), helper.getLevel(),
                     new GameProfile(UUID.randomUUID(), "combat-" + coordinate), ClientInformation.createDefault());
             helper.getLevel().getServer().getPlayerList().placeNewPlayer(connection, owner, CommonListenerCookie.createInitial(owner.getGameProfile(), false));

@@ -23,6 +23,16 @@ final class PlayerEntityEventNormalizerTest {
     @TempDir Path temporary;
 
     @Test
+    void admittedLocalThreatKeepsTaskBindingPriorityAndCooldownWithoutBrainReplan() {
+        var body = payload("HOSTILE_ENTERED_THREAT_RANGE", "behavior-1", NOW).put("localSafetyHandling", true);
+        var normalized = new PlayerEntityEventNormalizer(clock()).normalize(body, Optional.of(task("behavior-1")));
+        assertEquals(RuntimeEvent.Priority.CRITICAL, normalized.event().priority());
+        assertEquals("task-1", normalized.event().taskId());
+        org.junit.jupiter.api.Assertions.assertFalse(RuntimeEventBrainDispatcher.wakeEligible(normalized.event()));
+        assertEquals(java.time.Duration.ofSeconds(10), normalized.policy().cooldown());
+    }
+
+    @Test
     void bindsOnlyBehaviorRelevantEdgesAndUsesServerOwnedPriority() {
         PlayerEntityEventNormalizer normalizer = new PlayerEntityEventNormalizer(clock());
         ObjectNode targetLost = payload("CURRENT_TARGET_LOST", "behavior-1", NOW);

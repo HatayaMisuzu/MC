@@ -21,6 +21,41 @@ final class SurvivalEventNormalizerTest {
     @TempDir Path temporary;
 
     @Test
+    void localRecoveryRetainsDurableTaskAndExistingDeduplicationWithoutHidingOtherHazards() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("local-recovery.db"))) {
+            database.initialize();
+            var tasks = new com.mccompanion.runtime.task.TaskRepository(database,
+                    new com.mccompanion.runtime.task.TaskEventStore(database));
+            var task = tasks.create("companion", com.mccompanion.runtime.task.TaskType.TRAVEL,
+                    "existing route", Json.object().put("completedSteps", 2));
+            task = tasks.transition(task.taskId(), task.revision(), com.mccompanion.runtime.task.TaskState.ACCEPTED,
+                    "CommandAccepted", Json.object());
+            task = tasks.transition(task.taskId(), task.revision(), com.mccompanion.runtime.task.TaskState.RUNNING,
+                    "BehaviorStarted", Json.object());
+            ObjectNode body = payload("LOW_HEALTH", "ACTIVE", NOW)
+                    .put("behaviorId", task.behaviorId()).put("localSafetyHandling", true);
+            var normalizer = new SurvivalEventNormalizer(clock());
+            var low = normalizer.normalize(body, Optional.of(task));
+            var events = new RuntimeEventRepository(database, clock(), 8);
+            assertEquals("EVENT_ADMITTED", events.admit(low.event(), low.policy()).code());
+            assertEquals("EVENT_DUPLICATE", events.admit(low.event(), low.policy()).code());
+            assertEquals(task.taskId(), low.event().taskId());
+            assertEquals(RuntimeEvent.Priority.CRITICAL, low.event().priority());
+            assertFalse(RuntimeEventBrainDispatcher.wakeEligible(low.event()));
+            var persisted = tasks.get(task.taskId()).orElseThrow();
+            assertEquals(task, persisted);
+            assertEquals(2, persisted.payload().path("completedSteps").asInt());
+            assertTrue(RuntimeEventBrainDispatcher.wakeEligible(normalizer.normalize(
+                    body.put("localSafetyHandling", false), Optional.of(task)).event()));
+            for (String type : java.util.List.of("FIRE", "LAVA", "LOW_AIR", "DEATH")) {
+                var hazard = payload(type, type.equals("DEATH") ? "DEAD" : "ACTIVE", NOW)
+                        .put("localSafetyHandling", true);
+                assertTrue(RuntimeEventBrainDispatcher.wakeEligible(normalizer.normalize(hazard, Optional.of(task)).event()));
+            }
+        }
+    }
+
+    @Test
     void assignsServerOwnedSemanticsAndCoalescesDamage() {
         SurvivalEventNormalizer normalizer = new SurvivalEventNormalizer(clock());
         ObjectNode body = payload("DAMAGE", "ACTIVE", NOW);

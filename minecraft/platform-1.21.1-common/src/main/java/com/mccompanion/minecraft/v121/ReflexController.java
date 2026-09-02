@@ -19,7 +19,7 @@ final class ReflexController {
     }
 
     Optional<String> blockingReason(CompanionPlayer body) {
-        if (body.getHealth() <= Math.min(4.0F, body.getMaxHealth() * 0.2F)) {
+        if (com.mccompanion.core.body.combat.ThreatPolicy.lowHealth(body.getHealth(), body.getMaxHealth())) {
             return Optional.of("LOW_HEALTH");
         }
         if (body.isInLava() || body.isOnFire()) {

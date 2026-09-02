@@ -2,6 +2,7 @@ package com.mccompanion.minecraft.v121;
 
 import com.mccompanion.core.body.BodyControlArbiter;
 import com.mccompanion.core.body.combat.CombatController;
+import com.mccompanion.core.body.combat.ThreatPolicy;
 import com.mccompanion.core.body.interaction.EntityInteractionController;
 import com.mccompanion.core.body.interaction.EntityTargetIdentity;
 import com.mccompanion.core.navigation.GridPathPlanner;
@@ -62,6 +63,7 @@ final class BehaviorDirector {
     private final Logger logger;
     private final PlayerActionGateway actionGateway = new PlayerActionGateway();
     private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
+    private final Map<UUID, MinecraftThreatRecovery> threatRecoveries = new HashMap<>();
     private final ReflexController reflexController = new ReflexController();
     private final BodyControlArbiter controlArbiter = new BodyControlArbiter();
     private final DailyActionAdapter dailyActions;
@@ -123,6 +125,21 @@ final class BehaviorDirector {
         menuActions.remove(entry.companionId);
         survivalNavigations.remove(entry.companionId);
         survivalNavigationParameters.remove(entry.companionId);
+        if (parameters.capability().equals("DefendOwner")) {
+            ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+            if (owner == null || owner.level() != body.level()) throw new IllegalArgumentException("OWNER_OFFLINE");
+            var target = MinecraftThreatRecovery.observe(body, owner).stream()
+                    .filter(seen -> seen.entity().distanceToSqr(owner) <= 64)
+                    .sorted(java.util.Comparator.comparing((MinecraftThreatRecovery.Seen seen) -> !seen.fact().ownerAttacked())
+                            .thenComparingDouble(seen -> seen.entity().distanceToSqr(owner)))
+                    .map(MinecraftThreatRecovery.Seen::entity).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("NO_OWNER_THREAT"));
+            combats.put(entry.companionId, new MinecraftCombatController(new EntityTargetIdentity(target.getUUID(),
+                    EntityTargetIdentity.Source.UUID, "", false), MinecraftThreatRecovery.defenseStyle(body, target),
+                    parameters.durationTicks() == null ? 1200 : parameters.durationTicks(), body, actionGateway));
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
         if (MinecraftCombatController.supports(parameters.capability())) {
             TargetResolution target = resolveInitialTarget(body, parameters);
             if (target.failureCode != null) throw new IllegalArgumentException(target.failureCode);
@@ -227,6 +244,7 @@ final class BehaviorDirector {
     }
 
     private void supersedeActive(CompanionEntry entry, CompanionPlayer body) {
+        endThreatRecovery(entry, body);
         if (entry.blueprintSession != null && !entry.blueprintSession.temporarySupports().isEmpty()) {
             logger.info("blueprint_superseded_supports_retained companion={} supports={}",
                     entry.companionId, entry.blueprintSession.temporarySupports());
@@ -312,6 +330,8 @@ final class BehaviorDirector {
     }
 
     void stop(CompanionEntry entry, CompanionPlayer body, boolean success, String code) {
+        endThreatRecovery(entry, body);
+        actionGateway.cancelUsing(body);
         MinecraftCombatController combat = combats.get(entry.companionId);
         if (combat != null) combat.pause(body);
         smallBlueprints.forget(body);
@@ -405,6 +425,7 @@ final class BehaviorDirector {
     }
 
     void forget(UUID companionId) {
+        threatRecoveries.remove(companionId);
         navigation.remove(companionId);
         survivalNavigations.remove(companionId);
         survivalNavigationParameters.remove(companionId);
@@ -506,15 +527,8 @@ final class BehaviorDirector {
             tickRetreat(entry, body, retreat);
             return;
         }
-        if (entry.mode != CompanionEntry.Mode.PAUSED && !defends.containsKey(entry.companionId)) {
-            MinecraftCombatController combat = combats.get(entry.companionId);
-            var threat = reflexController.nearestRetreatThreat(body,
-                    combat == null ? null : combat.identity.uuid());
-            if (threat.isPresent() && threat.get().distanceToSqr(body) <= 9.0D) {
-                beginRetreat(entry, body, threat.get());
-                return;
-            }
-        }
+        if (entry.mode != CompanionEntry.Mode.PAUSED && !body.isInLava() && !body.isOnFire()
+                && !(body.isInWater() && body.getAirSupply() <= 40) && tickThreatRecovery(entry, body)) return;
         var reflex = reflexController.blockingReason(body);
         if (reflex.isPresent()) {
             claimSafety(entry, reflex.get());
@@ -636,7 +650,7 @@ final class BehaviorDirector {
                     }
                 });
         if (result.status() == RouteExecutionController.Status.BLOCKED) {
-            pauseSafely(entry, body, result.code());
+            if (!threatRecoveries.containsKey(entry.companionId)) pauseSafely(entry, body, result.code());
             return result.status();
         }
         if (result.status() == RouteExecutionController.Status.PAUSED) return result.status();
@@ -663,7 +677,7 @@ final class BehaviorDirector {
         GridPathPlanner.Point waypointPoint = routeStep.point();
         if (navigationAdapter.requiresPassageOpening(body, waypointPoint)) {
             if (!navigationAdapter.openDoorIfNeeded(body, waypointPoint)) {
-                pauseSafely(entry, body, "PASSAGE_INTERACTION_FAILED");
+                if (!threatRecoveries.containsKey(entry.companionId)) pauseSafely(entry, body, "PASSAGE_INTERACTION_FAILED");
                 return RouteExecutionController.Status.BLOCKED;
             }
             actionGateway.markVanillaGameModeAction(body);
@@ -677,7 +691,7 @@ final class BehaviorDirector {
         float yaw = navigationAdapter.movementYaw(body, waypointPoint, delta);
         boolean gapJump = routeStep.movement() == GridPathPlanner.Movement.JUMP_GAP;
         if (gapJump && !navigationAdapter.canExecuteGapJump(body)) {
-            pauseSafely(entry, body, "GAP_JUMP_UNSAFE");
+            if (!threatRecoveries.containsKey(entry.companionId)) pauseSafely(entry, body, "GAP_JUMP_UNSAFE");
             return RouteExecutionController.Status.BLOCKED;
         }
         actionGateway.applyMoveInput(body, yaw,
@@ -818,6 +832,70 @@ final class BehaviorDirector {
             if (entity != null) return entity;
         }
         return null;
+    }
+
+    boolean locallyHandlesSafetyEvent(CompanionEntry entry, String type) {
+        if (entry.mode == CompanionEntry.Mode.PAUSED) return false;
+        boolean handling = threatRecoveries.containsKey(entry.companionId);
+        return switch (type) {
+            case "LOW_HEALTH", "HEALTH_RECOVERED" -> handling;
+            case "CURRENT_TARGET_DIED" -> handling || combats.containsKey(entry.companionId)
+                    || recentEntityTargetExpiryTicks.getOrDefault(entry.companionId, 0L) >= server.getTickCount();
+            case "DAMAGE", "HOSTILE_ENTERED_THREAT_RANGE" ->
+                    handling || combats.containsKey(entry.companionId);
+            default -> false;
+        };
+    }
+
+    private void endThreatRecovery(CompanionEntry entry, CompanionPlayer body) {
+        MinecraftThreatRecovery recovery = threatRecoveries.remove(entry.companionId);
+        if (recovery == null) return;
+        recovery.stop(body);
+        navigation.remove(entry.companionId);
+        if (recovery.interruptedRoute != null) navigation.put(entry.companionId, recovery.interruptedRoute);
+        releaseSafety(entry);
+    }
+
+    private boolean tickThreatRecovery(CompanionEntry entry, CompanionPlayer body) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        var seen = MinecraftThreatRecovery.observe(body, owner);
+        MinecraftThreatRecovery recovery = threatRecoveries.get(entry.companionId);
+        if (recovery == null) {
+            MinecraftCombatController combat = combats.get(entry.companionId);
+            var decision = MinecraftThreatRecovery.decision(body, combat == null ? null : combat.identity.uuid(), seen);
+            if (decision.action() == ThreatPolicy.Action.CONTINUE) return false;
+            // Suspend existing executors, retaining their exact identity and progress. The durable
+            // Runtime task stays RUNNING while this bounded Body operation is in progress.
+            stop(entry, body, false, "LOCAL_THREAT_HANDLING");
+            recovery = new MinecraftThreatRecovery(entry, body, decision, navigation.remove(entry.companionId),
+                    actionGateway, navigationAdapter, server.getTickCount(), controlArbiter.snapshot(entry.companionId));
+            threatRecoveries.put(entry.companionId, recovery);
+            claimSafety(entry, "LOCAL_THREAT_HANDLING");
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            savedData.changed();
+        }
+        String result = recovery.tick(body, owner, seen, server.getTickCount(),
+                (target, ignored) -> tickNavigation(entry, body, target, 0.25, true, ignored)
+                        != RouteExecutionController.Status.BLOCKED);
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result == null ? "LOCAL_THREAT_HANDLING" : result.equals("COMPLETE") ? "LOCAL_THREAT_RESUMED" : result,
+                "", 0, 0, java.util.List.of(), recovery.details()));
+        if (result == null) return true;
+        endThreatRecovery(entry, body);
+        if (!result.equals("COMPLETE")) {
+            if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, result);
+            return true;
+        }
+        if (recovery.interruptedControl.authority() != BodyControlArbiter.Authority.IDLE) {
+            String failure = claim(entry, recovery.interruptedControl.authority(),
+                    recovery.interruptedControl.ownerIdentity(), "LOCAL_THREAT_RESUMED");
+            if (failure != null) { pauseSafely(entry, body, failure); return true; }
+        }
+        if (entry.mode == CompanionEntry.Mode.SKILL) resumeSkill(entry, body);
+        else if (entry.mode != CompanionEntry.Mode.IDLE) resumeNavigation(entry, body);
+        else actionGateway.completeBehavior(body, true, "LOCAL_THREAT_RESUMED", server.getTickCount());
+        savedData.changed();
+        return true;
     }
 
     private void tickCombat(CompanionEntry entry, CompanionPlayer body, MinecraftCombatController combat) {
@@ -2740,7 +2818,8 @@ final class BehaviorDirector {
     }
 
     private static boolean isSuspension(String code) {
-        return code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
+        return code.equals("LOCAL_THREAT_HANDLING") || code.startsWith("RECOVERY_")
+                || code.equals("THREAT_RECOVERY_TIMEOUT") || code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
                 || code.equals("RUNTIME_OFFLINE") || code.equals("LEASE_EXPIRED")
                 || code.equals("PAUSED_BY_OWNER") || code.equals("LOW_HEALTH")
                 || code.equals("ENVIRONMENT_HAZARD") || code.equals("DROWNING_RISK");

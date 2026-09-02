@@ -642,6 +642,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("displayName", target.displayName() == null ? "" : target.displayName())
                 .put("player", target.player()).put("hostile", target.hostile())
                 .put("alive", target.alive()).put("distanceSquared", target.distanceSquared());
+        payload.put("localSafetyHandling", registry.locallyHandlesSafetyEvent(event.companionId(), event.type().name()));
         sendEnvelope("player_entity_event", payload);
     }
 
@@ -660,6 +661,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("air", snapshot.air()).put("maxAir", snapshot.maxAir())
                 .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava())
                 .put("onGround", snapshot.onGround()).put("fallDistance", snapshot.fallDistance());
+        payload.put("localSafetyHandling", registry.locallyHandlesSafetyEvent(snapshot.companionId(), event.type().name()));
         sendEnvelope("survival_event", payload);
     }
 

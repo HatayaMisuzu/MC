@@ -92,6 +92,8 @@ public final class SurvivalEventNormalizer {
                 .put("damageAmount", damageAmount);
         eventPayload.set("vitals", vitals.deepCopy());
 
+        eventPayload.put("localSafetyHandling", payload.path("localSafetyHandling").asBoolean(false));
+
         String digest = Digests.sha256(bodyEventId);
         String coalesceKey = eventType.equals("DAMAGE") ? "survival-damage:" + companionId : null;
         String cooldownKey = switch (eventType) {

@@ -849,7 +849,7 @@ class RuntimeToolGatewayTest {
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of(
                         "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-block-interact",
-                        "c-block-place", "c-entity-interact", "c-entity-attack",
+                        "c-block-place", "c-blueprint", "c-entity-interact", "c-entity-attack",
                         "c-retreat", "c-menu-click", "c-menu-quick", "c-menu-close",
                         "c-use", "c-drop", "c-collect", "c-from", "c-to")) {
                     CompanionStatus status = new CompanionStatus(companionId, "owner", companionId, "world",
@@ -864,7 +864,7 @@ class RuntimeToolGatewayTest {
                 RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
                         ignored -> List.of("NavigateTo", "CollectResource", "MineResourceVein",
                                 "WithdrawFromStorage", "DepositToStorage", "LookAt",
-                                "InteractBlock", "PlaceBlock", "InteractEntity", "AttackEntity",
+                                "InteractBlock", "PlaceBlock", "BuildSmallBlueprint", "InteractEntity", "AttackEntity",
                                 "RetreatFromDanger", "MenuAction", "UseItem", "DropItem"));
 
                 var definitions = gateway.definitions(new ToolContext("hermes", "session", "c-step"));
@@ -873,7 +873,7 @@ class RuntimeToolGatewayTest {
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList().contains("movement.look"));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
                         .containsAll(List.of("block.interact", "block.place",
-                                "entity.interact", "entity.attack")));
+                                "build.small_blueprint", "entity.interact", "entity.attack")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
                         .containsAll(List.of("menu.click", "menu.quick_move", "menu.close")));
                 assertTrue(definitions.stream().map(ToolDefinition::name).toList()
@@ -886,6 +886,11 @@ class RuntimeToolGatewayTest {
                 assertEquals("BUILD", definition(definitions, "block.place").permission());
                 assertEquals("MEDIUM", definition(definitions, "block.place").risk());
                 assertEquals(List.of("block", "position"), required(definition(definitions, "block.place")));
+                assertEquals("BUILD", definition(definitions, "build.small_blueprint").permission());
+                assertEquals("HIGH", definition(definitions, "build.small_blueprint").risk());
+                assertEquals(Duration.ofMinutes(5), definition(definitions, "build.small_blueprint").timeout());
+                assertEquals(List.of("anchor", "maxSize", "blocks"),
+                        required(definition(definitions, "build.small_blueprint")));
                 assertEquals("INTERACT", definition(definitions, "entity.interact").permission());
                 assertEquals("COMBAT", definition(definitions, "entity.attack").permission());
                 assertEquals("MEDIUM", definition(definitions, "entity.attack").risk());
@@ -956,6 +961,37 @@ class RuntimeToolGatewayTest {
                 assertEquals("UP", blockPlacementParameters.path("parameters").path("face").asText());
                 assertEquals(5, blockPlacementParameters.path("parameters")
                         .path("target").path("x").asInt());
+
+                ObjectNode blueprint = Json.object();
+                blueprint.set("anchor", position(20, 64, 20));
+                blueprint.set("maxSize", Json.object().put("x", 5).put("y", 4).put("z", 5));
+                var blueprintBlocks = Json.MAPPER.createArrayNode();
+                blueprintBlocks.add(Json.object().put("block", "minecraft:oak_stairs")
+                        .set("position", Json.object().put("x", 0).put("y", 0).put("z", 0)));
+                ((ObjectNode) blueprintBlocks.get(0)).set("state", Json.object().put("facing", "north"));
+                ((ObjectNode) blueprintBlocks.get(0)).set("alternatives",
+                        Json.MAPPER.createArrayNode().add("minecraft:spruce_stairs"));
+                blueprint.set("blocks", blueprintBlocks);
+                blueprint.set("temporarySupport", Json.object().put("maxBlocks", 2).put("cleanup", true)
+                        .set("blocks", Json.MAPPER.createArrayNode().add("minecraft:cobblestone")));
+                ToolResult blueprintAccepted = gateway.execute(
+                        new ToolContext("hermes", "session", "c-blueprint"),
+                        new ToolCall("build-blueprint", "build.small_blueprint", blueprint));
+                assertTrue(blueprintAccepted.success(), blueprintAccepted.observation().toString());
+                JsonNode blueprintParameters = peer.lastCommand().path("arguments").path("parameters");
+                assertEquals("BuildSmallBlueprint", blueprintParameters.path("capability").asText());
+                assertEquals("north", blueprintParameters.path("parameters").path("blueprint")
+                        .path("blocks").path(0).path("state").path("facing").asText());
+                assertEquals(2, blueprintParameters.path("parameters").path("blueprint")
+                        .path("temporarySupport").path("maxBlocks").asInt());
+
+                ObjectNode invalidBlueprint = blueprint.deepCopy();
+                ((ObjectNode) invalidBlueprint.path("blocks").path(0).path("position")).put("x", 5);
+                ToolResult invalidBlueprintResult = gateway.execute(
+                        new ToolContext("hermes", "session", "c-blueprint"),
+                        new ToolCall("invalid-blueprint", "build.small_blueprint", invalidBlueprint));
+                assertFalse(invalidBlueprintResult.success());
+                assertEquals("INVALID_TOOL_ARGUMENTS", invalidBlueprintResult.code());
 
                 String entityId = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
                 ToolResult entityInteraction = gateway.execute(

@@ -1,5 +1,6 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.build.SmallBlueprint;
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import com.mccompanion.minecraft.fabric.PrimitiveObservationService;
 import com.mccompanion.minecraft.fabric.RegistryObservationService;
@@ -34,6 +35,188 @@ import org.slf4j.LoggerFactory;
 /** Headless integration tests that exercise the real ServerPlayer body and fake connection. */
 public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1400, batch = "blueprint_examples")
+    public void smallBlueprintOrientsAlternativeStairsCleansSupportAndCancelsSafely(GameTestHelper helper) {
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Builder").success(), "example body create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        BlockPos origin = moveToIsolatedArena(owner, body, 1088, 1088, 1);
+        String id = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
+                .findFirst().orElseThrow().companionId();
+        String lease = "blueprint-examples";
+        helper.assertTrue(registry.runtimeAcquireLease(id, lease, 1L,
+                System.currentTimeMillis() + 120_000L).success(), "example lease failed");
+        BlockPos anchor = origin.offset(3, 0, 3);
+        var blocks = java.util.List.of(
+                exampleBlock(0, 0, "minecraft:oak_stairs", true),
+                exampleBlock(1, 0, "minecraft:cobblestone", false),
+                exampleBlock(2, 0, "minecraft:cobblestone", false),
+                exampleBlock(1, 1, "minecraft:oak_stairs", true),
+                exampleBlock(2, 1, "minecraft:cobblestone", false),
+                exampleBlock(2, 2, "minecraft:oak_stairs", true),
+                exampleBlock(4, 1, "minecraft:oak_planks", false));
+        SmallBlueprint plan = new SmallBlueprint(
+                new SmallBlueprint.Anchor(body.serverLevel().dimension().location().toString(),
+                        anchor.getX(), anchor.getY(), anchor.getZ()),
+                new SmallBlueprint.Size(5, 3, 1), blocks,
+                new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 1, true));
+        body.addItem(new ItemStack(Items.COBBLESTONE, 3));
+        body.addItem(new ItemStack(Items.SPRUCE_STAIRS, 3));
+        body.addItem(new ItemStack(Items.OAK_PLANKS, 1));
+        body.addItem(new ItemStack(Items.DIRT, 2));
+        helper.assertTrue(registry.runtimeStart(id, lease, 1L, "blueprint-stairs", "skill",
+                null, null, null, new SkillParameters("BuildSmallBlueprint", plan)).success(), "example start failed");
+        awaitExampleCondition(helper, registry, id, 1000, () -> registry.runtimeSnapshots(false).stream()
+                .anyMatch(value -> value.companionId().equals(id) && value.behaviorState().equals("IDLE")), () -> {
+            for (var block : blocks) {
+                var actual = body.serverLevel().getBlockState(anchor.offset(
+                        block.offset().x(), block.offset().y(), block.offset().z()));
+                String expected = block.alternatives().isEmpty() ? block.blockId() : block.alternatives().get(0);
+                helper.assertTrue(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(actual.getBlock())
+                        .toString().equals(expected), "example final block mismatch: " + block);
+                for (var property : block.state().entrySet()) {
+                    var key = actual.getBlock().getStateDefinition().getProperty(property.getKey());
+                    helper.assertTrue(key != null && actual.getValue(key).toString().equals(property.getValue()),
+                            "example final state mismatch: " + actual);
+                }
+            }
+            helper.assertTrue(body.serverLevel().getBlockState(anchor.offset(4, 0, 0)).isAir(),
+                    "temporary dirt was not cleaned through real mining");
+            BlockPos cancellationTarget = origin.offset(10, 1, 10);
+            SmallBlueprint cancelPlan = new SmallBlueprint(new SmallBlueprint.Anchor(
+                    body.serverLevel().dimension().location().toString(),
+                    cancellationTarget.getX(), cancellationTarget.getY(), cancellationTarget.getZ()),
+                    new SmallBlueprint.Size(1, 1, 1),
+                    java.util.List.of(exampleBlock(0, 0, "minecraft:oak_planks", false)),
+                    new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 1, true));
+            body.addItem(new ItemStack(Items.OAK_PLANKS));
+            helper.assertTrue(registry.runtimeStart(id, lease, 1L, "blueprint-cancel", "skill",
+                    null, null, null, new SkillParameters("BuildSmallBlueprint", cancelPlan)).success(),
+                    "cancellation start failed");
+            awaitExampleCondition(helper, registry, id, 300,
+                    () -> body.serverLevel().getBlockState(cancellationTarget.below()).is(Blocks.DIRT), () -> {
+                helper.assertTrue(registry.runtimeCancel(id, lease, 1L).success(), "blueprint cancel failed");
+                var snapshot = registry.runtimeSnapshots(false).stream()
+                        .filter(value -> value.companionId().equals(id)).findFirst().orElseThrow();
+                helper.assertTrue(snapshot.behaviorObservation().failureCode()
+                        .equals("BLUEPRINT_CANCELLED_SUPPORTS_RETAINED"),
+                        "cancel did not report retained supports: " + snapshot.behaviorObservation());
+                helper.runAfterDelay(5, () -> {
+                    helper.assertTrue(body.serverLevel().getBlockState(cancellationTarget).isAir()
+                            && body.serverLevel().getBlockState(cancellationTarget.below()).is(Blocks.DIRT),
+                            "cancel mutated world or silently removed supports");
+                    helper.assertTrue(registry.runtimeReleaseLease(id, lease, 1L).success(), "example release failed");
+                removeFixture(helper, registry, owner, "blueprint example cleanup failed");
+                    helper.succeed();
+                });
+            });
+        });
+    }
+
+    private static SmallBlueprint.Block exampleBlock(int x, int y, String id, boolean stairs) {
+        return new SmallBlueprint.Block(new SmallBlueprint.Offset(x, y, 0), id,
+                stairs ? java.util.Map.of("facing", "west", "half", "bottom") : java.util.Map.of(),
+                stairs ? java.util.List.of("minecraft:spruce_stairs") : java.util.List.of());
+    }
+
+    private static void awaitExampleCondition(GameTestHelper helper, CompanionRegistry registry, String id,
+            int remaining, java.util.function.BooleanSupplier condition, Runnable done) {
+        if (condition.getAsBoolean()) { done.run(); return; }
+        var snapshot = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.companionId().equals(id)).findFirst().orElseThrow();
+        helper.assertTrue(remaining > 0 && snapshot.behaviorState().equals("RUNNING"),
+                "blueprint example blocked: " + snapshot.behaviorState() + " " + snapshot.behaviorObservation());
+        helper.runAfterDelay(1, () -> awaitExampleCondition(helper, registry, id, remaining - 1, condition, done));
+    }
+
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 6000, batch = "small_blueprint")
+    public void smallBlueprintBuildsShelterAndHouseAndResumesAfterInterruption(GameTestHelper helper) {
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Blueprint").success(), "blueprint create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "blueprint body missing");
+        BlockPos origin = moveToIsolatedArena(owner, body, 960, 960, 1);
+        for (int x = -4; x <= 15; x++) for (int z = -4; z <= 15; z++) for (int y = 4; y <= 6; y++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+        }
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
+        String lease = "fabric-small-blueprint";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                System.currentTimeMillis() + 300_000L).success(), "blueprint lease failed");
+
+        BlockPos shelterAnchor = origin.offset(3, 0, 2);
+        SmallBlueprint shelter = shelterBlueprint(body, shelterAnchor, 3);
+        helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE, shelter.blocks().size())),
+                "shelter materials fixture failed");
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L, "blueprint-shelter", "skill",
+                null, null, null, new SkillParameters("BuildSmallBlueprint", shelter)).success(),
+                "shelter start failed");
+        awaitBlueprintProgress(helper, registry, companionId, body, shelter, 300, () -> {
+            int beforePause = matchingBlueprintBlocks(body, shelter);
+            helper.assertTrue(beforePause > 0 && beforePause < shelter.blocks().size(),
+                    "shelter interruption did not occur during partial construction");
+            helper.assertTrue(registry.runtimePause(companionId, lease, 1L).success(), "shelter pause failed");
+            CompanionSavedData data = helper.getLevel().getServer().overworld().getDataStorage().computeIfAbsent(
+                    CompanionSavedData.FACTORY, CompanionSavedData.STORAGE_ID);
+            CompanionEntry entry = data.get(owner.getUUID());
+            CompanionEntry restored = CompanionEntry.load(entry.save());
+            helper.assertTrue(restored.blueprintSession != null
+                            && restored.blueprintSession.completed().size() == beforePause,
+                    "durable record lost completed blueprint positions");
+            entry.blueprintSession = restored.blueprintSession;
+            helper.runAfterDelay(5, () -> {
+                helper.assertValueEqual(matchingBlueprintBlocks(body, shelter), beforePause,
+                        "paused shelter repeated or mutated completed positions");
+                helper.assertTrue(registry.runtimeResume(companionId, lease, 1L).success(), "shelter resume failed");
+                awaitBehaviorIdleForChain(helper, registry, companionId, 1800, ignored -> {
+                    assertBlueprint(helper, body, shelter, "3x3 shelter");
+                    BlockPos houseAnchor = origin.offset(8, 0, 0);
+                    SmallBlueprint house = shelterBlueprint(body, houseAnchor, 5);
+                    helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE, 64)),
+                            "house material stack one failed");
+                    helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE,
+                                    house.blocks().size() - 64)), "house material stack two failed");
+                    helper.assertTrue(registry.runtimeStart(companionId, lease, 1L, "blueprint-house", "skill",
+                            null, null, null, new SkillParameters("BuildSmallBlueprint", house)).success(),
+                            "house start failed");
+                    awaitBehaviorIdleForChain(helper, registry, companionId, 3000, houseDone -> {
+                        assertBlueprint(helper, body, house, "5x5 house");
+                        BlockPos repairTarget = origin.offset(2, 0, 10);
+                        SmallBlueprint repair = oneBlockBlueprint(body, repairTarget,
+                                "minecraft:oak_planks");
+                        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                                        "blueprint-material-recovery", "skill", null, null, null,
+                                        new SkillParameters("BuildSmallBlueprint", repair)).success(),
+                                "material recovery blueprint start failed");
+                        awaitBehaviorPaused(helper, registry, companionId, 40, paused -> {
+                            helper.assertValueEqual(paused.behaviorObservation().failureCode(),
+                                    "MATERIALS_INSUFFICIENT",
+                                    "missing blueprint material did not pause safely");
+                            helper.assertTrue(body.addItem(new ItemStack(Items.OAK_PLANKS)),
+                                    "material recovery fixture failed");
+                            helper.assertTrue(registry.runtimeResume(companionId, lease, 1L).success(),
+                                    "material recovery resume failed");
+                            awaitBehaviorIdleForChain(helper, registry, companionId, 300, repaired -> {
+                                helper.assertTrue(body.serverLevel().getBlockState(repairTarget).is(Blocks.OAK_PLANKS),
+                                        "resumed blueprint did not verify the recovered material placement");
+                                helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                                        "blueprint release failed");
+                                removeFixture(helper, registry, owner, "blueprint cleanup failed");
+                                helper.succeed();
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "controlArbitration")
     public void ownerTakeoverInvalidatesRuntimeLeaseAndControlOwnerIsObservable(GameTestHelper helper) {
@@ -1631,6 +1814,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(ticksRemaining > 0,
                     "timed out waiting for behavior completion: behavior=" + snapshot.behaviorId()
                             + ", position=(" + snapshot.x() + "," + snapshot.y() + "," + snapshot.z() + ")"
+                            + ", observation=" + snapshot.behaviorObservation()
                             + ", evidence=" + snapshot.evidenceSummary());
             helper.runAfterDelay(1, () -> awaitBehaviorIdle(
                     helper, registry, companionId, ticksRemaining - 1, terminalAssertions, completeTest));
@@ -2740,6 +2924,79 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionRegistry.Result removed = registry.remove(owner);
         helper.assertTrue(removed.success(), failureMessage + ": " + removed.code());
         helper.getLevel().getServer().getPlayerList().remove(owner);
+    }
+
+    private static SmallBlueprint shelterBlueprint(CompanionPlayer body, BlockPos anchor, int width) {
+        java.util.ArrayList<SmallBlueprint.Block> blocks = new java.util.ArrayList<>();
+        for (int z = 0; z < width; z++) for (int x = 0; x < width; x++) {
+            blocks.add(blueprintBlock(x, 0, z));
+        }
+        int wallTop = width == 3 ? 2 : 3;
+        for (int y = 1; y <= wallTop; y++) for (int z = 0; z < width; z++) for (int x = 0; x < width; x++) {
+            boolean perimeter = x == 0 || z == 0 || x == width - 1 || z == width - 1;
+            boolean doorway = z == 0 && x == width / 2 && y <= 2;
+            if (perimeter && !doorway) blocks.add(blueprintBlock(x, y, z));
+        }
+        for (int z = 0; z < width; z++) for (int x = 0; x < width; x++) {
+            blocks.add(blueprintBlock(x, wallTop + 1, z));
+        }
+        return new SmallBlueprint(new SmallBlueprint.Anchor(
+                body.serverLevel().dimension().location().toString(), anchor.getX(), anchor.getY(), anchor.getZ()),
+                new SmallBlueprint.Size(width, wallTop + 2, width), blocks,
+                new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 4, true));
+    }
+
+    private static SmallBlueprint.Block blueprintBlock(int x, int y, int z) {
+        return new SmallBlueprint.Block(new SmallBlueprint.Offset(x, y, z),
+                "minecraft:cobblestone", java.util.Map.of(), java.util.List.of("minecraft:stone"));
+    }
+
+    private static SmallBlueprint oneBlockBlueprint(CompanionPlayer body, BlockPos target, String blockId) {
+        return new SmallBlueprint(new SmallBlueprint.Anchor(
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ()),
+                new SmallBlueprint.Size(1, 1, 1),
+                java.util.List.of(new SmallBlueprint.Block(
+                        new SmallBlueprint.Offset(0, 0, 0), blockId, java.util.Map.of(), java.util.List.of())),
+                new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 1, true));
+    }
+
+    private static int matchingBlueprintBlocks(CompanionPlayer body, SmallBlueprint blueprint) {
+        int matching = 0;
+        for (SmallBlueprint.Block block : blueprint.blocks()) {
+            BlockPos target = new BlockPos(blueprint.anchor().x() + block.offset().x(),
+                    blueprint.anchor().y() + block.offset().y(), blueprint.anchor().z() + block.offset().z());
+            if (body.serverLevel().getBlockState(target).is(Blocks.COBBLESTONE)) matching++;
+        }
+        return matching;
+    }
+
+    private static void assertBlueprint(GameTestHelper helper, CompanionPlayer body,
+                                        SmallBlueprint blueprint, String label) {
+        helper.assertValueEqual(matchingBlueprintBlocks(body, blueprint), blueprint.blocks().size(),
+                label + " final world state was incomplete");
+    }
+
+    private static void awaitBlueprintProgress(GameTestHelper helper, CompanionRegistry registry,
+                                               String companionId, CompanionPlayer body,
+                                               SmallBlueprint blueprint, int ticksRemaining,
+                                               Runnable progressed) {
+        int matching = matchingBlueprintBlocks(body, blueprint);
+        if (matching >= 3 && matching < blueprint.blocks().size()) {
+            progressed.run();
+            return;
+        }
+        var snapshot = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        helper.assertTrue(snapshot.behaviorState().equals("RUNNING"),
+                "blueprint stopped before partial progress: state=" + snapshot.behaviorState()
+                        + " evidence=" + snapshot.evidenceSummary());
+        helper.assertTrue(ticksRemaining > 0,
+                "blueprint made no partial progress: position=" + body.position()
+                        + " observation=" + snapshot.behaviorObservation()
+                        + " evidence=" + snapshot.evidenceSummary());
+        helper.runAfterDelay(1, () -> awaitBlueprintProgress(
+                helper, registry, companionId, body, blueprint, ticksRemaining - 1, progressed));
     }
 
     private static BlockPos moveToIsolatedArena(

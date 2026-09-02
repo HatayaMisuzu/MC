@@ -46,7 +46,8 @@ public final class CompanionRegistry {
             }
             entry.skillRecoveryRequired = entry.mode == CompanionEntry.Mode.PAUSED
                     && entry.resumeMode == CompanionEntry.Mode.SKILL
-                    && entry.runtimeBehaviorId != null && !entry.runtimeBehaviorId.isBlank();
+                    && entry.runtimeBehaviorId != null && !entry.runtimeBehaviorId.isBlank()
+                    && entry.blueprintSession == null;
             if (entry.spawned) {
                 spawnBody(entry, null);
             }
@@ -512,7 +513,7 @@ public final class CompanionRegistry {
 
     private static boolean runtimeSkillSupported(String capability) {
         return java.util.Set.of("LookAt", "InteractBlock", "InteractEntity", "MenuAction",
-                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "CollectResource",
+                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "BuildSmallBlueprint", "CollectResource",
                 "MineResourceVein", "WithdrawFromStorage", "DepositToStorage", "DeliverItem",
                 "EatAndRecover", "DefendOwner", "RetreatFromDanger", "CraftItem", "SmeltItem",
                 "ExploreArea", "EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle", "Fish",

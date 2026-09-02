@@ -79,6 +79,18 @@ public class JsonNode implements Iterable<JsonNode> {
                 : value.isJsonObject() ? value.getAsJsonObject().size() : 0;
     }
 
+    public Iterator<java.util.Map.Entry<String, JsonNode>> fields() {
+        if (!value.isJsonObject()) return java.util.Collections.emptyIterator();
+        Iterator<java.util.Map.Entry<String, JsonElement>> delegate = value.getAsJsonObject().entrySet().iterator();
+        return new Iterator<>() {
+            @Override public boolean hasNext() { return delegate.hasNext(); }
+            @Override public java.util.Map.Entry<String, JsonNode> next() {
+                var entry = delegate.next();
+                return java.util.Map.entry(entry.getKey(), wrap(entry.getValue()));
+            }
+        };
+    }
+
     @Override public Iterator<JsonNode> iterator() {
         if (!value.isJsonArray()) return java.util.Collections.emptyIterator();
         Iterator<JsonElement> delegate = value.getAsJsonArray().iterator();

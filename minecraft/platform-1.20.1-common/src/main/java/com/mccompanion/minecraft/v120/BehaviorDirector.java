@@ -63,6 +63,7 @@ final class BehaviorDirector {
     private final ReflexController reflexController = new ReflexController();
     private final BodyControlArbiter controlArbiter = new BodyControlArbiter();
     private final DailyActionController dailyActions;
+    private final MinecraftSmallBlueprintBuilder smallBlueprints;
     private final Map<UUID, RouteExecutionController.Session> navigation = new HashMap<>();
     private final Map<UUID, MinecraftSurvivalNavigationExecution> survivalNavigations = new HashMap<>();
     private final Map<UUID, SkillParameters> survivalNavigationParameters = new HashMap<>();
@@ -80,6 +81,7 @@ final class BehaviorDirector {
         this.savedData = savedData;
         this.logger = logger;
         this.dailyActions = new DailyActionController(server, actionGateway);
+        this.smallBlueprints = new MinecraftSmallBlueprintBuilder(actionGateway, navigationAdapter);
     }
 
     void start(CompanionEntry entry, CompanionPlayer body) {
@@ -129,11 +131,24 @@ final class BehaviorDirector {
             actionGateway.startBehavior(body, entry.mode, server.getTickCount());
             return;
         }
+        if (parameters.capability().equals("BuildSmallBlueprint")) {
+            if (parameters.blueprint() == null) throw new IllegalArgumentException("BLUEPRINT_MISSING");
+            entry.blueprintSession = new com.mccompanion.core.body.build.SmallBlueprintExecutor.Session(
+                    parameters.blueprint());
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            savedData.changed();
+            return;
+        }
         primitives.put(entry.companionId, new PrimitiveProgress(parameters, server.getTickCount()));
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
     private void supersedeActive(CompanionEntry entry, CompanionPlayer body) {
+        if (entry.blueprintSession != null && !entry.blueprintSession.temporarySupports().isEmpty()) {
+            logger.info("blueprint_superseded_supports_retained companion={} supports={}",
+                    entry.companionId, entry.blueprintSession.temporarySupports());
+        }
+        smallBlueprints.forget(body);
         actionGateway.stopInput(body);
         if (dailyActions.active(entry.companionId)) dailyActions.cancel(entry.companionId, body, "SUPERSEDED");
         actionGateway.completeBehavior(body, false, "SUPERSEDED", server.getTickCount());
@@ -144,6 +159,7 @@ final class BehaviorDirector {
         entityBehaviors.remove(entry.companionId);
         recentEntityTargets.remove(entry.companionId);
         recentEntityTargetExpiryTicks.remove(entry.companionId);
+        entry.blueprintSession = null;
     }
 
     void validateSkill(CompanionPlayer body, SkillParameters parameters) {
@@ -151,6 +167,12 @@ final class BehaviorDirector {
         else if (DailyActionController.supports(parameters.capability())) dailyActions.validate(body, parameters);
         else if (parameters.capability().equals("NavigateWithWorldChanges")) {
             validateSurvivalNavigation(body, parameters);
+        } else if (parameters.capability().equals("BuildSmallBlueprint")) {
+            if (parameters.blueprint() == null) throw new IllegalArgumentException("BLUEPRINT_MISSING");
+            if (!body.serverLevel().dimension().location().toString()
+                    .equals(parameters.blueprint().anchor().dimension())) {
+                throw new IllegalArgumentException("WORLD_CHANGED");
+            }
         }
     }
 
@@ -168,6 +190,13 @@ final class BehaviorDirector {
             actionGateway.startBehavior(body, entry.mode, server.getTickCount());
             return;
         }
+        if (entry.blueprintSession != null) {
+            entry.blueprintSession.requireReconciliation();
+            RouteExecutionController.Session route = navigation.get(entry.companionId);
+            if (route != null) route.resume(server.getTickCount());
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
         if (!canResumeSkill(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
@@ -178,7 +207,17 @@ final class BehaviorDirector {
     }
 
     void stop(CompanionEntry entry, CompanionPlayer body, boolean success, String code) {
+        smallBlueprints.forget(body);
         actionGateway.stopInput(body);
+        if (success || code.equals("RUNTIME_CANCEL") || code.equals("CANCELLED_BY_OWNER")
+                || code.equals("SUPERSEDED") || code.equals("BODY_DEAD")) {
+            if (entry.blueprintSession != null && !entry.blueprintSession.temporarySupports().isEmpty()) {
+                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                        "BLUEPRINT_CANCELLED_SUPPORTS_RETAINED", "", 0, 0, java.util.List.of(), Map.of(
+                        "reason", code, "retainedSupports", entry.blueprintSession.temporarySupports().toString())));
+            }
+            entry.blueprintSession = null;
+        }
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
         RouteExecutionController.Session route = navigation.get(entry.companionId);
         if (route != null && isSuspension(code)) route.pause(server.getTickCount());
@@ -823,6 +862,10 @@ final class BehaviorDirector {
     }
 
     private void tickPrimitive(CompanionEntry entry, CompanionPlayer body) {
+        if (entry.blueprintSession != null) {
+            tickSmallBlueprint(entry, body);
+            return;
+        }
         PrimitiveProgress progress = primitives.get(entry.companionId);
         if (progress == null) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
@@ -876,6 +919,39 @@ final class BehaviorDirector {
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
         savedData.changed();
+    }
+
+    private void tickSmallBlueprint(CompanionEntry entry, CompanionPlayer body) {
+        if (!entry.blueprintSession.plan().anchor().dimension()
+                .equals(body.serverLevel().dimension().location().toString())) {
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "BLUEPRINT_DIMENSION_CHANGED", "", 0, 0));
+            pauseSafely(entry, body, "BLUEPRINT_DIMENSION_CHANGED");
+            return;
+        }
+        int completedBeforeTick = entry.blueprintSession.completed().size();
+        var result = smallBlueprints.tick(body, entry.blueprintSession,
+                target -> tickNavigation(entry, body, target, 0.10D * 0.10D, true));
+        if (result.completed() != completedBeforeTick) navigation.remove(entry.companionId);
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result.code(), "", result.total(), result.completed(), java.util.List.of(), java.util.Map.of(
+                "completedBlocks", Integer.toString(result.completed()),
+                "totalBlocks", Integer.toString(result.total()),
+                "temporarySupports", Integer.toString(result.temporarySupports()),
+                "preparation", smallBlueprints.preparationDiagnostic(),
+                "activePosition", result.activePosition() == null ? "" : result.activePosition().toString())));
+        savedData.changed();
+        if (result.status() == com.mccompanion.core.body.build.SmallBlueprintExecutor.Status.BLOCKED) {
+            if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, result.code());
+            return;
+        }
+        if (result.status() == com.mccompanion.core.body.build.SmallBlueprintExecutor.Status.COMPLETE) {
+            entry.blueprintSession = null;
+            stop(entry, body, true, "NONE");
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed();
+        }
     }
 
     private String tickComposite(
@@ -1667,7 +1743,7 @@ final class BehaviorDirector {
         return body.serverLevel().dimension().location().toString().equals(parameters.dimension());
     }
 
-    private static boolean selectHotbarItem(CompanionPlayer body, Item item) {
+    static boolean selectHotbarItem(CompanionPlayer body, Item item) {
         for (int slot = 0; slot < 9; slot++) {
             if (body.getInventory().getItem(slot).is(item)) {
                 body.getInventory().selected = slot;

@@ -51,6 +51,7 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `block.break` | Converts one observed namespaced block position into `MineResourceVein` with `quantity=1`, preserving vanilla hardness, tool, drop, pickup, and evidence behavior |
 | `block.interact` | Performs one same-dimension, loaded, visible interaction within five blocks through `ServerPlayerGameMode.useItemOn`; face and hand are explicit and bounded |
 | `block.place` | Places one declared Registry block at an exact same-dimension target through its vanilla `BlockItem`; the external Brain supplies face/hand and placement succeeds only after block and inventory deltas are verified |
+| `build.small_blueprint` | Executes an external Brain-authored bounded block list through shared construction, navigation and vanilla placement/mining; `BUILD` permission, `HIGH` risk, connected `BuildSmallBlueprint` capability, exact per-block and final-state verification |
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `entity.attack` | Attacks one externally selected UUID-bound living entity within five blocks through `ServerPlayer.attack`; alive/range/visibility are revalidated and success requires an observed health decrease or death |
@@ -97,6 +98,38 @@ real `ServerPlayer`, inventory menu, vehicle, fishing hook and station-menu APIs
 result therefore contains observed body/world facts; an unverified effect is returned as
 `UNCERTAIN_EFFECT`. Task Graphs may compose these Tools directly, but do not perform per-tick menu or
 fish-bobber control.
+
+## Bounded small blueprints
+
+`build.small_blueprint` accepts `anchor: {dimension,x,y,z}` (dimension defaults to
+`minecraft:overworld`), `maxSize: {x,y,z}` (each axis 1..7), and 1..128 unique
+`blocks: [{position:{x,y,z},block,state?,alternatives?}]`. Positions are nonnegative
+offsets inside maxSize; state contains at most eight string-valued Registry properties,
+and alternatives contains at most eight other block IDs. The same representation covers
+walls, pillars, platforms, bridges, stairs, fence borders, plugging/repair, 3×3 shelters
+and 5×5 houses; there are no scenario-specific Handlers or internal design decisions.
+
+The deterministic builder preflights materials, orders blocks bottom-up, checks occupancy,
+chooses reachable placement stances, and asks vanilla BlockItem placement logic for the
+requested orientation/state. Every placed block and the final structure are read back from
+the actual world. Unattainable state, changed/occupied space, unloaded chunks, shortage or
+unreachable placement pauses with an explicit code; it does not overwrite existing blocks.
+After 1,200 active ticks without progress it pauses with `BLUEPRINT_PROGRESS_TIMEOUT`.
+
+Optional `temporarySupport: {blocks,maxBlocks,cleanup}` allows at most 16 cumulative
+placements, only from the declared material list, immediately below a target over existing
+ground. This is not an unbounded scaffolding planner. With cleanup=true (default), the
+builder mines its supports using the shared hardness/tool-aware action executor, then
+reverifies the structure. Changed supports are not destroyed. With cleanup=false, supports
+remain and their count is reported. Pause retains the plan, confirmed positions, chosen
+materials, supports and cumulative budget in SavedData; resume reconciles the live world
+and skips still-correct blocks. Cancel stops immediately and leaves any supports in place,
+reporting their positions through `BLUEPRINT_CANCELLED_SUPPORTS_RETAINED`; supersession
+also retains them and records their positions in the server log. Cleanup cannot continue
+after authority has been cancelled.
+
+The normal durable Tool/task lifecycle and five-minute deadline apply. Automated evidence
+is UNIT/INTEGRATION and REAL_MINECRAFT_GAMETEST, not LIVE_PROVIDER or HUMAN_PLAYTEST.
 
 Still required for RC:
 

@@ -53,7 +53,8 @@ public final class CompanionRegistry {
             }
             entry.skillRecoveryRequired = entry.mode == CompanionEntry.Mode.PAUSED
                     && entry.resumeMode == CompanionEntry.Mode.SKILL
-                    && entry.runtimeBehaviorId != null && !entry.runtimeBehaviorId.isBlank();
+                    && entry.runtimeBehaviorId != null && !entry.runtimeBehaviorId.isBlank()
+                    && entry.blueprintSession == null;
             if (entry.spawned) {
                 spawnBody(entry, null);
             }
@@ -537,7 +538,7 @@ public final class CompanionRegistry {
                 "DeliverItem", "EatAndRecover", "WithdrawFromStorage", "DepositToStorage",
                 "CraftItem", "ExploreArea", "CollectResource", "MineResourceVein", "SmeltItem",
                 "DefendOwner", "LookAt", "InteractBlock", "InteractEntity", "MenuAction",
-                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "RetreatFromDanger",
+                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "BuildSmallBlueprint", "RetreatFromDanger",
                 "NavigateWithWorldChanges", "FollowEntity", "ApproachEntity",
                 "KeepDistanceFromEntity", "ChaseEntity", "EscortEntity", "FleeFromEntity", "FaceEntity")
                 .contains(capability);

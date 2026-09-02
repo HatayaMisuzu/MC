@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
 import com.mccompanion.minecraft.v121.SkillParameters;
+import com.mccompanion.core.body.build.SmallBlueprint;
 import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import com.mccompanion.minecraft.bridge.RuntimeCommandArguments;
 import com.mccompanion.minecraft.bridge.ConnectionEpochGate;
@@ -181,6 +182,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("DropItem", true)
                 .put("AttackEntity", true)
                 .put("PlaceBlock", true)
+                .put("BuildSmallBlueprint", true)
                 .put("RetreatFromDanger", true)
                 .put("NavigateTo", true)
                 .put("NavigateWithWorldChanges", true)
@@ -474,7 +476,8 @@ final class RuntimeBridge implements AutoCloseable {
                 values.path("targetRuntimeId").canConvertToInt() ? values.path("targetRuntimeId").asInt() : null,
                 optionalDouble(values.path("minimumDistance")),
                 optionalDouble(values.path("maximumDistance")),
-                values.path("lostTimeoutTicks").canConvertToInt() ? values.path("lostTimeoutTicks").asInt() : null); }
+                values.path("lostTimeoutTicks").canConvertToInt() ? values.path("lostTimeoutTicks").asInt() : null,
+                smallBlueprint(values.path("blueprint"))); }
         catch (IllegalArgumentException invalid) { return null; }
     }
 
@@ -483,6 +486,27 @@ final class RuntimeBridge implements AutoCloseable {
         java.util.ArrayList<String> result = new java.util.ArrayList<>();
         value.forEach(entry -> { if (entry.isTextual()) result.add(entry.asText()); });
         return java.util.List.copyOf(result);
+    }
+
+    private static SmallBlueprint smallBlueprint(JsonNode value) {
+        if (!value.isObject()) return null;
+        JsonNode anchor = value.path("anchor");
+        JsonNode size = value.path("maxSize");
+        java.util.ArrayList<SmallBlueprint.Block> blocks = new java.util.ArrayList<>();
+        for (JsonNode block : value.path("blocks")) {
+            JsonNode position = block.path("position");
+            java.util.Map<String, String> state = new java.util.LinkedHashMap<>();
+            block.path("state").fields().forEachRemaining(entry -> state.put(entry.getKey(), entry.getValue().asText()));
+            blocks.add(new SmallBlueprint.Block(new SmallBlueprint.Offset(
+                    position.path("x").asInt(), position.path("y").asInt(), position.path("z").asInt()),
+                    block.path("block").asText(), state, stringList(block.path("alternatives"))));
+        }
+        JsonNode support = value.path("temporarySupport");
+        return new SmallBlueprint(new SmallBlueprint.Anchor(anchor.path("dimension").asText(),
+                anchor.path("x").asInt(), anchor.path("y").asInt(), anchor.path("z").asInt()),
+                new SmallBlueprint.Size(size.path("x").asInt(), size.path("y").asInt(), size.path("z").asInt()),
+                blocks, new SmallBlueprint.SupportPolicy(stringList(support.path("blocks")),
+                        support.path("maxBlocks").asInt(), support.path("cleanup").asBoolean(true)));
     }
 
     private static Double optionalDouble(JsonNode value) {

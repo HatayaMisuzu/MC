@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.build.SmallBlueprint;
+
 public record SkillParameters(String capability, String itemId, int quantity, boolean allowPartial,
                               String dimension, Integer x, Integer y, Integer z,
                               String targetId, String face, String hand,
@@ -9,7 +11,8 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
                               java.util.List<String> allowedPlaceBlocks,
                               int maxBreakBlocks, int maxPlaceBlocks, int maxRiskUnits,
                               String targetReferenceKind, String targetName, Integer targetRuntimeId,
-                              Double minimumDistance, Double maximumDistance, Integer lostTimeoutTicks) {
+                              Double minimumDistance, Double maximumDistance, Integer lostTimeoutTicks,
+                              SmallBlueprint blueprint) {
     public SkillParameters {
         capability = capability == null ? "" : capability;
         itemId = itemId == null ? "" : itemId;
@@ -58,7 +61,7 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
         this(capability, itemId, quantity, allowPartial, dimension, x, y, z, targetId, face, hand,
                 sessionToken, slot, button, menuAction, durationTicks, secondaryTargetId,
                 allowedBreakBlocks, allowedPlaceBlocks, maxBreakBlocks, maxPlaceBlocks, maxRiskUnits,
-                "", "", null, null, null, null);
+                "", "", null, null, null, null, null);
     }
 
     public SkillParameters(String capability, String targetId, String targetReferenceKind,
@@ -68,7 +71,7 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
                 targetId, "UP", "MAIN_HAND", "", null, null, "", null, "",
                 java.util.List.of(), java.util.List.of(), 0, 0, 8,
                 targetReferenceKind, targetName, targetRuntimeId,
-                minimumDistance, maximumDistance, lostTimeoutTicks);
+                minimumDistance, maximumDistance, lostTimeoutTicks, null);
     }
 
     /** Compatibility constructor for the pre-navigation-policy wire shape. */
@@ -119,4 +122,11 @@ public record SkillParameters(String capability, String itemId, int quantity, bo
     }
 
     public boolean hasBlockTarget() { return x != null && y != null && z != null; }
+
+    public SkillParameters(String capability, SmallBlueprint blueprint) {
+        this(capability, "", 1, false, "minecraft:overworld", null, null, null,
+                "", "UP", "MAIN_HAND", "", null, null, "", null, "",
+                java.util.List.of(), java.util.List.of(), 0, 0, 8,
+                "", "", null, null, null, null, blueprint);
+    }
 }

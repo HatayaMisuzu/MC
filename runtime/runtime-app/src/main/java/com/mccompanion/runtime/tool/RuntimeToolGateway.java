@@ -375,6 +375,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Place one declared block at an exact reachable position through vanilla player rules; the exact "
                         + "world block is authoritative in Survival, Creative, and reusable-item modes",
                 blockPlaceSchema(), "MEDIUM", "BUILD", false));
+        if (available.contains("BuildSmallBlueprint")) values.add(definition("build.small_blueprint",
+                "Build one bounded small blueprint through real navigation and vanilla block placement, with "
+                        + "material, occupancy, temporary-support, resume, and final-state verification",
+                smallBlueprintSchema(), "HIGH", "BUILD", false));
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
                 "Interact once with a visible reachable entity through vanilla player rules; success requires an "
                         + "observed entity, inventory, vehicle, or menu postcondition and otherwise returns "
@@ -708,6 +712,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "block.break" -> breakBlock(call.arguments());
             case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
             case "block.place" -> skill("PlaceBlock", validatedBlockPlacement(call.arguments()));
+            case "build.small_blueprint" -> skill("BuildSmallBlueprint", validatedSmallBlueprint(call.arguments()));
             case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
             case "entity.attack" -> skill("AttackEntity", validatedEntityAttack(call.arguments()));
             case "menu.click" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLICK"));
@@ -1402,6 +1407,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("position");
         } else if (name.equals("block.place")) {
             root.putArray("required").add("block").add("position");
+        } else if (name.equals("build.small_blueprint")) {
+            root.putArray("required").add("anchor").add("maxSize").add("blocks");
         } else if (name.equals("entity.interact") || name.equals("entity.attack")
                 || name.equals("safety.retreat")) {
             root.putArray("required").add("entityId");
@@ -1449,6 +1456,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 || name.startsWith("task.")) {
             return Duration.ofSeconds(5);
         }
+        if (name.equals("build.small_blueprint")) return Duration.ofMinutes(5);
         if (name.startsWith("movement.") || name.startsWith("resource.")
                 || name.startsWith("inventory.") || name.startsWith("combat.")
                 || name.startsWith("safety.") || name.equals("entity.collect")
@@ -1575,6 +1583,144 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = blockInteractionSchema();
         properties.putObject("block").put("type", "string")
                 .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        return properties;
+    }
+
+    private static JsonNode validatedSmallBlueprint(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("anchor", "maxSize", "blocks", "temporarySupport"));
+        ObjectNode anchor = validatedBoundedPosition(arguments.path("anchor"));
+        JsonNode size = arguments.path("maxSize");
+        if (!size.isObject()) throw new IllegalArgumentException("maxSize must be an object");
+        rejectUnexpected(size, Set.of("x", "y", "z"));
+        ObjectNode normalizedSize = Json.object();
+        for (String axis : List.of("x", "y", "z")) {
+            normalizedSize.put(axis, boundedInteger(size.path(axis), "maxSize." + axis, 1, 7));
+        }
+        JsonNode blocks = arguments.path("blocks");
+        if (!blocks.isArray() || blocks.isEmpty() || blocks.size() > 128) {
+            throw new IllegalArgumentException("blocks must contain 1..128 entries");
+        }
+        var normalizedBlocks = Json.MAPPER.createArrayNode();
+        Set<String> positions = new java.util.HashSet<>();
+        for (JsonNode block : blocks) {
+            if (!block.isObject()) throw new IllegalArgumentException("each block must be an object");
+            rejectUnexpected(block, Set.of("position", "block", "state", "alternatives"));
+            JsonNode offset = block.path("position");
+            if (!offset.isObject()) throw new IllegalArgumentException("block.position must be an object");
+            rejectUnexpected(offset, Set.of("x", "y", "z"));
+            ObjectNode normalizedOffset = Json.object();
+            for (String axis : List.of("x", "y", "z")) {
+                int maximum = normalizedSize.path(axis).asInt() - 1;
+                normalizedOffset.put(axis, boundedInteger(offset.path(axis), "block.position." + axis, 0, maximum));
+            }
+            String positionKey = normalizedOffset.path("x").asInt() + ","
+                    + normalizedOffset.path("y").asInt() + "," + normalizedOffset.path("z").asInt();
+            if (!positions.add(positionKey)) throw new IllegalArgumentException("duplicate blueprint position");
+            ObjectNode normalizedBlock = Json.object();
+            normalizedBlock.set("position", normalizedOffset);
+            normalizedBlock.put("block", namespacedId(block.path("block").asText(""), "block"));
+            ObjectNode normalizedState = Json.object();
+            JsonNode state = block.path("state");
+            if (!state.isMissingNode()) {
+                if (!state.isObject() || state.size() > 8) {
+                    throw new IllegalArgumentException("state must be an object with at most 8 properties");
+                }
+                state.fields().forEachRemaining(property -> {
+                    if (!property.getKey().matches("[a-z0-9_]+") || !property.getValue().isTextual()
+                            || !property.getValue().asText().matches("[a-z0-9_.-]+")) {
+                        throw new IllegalArgumentException("invalid block state property");
+                    }
+                    normalizedState.put(property.getKey(), property.getValue().asText());
+                });
+            }
+            normalizedBlock.set("state", normalizedState);
+            var alternatives = Json.MAPPER.createArrayNode();
+            JsonNode suppliedAlternatives = block.path("alternatives");
+            if (!suppliedAlternatives.isMissingNode()) {
+                if (!suppliedAlternatives.isArray() || suppliedAlternatives.size() > 8) {
+                    throw new IllegalArgumentException("alternatives must contain at most 8 entries");
+                }
+                Set<String> unique = new java.util.HashSet<>();
+                unique.add(normalizedBlock.path("block").asText());
+                suppliedAlternatives.forEach(value -> {
+                    String id = namespacedId(value.asText(""), "material alternative");
+                    if (!unique.add(id)) throw new IllegalArgumentException("duplicate material alternative");
+                    alternatives.add(id);
+                });
+            }
+            normalizedBlock.set("alternatives", alternatives);
+            normalizedBlocks.add(normalizedBlock);
+        }
+        ObjectNode support = Json.object().put("maxBlocks", 0).put("cleanup", true);
+        support.set("blocks", Json.MAPPER.createArrayNode());
+        if (arguments.has("temporarySupport")) {
+            JsonNode supplied = arguments.path("temporarySupport");
+            if (!supplied.isObject()) throw new IllegalArgumentException("temporarySupport must be an object");
+            rejectUnexpected(supplied, Set.of("blocks", "maxBlocks", "cleanup"));
+            int maximum = boundedInteger(supplied.path("maxBlocks"), "temporarySupport.maxBlocks", 0, 16);
+            JsonNode values = supplied.path("blocks");
+            if (!values.isArray() || values.size() > 8 || (maximum > 0) != !values.isEmpty()) {
+                throw new IllegalArgumentException("temporary support blocks are required exactly when maxBlocks is positive");
+            }
+            var normalized = Json.MAPPER.createArrayNode();
+            Set<String> unique = new java.util.HashSet<>();
+            values.forEach(value -> {
+                String id = namespacedId(value.asText(""), "temporary support block");
+                if (!unique.add(id)) throw new IllegalArgumentException("duplicate temporary support block");
+                normalized.add(id);
+            });
+            support.set("blocks", normalized);
+            support.put("maxBlocks", maximum);
+            if (supplied.has("cleanup") && !supplied.path("cleanup").isBoolean()) {
+                throw new IllegalArgumentException("temporarySupport.cleanup must be boolean");
+            }
+            support.put("cleanup", supplied.path("cleanup").asBoolean(true));
+        }
+        ObjectNode blueprint = Json.object();
+        blueprint.set("anchor", anchor);
+        blueprint.set("maxSize", normalizedSize);
+        blueprint.set("blocks", normalizedBlocks);
+        blueprint.set("temporarySupport", support);
+        return Json.object().set("blueprint", blueprint);
+    }
+
+    private static ObjectNode smallBlueprintSchema() {
+        ObjectNode properties = Json.object();
+        properties.set("anchor", positionSchema());
+        ObjectNode size = properties.putObject("maxSize");
+        size.put("type", "object").put("additionalProperties", false);
+        ObjectNode sizeProperties = size.putObject("properties");
+        for (String axis : List.of("x", "y", "z")) {
+            sizeProperties.putObject(axis).put("type", "integer").put("minimum", 1).put("maximum", 7);
+        }
+        size.putArray("required").add("x").add("y").add("z");
+        ObjectNode blocks = properties.putObject("blocks");
+        blocks.put("type", "array").put("minItems", 1).put("maxItems", 128);
+        ObjectNode block = blocks.putObject("items");
+        block.put("type", "object").put("additionalProperties", false);
+        ObjectNode blockProperties = block.putObject("properties");
+        ObjectNode offset = blockProperties.putObject("position");
+        offset.put("type", "object").put("additionalProperties", false);
+        ObjectNode offsetProperties = offset.putObject("properties");
+        for (String axis : List.of("x", "y", "z")) offsetProperties.putObject(axis).put("type", "integer").put("minimum", 0).put("maximum", 6);
+        offset.putArray("required").add("x").add("y").add("z");
+        blockProperties.putObject("block").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        ObjectNode state = blockProperties.putObject("state");
+        state.put("type", "object").put("maxProperties", 8);
+        state.putObject("additionalProperties").put("type", "string").put("pattern", "^[a-z0-9_.-]+$");
+        ObjectNode alternatives = blockProperties.putObject("alternatives");
+        alternatives.put("type", "array").put("maxItems", 8).put("uniqueItems", true);
+        alternatives.putObject("items").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        block.putArray("required").add("position").add("block");
+        ObjectNode support = properties.putObject("temporarySupport");
+        support.put("type", "object").put("additionalProperties", false);
+        ObjectNode supportProperties = support.putObject("properties");
+        ObjectNode supportBlocks = supportProperties.putObject("blocks");
+        supportBlocks.put("type", "array").put("maxItems", 8).put("uniqueItems", true);
+        supportBlocks.putObject("items").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        supportProperties.putObject("maxBlocks").put("type", "integer").put("minimum", 0).put("maximum", 16).put("default", 0);
+        supportProperties.putObject("cleanup").put("type", "boolean").put("default", true);
+        support.putArray("required").add("blocks").add("maxBlocks");
         return properties;
     }
 

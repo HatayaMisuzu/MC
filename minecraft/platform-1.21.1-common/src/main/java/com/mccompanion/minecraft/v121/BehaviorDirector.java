@@ -106,6 +106,11 @@ final class BehaviorDirector {
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
+    java.util.Map<String, Object> worldNavigation(UUID companionId) {
+        RouteExecutionController.Session route = navigation.get(companionId);
+        return route == null ? java.util.Map.of("active", false) : route.localSummary();
+    }
+
     void resumeNavigation(CompanionEntry entry, CompanionPlayer body) {
         RouteExecutionController.Session session = navigation.get(entry.companionId);
         if (session == null) {

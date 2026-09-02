@@ -18,6 +18,12 @@ import java.util.Set;
 public final class MemoryToolGateway implements ToolGateway {
     private final MemoryRepository memories;
     private final ConversationRepository conversations;
+    private com.mccompanion.runtime.session.CompanionRepository companions;
+    public MemoryToolGateway(MemoryRepository memories, ConversationRepository conversations,
+                             com.mccompanion.runtime.session.CompanionRepository companions) {
+        this(memories, conversations);
+        this.companions = java.util.Objects.requireNonNull(companions);
+    }
     public MemoryToolGateway(MemoryRepository memories) { this(memories, null); }
     public MemoryToolGateway(MemoryRepository memories, ConversationRepository conversations) {
         this.memories = java.util.Objects.requireNonNull(memories);
@@ -69,6 +75,19 @@ public final class MemoryToolGateway implements ToolGateway {
         int limit = call.arguments().path("limit").asInt(20);
         if (limit < 1 || limit > 20) throw new IllegalArgumentException("limit must be 1..20");
         var candidates = Json.MAPPER.createArrayNode();
+        if (companions != null) {
+            var summary = companions.worldModel(context.companionId()).summary(companions.observationTime(), List.of());
+            Set<String> seen = new java.util.HashSet<>();
+            for (String group : List.of("nearby", "memory")) for (JsonNode entry : summary.path(group)) {
+                if (!Set.of("container", "knownContainer").contains(entry.path("kind").asText())
+                        || candidates.size() >= limit || !seen.add(entry.path("identity").asText())) continue;
+                ObjectNode candidate = entry.deepCopy();
+                candidate.put("sameDimension", dimension.isEmpty() || dimension.equals(entry.path("dimension").asText()));
+                candidates.add(candidate);
+            }
+            return ok(call, Json.object().put("requestedDimension", dimension).put("count", candidates.size())
+                    .set("containers", candidates));
+        }
         for (MemoryFact fact : memories.relevant(context.companionId(), MemoryKind.WORLD, 100)) {
             if (!fact.verified() || !fact.key().startsWith("container:")) continue;
             JsonNode value = fact.value();

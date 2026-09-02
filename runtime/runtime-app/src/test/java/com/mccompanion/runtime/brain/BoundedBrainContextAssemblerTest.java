@@ -10,6 +10,30 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BoundedBrainContextAssemblerTest {
+    @Test void clipsWorldModelByWholeEntriesAndEnforcesTotalSerializedBudget() {
+        var world = Json.object().put("source", "WORLD_MODEL").put("emittedEntries", 30).put("omittedEntries", 0);
+        var entries = world.putArray("current");
+        for (int i = 0; i < 30; i++) entries.addObject().put("identity", "entry-" + i)
+                .put("source", "CONNECTED_BODY_OBSERVATION").put("observedAt", "2026-09-02T00:00:00Z")
+                .put("ttlMillis", 1000).put("stale", true).put("verified", false).put("invalidation", "TTL_EXPIRED")
+                .put("value", "x".repeat(100));
+        var clipped = BoundedBrainContextAssembler.bounded(world, 4000, Json.object(), "world");
+        assertTrue(Json.write(clipped).length() <= 4000);
+        for (var entry : clipped.path("current")) {
+            assertTrue(entry.path("stale").asBoolean());
+            assertFalse(entry.path("verified").asBoolean());
+            assertEquals("TTL_EXPIRED", entry.path("invalidation").asText());
+            assertTrue(entry.has("observedAt"));
+        }
+        var large = Json.object();
+        for (int i = 0; i < 30; i++) large.put("field-" + i, "\\\"\n".repeat(1000));
+        var result = BoundedBrainContextAssembler.assemble(new AgentContext("companion", world,
+                java.util.Collections.nCopies(12, "x".repeat(2000)), large, List.of(), List.of(),
+                large, large, large, large, 5));
+        assertTrue(Json.write(result.context()).length() <= BoundedBrainContextAssembler.DEFAULT_TOTAL_CHARS);
+        assertFalse(Json.write(result.context().path("verifiedWorld")).contains("\"verified\":true"));
+    }
+
     @Test void clipsEachCategoryDeduplicatesMemoryAndNeverEmitsUnboundedGraphOrToolLog() {
         String privateBody = "sensitive-body-".repeat(4_000);
         var world = Json.object().put("position", "verified").put("oversized", privateBody);

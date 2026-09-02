@@ -195,6 +195,7 @@ public final class RuntimeApplication implements AutoCloseable {
             SearchSessionRepository searchSessions = new SearchSessionRepository(database);
             int expiredSearchSessions = searchSessions.expire();
             RegistryToolGateway registryTools = new RegistryToolGateway(sessions, commandSender);
+            registryTools.attachWorldModel(companions);
             java.util.concurrent.atomic.AtomicReference<CompositeToolGateway> toolGatewayReference =
                     new java.util.concurrent.atomic.AtomicReference<>();
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
@@ -214,7 +215,7 @@ public final class RuntimeApplication implements AutoCloseable {
                             companionId -> activeSessionRegistry.forCompanion(companionId)
                                     .map(value -> value.handshake()).orElse(null)),
                     registryTools,
-                    new MemoryToolGateway(memories, conversationRepository), new SearchToolGateway(searchProvider,
+                    new MemoryToolGateway(memories, conversationRepository, companions), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains, searchSessions), skillTools,
                     new ProactiveMessageToolGateway(brainAudit,
                             new ProactiveMessageRepository(database), conversations)));
@@ -222,6 +223,7 @@ public final class RuntimeApplication implements AutoCloseable {
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
                     conversationRepository);
             runtimeEvents = new RuntimeEventService(new RuntimeEventRepository(database));
+            runtimeEvents.attachWorldModel(companions);
             commands.setTaskLifecycleListener(runtimeEvents);
             taskGraphRuntime.setLifecycleListener(runtimeEvents);
             minecraftTools.attachTaskGraphRuntime(taskGraphRuntime);

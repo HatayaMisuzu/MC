@@ -55,6 +55,13 @@ public final class BoundedBrainContextAssembler {
             value.set("recentConversation", boundedStrings(context.recentConversation(), 8, 4_000,
                     stats, "recentConversationTotal"));
         }
+        // Preserve whole World Model entries and their freshness envelope under total pressure.
+        for (String category : List.of("brainSemanticState", "episodeCapsule", "preferences", "recentConversation",
+                "knownLandmarks", "activeTask", "brainBehaviorSettings", "availableCapabilities")) {
+            if (Json.write(value).length() <= DEFAULT_TOTAL_CHARS) break;
+            value.set(category, Json.object().put("_truncated", true));
+            stats.put(category + "TotalClipped", true);
+        }
         int emitted = Json.write(value).length();
         stats.put("budgetChars", DEFAULT_TOTAL_CHARS).put("emittedChars", emitted)
                 .put("totalClipped", original > DEFAULT_TOTAL_CHARS);
@@ -65,6 +72,19 @@ public final class BoundedBrainContextAssembler {
         if (input == null || input.isNull() || input.isMissingNode()) return Json.object();
         if (Json.write(input).length() <= maxChars) return input.deepCopy();
         stats.put(category + "Clipped", true);
+        if (input.path("source").asText().equals("WORLD_MODEL")) {
+            ObjectNode result = input.deepCopy();
+            int removed = 0;
+            for (String group : List.of("memory", "nearby", "current")) {
+                if (!(result.path(group) instanceof ArrayNode entries)) continue;
+                while (!entries.isEmpty() && Json.write(result).length() > maxChars - 100) {
+                    entries.remove(entries.size() - 1); removed++;
+                }
+            }
+            result.put("emittedEntries", Math.max(0, result.path("emittedEntries").asInt() - removed));
+            result.put("omittedEntries", result.path("omittedEntries").asInt() + removed);
+            return result;
+        }
         if (input.isObject()) {
             ObjectNode output = Json.object();
             input.fields().forEachRemaining(entry -> {

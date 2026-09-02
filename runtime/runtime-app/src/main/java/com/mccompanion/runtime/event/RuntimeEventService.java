@@ -34,6 +34,11 @@ public final class RuntimeEventService implements CommandService.TaskLifecycleLi
     private final ScheduledExecutorService worker;
     private final AtomicBoolean started = new AtomicBoolean();
     private volatile Dispatcher dispatcher = event -> DispatchResult.DEFERRED;
+    private com.mccompanion.runtime.session.CompanionRepository companions;
+
+    public void attachWorldModel(com.mccompanion.runtime.session.CompanionRepository companions) {
+        this.companions = Objects.requireNonNull(companions);
+    }
 
     public RuntimeEventService(RuntimeEventRepository repository) {
         this(repository, Clock.systemUTC());
@@ -58,12 +63,15 @@ public final class RuntimeEventService implements CommandService.TaskLifecycleLi
 
     public RuntimeEventRepository.Admission admit(RuntimeEvent event,
                                                   RuntimeEvent.AdmissionPolicy policy) throws SQLException {
+        if (companions != null) companions.updateWorldModel(event.companionId(), model -> model.event(event));
         return repository.admit(event, policy);
     }
 
     public RuntimeEventRepository.Admission admitSurvival(
             SurvivalEventNormalizer.Normalized normalized) throws SQLException {
         Objects.requireNonNull(normalized, "normalized");
+        if (companions != null) companions.updateWorldModel(normalized.event().companionId(),
+                model -> model.event(normalized.event()));
         if (normalized.invalidatePreDeath()) {
             return repository.admitDeath(normalized.event(), normalized.policy());
         }
@@ -72,6 +80,10 @@ public final class RuntimeEventService implements CommandService.TaskLifecycleLi
 
     @Override public void onTaskUpdated(TaskRecord task, JsonNode observation) {
         try {
+            if (companions != null) companions.updateWorldModel(task.companionId(), model -> model.runtime("task",
+                    Json.object().put("taskId", task.taskId()).put("state", task.state().name())
+                            .put("type", task.type().name()).put("revision", task.revision()),
+                    taskTarget(task.payload()), clock.instant()));
             TaskTransition transition = taskTransition(task, observation);
             if (transition == null) return;
             Instant now = clock.instant();
@@ -107,6 +119,9 @@ public final class RuntimeEventService implements CommandService.TaskLifecycleLi
     @Override public void onLifecycle(TaskGraphExecutionRecord record, String transition,
                                       JsonNode details) {
         try {
+            if (companions != null) companions.updateWorldModel(record.companionId(), model -> model.runtime("taskGraph",
+                    Json.object().put("executionId", record.executionId()).put("state", record.state())
+                            .put("currentNodeId", record.currentNodeId()), null, clock.instant()));
             GraphTransition mapped = graphTransition(transition);
             if (mapped == null) return;
             Instant now = clock.instant();

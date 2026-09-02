@@ -734,6 +734,19 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("type", container.type()).put("dimension", container.dimension())
                     .put("x", container.x()).put("y", container.y()).put("z", container.z())
                     .put("verified", true));
+            status.set("localWorld", PrimitiveObservationService.localWorld(registry, snapshot.companionId()));
+            status.set("navigation", JSON.valueToTree(registry.worldNavigation(snapshot.companionId())));
+            ArrayNode resources = ((ObjectNode) status.path("localWorld")).putArray("resources");
+            if (snapshot.behaviorObservation() != null) snapshot.behaviorObservation().candidates().stream()
+                    .limit(16).forEach(candidate -> {
+                        // Reobserve historical candidates; their old result is not fresh evidence.
+                        ObjectNode query = JSON.createObjectNode().put("tool", "block.inspect");
+                        query.putObject("position").put("dimension", candidate.dimension())
+                                .put("x", candidate.x()).put("y", candidate.y()).put("z", candidate.z());
+                        var observed = PrimitiveObservationService.inspect(registry, snapshot.companionId(), query);
+                        if (observed.success() && candidate.block().equals(observed.observation().path("block").asText()))
+                            resources.add(observed.observation());
+                    });
             status.putObject("capabilities");
             if (activeBehavior) {
                 status.put("behaviorId", snapshot.behaviorId());

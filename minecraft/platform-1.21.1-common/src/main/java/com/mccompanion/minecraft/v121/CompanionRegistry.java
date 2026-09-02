@@ -334,6 +334,14 @@ public final class CompanionRegistry {
     }
 
     /** Returns only the live authenticated Runtime body; callers must remain on the server thread. */
+    public java.util.Map<String, Object> worldNavigation(String companionId) {
+        return behaviorDirector.worldNavigation(UUID.fromString(companionId));
+    }
+
+    public SkillParameters worldTargetParameters(String companionId) {
+        return behaviorDirector.eventParameters(UUID.fromString(companionId));
+    }
+
     public CompanionPlayer runtimeBody(String companionId) {
         CompanionEntry entry = entryByCompanion(companionId);
         return entry == null ? null : liveBodies.get(entry.companionId);

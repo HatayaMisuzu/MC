@@ -217,6 +217,20 @@ public final class RouteExecutionController {
             return true;
         }
 
+        /** A bounded observation for context; never exports or changes the full route. */
+        public java.util.Map<String, Object> localSummary() {
+            var result = new java.util.LinkedHashMap<String, Object>();
+            result.put("active", true);
+            result.put("paused", pausedAtTick >= 0);
+            result.put("waypointIndex", waypointIndex);
+            result.put("routeLength", route.size());
+            result.put("replanCount", replanCount);
+            if (goal != null) result.put("goal", java.util.Map.of("x", goal.x(), "y", goal.y(), "z", goal.z()));
+            result.put("nextSteps", route.stream().skip(waypointIndex).limit(8)
+                    .map(step -> java.util.Map.of("x", step.point().x(), "y", step.point().y(), "z", step.point().z())).toList());
+            return result;
+        }
+
         public Snapshot snapshot() {
             return new Snapshot(route, goal, waypointIndex, bestWaypointDistanceSquared,
                     stagnantTicks, replanCount, startedTick, pausedTicks, pausedAtTick, worldAtStart,

@@ -23,7 +23,8 @@ class ObservationToolGatewayTest {
     void exposesBoundedVerifiedObservationCapabilityAndTaskPrimitives() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("observations.db"))) {
             database.initialize();
-            CompanionRepository companions = new CompanionRepository(database);
+            CompanionRepository companions = new CompanionRepository(database, java.time.Clock.fixed(
+                    java.time.Instant.parse("2026-07-16T10:00:00Z"), java.time.ZoneOffset.UTC));
             var status = Json.object().put("dimension", "examplemod:moon")
                     .put("bodyState", "spawned").put("runtimeConnected", true)
                     .put("observedAt", "2026-07-16T10:00:00Z")

@@ -79,6 +79,10 @@ public final class SessionRegistry implements AutoCloseable {
         byId.remove(session.sessionId(), session);
         byWorld.remove(session.handshake().worldId(), session);
         session.companionIds().forEach(id -> byCompanion.remove(id, session));
+        for (String id : session.companionIds()) {
+            try { companions.invalidateWorldModel(id, "DISCONNECTED"); }
+            catch (SQLException failure) { log.error("Unable to invalidate disconnected world observations", failure); }
+        }
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 UPDATE runtime_session SET state='DISCONNECTED', disconnected_at=?, last_seen_at=? WHERE session_id=?
                 """)) {
@@ -138,6 +142,7 @@ public final class SessionRegistry implements AutoCloseable {
 
     /** Converts sessions left CONNECTED by an unclean previous process into durable disconnected history. */
     public int recoverStaleSessions() throws SQLException {
+        for (var companion : companions.list()) companions.invalidateWorldModel(companion.companionId(), "RUNTIME_RESTART");
         try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement("""
                 UPDATE runtime_session SET state='DISCONNECTED', disconnected_at=?, last_seen_at=?
                 WHERE state='CONNECTED'

@@ -546,7 +546,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         }
         CompanionStatus status = convert(protocolView, CompanionStatus.class);
         sessions.registerCompanion(session, status, normalized);
-        memories.rememberObservedContainers(status.companionId(), normalized);
+        // registerCompanion persisted visible containers in the bounded World Model.
         conversations.deliverPending(status.companionId());
     }
 

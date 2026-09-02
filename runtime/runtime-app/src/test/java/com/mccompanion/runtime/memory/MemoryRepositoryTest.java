@@ -45,22 +45,29 @@ class MemoryRepositoryTest {
     }
 
     @Test
-    void bodyVerifiedContainersBecomeDurablePlanningContextWithoutInventingContents() throws Exception {
+    void observedContainersUseBoundedModelWithoutInventingContentsOrLandmarks() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("containers.db"))) {
             database.initialize();
             MemoryRepository repository = new MemoryRepository(database);
-            var status = Json.object().put("bodyState", "spawned");
+            var companions = new com.mccompanion.runtime.session.CompanionRepository(database);
+            var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true)
+                    .put("dimension", "minecraft:overworld").put("observedAt", Instant.now().toString());
+            status.putObject("localWorld");
             status.putArray("observedContainers").addObject().put("type", "minecraft:chest")
                     .put("dimension", "minecraft:overworld").put("x", 12).put("y", 64).put("z", -4)
                     .put("verified", true);
 
             repository.rememberObservedContainers("c1", status);
-            var world = repository.enrichVerifiedWorld("c1", Json.object().put("bodyState", "spawned"));
-
-            assertEquals(1, world.path("knownContainers").size());
-            assertEquals(12, world.path("knownContainers").get(0).path("x").asInt());
-            assertFalse(world.path("knownContainers").get(0).has("contents"));
-            assertEquals(1, repository.verifiedLandmarkKeys("c1").size());
+            companions.upsert("c1", "session", "world", "owner", "Body", status);
+            var world = repository.enrichVerifiedWorld("c1", companions.get("c1").orElseThrow().status());
+            assertEquals(1, world.path("memory").size());
+            var container = world.path("memory").get(0);
+            assertEquals("knownContainer", container.path("kind").asText());
+            assertEquals(12, container.path("value").path("x").asInt());
+            assertFalse(container.path("value").has("contents"));
+            assertFalse(container.path("current").asBoolean());
+            assertTrue(repository.verifiedLandmarkKeys("c1").isEmpty());
+            assertTrue(repository.relevant("c1", MemoryKind.WORLD, 10).isEmpty(), "observations must not create duplicate permanent history");
         }
     }
 

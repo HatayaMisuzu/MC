@@ -53,6 +53,9 @@ public final class MemoryRepository {
         if (confidence < 0 || confidence > 1 || Double.isNaN(confidence)) throw new IllegalArgumentException("confidence must be 0..1");
         java.util.Objects.requireNonNull(kind, "kind");
         JsonNode boundedValue = value == null ? Json.object() : value;
+        if (kind == MemoryKind.WORLD && verified && source.startsWith("USER")) {
+            boundedValue = scopedLocation(companionId, boundedValue);
+        }
         rejectSensitive(kind, key, boundedValue, source);
         if (Json.write(boundedValue).length() > MAX_VALUE_CHARS) {
             throw new IllegalArgumentException("memory value exceeds 16384 characters");
@@ -237,7 +240,8 @@ public final class MemoryRepository {
                     statement.setString(2, candidate.companionId());
                     statement.setString(3, candidate.kind().name());
                     statement.setString(4, candidate.key());
-                    statement.setString(5, Json.write(candidate.value()));
+                    statement.setString(5, Json.write(candidate.kind() == MemoryKind.WORLD
+                            ? scopedLocation(companionId, candidate.value()) : candidate.value()));
                     statement.setString(6, candidate.capsuleId() == null ? "USER_APPROVED_SUGGESTION"
                             : "USER_APPROVED_EPISODE_CAPSULE:" + candidate.capsuleId());
                     statement.setLong(7, candidate.expiresAt().toEpochMilli());
@@ -402,7 +406,8 @@ public final class MemoryRepository {
                         UPDATE memory_fact SET value_json=?,verified=1,confidence=1.0,
                         source='USER_EDIT',updated_at=? WHERE companion_id=? AND memory_id=?
                         """)) {
-                    statement.setString(1, Json.write(boundedValue));
+                    statement.setString(1, Json.write(existing.kind() == MemoryKind.WORLD
+                            ? scopedLocation(companionId, boundedValue) : boundedValue));
                     statement.setLong(2, clock.millis());
                     statement.setString(3, required(companionId));
                     statement.setString(4, required(memoryId));
@@ -577,6 +582,8 @@ public final class MemoryRepository {
 
     /** Persists only body-verified visible container positions; item contents are never inferred or scanned. */
     public void rememberObservedContainers(String companionId, JsonNode status) throws SQLException {
+        // New snapshots persist these facts once in the bounded invalidatable World Model.
+        if (status != null && status.has("localWorld")) return;
         if (!settings(companionId).autoSaveEnabled()) return;
         JsonNode observed = status == null ? null : status.path("observedContainers");
         if (observed == null || !observed.isArray()) return;
@@ -594,6 +601,11 @@ public final class MemoryRepository {
     }
 
     public JsonNode enrichVerifiedWorld(String companionId, JsonNode currentStatus) throws SQLException {
+        if (currentStatus != null && currentStatus.has(com.mccompanion.runtime.worldmodel.WorldModel.STORAGE_FIELD)) {
+            return new com.mccompanion.runtime.worldmodel.WorldModel(
+                    currentStatus.path(com.mccompanion.runtime.worldmodel.WorldModel.STORAGE_FIELD))
+                    .summary(clock.instant(), relevant(companionId, MemoryKind.WORLD, 100));
+        }
         ObjectNode world = currentStatus != null && currentStatus.isObject()
                 ? (ObjectNode) currentStatus.deepCopy() : Json.object();
         var containers = world.putArray("knownContainers");
@@ -603,9 +615,26 @@ public final class MemoryRepository {
         return world;
     }
 
+    /** Bind an explicit location to the existing companion world, without guessing a location. */
+    private JsonNode scopedLocation(String companionId, JsonNode value) throws SQLException {
+        if (!value.isObject() || value.has("worldId") || value.path("dimension").asText("").isBlank()
+                || !value.path("x").isNumber() || !value.path("y").isNumber() || !value.path("z").isNumber()) return value;
+        try (var connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "SELECT world_id FROM companion WHERE companion_id=?")) {
+            statement.setString(1, companionId);
+            try (ResultSet result = statement.executeQuery()) {
+                return result.next() ? ((ObjectNode) value.deepCopy()).put("worldId", result.getString(1)) : value;
+            }
+        }
+    }
+
     public List<String> verifiedLandmarkKeys(String companionId) throws SQLException {
+        String worldId = new com.mccompanion.runtime.session.CompanionRepository(database, clock)
+                .get(companionId).map(com.mccompanion.runtime.session.CompanionRecord::worldId).orElse("");
         return relevant(companionId, MemoryKind.WORLD, 100).stream()
-                .filter(MemoryFact::verified).map(MemoryFact::key).toList();
+                .filter(com.mccompanion.runtime.worldmodel.WorldModel::explicitLandmark)
+                .filter(fact -> !worldId.isBlank() && worldId.equals(fact.value().path("worldId").asText()))
+                .map(MemoryFact::key).toList();
     }
 
     /** Bounded preference context with confidence and freshness metadata. */

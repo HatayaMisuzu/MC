@@ -513,7 +513,7 @@ public final class CompanionRegistry {
 
     private static boolean runtimeSkillSupported(String capability) {
         return java.util.Set.of("LookAt", "InteractBlock", "InteractEntity", "MenuAction",
-                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "BuildSmallBlueprint", "CollectResource",
+                "UseItem", "DropItem", "AttackEntity", "MeleeAttack", "ShieldCombat", "BowAttack", "PlaceBlock", "BuildSmallBlueprint", "CollectResource",
                 "MineResourceVein", "WithdrawFromStorage", "DepositToStorage", "DeliverItem",
                 "EatAndRecover", "DefendOwner", "RetreatFromDanger", "CraftItem", "SmeltItem",
                 "ExploreArea", "EquipItem", "SleepAtBed", "UseWaterBucket", "UseVehicle", "Fish",

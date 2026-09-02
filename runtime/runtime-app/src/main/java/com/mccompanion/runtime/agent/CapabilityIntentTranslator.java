@@ -15,7 +15,7 @@ public final class CapabilityIntentTranslator {
             case "FollowOwner" -> Optional.of(new Intent(TaskType.FOLLOW, Json.object(), requestText));
             case "NavigateTo" -> Optional.ofNullable(navigate(step.parameters(), requestText));
             case "FollowEntity", "ApproachEntity", "KeepDistanceFromEntity", "ChaseEntity",
-                    "EscortEntity", "FleeFromEntity", "FaceEntity" ->
+                    "EscortEntity", "FleeFromEntity", "FaceEntity", "MeleeAttack", "ShieldCombat", "BowAttack" ->
                     Optional.ofNullable(entitySkill(step, requestText));
             case "WithdrawFromStorage", "DepositToStorage", "CraftItem", "DeliverItem", "EatAndRecover" ->
                     Optional.of(skill(step, requestText));

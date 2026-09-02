@@ -55,6 +55,9 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `entity.attack` | Attacks one externally selected UUID-bound living entity within five blocks through `ServerPlayer.attack`; alive/range/visibility are revalidated and success requires an observed health decrease or death |
+| `combat.melee` | Starts one bounded continuous `MeleeAttack`: inventory-menu weapon selection, live UUID tracking, collision-aware chase, version-correct attack reach, vanilla cooldown and observed target death |
+| `combat.shield` | Starts `ShieldCombat` against the same explicit target, requires an offhand shield, faces the target, blocks only during a local threat window and lowers within 12 ticks so melee can continue |
+| `combat.bow` | Starts `BowAttack`: bow/ammunition checks, distance control, 20-tick draw, movement lead, vanilla release/projectile creation and observed damage/death; pause/cancel abort the draw without firing |
 | `inventory.transfer` | Selects the existing verified-container withdraw or deposit executor from the declared direction; arbitrary container or filesystem access is impossible |
 | `menu.inspect` | Reads the exact live open menu and issues a process-local 192-bit opaque capability bound to that menu instance for sixty seconds |
 | `menu.click` | Performs one bounded left/right vanilla pickup click using the exact unexpired menu capability and rejects no-effect actions |
@@ -136,3 +139,26 @@ Still required for RC:
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and
   composite-to-primitive equivalence.
+
+### Single-target combat core (Feature 6A)
+
+The three `combat.*` tools above require `COMBAT` permission and their corresponding connected-body
+capability. Arguments are `target` (exactly one `uuid`, numeric `entityId`, `playerIdentity`, or unique
+`name`, using the existing entity-identity resolver) and optional `durationTicks` in `20..2400`
+(default `1200`). A name/runtime ID is resolved once to a UUID; ticks never reselect by name.
+For example: `combat.bow({"target":{"uuid":"<observed-uuid>"},"durationTicks":600})`.
+Use the existing task pause/resume/cancel controls to suspend or disengage. A resumed in-process
+session preserves identity; an interrupted process still requires the existing explicit recovery.
+
+Completion requires `TARGET_DEAD_CONFIRMED`; disappearance, unreachable navigation, missing shield,
+bow/ammunition, timeout, and unobserved attack effects fail explicitly. Observations include target
+identity/health, action, attack/shot counts, damage observations and current item-use state. Local
+controllers never choose a replacement target. Fabric's existing proximity retreat ignores only the
+explicit combat target; other threats and low-health/environment reflexes remain enabled. Threat
+prioritization, low-health retreat orchestration and return to the interrupted task remain Feature 6B.
+
+Evidence is shared UNIT tests, Runtime dispatch INTEGRATION with a protocol fixture, and isolated
+REAL_MINECRAFT_GAMETEST on Forge 1.20.1 and Fabric 1.21.1. These are not LIVE_PROVIDER or HUMAN_PLAYTEST.
+
+Forge verification uses a clean generated GameTest world: reusing `build/gametest/world` reproduced
+target-index loading failures; backing up that exact test world and rerunning clean passed.

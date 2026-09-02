@@ -837,6 +837,60 @@ class RuntimeToolGatewayTest {
     }
 
     @Test
+    void combatToolsBindOneIdentityAndDispatchBoundedContinuousBehavior() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("combat.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("combat.log"), false, new Redactor())) {
+            database.initialize();
+            CompanionRepository companions = new CompanionRepository(database);
+            TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                for (String id : List.of("melee", "shield", "bow", "invalid")) {
+                    sessions.registerCompanion(session, new CompanionStatus(id, "owner", id,
+                            "world", "minecraft:overworld", new PositionDto(0, 64, 0),
+                            CompanionBodyState.SPAWNED, null, null, 0, 0, true,
+                            CapabilitySet.empty(), Instant.now()), Json.object());
+                }
+                CommandService commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                RuntimeToolGateway gateway = new RuntimeToolGateway(commands, companions, tasks,
+                        ignored -> List.of("MeleeAttack", "ShieldCombat", "BowAttack"));
+                String uuid = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
+                List<String> ids = List.of("melee", "shield", "bow");
+                List<String> capabilities = List.of("MeleeAttack", "ShieldCombat", "BowAttack");
+                for (int i = 0; i < 3; i++) {
+                    ToolContext context = new ToolContext("hermes", "combat-session", ids.get(i));
+                    var def = definition(gateway.definitions(context), "combat." + ids.get(i));
+                    assertEquals(List.of("target"), required(def));
+                    ObjectNode args = Json.object().put("durationTicks", 600);
+                    args.set("target", Json.object().put("uuid", uuid));
+                    ToolResult result = gateway.execute(context, new ToolCall("combat-" + i, def.name(), args));
+                    assertTrue(result.success(), result.observation().toString());
+                    JsonNode wire = peer.lastCommand().path("arguments").path("parameters");
+                    assertEquals(capabilities.get(i), wire.path("capability").asText());
+                    assertEquals(uuid, wire.path("parameters").path("entityId").asText());
+                    assertEquals("UUID", wire.path("parameters").path("targetReferenceKind").asText());
+                    assertEquals(600, wire.path("parameters").path("durationTicks").asInt());
+                }
+                ToolContext context = new ToolContext("hermes", "combat-session", "invalid");
+                ObjectNode args = Json.object().put("durationTicks", 2401);
+                args.set("target", Json.object().put("uuid", uuid));
+                assertEquals("INVALID_TOOL_ARGUMENTS", gateway.execute(context,
+                        new ToolCall("too-long", "combat.bow", args)).code());
+                args.put("durationTicks", 100).put("shell", "forbidden");
+                assertEquals("INVALID_TOOL_ARGUMENTS", gateway.execute(context,
+                        new ToolCall("extra", "combat.melee", args)).code());
+                args.remove("shell");
+                args.set("target", Json.object().put("uuid", uuid).put("name", "ambiguous"));
+                assertEquals("INVALID_TOOL_ARGUMENTS", gateway.execute(context,
+                        new ToolCall("ambiguous", "combat.shield", args)).code());
+            }
+        }
+    }
+
+    @Test
     void boundedActionPrimitivesDispatchThroughExistingBodyExecutors() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("action-primitives.db"));
              RuntimeLog log = new RuntimeLog(temporary.resolve("action-primitives.log"), false, new Redactor())) {

@@ -384,6 +384,15 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                         + "observed entity, inventory, vehicle, or menu postcondition and otherwise returns "
                         + "UNCERTAIN_EFFECT",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
+        if (available.contains("MeleeAttack")) values.add(definition("combat.melee",
+                "Continuously chase and melee one explicit living target until observed death or bounded failure",
+                combatSchema(), "MEDIUM", "COMBAT", false));
+        if (available.contains("ShieldCombat")) values.add(definition("combat.shield",
+                "Melee one explicit target with timed shield defense; requires a shield and lowers it between blocks",
+                combatSchema(), "MEDIUM", "COMBAT", false));
+        if (available.contains("BowAttack")) values.add(definition("combat.bow",
+                "Continuously draw, aim at and shoot one explicit moving target; requires a bow and ammunition",
+                combatSchema(), "MEDIUM", "COMBAT", false));
         if (available.contains("AttackEntity")) values.add(definition("entity.attack",
                 "Attack one externally selected visible reachable living entity through vanilla player rules",
                 entityAttackSchema(), "MEDIUM", "COMBAT", false));
@@ -714,6 +723,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "block.place" -> skill("PlaceBlock", validatedBlockPlacement(call.arguments()));
             case "build.small_blueprint" -> skill("BuildSmallBlueprint", validatedSmallBlueprint(call.arguments()));
             case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
+            case "combat.melee" -> skill("MeleeAttack", validatedCombat(call.arguments()));
+            case "combat.shield" -> skill("ShieldCombat", validatedCombat(call.arguments()));
+            case "combat.bow" -> skill("BowAttack", validatedCombat(call.arguments()));
             case "entity.attack" -> skill("AttackEntity", validatedEntityAttack(call.arguments()));
             case "menu.click" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLICK"));
             case "menu.quick_move" -> skill("MenuAction", validatedMenuAction(call.arguments(), "QUICK_MOVE"));
@@ -966,6 +978,30 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
                 Set.of("MAIN_HAND", "OFF_HAND"));
         return Json.object().put("entityId", entityId).put("hand", hand);
+    }
+
+    private static JsonNode validatedCombat(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("target", "durationTicks"));
+        ObjectNode identity = Json.object();
+        identity.set("target", arguments.path("target"));
+        ObjectNode values = (ObjectNode) validatedEntityBehavior(identity);
+        if (arguments.has("durationTicks")) {
+            JsonNode duration = arguments.path("durationTicks");
+            if (!duration.isIntegralNumber() || !duration.canConvertToInt()
+                    || duration.asInt() < 20 || duration.asInt() > 2400)
+                throw new IllegalArgumentException("durationTicks must be 20..2400");
+            values.put("durationTicks", duration.asInt());
+        }
+        return values;
+    }
+
+    private static ObjectNode combatSchema() {
+        ObjectNode schema = entityBehaviorSchema(true);
+        ObjectNode properties = (ObjectNode) schema.path("properties");
+        properties.remove(java.util.List.of("minimumDistance", "maximumDistance", "lostTimeoutTicks"));
+        properties.set("durationTicks", Json.object().put("type", "integer").put("minimum", 20)
+                .put("maximum", 2400).put("default", 1200));
+        return schema;
     }
 
     private static JsonNode validatedEntityAttack(JsonNode arguments) {

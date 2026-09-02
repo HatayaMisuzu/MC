@@ -13,7 +13,8 @@
       "com.mccompanion.minecraft.v121.DailyActionGameTests",
       "com.mccompanion.minecraft.v121.EntityEventGameTests",
       "com.mccompanion.minecraft.v121.SurvivalEventGameTests",
-      "com.mccompanion.minecraft.v121.InventoryWorldEventGameTests"
+      "com.mccompanion.minecraft.v121.InventoryWorldEventGameTests",
+      "com.mccompanion.minecraft.v121.CombatGameTests"
     ]
   },
   "depends": {

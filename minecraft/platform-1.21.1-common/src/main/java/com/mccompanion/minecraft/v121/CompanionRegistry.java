@@ -538,7 +538,7 @@ public final class CompanionRegistry {
                 "DeliverItem", "EatAndRecover", "WithdrawFromStorage", "DepositToStorage",
                 "CraftItem", "ExploreArea", "CollectResource", "MineResourceVein", "SmeltItem",
                 "DefendOwner", "LookAt", "InteractBlock", "InteractEntity", "MenuAction",
-                "UseItem", "DropItem", "AttackEntity", "PlaceBlock", "BuildSmallBlueprint", "RetreatFromDanger",
+                "UseItem", "DropItem", "AttackEntity", "MeleeAttack", "ShieldCombat", "BowAttack", "PlaceBlock", "BuildSmallBlueprint", "RetreatFromDanger",
                 "NavigateWithWorldChanges", "FollowEntity", "ApproachEntity",
                 "KeepDistanceFromEntity", "ChaseEntity", "EscortEntity", "FleeFromEntity", "FaceEntity")
                 .contains(capability);

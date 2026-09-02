@@ -53,6 +53,46 @@ final class PlayerActionGateway {
         lookActions.add(body.getUUID());
     }
 
+    /** Actual vanilla attack input; damage is observed by the combat adapter. */
+    void attack(CompanionPlayer body, net.minecraft.world.entity.LivingEntity target) {
+        body.attack(target);
+        body.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+        markVanillaAttack(body);
+    }
+
+    boolean startUsing(CompanionPlayer body, net.minecraft.world.InteractionHand hand) {
+        body.gameMode.useItem(body, body.serverLevel(), body.getItemInHand(hand), hand);
+        markVanillaGameModeAction(body);
+        return body.isUsingItem() && body.getUsedItemHand() == hand;
+    }
+
+    void cancelUsing(CompanionPlayer body) {
+        // stopUsingItem aborts a bow draw; releaseUsingItem would fire it.
+        body.stopUsingItem();
+    }
+
+    void releaseUsing(CompanionPlayer body) {
+        body.releaseUsingItem();
+        markVanillaGameModeAction(body);
+    }
+
+    boolean equipCombatItem(CompanionPlayer body, int inventorySlot, boolean offhand) {
+        if (body.containerMenu != body.inventoryMenu || !body.inventoryMenu.getCarried().isEmpty()
+                || inventorySlot < 0 || inventorySlot >= 36) return false;
+        ItemStack before = body.getInventory().getItem(inventorySlot).copy();
+        int menuSlot = inventorySlot < 9 ? inventorySlot + 36 : inventorySlot;
+        if (offhand) body.inventoryMenu.clicked(menuSlot, 40, net.minecraft.world.inventory.ClickType.SWAP, body);
+        else {
+            int hotbar = inventorySlot < 9 ? inventorySlot : body.getInventory().getSuitableHotbarSlot();
+            if (inventorySlot >= 9) body.inventoryMenu.clicked(menuSlot, hotbar,
+                    net.minecraft.world.inventory.ClickType.SWAP, body);
+            selectHotbarSlot(body, hotbar);
+        }
+        markVanillaMenuAction(body);
+        ItemStack after = offhand ? body.getOffhandItem() : body.getMainHandItem();
+        return !before.isEmpty() && ItemStack.matches(before, after) && body.inventoryMenu.getCarried().isEmpty();
+    }
+
     void markVanillaGameModeAction(CompanionPlayer body) { gameModeActions.add(body.getUUID()); }
     void markVanillaEntityInteraction(CompanionPlayer body) {
         entityInteractionActions.add(body.getUUID());

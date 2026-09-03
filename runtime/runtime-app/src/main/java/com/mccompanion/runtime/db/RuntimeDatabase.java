@@ -967,6 +967,8 @@ public final class RuntimeDatabase implements AutoCloseable {
                         completionClaimConditions),
                 new Migration(32, "persist active durable execution tracking across Runtime restart",
                         durableBrainTracking),
-                new Migration(33, "persist bounded event-driven Brain wake admissions", runtimeEvents));
+                new Migration(33, "persist bounded event-driven Brain wake admissions", runtimeEvents),
+                new Migration(34, "persist bounded Task Graph replanning", List.of(
+                        "ALTER TABLE task_graph_execution ADD COLUMN replan_json TEXT NOT NULL DEFAULT '{}'")));
     }
 }

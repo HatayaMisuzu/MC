@@ -191,6 +191,41 @@ public final class RuntimeEventRepository {
         }
     }
 
+    /** Requeue only an already durable graph request; the observed timestamp and replan budget stay intact. */
+    public void recoverReplan(RuntimeEvent event) throws SQLException {
+        long now = clock.millis();
+        try (var connection = database.open()) {
+            connection.setAutoCommit(false);
+            try {
+                try (var death = connection.prepareStatement("""
+                        SELECT 1 FROM runtime_event WHERE companion_id=? AND event_type='DEATH' AND occurred_at>? LIMIT 1
+                        """)) {
+                    death.setString(1, event.companionId()); death.setLong(2, event.occurredAt().toEpochMilli());
+                    try (var row = death.executeQuery()) { if (row.next()) { connection.rollback(); return; } }
+                }
+                try (var insert = connection.prepareStatement("""
+                        INSERT OR IGNORE INTO runtime_event(
+                          event_id,category,event_type,priority,source,companion_id,task_id,
+                          task_graph_execution_id,target_json,dedup_key,coalesce_key,cooldown_key,
+                          payload_json,occurrence_count,occurred_at,observed_at,available_at,expires_at,
+                          state,attempt_count,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'PENDING',0,?,?)
+                        """)) {
+                    bindEvent(insert, event, now, now); insert.executeUpdate();
+                }
+                try (var update = connection.prepareStatement("""
+                        UPDATE runtime_event SET state='PENDING',available_at=?,expires_at=?,updated_at=?
+                        WHERE event_id=? AND companion_id=?
+                        """)) {
+                    update.setLong(1, now); update.setLong(2, now + Duration.ofMinutes(10).toMillis());
+                    update.setLong(3, now); update.setString(4, event.eventId());
+                    update.setString(5, event.companionId()); update.executeUpdate();
+                }
+                connection.commit();
+            } catch (SQLException | RuntimeException failure) { connection.rollback(); throw failure; }
+        }
+    }
+
     public int recoverInterrupted() throws SQLException {
         long now = clock.millis();
         try (Connection connection = database.open()) {

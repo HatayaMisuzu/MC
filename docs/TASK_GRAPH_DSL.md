@@ -19,6 +19,10 @@ goals, load code, invoke a shell, access the network, or access arbitrary files.
 scalar sizes are bounded, duplicate keys are rejected, and trailing documents/tokens are rejected.
 Lua, JavaScript, Python, native binaries and system shell scripts are not supported.
 
+For bounded event-driven pause / Brain-authored rewrite / resume, see
+[EVENT_DRIVEN_REPLAN.md](EVENT_DRIVEN_REPLAN.md). `task_graph.replan` revises an existing frozen
+execution; it cannot change permissions or discard completed work.
+
 ## Required graph fields
 
 ```yaml

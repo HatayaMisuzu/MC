@@ -253,6 +253,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 if (task == null || !task.companionId().equals(context.companionId())) return Optional.empty();
                 ToolCall inspect = new ToolCall("recovery-inspect-" + handle.id(), handle.statusTool(),
                         Json.object().put(handle.field(), handle.id()));
+                if (task.state().terminal() && commands.leaseFor(task.companionId())
+                        .filter(lease -> lease.epoch() == task.controlEpoch()).isPresent())
+                    return Optional.of(controlReleaseUnconfirmed(inspect, task));
                 return Optional.of(task.state().terminal() || task.state() == TaskState.BLOCKED
                         || task.state() == TaskState.PAUSED || task.state() == TaskState.RECONCILIATION_REQUIRED
                         ? terminalResult(inspect, task) : progressResult(inspect, task));
@@ -282,9 +285,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             return;
         }
         if ("TASK".equals(handle.kind()) && tasks != null) {
+            try {
+                TaskRecord bound = tasks.forCommand("brain-" + context.brainSessionId() + '-' + call.callId()).orElse(null);
+                if (bound == null || !bound.taskId().equals(handle.id())
+                        || !bound.companionId().equals(context.companionId())
+                        || commands.activeTaskFor(context.companionId()).filter(t -> t.taskId().equals(handle.id())).isEmpty()) return;
+            } catch (java.sql.SQLException failure) {
+                throw new IllegalStateException("DURABLE_CANCEL_BINDING_UNAVAILABLE", failure);
+            }
             activeTasks.remove(key(context, call.callId()));
             commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
-                    context.companionId(), stop(reason == null ? "cancel" : reason));
+                    context.companionId(), stop("cancel"));
             return;
         }
         cancel(context, call.callId(), reason);
@@ -318,6 +329,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
             values.add(definition("task_graph.resume", "Resume a safely paused task graph execution",
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
+            values.add(definition("task_graph.replan", "Validate and atomically replace only unfinished work for a pending event replan",
+                    replanSchema(), "MEDIUM", "CONTROL_TASK", true));
             values.add(definition("task_graph.cancel", "Cancel a session-owned task graph execution",
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
         }
@@ -547,6 +560,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 String label = call.arguments().path("label").asText("");
                 if (executionId.isBlank()) throw new IllegalArgumentException("executionId is required");
                 return taskGraphRuntime.checkpoint(context, call, executionId, label);
+            }
+            if (call.name().equals("task_graph.replan")) {
+                if (taskGraphRuntime == null) return ToolResult.rejected(call, "TASK_GRAPH_RUNTIME_UNAVAILABLE", "unavailable");
+                rejectUnexpected(call.arguments(), Set.of("executionId", "requestId", "epoch", "expectedRevision", "graph"));
+                for (String number : List.of("epoch", "expectedRevision")) {
+                    if (!call.arguments().path(number).isIntegralNumber() || call.arguments().path(number).asLong(-1) < 0)
+                        throw new IllegalArgumentException(number + " must be a nonnegative integer");
+                }
+                return taskGraphRuntime.replan(context, call, call.arguments().path("executionId").asText(),
+                        call.arguments().path("requestId").asText(), call.arguments().path("epoch").asLong(),
+                        call.arguments().path("expectedRevision").asLong(), call.arguments().path("graph"));
             }
             if (call.name().startsWith("task_graph.") && !call.name().equals("task_graph.validate")) {
                 if (taskGraphRuntime == null) {
@@ -1477,6 +1501,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         } else if (name.equals("task_graph.inspect") || name.equals("task_graph.pause")
                 || name.equals("task_graph.resume") || name.equals("task_graph.cancel")) {
             root.putArray("required").add("executionId");
+        } else if (name.equals("task_graph.replan")) {
+            root.putArray("required").add("executionId").add("requestId").add("epoch").add("expectedRevision").add("graph");
         } else if (name.equals("task.wait")) {
             root.putArray("required").add("durationMillis");
         } else if (name.equals("task.checkpoint")) {
@@ -1850,6 +1876,15 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             default -> throw new IllegalArgumentException("format must be json or yaml");
         };
         return TaskGraphCodec.parse(arguments.path("document").asText(), format);
+    }
+
+    private static ObjectNode replanSchema() {
+        ObjectNode properties = executionIdSchema();
+        properties.putObject("requestId").put("type", "string").put("minLength", 1).put("maxLength", 160);
+        properties.putObject("epoch").put("type", "integer").put("minimum", 0);
+        properties.putObject("expectedRevision").put("type", "integer").put("minimum", 0);
+        properties.putObject("graph").put("type", "object");
+        return properties;
     }
 
     private static ObjectNode executionIdSchema() {

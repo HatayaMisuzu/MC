@@ -232,6 +232,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
+            if (externalBrain != null) externalBrain.attachTaskGraphs(taskGraphRuntime);
             if (externalBrain != null && !recoveredDurableCalls.isEmpty()) {
                 externalBrain.restoreActiveDurableCalls(recoveredDurableCalls);
             }
@@ -274,6 +275,8 @@ public final class RuntimeApplication implements AutoCloseable {
             webSocket.attachRegistryQueries(registryTools);
             webSocket.attachRuntimeEvents(runtimeEvents);
             webSocket.startAndAwait(Duration.ofSeconds(15));
+            var replanEvents = new RuntimeEventRepository(database);
+            for (var event : taskGraphs.pendingReplanEvents()) replanEvents.recoverReplan(event);
             runtimeEvents.start(new RuntimeEventBrainDispatcher(externalBrain,
                     new BrainContextAssembler(companions, sessions, capabilityVisibility,
                             memories, conversations, commands), conversations));

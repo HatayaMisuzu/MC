@@ -118,7 +118,7 @@ final class RuntimeEventServiceTest {
                 Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(), Json.object(),
                 Json.MAPPER.createArrayNode(), Json.MAPPER.createArrayNode(), Json.object(),
                 Json.MAPPER.createArrayNode(), Json.object(), Json.object(), Json.object(),
-                revision, resultCode, now, now);
+                revision, resultCode, now, now, Json.object());
     }
 
     private static final class MutableClock extends Clock {

@@ -410,7 +410,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                        taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_MODIFIED_GOAL");
                         waiting = java.util.Optional.empty();
                     }
                 }
@@ -466,11 +465,14 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                             conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
                             waiting = java.util.Optional.empty();
                         }
-                        externalBrain.cancel("runtime-primary", companionId, "OWNER_MODIFIED_GOAL");
+                        externalBrain.pauseActiveForUserInstruction("runtime-primary", companionId, "OWNER_MODIFIED_GOAL");
                     }
                     var brainResult = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                             && incoming.kind() == IncomingMessageKind.WAITING_ANSWER
                             ? externalBrain.answer("runtime-primary", waiting.orElseThrow(), incoming, context)
+                            : incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION
+                                || incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION
+                            ? externalBrain.continueInstruction("runtime-primary", companionId, text, context)
                             : externalBrain.continueTurn("runtime-primary", companionId, text, context);
                     reply.put("accepted", true).put("source", "external-brain").put("code", brainResult.code())
                             .put("decision", brainResult.kind().name()).put("reply", brainResult.response());

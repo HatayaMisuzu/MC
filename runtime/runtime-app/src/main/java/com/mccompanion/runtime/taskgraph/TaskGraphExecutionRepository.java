@@ -35,8 +35,8 @@ public final class TaskGraphExecutionRepository {
                 INSERT INTO task_graph_execution(execution_id,controller_id,brain_session_id,companion_id,
                 graph_id,graph_version,graph_hash,graph_json,state,current_node_id,completed_nodes_json,
                 tool_results_json,variables_json,checkpoints_json,waiting_question_json,permissions_json,
-                limits_json,provenance_json,inputs_json,evidence_json,revision,result_code,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '[]',0,'CREATED',?,?)
+                limits_json,provenance_json,inputs_json,replan_json,evidence_json,revision,result_code,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '[]',0,'CREATED',?,?)
                 """)) {
             statement.setString(1, required(executionId)); statement.setString(2, context.controllerId());
             statement.setString(3, context.brainSessionId()); statement.setString(4, context.companionId());
@@ -48,7 +48,8 @@ public final class TaskGraphExecutionRepository {
             statement.setString(17, Json.write(limits.toJson()));
             statement.setString(18, Json.write(provenance == null ? Json.object() : provenance));
             statement.setString(19, Json.write(inputs == null ? Json.object() : inputs));
-            statement.setLong(20, now); statement.setLong(21, now); statement.executeUpdate();
+            statement.setString(20, Json.write(TaskGraphReplan.initial(provenance)));
+            statement.setLong(21, now); statement.setLong(22, now); statement.executeUpdate();
         }
         return get(executionId).orElseThrow();
     }
@@ -111,9 +112,93 @@ public final class TaskGraphExecutionRepository {
                         Json.parse(row.getString("provenance_json")), Json.parse(row.getString("result_json")),
                         row.getLong("revision"),
                         row.getString("result_code"), Instant.ofEpochMilli(row.getLong("created_at")),
-                        Instant.ofEpochMilli(row.getLong("updated_at"))));
+                        Instant.ofEpochMilli(row.getLong("updated_at")), Json.parse(row.getString("replan_json"))));
             }
         }
+    }
+
+    /** Replan intent is independent of the worker's snapshot revision until the graph is quiescent. */
+    public TaskGraphExecutionRecord saveReplan(TaskGraphExecutionRecord record, JsonNode replan) throws SQLException {
+        try (var connection = database.open(); var statement = connection.prepareStatement("""
+                UPDATE task_graph_execution SET replan_json=? WHERE execution_id=? AND replan_json=?
+                """)) {
+            statement.setString(1, Json.write(replan)); statement.setString(2, record.executionId());
+            statement.setString(3, Json.write(record.replan()));
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_REPLAN_STATE");
+        }
+        return get(record.executionId()).orElseThrow();
+    }
+
+    /** Atomic graph/epoch commit. A crash cannot expose a rewritten graph with the old request. */
+    public TaskGraphExecutionRecord applyReplan(TaskGraphExecutionRecord record, JsonNode graph,
+                                                JsonNode replan) throws SQLException {
+        try (var connection = database.open(); var statement = connection.prepareStatement("""
+                UPDATE task_graph_execution SET graph_json=?,graph_hash=?,replan_json=?,state='PAUSED',
+                current_node_id=NULL,waiting_question_json=NULL,result_json='{}',
+                result_code='REPLAN_APPLIED',revision=revision+1,updated_at=?
+                WHERE execution_id=? AND revision=? AND state IN ('PAUSED','FAILED') AND replan_json=?
+                """)) {
+            statement.setString(1, Json.canonical(graph));
+            statement.setString(2, Digests.sha256(Json.canonical(graph)));
+            statement.setString(3, Json.write(replan)); statement.setLong(4, clock.millis());
+            statement.setString(5, record.executionId()); statement.setLong(6, record.revision());
+            statement.setString(7, Json.write(record.replan()));
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_TASK_GRAPH_REVISION");
+        }
+        return get(record.executionId()).orElseThrow();
+    }
+
+    public List<TaskGraphExecutionRecord> forEvent(String companionId, String executionId, String taskId)
+            throws SQLException {
+        List<String> ids = new ArrayList<>();
+        try (var connection = database.open(); var statement = connection.prepareStatement("""
+                SELECT g.execution_id FROM task_graph_execution g WHERE companion_id=?
+                AND state NOT IN ('SUCCEEDED','CANCELLED')
+                AND (? IS NULL OR execution_id=?)
+                AND (? IS NULL OR EXISTS (SELECT 1 FROM task_command c WHERE c.task_id=?
+                    AND instr(c.command_id, 'brain-' || g.brain_session_id || '-' || g.execution_id || ':')=1))
+                ORDER BY created_at DESC LIMIT 24
+                """)) {
+            statement.setString(1, companionId); statement.setString(2, executionId);
+            statement.setString(3, executionId); statement.setString(4, taskId); statement.setString(5, taskId);
+            try (var rows = statement.executeQuery()) { while (rows.next()) ids.add(rows.getString(1)); }
+        }
+        List<TaskGraphExecutionRecord> records = new ArrayList<>();
+        for (String id : ids) get(id).ifPresent(records::add);
+        return List.copyOf(records);
+    }
+
+    public boolean ownsEvent(String controllerId, com.mccompanion.runtime.event.RuntimeEvent event) throws SQLException {
+        try (var connection = database.open(); var statement = connection.prepareStatement("""
+                SELECT 1 FROM task_graph_execution g WHERE controller_id=? AND companion_id=?
+                AND (? IS NULL OR execution_id=?)
+                AND (? IS NULL OR EXISTS (SELECT 1 FROM task_command c WHERE c.task_id=?
+                    AND instr(c.command_id, 'brain-' || g.brain_session_id || '-' || g.execution_id || ':')=1))
+                AND (? IS NOT NULL OR ? IS NOT NULL OR state NOT IN ('SUCCEEDED','CANCELLED')) LIMIT 1
+                """)) {
+            statement.setString(1, controllerId); statement.setString(2, event.companionId());
+            statement.setString(3, event.taskGraphExecutionId()); statement.setString(4, event.taskGraphExecutionId());
+            statement.setString(5, event.taskId()); statement.setString(6, event.taskId());
+            statement.setString(7, event.taskGraphExecutionId()); statement.setString(8, event.taskId());
+            try (var row = statement.executeQuery()) { return row.next(); }
+        }
+    }
+
+    /** Startup-only recovery source, including user instructions not originally queued as world events. */
+    public List<com.mccompanion.runtime.event.RuntimeEvent> pendingReplanEvents() throws SQLException {
+        List<com.mccompanion.runtime.event.RuntimeEvent> events = new ArrayList<>();
+        try (var connection = database.open(); var statement = connection.prepareStatement("""
+                SELECT replan_json FROM task_graph_execution
+                WHERE state NOT IN ('SUCCEEDED','CANCELLED')
+                AND json_extract(replan_json,'$.phase') IN ('REQUESTED','WAITING_BRAIN','APPLIED')
+                ORDER BY updated_at LIMIT 64
+                """)) {
+            try (var rows = statement.executeQuery()) {
+                while (rows.next()) events.add(Json.MAPPER.convertValue(Json.parse(rows.getString(1)).path("event"),
+                        com.mccompanion.runtime.event.RuntimeEvent.class));
+            }
+        }
+        return List.copyOf(events);
     }
 
     public List<String> waitingTimeExecutionIds() throws SQLException {

@@ -1021,7 +1021,6 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                        taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_MODIFIED_GOAL");
                         waiting = java.util.Optional.empty();
                     }
                 }
@@ -1054,7 +1053,7 @@ public final class RuntimeHealthServer implements AutoCloseable {
                         conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
                         waiting = java.util.Optional.empty();
                     }
-                    externalBrain.cancel(controllerId, companionId, "OWNER_MODIFIED_GOAL");
+                    externalBrain.pauseActiveForUserInstruction(controllerId, companionId, "OWNER_MODIFIED_GOAL");
                 }
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
                     conversations.hear(companionId, null,
@@ -1063,6 +1062,9 @@ public final class RuntimeHealthServer implements AutoCloseable {
                 var result = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                         && incoming.kind() == IncomingMessageKind.WAITING_ANSWER
                         ? externalBrain.answer(controllerId, waiting.orElseThrow(), incoming, context)
+                        : incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION
+                            || incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION
+                        ? externalBrain.continueInstruction(controllerId, companionId, text, context)
                         : externalBrain.continueTurn(controllerId, companionId, text, context);
                 if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE && !result.response().isBlank()) {
                     conversations.say(companionId, null,

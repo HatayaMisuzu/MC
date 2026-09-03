@@ -26,7 +26,9 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
     @Override public RuntimeEventService.DispatchResult dispatch(RuntimeEvent event) throws Exception {
         if (!wakeEligible(event)) return RuntimeEventService.DispatchResult.SUPPRESSED;
         if (brain == null) return RuntimeEventService.DispatchResult.DEFERRED;
-        if (event.priority() == RuntimeEvent.Priority.CRITICAL) {
+        // Graph event deduplication MUST precede interruption. A delayed failure from the old epoch
+        // must not pause the freshly resumed graph before it is recognized as stale.
+        if (event.priority() == RuntimeEvent.Priority.CRITICAL && !brain.graphOwnsEvent(CONTROLLER_ID, event)) {
             brain.pauseActiveForCriticalEvent(CONTROLLER_ID, event.companionId(), event.eventType());
         }
         BrainContextAssembler.Prepared prepared;
@@ -38,6 +40,7 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
             }
             throw missing;
         }
+        if (prepared.capabilities().availableNames().isEmpty()) return RuntimeEventService.DispatchResult.DEFERRED;
         var result = brain.continueEvent(CONTROLLER_ID, event, prepared.context());
         if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE && !result.response().isBlank()) {
             var details = Json.object().put("source", "runtime-event")
@@ -52,7 +55,9 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
         } else {
             conversations.deliverPending(event.companionId());
         }
-        return RuntimeEventService.DispatchResult.DELIVERED;
+        return result.code().equals("REPLAN_PENDING") ? RuntimeEventService.DispatchResult.DEFERRED
+                : result.code().equals("EVENT_NO_REPLAN") ? RuntimeEventService.DispatchResult.SUPPRESSED
+                : RuntimeEventService.DispatchResult.DELIVERED;
     }
 
     static boolean wakeEligible(RuntimeEvent event) {
@@ -64,6 +69,8 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
                 || event.category() == RuntimeEvent.Category.PLAYER_ENTITY
                     && java.util.Set.of("HOSTILE_ENTERED_THREAT_RANGE", "CURRENT_TARGET_DIED").contains(event.eventType())))
             return false;
+        if (!com.mccompanion.runtime.taskgraph.TaskGraphReplan.semantic(event)
+                && !java.util.Set.of("TASK_COMPLETED", "TASK_GRAPH_TERMINAL").contains(event.eventType())) return false;
         if (event.taskBound()) return true;
         if (event.priority() != RuntimeEvent.Priority.CRITICAL) return false;
         return event.category() != RuntimeEvent.Category.PLAYER_ENTITY

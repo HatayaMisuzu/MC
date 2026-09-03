@@ -109,6 +109,8 @@ def generateModMetadata = tasks.register('generateModMetadata', ProcessResources
 }
 
 sourceSets.main.resources.srcDir generateModMetadata
+// This fixture requires an external Runtime; the focused event-replan init script opts it in.
+sourceSets.main.java.exclude '**/EventReplanForgeGameTests.java'
 legacyForge.ideSyncTask generateModMetadata
 
 tasks.withType(JavaCompile).configureEach {

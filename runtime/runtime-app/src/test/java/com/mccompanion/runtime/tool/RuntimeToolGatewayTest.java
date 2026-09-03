@@ -43,6 +43,39 @@ class RuntimeToolGatewayTest {
     @TempDir Path temporary;
 
     @Test
+    void durableReplanCancellationUsesCancelActionAndExactRecordedBinding() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("replan-cancel.db"));
+             RuntimeLog log = new RuntimeLog(temporary.resolve("replan-cancel.log"), false, new Redactor())) {
+            database.initialize();
+            var companions = new CompanionRepository(database);
+            var tasks = new TaskRepository(database, new TaskEventStore(database));
+            try (var sessions = new SessionRegistry(database, companions, log)) {
+                CapturingPeer peer = new CapturingPeer();
+                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                        "fabric", "world", Json.object()));
+                sessions.registerCompanion(session, new CompanionStatus("c1", "owner", "body", "world", "minecraft:overworld",
+                        new PositionDto(0, 64, 0), CompanionBodyState.SPAWNED, null, null, 0, 0, true,
+                        CapabilitySet.empty(), Instant.now()), Json.object().put("dimension", "minecraft:overworld"));
+                var commands = new CommandService(sessions, companions, tasks, new LeaseService(database),
+                        new IdempotencyStore(database), new ProtocolCommandSender(), log);
+                var gateway = new RuntimeToolGateway(commands, companions, tasks, ignored -> List.of("NavigateTo"));
+                var context = new ToolContext("runtime-primary", "brain", "c1");
+                var call = new ToolCall("graph:route:1", "movement.navigate",
+                        Json.object().put("dimension", "minecraft:overworld").put("x", 5).put("y", 64).put("z", 0));
+                var accepted = gateway.execute(context, call); assertTrue(accepted.success());
+                var handle = DurableExecutionReceipt.handle(accepted).orElseThrow();
+                int before = peer.messages.size();
+                gateway.cancelDurable(new ToolContext("runtime-primary", "other-brain", "c1"), call, handle, "SEMANTIC_REPLAN");
+                assertEquals(before, peer.messages.size());
+                gateway.cancelDurable(context, call, handle, "SEMANTIC_REPLAN");
+                assertTrue(peer.messages.size() > before);
+                assertEquals("cancel_behavior", peer.lastCommand().path("command").asText());
+                assertEquals(handle.id(), peer.lastCommand().path("taskId").asText());
+            }
+        }
+    }
+
+    @Test
     void ownerActivityMatchesOnlyTheExactActiveWorldTarget() {
         JsonNode payload = Json.object().put("capability", "InteractBlock");
         ((com.fasterxml.jackson.databind.node.ObjectNode) payload).set("parameters",

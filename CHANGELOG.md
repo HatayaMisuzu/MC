@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Mark all bundled jpackage launchers as UTF-8-aware so the Windows package resolves its bundled
+  Runtime when extracted below a Unicode path that the host ANSI code page cannot represent. The
+  final artifact test now includes such a cross-code-page path instead of relying on the host locale.
 - Preserve explicit primitive attack targets during bounded threat evaluation on both Minecraft
   versions; low health, explosive threats and multiple hostiles still preempt execution.
 - Deliver durable Task Graph lifecycle feedback immediately, including completion without another

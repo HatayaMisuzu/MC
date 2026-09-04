@@ -596,9 +596,20 @@ tasks.register('jpackageTerminal', Exec) {
     }
 }
 
+tasks.register('patchJpackageLaunchers', Exec) {
+    group = 'distribution'
+    description = 'Makes the bundled Windows launchers resolve paths independently of the system ANSI code page.'
+    dependsOn 'jpackageTerminal'
+    doFirst {
+        commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/patch-windows-launcher-utf8.ps1').absolutePath,
+                '-LauncherDirectory', terminalJpackage.get().dir('mcac').asFile.absolutePath
+    }
+}
+
 tasks.register('stageTerminal') {
     group = 'distribution'
-    dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
+    dependsOn 'patchJpackageLaunchers', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
     doLast {
         copy {
             into terminalImage

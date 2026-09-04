@@ -1,6 +1,6 @@
 # RC completion matrix
 
-Updated: 2026-09-03
+Updated: 2026-09-04
 Overall status: `HUMAN_PLAYTEST_PENDING`
 Automated productization baseline: `FROZEN`
 Product version: `0.3.1`
@@ -52,6 +52,10 @@ checks, Unicode/space-path Windows artifact checks, clean-extraction bilingual b
 and isolated multi-profile Runtime checks also passed. Earlier focused Runtime/Bridge REPLAY chains
 cover World Model, persistence/restart, combat/recovery and event-driven replanning on the two Full
 Bridge targets; these remain `RUNTIME / BRIDGE INTEGRATION`, not Live-provider or human evidence.
+
+The staged Windows launchers also carry a UTF-8 process manifest. A focused final-artifact probe
+starts the bundled Runtime below a space-containing BMP Unicode path that the host ANSI code page
+cannot encode, so this result does not depend on the developer machine using a Chinese locale.
 
 ### Historical live evidence
 

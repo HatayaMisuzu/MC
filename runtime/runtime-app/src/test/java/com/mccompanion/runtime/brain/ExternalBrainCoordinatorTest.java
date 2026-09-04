@@ -35,6 +35,23 @@ class ExternalBrainCoordinatorTest {
     @TempDir Path temporary;
 
     @Test
+    void completedExternalClientWorkDoesNotOpenAnUnrelatedBrainSession() {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            turns.incrementAndGet();
+            return BrainTurnResult.finalResponse("unexpected");
+        });
+        Instant now = Instant.now();
+        RuntimeEvent completed = new RuntimeEvent("done", RuntimeEvent.Category.TASK, "TASK_COMPLETED",
+                RuntimeEvent.Priority.MEDIUM, "TASK_RUNTIME", "c1", "external-client-task", null,
+                Json.object(), "done", null, null, now, now, now.plusSeconds(60), Json.object());
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, new RecordingGateway(), 4)) {
+            assertEquals("EVENT_NO_REPLAN", coordinator.continueEvent("runtime-primary", completed, context()).code());
+            assertEquals(0, turns.get());
+        }
+    }
+
+    @Test
     void taskBoundRuntimeEventWakesBrainWithoutBecomingANewUserGoal() {
         ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
             JsonNode event = Json.parse(request.userMessage());

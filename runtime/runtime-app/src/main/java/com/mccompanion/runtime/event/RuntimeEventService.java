@@ -156,8 +156,13 @@ public final class RuntimeEventService implements CommandService.TaskLifecycleLi
         DispatchResult result;
         try {
             result = Objects.requireNonNull(dispatcher.dispatch(event), "dispatch result");
+        } catch (com.mccompanion.runtime.brain.LiveBrainBudgetException exhausted) {
+            repository.suppressed(event.eventId());
+            LOGGER.warn("Runtime event stopped at Brain budget boundary: event={} code={}",
+                    event.eventId(), exhausted.getMessage());
+            return;
         } catch (Exception failure) {
-            repository.defer(event.eventId(), RETRY_DELAY);
+            repository.retryFailed(event.eventId(), RETRY_DELAY);
             throw failure;
         }
         switch (result) {

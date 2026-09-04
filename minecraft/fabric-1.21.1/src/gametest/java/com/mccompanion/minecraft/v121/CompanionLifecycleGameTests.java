@@ -331,6 +331,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         observationOrigin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
             }
         }
+        for (int z = 1; z <= 2; z++) {
+            body.serverLevel().setBlockAndUpdate(
+                    observationOrigin.offset(0, -1, z), Blocks.STONE.defaultBlockState());
+            for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        observationOrigin.offset(0, y, z), Blocks.AIR.defaultBlockState());
+            }
+        }
         BlockPos blockPosition = observationOrigin.offset(2, 1, 0);
         body.serverLevel().setBlockAndUpdate(blockPosition, RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
         body.getInventory().add(new ItemStack(RegistryFixtureInitializer.BLUE_ITEM, 3));
@@ -815,31 +823,31 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "entity attack test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "entity attack test created no live body");
-        var cow = EntityType.COW.create(body.serverLevel());
-        helper.assertTrue(cow != null, "entity attack test could not create cow");
-        cow.setNoAi(true);
-        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
-        helper.assertTrue(body.serverLevel().addFreshEntity(cow),
-                "entity attack test could not add cow");
-        float healthBefore = cow.getHealth();
+        var husk = EntityType.HUSK.create(body.serverLevel());
+        helper.assertTrue(husk != null, "entity attack test could not create husk");
+        husk.setNoAi(true);
+        husk.moveTo(body.getX() + 2.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(husk),
+                "entity attack test could not add husk");
+        float healthBefore = husk.getHealth();
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-entity-attack";
         helper.assertTrue(registry.runtimeAcquireLease(
                 companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
                 "entity attack lease acquisition failed");
-        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "attack-selected-cow", "skill",
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "attack-selected-husk", "skill",
                 null, null, null, new SkillParameters("AttackEntity", "", 1, false,
                         body.serverLevel().dimension().location().toString(),
-                        null, null, null, cow.getUUID().toString(), "UP", "MAIN_HAND")).success(),
+                        null, null, null, husk.getUUID().toString(), "UP", "MAIN_HAND")).success(),
                 "entity attack failed to start");
         awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
-            helper.assertTrue(!cow.isAlive() || cow.getHealth() < healthBefore,
+            helper.assertTrue(!husk.isAlive() || husk.getHealth() < healthBefore,
                     "vanilla entity attack did not damage the selected living entity");
             helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "ENTITY_ATTACK_COMPLETE",
                     "entity attack observation code mismatch");
             helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_ATTACK"),
                     "entity attack evidence did not identify ServerPlayer.attack");
-            cow.discard();
+            husk.discard();
             removeFixture(helper, registry, owner, "entity attack cleanup failed");
         });
     }
@@ -1273,10 +1281,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(usedSword.is(Items.IRON_SWORD) && usedSword.getDamageValue() >= 1,
                     "vanilla attack did not consume weapon durability");
             helper.assertTrue(snapshot.behaviorObservation() != null, "defense produced no observation");
-            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "DEFEND_COMPLETE",
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "TARGET_DEAD_CONFIRMED",
                     "defense observation code mismatch");
-            helper.assertValueEqual(snapshot.behaviorObservation().itemId(), "THREAT_DEFEATED",
-                    "defense did not report the verified threat outcome");
+            helper.assertValueEqual(snapshot.behaviorObservation().details().get("targetId"), husk.getUUID().toString(),
+                    "defense did not report the verified target identity");
             helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
                     "defense did not produce successful action evidence");
             removeFixture(helper, registry, owner, "defend test cleanup failed");

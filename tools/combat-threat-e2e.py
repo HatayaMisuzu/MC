@@ -93,7 +93,7 @@ try:
     init = evidence / ("threat-" + args.loader + "-bridge.init.gradle")
     init_text = """allprojects { afterEvaluate { p ->
         if (p.name == 'minecraft-ai-companion-forge-1.20.1') {
-            p.sourceSets.main.java.exclude { d -> d.file.name.endsWith('GameTests.java') &&
+            p.sourceSets.gameTest.java.exclude { d -> d.file.name.endsWith('GameTests.java') &&
                 !(d.file.name in ['CombatForgeGameTests.java', 'ThreatRecoveryForgeGameTests.java']) }
         }
         if (p.name == 'minecraft-ai-companion-fabric-1.21.1') {
@@ -153,6 +153,9 @@ try:
              "permissions": ["READ_WORLD", "BUILD", "INVENTORY", "MOVE", "INTERACT"],
              "root": {"id": "root", "type": "sequence", "nodes": [
                  {"id": "before", "type": "call_tool", "tool": "inventory.inspect", "arguments": {}},
+                 {"id": "materials", "type": "call_tool", "tool": "inventory.transfer", "arguments": {
+                     "direction": "FROM_CONTAINER", "item": "minecraft:cobblestone", "quantity": 7,
+                     "container": {"dimension": "minecraft:overworld", "x": 1536, "y": 100, "z": 1539}}},
                  {"id": "build", "type": "call_tool", "tool": "build.small_blueprint", "arguments": blueprint},
                  {"id": "done", "type": "return", "value": "resumed-and-verified"}]}}
     submitted = tool("task_graph.execute", {"graph": graph,

@@ -191,6 +191,23 @@ public final class RuntimeEventRepository {
         }
     }
 
+    /** A failed dispatch cannot poll an unavailable provider until its whole profile budget is spent. */
+    public void retryFailed(String eventId, Duration delay) throws SQLException {
+        long now = clock.millis();
+        try (Connection connection = database.open(); PreparedStatement update = connection.prepareStatement("""
+                UPDATE runtime_event
+                SET state=CASE WHEN attempt_count>=3 OR expires_at<=? THEN 'SUPPRESSED' ELSE 'PENDING' END,
+                    available_at=?,updated_at=?
+                WHERE event_id=? AND state='DISPATCHING'
+                """)) {
+            update.setLong(1, now);
+            update.setLong(2, Math.addExact(now, delay.toMillis()));
+            update.setLong(3, now);
+            update.setString(4, eventId);
+            update.executeUpdate();
+        }
+    }
+
     /** Requeue only an already durable graph request; the observed timestamp and replan budget stay intact. */
     public void recoverReplan(RuntimeEvent event) throws SQLException {
         long now = clock.millis();

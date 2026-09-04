@@ -22,6 +22,27 @@ final class RuntimeEventServiceTest {
     @TempDir Path temporary;
 
     @Test
+    void permanentBrainBudgetFailureIsNotRetried() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-26T00:00:00Z"));
+        try (RuntimeDatabase database = database("budget.db");
+             RuntimeEventService service = service(database, clock)) {
+            RuntimeEventRepository repository = new RuntimeEventRepository(database, clock, 8);
+            service.onTaskUpdated(task(2, TaskState.COMPLETED, Json.object()), Json.object());
+            var attempts = new java.util.concurrent.atomic.AtomicInteger();
+            service.start(event -> {
+                attempts.incrementAndGet();
+                throw new com.mccompanion.runtime.brain.LiveBrainBudgetException("BRAIN_INPUT_TOKEN_BUDGET_EXCEEDED",
+                        com.mccompanion.runtime.brain.LiveBrainFailureCategory.RATE_LIMIT);
+            });
+            long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (repository.pendingCount("companion") != 0 && System.nanoTime() < deadline) Thread.sleep(10);
+            assertEquals(0, repository.pendingCount("companion"));
+            service.drainOnce();
+            assertEquals(1, attempts.get());
+        }
+    }
+
+    @Test
     void normalizesBlockedTaskWithTaskAndTargetBindings() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-26T05:00:00Z"));
         try (RuntimeDatabase database = database("task.db");

@@ -18,6 +18,11 @@ Follow、Navigate 位置变化、安全空闲与重连；这不代表其他 Prov
 本版本以 Fabric 1.21.1 与 Forge 1.20.1 双 Full Runtime Bridge 为自动化产品目标；
 NeoForge 1.21.1 保持 `LOCAL_ONLY`。
 
+当前开发主线还整合了日常动作、生存导航、持久事件、任意实体交互、小型蓝图建筑、战斗恢复、
+有界 World Model 与事件驱动重规划。共享控制逻辑和版本适配边界见
+[开发者说明](docs/developer/README.md#shared-code-and-version-bindings)；这些新增能力的证据以
+RC 矩阵为准，不沿用历史发布包的 Live Brain 结论。
+
 ## 使用发布包
 
 1. 完整解压 `mcac-release.zip`，不要只单独复制 `mcac.exe`。

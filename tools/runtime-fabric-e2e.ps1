@@ -66,6 +66,9 @@ brain:
   timeout_seconds: 10
   max_output_tokens: 1400
   max_tool_calls_per_turn: 12
+  # This replay verifies 11 Brain turns plus session setup with World Model context.
+  # Keep production defaults unchanged; budget this multi-action integration episode explicitly.
+  max_input_tokens: 200000
 logging:
   file: ./logs/runtime.log
   console: true
@@ -637,7 +640,8 @@ try {
     Copy-Item -LiteralPath $token -Destination $gameToken -Force
     $pairingToken = (Get-Content -Raw -LiteralPath $token).Trim()
 
-    $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon > `"$gameOutFile`" 2> `"$gameErrFile`"`""
+    $offlineArgument = if ($env:MCAC_TEST_OFFLINE -eq '1') { '--offline' } else { '' }
+    $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon --no-parallel $offlineArgument > `"$gameOutFile`" 2> `"$gameErrFile`"`""
     $game = Start-TestProcess 'cmd.exe' $gameArgs $fabric $false
 
     $gameLog = Join-Path $gameRun 'logs\latest.log'

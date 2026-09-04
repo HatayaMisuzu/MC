@@ -1,0 +1,17 @@
+allprojects {
+    afterEvaluate { p ->
+        if (p.name == 'minecraft-ai-companion-fabric-1.21.1') {
+            p.tasks.named('processGametestResources').configure {
+                inputs.property('persistenceFixtureBoundary', true)
+                doLast {
+                    def descriptor = new File(destinationDir, 'fabric.mod.json')
+                    def data = new groovy.json.JsonSlurper().parse(descriptor)
+                    data.entrypoints['fabric-gametest'] = [
+                            'com.mccompanion.minecraft.v121.CompanionLifecycleGameTests'
+                    ]
+                    descriptor.text = groovy.json.JsonOutput.toJson(data)
+                }
+            }
+        }
+    }
+}

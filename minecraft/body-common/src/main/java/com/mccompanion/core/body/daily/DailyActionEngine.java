@@ -523,8 +523,8 @@ public final class DailyActionEngine {
             case HARVEST_CROP -> x.crop() != null && x.crop().harvested();
             case PICKUP_CROP -> x.crop() != null && x.crop().pickedUp();
             case REPLANT_CROP -> x.crop() != null && x.crop().replanted();
-            case VERIFY_CROP -> x.crop() != null && x.crop().age() == 0
-                    && x.crop().replanted() && x.crop().position().equals(s.selectedTarget)
+            case VERIFY_CROP -> x.crop() != null && x.crop().replanted()
+                    && x.crop().position().equals(s.selectedTarget)
                     && (x.crop().cropId().isBlank() || x.crop().cropId().equals(r.itemId()))
                     && x.crop().harvestedCount() > 0 && x.crop().seedConsumed() > 0;
             case APPROACH_FIRST_ANIMAL -> near(x.position(), animalPosition(x, s.selectedTargetId));

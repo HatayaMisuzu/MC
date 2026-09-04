@@ -24,6 +24,7 @@ import net.minecraft.world.item.alchemy.PotionUtils;
 import net.minecraft.world.item.alchemy.Potions;
 import net.minecraft.world.item.trading.MerchantOffer;
 import net.minecraft.world.item.enchantment.EnchantmentHelper;
+import net.minecraft.world.item.enchantment.Enchantments;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.properties.BedPart;
@@ -128,8 +129,14 @@ public final class DailyActionForgeGameTests {
             template = "bastion/mobs/empty", timeoutTicks = 800)
     public static void nearbyBedNavigationCanBeCancelledWithoutLeavingTheBodyAsleep(GameTestHelper h) {
         Fixture f = fixture(h, "daily-sleep-cancel");
-        f.body.moveTo(512.5D, 80.0D, 512.5D, 0.0F, 0.0F);
-        f.owner.moveTo(512.5D, 80.0D, 510.5D, 0.0F, 0.0F);
+        // This isolated arena sits outside the tiny template and must remain loaded while the
+        // real ServerPlayer travels. Reset only fixture physics before starting the action.
+        f.level.setChunkForced(32, 32, true);
+        f.body.teleportTo(512.5D, 80.0D, 512.5D);
+        f.body.setDeltaMovement(Vec3.ZERO);
+        f.body.fallDistance = 0.0F;
+        f.body.setOnGround(true);
+        f.owner.teleportTo(512.5D, 80.0D, 510.5D);
         BlockPos origin = f.body.blockPosition();
         BlockPos bed = origin.offset(5, 0, 0);
         for (int x = -2; x <= 7; x++) for (int z = -2; z <= 2; z++) {
@@ -750,15 +757,12 @@ public final class DailyActionForgeGameTests {
             template = "bastion/mobs/empty", timeoutTicks = 3000)
     public static void fishingUsesNaturalCastBiteReelAndLoot(GameTestHelper h) {
         Fixture f = fixture(h, "daily-fishing");
-        BlockPos water = f.body.blockPosition().offset(3, 0, 0);
-        for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
-            f.level.setBlockAndUpdate(water.offset(x, -2, z), Blocks.DIRT.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, -1, z), Blocks.WATER.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, 0, z), Blocks.WATER.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, 1, z), Blocks.AIR.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, 2, z), Blocks.AIR.defaultBlockState());
-        }
-        f.body.addItem(new ItemStack(Items.FISHING_ROD));
+        BlockPos water = prepareFishingPool(f, 776);
+        // Lure III keeps this real cast/bite/reel flow inside the GameTest time budget without
+        // fabricating a bite or loot. The isolated compact pool keeps the body on dry ground.
+        ItemStack rod = new ItemStack(Items.FISHING_ROD);
+        rod.enchant(Enchantments.FISHING_SPEED, 3);
+        f.body.addItem(rod);
         start(h, f, new SkillParameters("Fish", "minecraft:fishing_rod", 1, false, f.dimension(),
                 water.getX(), water.getY(), water.getZ(), "", "UP", "MAIN_HAND", "", null, null, "FISH", 2400));
         h.assertTrue(f.registry.runtimeSnapshots(false).stream().anyMatch(s -> s.companionId().equals(f.companionId)),
@@ -790,14 +794,7 @@ public final class DailyActionForgeGameTests {
             template = "bastion/mobs/empty", timeoutTicks = 1400)
     public static void fishingRuntimeCancelReelsOnceAndCleansHook(GameTestHelper h) {
         Fixture f = fixture(h, "daily-fishing-cancel");
-        BlockPos water = f.body.blockPosition().offset(3, 0, 0);
-        for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
-            f.level.setBlockAndUpdate(water.offset(x, -2, z), Blocks.DIRT.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, -1, z), Blocks.WATER.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, 0, z), Blocks.WATER.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, 1, z), Blocks.AIR.defaultBlockState());
-            f.level.setBlockAndUpdate(water.offset(x, 2, z), Blocks.AIR.defaultBlockState());
-        }
+        BlockPos water = prepareFishingPool(f, 808);
         f.body.addItem(new ItemStack(Items.FISHING_ROD));
         int fishBefore = fishCount(f.body);
         start(h, f, new SkillParameters("Fish", "minecraft:fishing_rod", 1, false, f.dimension(),
@@ -979,6 +976,16 @@ public final class DailyActionForgeGameTests {
         h.assertTrue(registry.create(owner, name).success(), "companion create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         h.assertTrue(body != null, "daily body was not spawned");
+        BlockPos safeSpawn = body.blockPosition();
+        body.serverLevel().setBlockAndUpdate(safeSpawn.below(), Blocks.STONE.defaultBlockState());
+        for (int y = 0; y <= 2; y++) {
+            body.serverLevel().setBlockAndUpdate(safeSpawn.above(y), Blocks.AIR.defaultBlockState());
+        }
+        body.setDeltaMovement(Vec3.ZERO);
+        body.clearFire();
+        body.setAirSupply(body.getMaxAirSupply());
+        body.fallDistance = 0.0F;
+        body.setOnGround(true);
         String id = registry.runtimeSnapshots(false).stream()
                 .filter(s -> s.ownerId().equals(owner.getUUID().toString()))
                 .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
@@ -1079,6 +1086,32 @@ public final class DailyActionForgeGameTests {
             f.level.setBlockAndUpdate(water.offset(x, -1, z), Blocks.STONE.defaultBlockState());
             f.level.setBlockAndUpdate(water.offset(x, -2, z), Blocks.STONE.defaultBlockState());
         }
+        f.level.setChunkForced(water.getX() >> 4, water.getZ() >> 4, false);
+    }
+
+    private static BlockPos prepareFishingPool(Fixture f, int coordinate) {
+        f.level.setChunkForced(coordinate >> 4, coordinate >> 4, true);
+        f.body.teleportTo(coordinate + 0.5D, 80.0D, coordinate + 0.5D);
+        f.owner.teleportTo(coordinate + 0.5D, 80.0D, coordinate - 2.5D);
+        f.body.setDeltaMovement(Vec3.ZERO);
+        f.body.clearFire();
+        f.body.setAirSupply(f.body.getMaxAirSupply());
+        f.body.fallDistance = 0.0F;
+        f.body.setOnGround(true);
+        BlockPos origin = f.body.blockPosition();
+        for (int x = -3; x <= 7; x++) for (int z = -4; z <= 4; z++) {
+            f.level.setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+            for (int y = 0; y <= 3; y++) {
+                f.level.setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+            }
+        }
+        BlockPos water = origin.offset(3, 0, 0);
+        for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
+            f.level.setBlockAndUpdate(water.offset(x, -2, z), Blocks.DIRT.defaultBlockState());
+            f.level.setBlockAndUpdate(water.offset(x, -1, z), Blocks.WATER.defaultBlockState());
+            f.level.setBlockAndUpdate(water.offset(x, 0, z), Blocks.WATER.defaultBlockState());
+        }
+        return water;
     }
 
     private static int fishCount(CompanionPlayer body) {

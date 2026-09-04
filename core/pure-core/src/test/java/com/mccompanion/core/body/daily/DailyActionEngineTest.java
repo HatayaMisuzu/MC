@@ -409,7 +409,8 @@ final class DailyActionEngineTest {
                 phase == DailyActionPhase.SCAN_CROP || changed, phase == DailyActionPhase.HARVEST_CROP
                         || phase == DailyActionPhase.PICKUP_CROP || phase == DailyActionPhase.REPLANT_CROP || phase == DailyActionPhase.VERIFY_CROP,
                 phase == DailyActionPhase.PICKUP_CROP || phase == DailyActionPhase.REPLANT_CROP || phase == DailyActionPhase.VERIFY_CROP,
-                phase == DailyActionPhase.REPLANT_CROP || phase == DailyActionPhase.VERIFY_CROP, 0, "minecraft:wheat_seeds", 1) : null;
+                phase == DailyActionPhase.REPLANT_CROP || phase == DailyActionPhase.VERIFY_CROP,
+                phase == DailyActionPhase.VERIFY_CROP ? 1 : 0, "minecraft:wheat_seeds", 1) : null;
         java.util.UUID firstAnimal = java.util.UUID.nameUUIDFromBytes("a".getBytes());
         java.util.UUID secondAnimal = java.util.UUID.nameUUIDFromBytes("b".getBytes());
         DailyActionSnapshot.BreedFact breed = changed && request.kind() == DailyActionKind.BREED_ANIMALS

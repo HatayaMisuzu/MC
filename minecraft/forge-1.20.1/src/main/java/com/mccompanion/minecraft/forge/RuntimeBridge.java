@@ -63,6 +63,7 @@ final class RuntimeBridge implements AutoCloseable {
     private final AtomicBoolean connecting = new AtomicBoolean();
     private final ConnectionEpochGate<WebSocket> connections = new ConnectionEpochGate<>();
     private final Map<String, String> observedBehaviorStates = new ConcurrentHashMap<>();
+    private final java.util.Set<String> announcedCompanions = ConcurrentHashMap.newKeySet();
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
     private final Map<String, Long> pendingPlayerRequestTimes = new ConcurrentHashMap<>();
     private final Map<UUID, Long> playerRequestTimes = new ConcurrentHashMap<>();
@@ -235,6 +236,7 @@ final class RuntimeBridge implements AutoCloseable {
                 closeSocket(1008, "handshake rejected");
                 return;
             }
+            announcedCompanions.clear();
             sessionId = message.path("sessionId").asText();
             outgoingSequence.set(0);
             server.execute(() -> {
@@ -595,6 +597,9 @@ final class RuntimeBridge implements AutoCloseable {
     /** Runs on the Minecraft server thread and observes only bounded areas around live bodies. */
     void tick() {
         if (closed || socket == null || sessionId == null || server.getTickCount() % 5 != 0) return;
+        // Register new/reconnected Bodies before their first authenticated event.
+        if (registry.runtimeSnapshots(false).stream().anyMatch(snapshot ->
+                !announcedCompanions.contains(snapshot.companionId()))) publishStatusOnServerThread();
         java.util.Set<String> observedCompanions = new java.util.HashSet<>();
         Instant observedAt = Instant.now();
         for (CompanionRegistry.EntityEventBinding binding : registry.entityEventBindings()) {
@@ -703,7 +708,8 @@ final class RuntimeBridge implements AutoCloseable {
     private void publishStatusOnServerThread() {
         if (socket == null || sessionId == null) return;
         ArrayNode companions = JSON.createArrayNode();
-        for (CompanionRegistry.RuntimeSnapshot snapshot : registry.runtimeSnapshots(true)) {
+        var snapshots = registry.runtimeSnapshots(true);
+        for (CompanionRegistry.RuntimeSnapshot snapshot : snapshots) {
             boolean activeBehavior =
                     snapshot.behaviorId() != null && !snapshot.behaviorState().equalsIgnoreCase("IDLE");
             ObjectNode status = companions.addObject()
@@ -759,11 +765,15 @@ final class RuntimeBridge implements AutoCloseable {
                 status.put("behaviorId", snapshot.behaviorId());
                 status.put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT));
             }
-            if (snapshot.behaviorId() != null) publishObservedLifecycle(snapshot);
         }
         ObjectNode payload = JSON.createObjectNode();
         payload.set("companions", companions);
         sendEnvelope("companion_list", payload);
+        announcedCompanions.clear();
+        for (CompanionRegistry.RuntimeSnapshot snapshot : snapshots) {
+            announcedCompanions.add(snapshot.companionId());
+            if (snapshot.behaviorId() != null) publishObservedLifecycle(snapshot);
+        }
     }
 
     private void publishObservedLifecycle(CompanionRegistry.RuntimeSnapshot snapshot) {
@@ -959,6 +969,7 @@ final class RuntimeBridge implements AutoCloseable {
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
+        announcedCompanions.clear();
         entityEvents.clear();
         survivalEvents.clear();
         if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
@@ -1069,6 +1080,7 @@ final class RuntimeBridge implements AutoCloseable {
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
+        announcedCompanions.clear();
         entityEvents.clear();
         survivalEvents.clear();
         executor.shutdownNow();

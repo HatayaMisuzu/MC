@@ -12,6 +12,7 @@ $ascii = [Text.Encoding]::ASCII
 $sessions = @{}
 $taskIds = @{}
 $nextSession = 0
+$requestChars = 0
 
 function Find-HeaderEnd([byte[]]$bytes) {
     for ($index = 0; $index -le $bytes.Length - 4; $index++) {
@@ -167,6 +168,8 @@ try {
         try {
             $stream = $client.GetStream()
             $http = Read-HttpRequest $stream
+            $requestChars += $http.body.Length
+            Write-Output "Hermes REPLAY request chars=$($http.body.Length) aggregateChars=$requestChars"
             $request = if ($http.body) { $http.body | ConvertFrom-Json } else { $null }
             if ($http.path -eq '/health') {
                 $response = @{ status = 'ok' }

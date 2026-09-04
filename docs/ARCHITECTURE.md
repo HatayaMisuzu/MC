@@ -1,6 +1,6 @@
 # MCAC architecture
 
-Updated: 2026-07-16
+Updated: 2026-09-04
 
 ## Authority boundary
 
@@ -41,6 +41,13 @@ verified observations. It cannot invent an open-ended goal, choose a high-level 
 a competing personality/plan, or modify production source.
 
 ## Runtime and body layers
+
+The [developer guide](developer/README.md#shared-code-and-version-bindings) maps the existing shared,
+Minecraft-version and Loader source boundaries. Deterministic daily actions, navigation, entity
+interaction, building and combat policy are shared where their contracts are identical; vanilla
+API differences stay in the two version bindings. The [World Model](WORLD_MODEL.md) is a bounded,
+invalidatable projection, and [event replanning](EVENT_DRIVEN_REPLAN.md) can revise only the remaining
+work of an existing externally authored goal.
 
 ```text
 External Brain adapters

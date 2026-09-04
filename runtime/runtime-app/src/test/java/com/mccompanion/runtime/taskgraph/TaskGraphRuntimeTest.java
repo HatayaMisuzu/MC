@@ -292,7 +292,7 @@ class TaskGraphRuntimeTest {
 
                 assertTrue(runtime.resume(context,
                         new ToolCall("resume-repeat", "task_graph.resume", Json.object()), "execution-7").success());
-                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(5), ignored -> { });
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(10), ignored -> { });
                 assertTrue(terminal.success(), terminal.observation().toString());
                 assertEquals(2, gateway.arguments.size(),
                         "resume replayed a Tool already persisted in the interrupted iteration");

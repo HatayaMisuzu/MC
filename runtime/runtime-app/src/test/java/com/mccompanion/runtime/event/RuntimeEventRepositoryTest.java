@@ -19,6 +19,24 @@ final class RuntimeEventRepositoryTest {
     @TempDir Path temporary;
 
     @Test
+    void failedDeliveryStopsAfterThreeAttemptsAndDoesNotReturnAfterRestart() throws Exception {
+        MutableClock clock = new MutableClock(Instant.parse("2026-08-26T00:00:00Z"));
+        try (RuntimeDatabase database = database("failed-delivery.db")) {
+            RuntimeEventRepository repository = new RuntimeEventRepository(database, clock, 8);
+            repository.admit(event("failed", "failed", null, null, RuntimeEvent.Priority.CRITICAL, clock),
+                    RuntimeEvent.AdmissionPolicy.immediate());
+            for (int attempt = 0; attempt < 3; attempt++) {
+                assertEquals("failed", repository.claimReady().orElseThrow().eventId());
+                repository.retryFailed("failed", Duration.ofSeconds(1));
+                clock.advance(Duration.ofSeconds(1));
+            }
+            assertTrue(repository.claimReady().isEmpty());
+            assertEquals(0, repository.recoverInterrupted());
+            assertEquals(0, repository.pendingCount("companion"));
+        }
+    }
+
+    @Test
     void deduplicatesAndRejectsAlreadyStaleEvents() throws Exception {
         MutableClock clock = new MutableClock(Instant.parse("2026-08-26T00:00:00Z"));
         try (RuntimeDatabase database = database("dedup.db")) {

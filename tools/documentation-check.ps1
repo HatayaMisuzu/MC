@@ -207,7 +207,7 @@ foreach ($relative in $supportDocs) {
 }
 
 $matrixHead = ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root 'docs/RC_COMPLETION_MATRIX.md') |
-    Select-Object -First 35) -join "`n")
+    Select-Object -First 80) -join "`n")
 foreach ($requiredText in @(
     'Overall status: `HUMAN_PLAYTEST_PENDING`', 'Automated productization baseline: `FROZEN`',
     'Product version: `0.3.1`', 'mcac-productization-baseline-0.3.0',

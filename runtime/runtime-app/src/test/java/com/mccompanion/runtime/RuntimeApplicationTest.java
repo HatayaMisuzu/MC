@@ -1430,14 +1430,7 @@ class RuntimeApplicationTest {
             JsonNode inspectedGraph = awaitTaskGraphState(http, mcpRequest, executionId, "SUCCEEDED");
             assertEquals("SUCCEEDED", inspectedGraph.path("state").asText(), inspectedGraph.toString());
             assertEquals("Yes", inspectedGraph.path("value").asText());
-            client.send("""
-                    {"type":"companion_status","sessionId":"%s","sequence":3,"payload":{
-                      "companionId":"graph-companion","ownerId":"owner-1","displayName":"Graph Companion",
-                      "worldId":"graph-world","dimension":"minecraft:overworld",
-                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
-                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
-                      "capabilities":{},"observedAt":"%s"}}
-                    """.formatted(sessionId, Instant.now()));
+            // Completion feedback must arrive without another Body status packet or Brain turn.
             client.awaitConversationReplies(List.of(
                     "Task started.", "Continue?", "Task resumed.", "Task completed."), 5);
             URI graphManagement = new URI("http://127.0.0.1:" + config.server.managementPort
@@ -1506,7 +1499,13 @@ class RuntimeApplicationTest {
                     HttpResponse.BodyHandlers.ofString());
             latestBody = inspected.body();
             latest = Json.parse(latestBody).path("result").path("structuredContent").path("observation");
-            if (expectedState.equals(latest.path("state").asText())) return latest;
+            String state = latest.path("state").asText();
+            // WAITING is persisted before its durable user question is materialized. Answer only
+            // after that actual question exists, just as a user waits to receive the prompt.
+            if (expectedState.equals(state) && (!state.equals("WAITING")
+                    || latest.path("waitingQuestion").hasNonNull("questionId"))) return latest;
+            assertFalse(java.util.Set.of("FAILED", "CANCELLED", "RECONCILIATION_REQUIRED", "PAUSED")
+                    .contains(state), "Task Graph stopped before " + expectedState + ": " + latestBody);
             Thread.sleep(20);
         }
         fail("Task Graph did not reach " + expectedState + "; latest=" + latestBody);

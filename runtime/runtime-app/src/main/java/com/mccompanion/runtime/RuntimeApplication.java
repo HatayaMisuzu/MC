@@ -225,7 +225,18 @@ public final class RuntimeApplication implements AutoCloseable {
             runtimeEvents = new RuntimeEventService(new RuntimeEventRepository(database));
             runtimeEvents.attachWorldModel(companions);
             commands.setTaskLifecycleListener(runtimeEvents);
-            taskGraphRuntime.setLifecycleListener(runtimeEvents);
+            RuntimeEventService graphEvents = runtimeEvents;
+            taskGraphRuntime.setLifecycleListener((record, transition, details) -> {
+                graphEvents.onLifecycle(record, transition, details);
+                // PROGRESS/CHECKPOINT update the World Model but do not append lifecycle feedback.
+                // Avoid doing synchronous conversation delivery on the graph worker's hot path.
+                if (switch (transition) {
+                    case "STARTED", "PAUSED", "RESUMED", "CANCELLED", "SUCCEEDED", "FAILED" -> true;
+                    default -> false;
+                }) {
+                    conversations.deliverPending(record.companionId());
+                }
+            });
             minecraftTools.attachTaskGraphRuntime(taskGraphRuntime);
             skillTools.attachTaskGraphRuntime(taskGraphRuntime);
             externalBrain = brainOverride == null

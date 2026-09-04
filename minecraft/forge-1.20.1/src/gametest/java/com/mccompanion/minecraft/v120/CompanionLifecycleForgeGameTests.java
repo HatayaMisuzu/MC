@@ -1919,38 +1919,6 @@ public final class CompanionLifecycleForgeGameTests {
         // test fixture's residual vanilla physics before the independent movement assertion.
         body.setDeltaMovement(Vec3.ZERO);
         body.fallDistance = 0.0F;
-        if (Boolean.getBoolean("mccompanion.runtime.e2e")) {
-            long runtimeCommandBaseline = registry.runtimeCommandCount();
-            LOGGER.info("forge_runtime_e2e_ready companion={}", companionId);
-            helper.succeedWhen(() -> {
-                CompanionRegistry.RuntimeSnapshot runtimeSnapshot = registry.runtimeSnapshots(true).stream()
-                        .filter(snapshot -> snapshot.companionId().equals(companionId))
-                        .findFirst()
-                        .orElseThrow();
-                helper.assertTrue(
-                        registry.runtimeCommandCount() >= runtimeCommandBaseline + 6
-                                && runtimeSnapshot.behaviorId() == null
-                                && runtimeSnapshot.behaviorState().equals("IDLE"),
-                        "waiting for Runtime start/pause/resume/cancel lifecycle");
-                CompanionCommands.TextRequestResult playerRequest =
-                        MinecraftAiCompanionForge.integrationSubmitPlayerText(
-                                owner,
-                                "report current status");
-                helper.assertTrue(
-                        playerRequest.accepted(),
-                        "authenticated player request was not accepted: " + playerRequest.message());
-                MinecraftAiCompanionForge.integrationSubmitOwnerBlockActivity(
-                        owner,
-                        owner.blockPosition(),
-                        "BLOCK_USE");
-                LOGGER.info("forge_runtime_e2e_player_and_owner_activity_sent companion={}", companionId);
-                helper.assertTrue(registry.remove(owner).success(), "Runtime E2E cleanup failed");
-                helper.getLevel().getServer().getPlayerList().remove(owner);
-                ownerConnection.disconnect(Component.literal("Forge Runtime E2E complete"));
-            });
-            return;
-        }
-
         helper.runAfterDelay(220, () -> {
             // The navigation arena extends far beyond the tiny vanilla empty template.
             // Move both test participants to a separate Z corridor before building it so

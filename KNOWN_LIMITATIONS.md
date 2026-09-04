@@ -31,7 +31,18 @@ evidence must be attached to the exact Git or GitHub Actions SHA described by
 - Unknown Mod content is discovered through live Registry, recipe, Observation, and generic
   interaction primitives. Compatibility with every third-party menu or mechanic is not guaranteed.
 - Navigation is bounded, deterministic body control with re-planning, stuck detection, unloaded
-  chunk boundaries, and safety costs. It does not break or place blocks to invent a route.
+  chunk boundaries, and safety costs. Ordinary navigation does not edit the world. The explicit
+  `movement.navigate_survival` Tool may break/place only within Brain-supplied allowlists and
+  budgets, with verified player-action effects; Runtime never invents the destination.
+- Small blueprints are bounded to 1..7 blocks per axis and 128 entries. Temporary supports are
+  limited, and arbitrary schematics or Mod mechanics are not implied. Daily actions with uncertain
+  side effects require explicit recovery after restart; a started trade/build is not verified success.
+- Event replanning preserves the original user goal and completed work, permits at most four
+  requests per execution and two provider deliveries per event, and remains visibly blocked when
+  effects cannot be reconciled. The World Model carries freshness/invalidation metadata and must
+  not be treated as an authoritative replacement for current world observations.
+- Event delivery failures stop after bounded attempts; exhausted Brain budgets stop immediately.
+  The event remains inspectable, but automatic replay after that boundary requires explicit recovery.
 - Production-duration multi-profile load and reconnect behavior still require field observation.
 - A general-purpose script VM is deliberately deferred; declarative Skills execute only through the
   typed, permission-bound Task Graph Runtime.

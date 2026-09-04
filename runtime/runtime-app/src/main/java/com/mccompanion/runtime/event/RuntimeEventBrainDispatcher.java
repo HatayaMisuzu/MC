@@ -28,7 +28,8 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
         if (brain == null) return RuntimeEventService.DispatchResult.DEFERRED;
         // Graph event deduplication MUST precede interruption. A delayed failure from the old epoch
         // must not pause the freshly resumed graph before it is recognized as stale.
-        if (event.priority() == RuntimeEvent.Priority.CRITICAL && !brain.graphOwnsEvent(CONTROLLER_ID, event)) {
+        boolean graphOwnsEvent = brain.graphOwnsEvent(CONTROLLER_ID, event);
+        if (event.priority() == RuntimeEvent.Priority.CRITICAL && !graphOwnsEvent) {
             brain.pauseActiveForCriticalEvent(CONTROLLER_ID, event.companionId(), event.eventType());
         }
         BrainContextAssembler.Prepared prepared;
@@ -40,7 +41,11 @@ public final class RuntimeEventBrainDispatcher implements RuntimeEventService.Di
             }
             throw missing;
         }
-        if (prepared.capabilities().availableNames().isEmpty()) return RuntimeEventService.DispatchResult.DEFERRED;
+        // Replanning needs the connected Body tool contract. An admitted critical notification
+        // outside a graph must still reach the Brain when the Body only publishes observations.
+        if (graphOwnsEvent && prepared.capabilities().availableNames().isEmpty()) {
+            return RuntimeEventService.DispatchResult.DEFERRED;
+        }
         var result = brain.continueEvent(CONTROLLER_ID, event, prepared.context());
         if (result.kind() == BrainTurnResult.Kind.FINAL_RESPONSE && !result.response().isBlank()) {
             var details = Json.object().put("source", "runtime-event")

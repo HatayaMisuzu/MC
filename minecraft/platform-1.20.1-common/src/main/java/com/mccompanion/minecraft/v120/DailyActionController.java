@@ -420,10 +420,12 @@ final class DailyActionController {
         BlockState state = level.getBlockState(pos);
         boolean isCrop = state.getBlock() instanceof CropBlock crop;
         int age = isCrop ? ((CropBlock) state.getBlock()).getAge(state) : -1;
+        boolean sameCrop = isCrop && facts.cropId.equals(
+                BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString());
         int harvested = Math.max(0, count(inventory, facts.harvestItem) - facts.harvestBefore);
         int seedConsumed = Math.max(0, facts.seedBeforeReplant - count(inventory, facts.seedItem));
         return new DailyActionSnapshot.CropFact(true, facts.activeTarget, false,
-                !isCrop, facts.pickedUp && harvested > 0, isCrop && age == 0,
+                !isCrop, facts.pickedUp && harvested > 0, facts.replantVerified && sameCrop,
                 age, facts.seedItem, harvested, facts.cropId, facts.harvestItem,
                 harvested, seedConsumed);
     }
@@ -661,6 +663,7 @@ final class DailyActionController {
         boolean firstFed;
         boolean secondFed;
         boolean pickedUp;
+        boolean replantVerified;
         double bestDistance = Double.MAX_VALUE;
 
         Facts(SkillParameters parameters, CompanionPlayer body, DailyActionRequest request) {
@@ -858,11 +861,30 @@ final class DailyActionController {
                 return DailyActionCommand.CommandResult.success();
             }
             if (cmd.action().equals("REPLANT_CROP")) {
-                Facts f=findFacts();String seedId=f==null?cmd.seedItem():f.seedItem;Item item = resolve(seedId);if(!body.serverLevel().getBlockState(pos.below()).is(Blocks.FARMLAND))return DailyActionCommand.CommandResult.rejected("FARMLAND_INVALID"); if (item == null || !ensureMainHand(item)) return DailyActionCommand.CommandResult.rejected("SEED_MISSING");if(f!=null)f.seedBeforeReplant=countItem(body,seedId);
+                Facts f = findFacts();
+                String seedId = f == null ? cmd.seedItem() : f.seedItem;
+                Item item = resolve(seedId);
+                if (!body.serverLevel().getBlockState(pos.below()).is(Blocks.FARMLAND)) {
+                    return DailyActionCommand.CommandResult.rejected("FARMLAND_INVALID");
+                }
+                if (item == null || !ensureMainHand(item)) {
+                    return DailyActionCommand.CommandResult.rejected("SEED_MISSING");
+                }
+                if (f != null) {
+                    f.seedBeforeReplant = countItem(body, seedId);
+                }
                 var result = body.gameMode.useItemOn(body, body.serverLevel(), body.getMainHandItem(), InteractionHand.MAIN_HAND,
                         new BlockHitResult(Vec3.atCenterOf(pos.below()), Direction.UP, pos.below(), false));
-                BlockState planted=body.serverLevel().getBlockState(pos);boolean verified=result.consumesAction()&&planted.getBlock() instanceof CropBlock plantedCrop&&plantedCrop.getAge(planted)==0;
-                gateway.markVanillaGameModeAction(body); return verified ? DailyActionCommand.CommandResult.success() : DailyActionCommand.CommandResult.uncertain("REPLANT_UNVERIFIED");
+                BlockState planted = body.serverLevel().getBlockState(pos);
+                boolean verified = result.consumesAction()
+                        && planted.getBlock() instanceof CropBlock plantedCrop
+                        && plantedCrop.getAge(planted) == 0;
+                if (verified && f != null) {
+                    f.replantVerified = true;
+                }
+                gateway.markVanillaGameModeAction(body);
+                return verified ? DailyActionCommand.CommandResult.success()
+                        : DailyActionCommand.CommandResult.uncertain("REPLANT_UNVERIFIED");
             }
             return DailyActionCommand.CommandResult.success();
         }

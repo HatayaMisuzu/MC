@@ -1,10 +1,10 @@
 allprojects {
     afterEvaluate { p ->
         if (p.name == 'minecraft-ai-companion-forge-1.20.1') {
-            p.sourceSets.main.java.setExcludes(p.sourceSets.main.java.excludes.findAll {
+            p.sourceSets.gameTest.java.setExcludes(p.sourceSets.gameTest.java.excludes.findAll {
                 it != '**/EventReplanForgeGameTests.java'
             })
-            p.sourceSets.main.java.exclude { d -> d.file.name.endsWith('GameTests.java') && d.file.name != 'EventReplanForgeGameTests.java' }
+            p.sourceSets.gameTest.java.exclude { d -> d.file.name.endsWith('GameTests.java') && d.file.name != 'EventReplanForgeGameTests.java' }
         }
         if (p.name == 'minecraft-ai-companion-fabric-1.21.1') {
             p.tasks.named('processGametestResources').configure {

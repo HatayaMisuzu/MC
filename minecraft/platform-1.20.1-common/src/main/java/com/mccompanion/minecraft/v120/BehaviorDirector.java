@@ -857,7 +857,13 @@ final class BehaviorDirector {
         MinecraftThreatRecovery recovery = threatRecoveries.get(entry.companionId);
         if (recovery == null) {
             MinecraftCombatController combat = combats.get(entry.companionId);
-            var decision = MinecraftThreatRecovery.decision(body, combat == null ? null : combat.identity.uuid(), seen);
+            UUID selectedTarget = combat == null ? null : combat.identity.uuid();
+            PrimitiveProgress primitive = primitives.get(entry.companionId);
+            if (selectedTarget == null && primitive != null && primitive.parameters.capability().equals("AttackEntity")) {
+                try { selectedTarget = UUID.fromString(primitive.parameters.targetId()); }
+                catch (IllegalArgumentException invalid) { /* The primitive reports its invalid argument. */ }
+            }
+            var decision = MinecraftThreatRecovery.decision(body, selectedTarget, seen);
             if (decision.action() == ThreatPolicy.Action.CONTINUE) return false;
             // Suspend existing executors, retaining their exact identity and progress. The durable
             // Runtime task stays RUNNING while this bounded Body operation is in progress.

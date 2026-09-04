@@ -20,6 +20,12 @@ recoverable events, not the emergency hazards above.
 World events bind through the exact persisted Body task command to the owning graph; they do not
 grant access to another companion/controller/session.
 
+Successful completion wakes only a Brain still waiting on that exact execution; other clients
+retain their durable receipt and conversation feedback without opening an unrelated Brain session.
+Failed event dispatch stops after at most three claimed attempts, and a permanent Brain budget
+failure stops immediately. Suppressed events remain inspectable; restoring a provider does not
+silently replay an exhausted event. This does not expand the graph's separate replanning budget.
+
 ## Request and tool contract
 
 Graphs started during an authenticated Brain user turn capture the original user text automatically.
@@ -106,5 +112,6 @@ Final current-code chains on 2026-09-03 passed Fabric 1.21.1 (1/1 GameTest) and 
 (2/2, including its unknown-Mod fixture). Both persisted `SUCCEEDED`, epoch 1, `RESUMED`, one replan,
 one collection receipt and one real diamond in the original chest. LIVE_PROVIDER and HUMAN_PLAYTEST
 were NOT_RUN. No subsequent execution file or release candidate was started.
-The Forge-only harness fixture is excluded from normal main-source compilation; the focused init
-script explicitly opts it in. Fabric registers it only in the focused GameTest descriptor.
+The Forge harness fixture lives in `src/gametest` and is excluded from the ordinary test run;
+the focused init script explicitly opts it in. Fabric registers it only in the focused GameTest
+descriptor. Neither Loader includes this fixture in its production JAR.

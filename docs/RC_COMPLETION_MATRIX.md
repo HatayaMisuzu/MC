@@ -16,6 +16,43 @@ Historical candidate SHAs and workflow run IDs below apply only to their named r
 
 ## Evidence scope
 
+### Current closeout evidence
+
+#### Eight-capability integration — 2026-09-04
+
+This closeout covers the existing eight enhancements on Fabric 1.21.1 and Forge 1.20.1.
+It does not widen the product scope, replace the frozen release, or inherit historical Live evidence.
+
+| Required combined scenario | Current local evidence |
+| --- | --- |
+| A. Follow a non-owner player | Both Loaders execute the same long corridor with water, a door, height changes, moving/stopped target, disconnect/rejoin of the same player identity, owner-defense interruption and restoration of the original follow behavior. |
+| B. Resource work | Both Runtime/Bridge replan harnesses mine one diamond, encounter an obstructed route, traverse a Brain-declared detour and deposit into the original chest. World Model harnesses verify stable identity, actual navigation and stale entity/container invalidation; Loader lifecycle tests retain real processing and delivery assertions. |
+| C. Daily actions | Both Loader suites cover equipment, sleep, buckets, crops, vehicles, fishing, trading, enchanting and brewing through actual player interactions and postconditions. |
+| D. Building and recovery | Both Runtime/Bridge threat harnesses withdraw seven cobblestone from a real chest, build two blocks, pause for low-health recovery, resume the same task and verify all seven placed blocks plus zero remaining material. Existing blueprint suites retain larger structure, obstruction, support and restoration cases. |
+| E. Combat and safety | Both Loader suites cover Zombie, Skeleton, Creeper, multiple threats, shield/bow behavior and retreat/recovery. Explicit primitive attack targets now share the selected-target safety semantics while low health, explosives and multiple hostiles still preempt. |
+| F. Event-driven replan | Both real Minecraft/Runtime chains complete the original diamond objective after one pause/replan/resume at epoch 1, without collecting a second diamond or replaying completed work. |
+
+These are `REAL_MINECRAFT_GAMETEST` and `RUNTIME / BRIDGE INTEGRATION` results with
+deterministic external-Brain `REPLAY` where applicable. `LIVE_PROVIDER=NOT_RUN` and
+`HUMAN_PLAYTEST=NOT_RUN` for this enhancement closeout. Fixture arena construction and event
+injection are test setup; Body actions and final world/inventory effects are real Minecraft execution.
+
+Integration fixes also order durable graph feedback before delivery, register reconnected Bodies
+before event publication, avoid opening Brain sessions for unrelated completed client work and
+bound failed event dispatch. Progress/checkpoint updates no longer block Task Graph controls on
+synchronous conversation delivery; the packaged bilingual browser path verifies pause, resume and
+cancel against the real Runtime backend. Forge test classes are excluded from product JARs without
+a Java module split package. NeoForge compiles the existing shared bindings and remains `LOCAL_ONLY`.
+The shared/version/Loader responsibilities are documented in `docs/developer/README.md`.
+
+Final local closeout on 2026-09-04 passed the root check, all three platform builds and dedicated
+server launches, Fabric 1.21.1 GameTest 81/81, Forge 1.20.1 GameTest 58/58 and NeoForge 1.21.1
+LOCAL_ONLY GameTest 1/1. Release-package verification, arbitrary-working-directory TUI and launcher
+checks, Unicode/space-path Windows artifact checks, clean-extraction bilingual browser golden path
+and isolated multi-profile Runtime checks also passed. Earlier focused Runtime/Bridge REPLAY chains
+cover World Model, persistence/restart, combat/recovery and event-driven replanning on the two Full
+Bridge targets; these remain `RUNTIME / BRIDGE INTEGRATION`, not Live-provider or human evidence.
+
 ### Historical live evidence
 
 On 2026-08-01, a disposable PCL + Forge 1.20.1 + Runtime + Hermes + official
@@ -24,7 +61,7 @@ Navigate position change, safe idle, and reconnect. It is retained as historical
 not reused as current 2026-08-02 proof. This bounded result does not establish Fabric, other-provider,
 broad Tool/terrain, or sustained subjective human-play coverage.
 
-### Current closeout evidence
+### Historical frozen-release closeout evidence
 
 The newly built Forge artifact was formally installed into
 the real PCL Forge 1.20.1 instance and its SHA-256 matched the build. Forge startup established the
@@ -180,6 +217,10 @@ Feature 5 final validation also ran the broader pure-core suite: 137/139 passed.
 the unchanged starting commit `bb48c72` in an isolated checkout. They are pre-existing,
 not counted as passing, and were not changed by the bounded blueprint feature. All eight
 new blueprint unit tests and all 17 RuntimeToolGateway tests passed.
+
+The 2026-09-04 project closeout resolved those two historical navigation test failures: the fake
+movement port now agrees with the shared planner's traversability rules. Both original assertions
+and the complete 149-test pure-core suite pass; production navigation was not weakened.
 
 | Module | Status | Implementation evidence | Test evidence | Remaining gap |
 |---|---|---|---|---|

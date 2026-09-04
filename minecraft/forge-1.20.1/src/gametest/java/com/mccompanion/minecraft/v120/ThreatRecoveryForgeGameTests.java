@@ -41,7 +41,14 @@ public final class ThreatRecoveryForgeGameTests {
             var plan = new SmallBlueprint(new SmallBlueprint.Anchor(f.body.serverLevel().dimension().location().toString(),
                     anchor.getX(), anchor.getY(), anchor.getZ()), new SmallBlueprint.Size(7, 1, 1), blocks,
                     new SmallBlueprint.SupportPolicy(java.util.List.of(), 0, false));
-            f.body.addItem(new ItemStack(Items.COBBLESTONE, 7));
+            if (Boolean.getBoolean("mccompanion.threat.e2e")) {
+                var supply = f.origin.offset(0, 0, 3);
+                f.body.serverLevel().setBlockAndUpdate(supply, Blocks.CHEST.defaultBlockState());
+                ((net.minecraft.world.Container) f.body.serverLevel().getBlockEntity(supply))
+                        .setItem(0, new ItemStack(Items.COBBLESTONE, 7));
+            } else {
+                f.body.addItem(new ItemStack(Items.COBBLESTONE, 7));
+            }
             f.body.getInventory().setItem(15, new ItemStack(Items.COOKED_BEEF, 4));
             f.body.getFoodData().setFoodLevel(10);
             f.body.getFoodData().setSaturation(0);

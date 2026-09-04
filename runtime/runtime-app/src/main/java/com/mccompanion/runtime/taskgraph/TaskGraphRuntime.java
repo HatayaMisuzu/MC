@@ -1200,8 +1200,10 @@ public final class TaskGraphRuntime implements AutoCloseable {
         JsonNode details = Json.object().put("source", "TASK_GRAPH_RUNTIME")
                 .put("executionId", record.executionId()).put("state", record.state())
                 .put("transition", transition).put("reasonCode", reasonCode);
-        notifyEventListener(record, transition, details);
-        if (conversations == null) return true;
+        if (conversations == null) {
+            notifyEventListener(record, transition, details);
+            return true;
+        }
         String message = switch (transition) {
             case "STARTED" -> "Task started.";
             case "PAUSED" -> "Task paused. Use the Terminal to resume or cancel.";
@@ -1216,6 +1218,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
         try {
             conversations.appendOnce(eventId, record.companionId(), null, null,
                     "ASSISTANT", "TASK_GRAPH_LIFECYCLE", message, details);
+            // Observers may immediately deliver the outbox, so publish only after feedback is durable.
+            notifyEventListener(record, transition, details);
             return conversations.eventExists(eventId);
         } catch (SQLException | RuntimeException failure) {
             LOGGER.warn("Unable to enqueue Task Graph lifecycle feedback: execution={} transition={}",

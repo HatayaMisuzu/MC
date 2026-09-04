@@ -1,6 +1,6 @@
 # MCAC product status
 
-Updated: 2026-08-10
+Updated: 2026-09-04
 
 MCAC 0.3.1 is the released repair baseline for the frozen automated productization scope.
 Its current readiness is `HUMAN_PLAYTEST_PENDING`. One bounded live-provider vertical slice is now
@@ -14,6 +14,13 @@ exact-SHA verification; its stable scope and SHA authorities are in
 "Released" here means the frozen automated baseline was published as the annotated tag and GitHub
 Release `mcac-productization-baseline-0.3.1`. The frozen release remains immutable; current `main`
 contains post-release reliability work and evidence updates.
+
+The current development line also integrates eight bounded gameplay enhancements: daily actions,
+survival navigation, durable events, arbitrary entity interaction, small blueprint construction,
+combat recovery, a persisted [World Model](WORLD_MODEL.md), and
+[event-driven replanning](EVENT_DRIVEN_REPLAN.md). These reuse the existing Runtime/Body boundaries
+on the two Full Bridge targets. Their local automated evidence is recorded separately from the
+immutable release and does not inherit its historical Live-provider result.
 
 On 2026-08-01, a disposable PCL + Forge 1.20.1 instance completed a real Runtime + Hermes + official
 DeepSeek API vertical slice. Sanitized evidence verifies handshake, recovery, world-state reading,

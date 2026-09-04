@@ -3,10 +3,8 @@ package com.mccompanion.core.body.daily.navigation;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.mccompanion.core.navigation.GridPathPlanner;
 import java.util.HashSet;
 import java.util.Set;
-import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 final class DailyNavigatorTest {
@@ -153,7 +151,7 @@ final class DailyNavigatorTest {
         @Override public Vec currentPosition() { return point.center(); }
         @Override public String worldKey() { return world; }
         @Override public boolean traversable(NavPoint from, NavPoint to) {
-            return from.manhattanDistance(to) == 1 && !blocked.contains(to);
+            return from.y() == to.y() && from.manhattanDistance(to) == 1 && !blocked.contains(to);
         }
         @Override public boolean openDoor(NavPoint next) { openedDoors++; return true; }
         @Override public void applyMove(Vec direction, boolean jump) {
@@ -165,16 +163,5 @@ final class DailyNavigatorTest {
             moves++;
         }
         @Override public void stop() { stopped = true; }
-        @Override public GridPathPlanner.Plan plan(NavPoint from, NavPoint target) {
-            return GridPathPlanner.plan(from.plannerPoint(), target.plannerPoint(),
-                    new GridPathPlanner.Environment() {
-                        @Override public boolean loaded(GridPathPlanner.Point candidate) { return true; }
-                        @Override public GridPathPlanner.Traversal traversal(GridPathPlanner.Point fromPoint, GridPathPlanner.Point to) {
-                            return fromPoint.y() != to.y() || blocked.contains(NavPoint.from(to))
-                                    ? GridPathPlanner.Traversal.blocked()
-                                    : GridPathPlanner.Traversal.passable(1);
-                        }
-                    });
-        }
     }
 }

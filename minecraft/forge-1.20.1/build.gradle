@@ -23,6 +23,11 @@ sourceSets.main.java.srcDir('../body-common/src/main/java')
 sourceSets.main.resources.srcDir('../platform-common/src/main/resources')
 sourceSets.main.resources.srcDir('src/generated/resources')
 sourceSets {
+    gameTest {
+        java.setSrcDirs(['src/gametest/java'])
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
     gameTestMod {
         java.setSrcDirs(['src/gametestmod/java'])
         resources.setSrcDirs(['src/gametestmod/resources'])
@@ -48,6 +53,7 @@ tasks.register('resolveAndLockAll') {
 legacyForge {
     version = "${project.minecraft_version}-${project.forge_version}"
     addModdingDependenciesTo sourceSets.gameTestMod
+    addModdingDependenciesTo sourceSets.gameTest
 
     parchment {
         mappingsVersion = project.parchment_mappings_version
@@ -75,6 +81,9 @@ legacyForge {
     mods {
         "${mod_id}" {
             sourceSet(sourceSets.main)
+            // Package-private Body fixtures must share the product module in development,
+            // while remaining outside sourceSets.main and the distributed JAR.
+            sourceSet(sourceSets.gameTest)
         }
         mcac_unknown_fixture {
             sourceSet(sourceSets.gameTestMod)
@@ -86,6 +95,7 @@ dependencies {
     implementation "com.mccompanion:pure-core:${mod_version}"
     implementation "com.mccompanion:protocol-model:${mod_version}"
     gameTestModImplementation sourceSets.main.output
+    gameTestImplementation sourceSets.main.output
 }
 
 def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
@@ -109,8 +119,15 @@ def generateModMetadata = tasks.register('generateModMetadata', ProcessResources
 }
 
 sourceSets.main.resources.srcDir generateModMetadata
-// This fixture requires an external Runtime; the focused event-replan init script opts it in.
-sourceSets.main.java.exclude '**/EventReplanForgeGameTests.java'
+if (project.hasProperty('mccompanionRuntimeE2E')) {
+    // The Runtime bridge boundary has its own deterministic GameTest. Do not make this short
+    // integration task wait for every unrelated Loader behavior fixture.
+    sourceSets.gameTest.java.setIncludes(['**/RuntimeBridgeForgeGameTests.java'])
+} else {
+    // These fixtures require an external Runtime; their focused harnesses opt them in.
+    sourceSets.gameTest.java.exclude '**/EventReplanForgeGameTests.java',
+            '**/WorldModelForgeGameTests.java', '**/RuntimeBridgeForgeGameTests.java'
+}
 legacyForge.ideSyncTask generateModMetadata
 
 tasks.withType(JavaCompile).configureEach {
@@ -155,6 +172,9 @@ def verifyRuntimeBridgeArtifact = tasks.register('verifyRuntimeBridgeArtifact') 
                 throw new GradleException("Production Forge JAR has invalid 1.20.1 pack.mcmeta: ${artifact}")
             }
             zip.entries().each { entry ->
+                if (entry.name ==~ /.*GameTests(\$.*)?\.class/ || entry.name.contains('mcac_unknown_fixture')) {
+                    throw new GradleException("Production Forge JAR contains a GameTest fixture: ${entry.name}")
+                }
                 if (entry.name.startsWith('META-INF/jarjar/') && entry.name.toLowerCase().contains('jackson')) {
                     throw new GradleException("Production Forge JAR still embeds Jackson: ${entry.name}")
                 }

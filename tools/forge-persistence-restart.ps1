@@ -2,6 +2,8 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+$offlineArguments = @()
+if ($env:MCAC_TEST_OFFLINE -eq '1') { $offlineArguments += '--offline' }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $forge = Join-Path $root 'minecraft\forge-1.20.1'
 $runDirectory = Join-Path $forge 'build\launch-test\server'
@@ -17,7 +19,7 @@ New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 Push-Location $forge
 try {
     $ErrorActionPreference = 'Continue'
-    $seed = & '.\gradlew.bat' runServer -PmccompanionPersistenceProbe=seed --no-daemon 2>&1
+    $seed = & '.\gradlew.bat' runServer -PmccompanionPersistenceProbe=seed --no-daemon --no-parallel @offlineArguments 2>&1
     $seedExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $seed | Set-Content -LiteralPath (Join-Path $evidence 'seed-and-stop.log') -Encoding UTF8
@@ -26,7 +28,7 @@ try {
     }
 
     $ErrorActionPreference = 'Continue'
-    $verify = & '.\gradlew.bat' runServer -PmccompanionPersistenceProbe=verify --no-daemon 2>&1
+    $verify = & '.\gradlew.bat' runServer -PmccompanionPersistenceProbe=verify --no-daemon --no-parallel @offlineArguments 2>&1
     $verifyExit = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $verify | Set-Content -LiteralPath (Join-Path $evidence 'restart-and-verify.log') -Encoding UTF8

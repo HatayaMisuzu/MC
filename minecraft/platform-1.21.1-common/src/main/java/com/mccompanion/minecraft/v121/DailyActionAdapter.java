@@ -1068,12 +1068,14 @@ final class DailyActionAdapter implements DailyActionEngine.Adapter {
             BlockState current = body.serverLevel().getBlockState(block(cropRun.target()));
             boolean cropBlock = current.getBlock() instanceof CropBlock;
             int age = cropBlock ? ((CropBlock) current.getBlock()).getAge(current) : -1;
+            boolean sameCrop = cropBlock && cropRun.cropId().equals(
+                    BuiltInRegistries.BLOCK.getKey(current.getBlock()).toString());
             int harvestedCount = Math.max(0, countId(cropRun.harvestItem()) - cropRun.harvestBefore());
             int seedConsumed = Math.max(0, cropSeedBeforeReplant.getOrDefault(body.getUUID(),
                     countId(cropRun.seedItem())) - countId(cropRun.seedItem()));
             boolean harvested = cropState != null && cropState[0] > 0 && !cropBlock;
             boolean pickedUp = cropState != null && cropState[1] > 0 && harvestedCount > 0;
-            boolean replanted = cropState != null && cropState[2] > 0 && cropBlock && age == 0;
+            boolean replanted = cropState != null && cropState[2] > 0 && sameCrop;
             crop = new DailyActionSnapshot.CropFact(true, cropRun.target(), false,
                     harvested, pickedUp, replanted, age, cropRun.seedItem(), harvestedCount,
                     cropRun.cropId(), cropRun.harvestItem(), harvestedCount, seedConsumed);

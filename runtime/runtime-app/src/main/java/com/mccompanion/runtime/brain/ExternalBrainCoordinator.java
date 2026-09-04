@@ -88,6 +88,18 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
         Object lock = companionLocks.computeIfAbsent(event.companionId(), ignored -> new Object());
         synchronized (lock) {
+            boolean completed = event.eventType().equals("TASK_COMPLETED")
+                    || event.eventType().equals("TASK_GRAPH_TERMINAL")
+                        && event.payload().path("state").asText().equals("SUCCEEDED");
+            // Completed MCP/local work already has a durable receipt. Wake only the Brain
+            // actually waiting on that execution, rather than opening an unrelated session.
+            if (completed && activeFor(event.companionId()).stream().noneMatch(active ->
+                    active.handle() != null && controllerId.equals(active.context().controllerId())
+                    && ("TASK".equals(active.handle().kind()) && active.handle().id().equals(event.taskId())
+                        || "TASK_GRAPH".equals(active.handle().kind())
+                            && active.handle().id().equals(event.taskGraphExecutionId())))) {
+                return new BrainCoordinatorResult("", BrainTurnResult.Kind.WAIT, "", "EVENT_NO_REPLAN", List.of());
+            }
             if (TaskGraphReplan.semantic(event) && graphOwnsEvent(controllerId, event)) {
                 try {
                     var requests = taskGraphs.prepareReplan(controllerId, event, context.verifiedWorld());

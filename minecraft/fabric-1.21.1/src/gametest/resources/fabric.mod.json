@@ -15,7 +15,8 @@
       "com.mccompanion.minecraft.v121.SurvivalEventGameTests",
       "com.mccompanion.minecraft.v121.InventoryWorldEventGameTests",
       "com.mccompanion.minecraft.v121.CombatGameTests",
-      "com.mccompanion.minecraft.v121.ThreatRecoveryGameTests"
+      "com.mccompanion.minecraft.v121.ThreatRecoveryGameTests",
+      "com.mccompanion.minecraft.v121.FinalProductGameTests"
     ]
   },
   "depends": {

@@ -51,9 +51,13 @@ The first bounded mutation entry points now reuse those same connected-body exec
 | `block.break` | Converts one observed namespaced block position into `MineResourceVein` with `quantity=1`, preserving vanilla hardness, tool, drop, pickup, and evidence behavior |
 | `block.interact` | Performs one same-dimension, loaded, visible interaction within five blocks through `ServerPlayerGameMode.useItemOn`; face and hand are explicit and bounded |
 | `block.place` | Places one declared Registry block at an exact same-dimension target through its vanilla `BlockItem`; the external Brain supplies face/hand and placement succeeds only after block and inventory deltas are verified |
+| `build.small_blueprint` | Executes an external Brain-authored bounded block list through shared construction, navigation and vanilla placement/mining; `BUILD` permission, `HIGH` risk, connected `BuildSmallBlueprint` capability, exact per-block and final-state verification |
 | `entity.collect` | Uses the existing bounded `CollectResource` movement and vanilla `ItemEntity` pickup executor |
 | `entity.interact` | Performs one UUID-bound, alive, visible entity interaction within five blocks through `ServerPlayer.interactOn`; the target is revalidated immediately before use |
 | `entity.attack` | Attacks one externally selected UUID-bound living entity within five blocks through `ServerPlayer.attack`; alive/range/visibility are revalidated and success requires an observed health decrease or death |
+| `combat.melee` | Starts one bounded continuous `MeleeAttack`: inventory-menu weapon selection, live UUID tracking, collision-aware chase, version-correct attack reach, vanilla cooldown and observed target death |
+| `combat.shield` | Starts `ShieldCombat` against the same explicit target, requires an offhand shield, faces the target, blocks only during a local threat window and lowers within 12 ticks so melee can continue |
+| `combat.bow` | Starts `BowAttack`: bow/ammunition checks, distance control, 20-tick draw, movement lead, vanilla release/projectile creation and observed damage/death; pause/cancel abort the draw without firing |
 | `inventory.transfer` | Selects the existing verified-container withdraw or deposit executor from the declared direction; arbitrary container or filesystem access is impossible |
 | `menu.inspect` | Reads the exact live open menu and issues a process-local 192-bit opaque capability bound to that menu instance for sixty seconds |
 | `menu.click` | Performs one bounded left/right vanilla pickup click using the exact unexpired menu capability and rejects no-effect actions |
@@ -70,8 +74,114 @@ capture their actual Mod protocol payloads, including unknown namespaced IDs. Ex
 GameTests verify the shared movement, mining, pickup, and container executors; direct per-alias
 Runtime/Fabric E2E remains part of the RC gap.
 
+## Daily player action macros
+
+Ordinary player actions that need several body ticks or menu transitions are exposed as bounded
+macro Tools, not as LLM-driven click loops:
+
+| Capability | Tools |
+|---|---|
+| Equipment | `equipment.equip`, `equipment.unequip`, `equipment.best_tool`, `equipment.best_weapon` |
+| Sleep | `survival.sleep`, `survival.wake` |
+| Water bucket | `bucket.fill_water`, `bucket.empty_water` |
+| Vehicles | `vehicle.mount`, `vehicle.travel`, `vehicle.dismount` |
+| Fishing and farming | `fishing.fish`, `farming.harvest_replant` |
+| Animals and villagers | `animal.breed`, `villager.trade` |
+| Stations | `enchanting.apply`, `brewing.brew` |
+| Elytra | `elytra.glide` |
+
+All 18 Tools are capability-gated by the connected Loader handshake, non-idempotent, bound to the
+existing durable task/lease lifecycle, and limited to five minutes. Schemas require typed positions,
+UUIDs, slots, options and bounded quantities; breeding deliberately supports one verified cycle per
+call because vanilla parents cannot immediately breed again.
+
+The shared daily-action engine owns target identity, deterministic phases, pause/cancel handling,
+timeouts and postconditions. Loader modules adapt those commands to the target Minecraft version's
+real `ServerPlayer`, inventory menu, vehicle, fishing hook and station-menu APIs. A successful Tool
+result therefore contains observed body/world facts; an unverified effect is returned as
+`UNCERTAIN_EFFECT`. Task Graphs may compose these Tools directly, but do not perform per-tick menu or
+fish-bobber control.
+
+## Bounded small blueprints
+
+`build.small_blueprint` accepts `anchor: {dimension,x,y,z}` (dimension defaults to
+`minecraft:overworld`), `maxSize: {x,y,z}` (each axis 1..7), and 1..128 unique
+`blocks: [{position:{x,y,z},block,state?,alternatives?}]`. Positions are nonnegative
+offsets inside maxSize; state contains at most eight string-valued Registry properties,
+and alternatives contains at most eight other block IDs. The same representation covers
+walls, pillars, platforms, bridges, stairs, fence borders, plugging/repair, 3×3 shelters
+and 5×5 houses; there are no scenario-specific Handlers or internal design decisions.
+
+The deterministic builder preflights materials, orders blocks bottom-up, checks occupancy,
+chooses reachable placement stances, and asks vanilla BlockItem placement logic for the
+requested orientation/state. Every placed block and the final structure are read back from
+the actual world. Unattainable state, changed/occupied space, unloaded chunks, shortage or
+unreachable placement pauses with an explicit code; it does not overwrite existing blocks.
+After 1,200 active ticks without progress it pauses with `BLUEPRINT_PROGRESS_TIMEOUT`.
+
+Optional `temporarySupport: {blocks,maxBlocks,cleanup}` allows at most 16 cumulative
+placements, only from the declared material list, immediately below a target over existing
+ground. This is not an unbounded scaffolding planner. With cleanup=true (default), the
+builder mines its supports using the shared hardness/tool-aware action executor, then
+reverifies the structure. Changed supports are not destroyed. With cleanup=false, supports
+remain and their count is reported. Pause retains the plan, confirmed positions, chosen
+materials, supports and cumulative budget in SavedData; resume reconciles the live world
+and skips still-correct blocks. Cancel stops immediately and leaves any supports in place,
+reporting their positions through `BLUEPRINT_CANCELLED_SUPPORTS_RETAINED`; supersession
+also retains them and records their positions in the server log. Cleanup cannot continue
+after authority has been cancelled.
+
+The normal durable Tool/task lifecycle and five-minute deadline apply. Automated evidence
+is UNIT/INTEGRATION and REAL_MINECRAFT_GAMETEST, not LIVE_PROVIDER or HUMAN_PLAYTEST.
+
 Still required for RC:
 
 - cross-loader Registry query support plus tags/tool-requirement/component breadth;
 - real Fabric tests for each mutating primitive, cancellation, budgets, world/inventory deltas, and
   composite-to-primitive equivalence.
+
+### Continuous combat and bounded threat recovery (Feature 6)
+
+The three `combat.*` tools above require `COMBAT` permission and their corresponding connected-body
+capability. Arguments are `target` (exactly one `uuid`, numeric `entityId`, `playerIdentity`, or unique
+`name`, using the existing entity-identity resolver) and optional `durationTicks` in `20..2400`
+(default `1200`). A name/runtime ID is resolved once to a UUID; ticks never reselect by name.
+For example: `combat.bow({"target":{"uuid":"<observed-uuid>"},"durationTicks":600})`.
+Use the existing task pause/resume/cancel controls to suspend or disengage. A resumed in-process
+session preserves identity; an interrupted process still requires the existing explicit recovery.
+
+Completion requires `TARGET_DEAD_CONFIRMED`; disappearance, unreachable navigation, missing shield,
+bow/ammunition, timeout, and unobserved attack effects fail explicitly. Observations include target
+identity/health, action, attack/shot counts, damage observations and current item-use state. Local
+combat controllers retain the explicit target. A separate finite safety interruption on both Full
+Bridges observes at most 32 nearby live mobs: low health takes precedence, followed by imminent
+Creepers, multiple close hostiles, recent owner damage, attacking Skeletons and close melee threats.
+It uses the shared combat executor for bounded owner defense and checks all nearby threats while
+retreating. `combat.defend_owner` also reuses that executor.
+
+Low health enters at 30% and resumes at 60%. Safe clearance is 8 blocks for Creepers, 16 for
+Skeletons and 7 for melee hostiles, followed by 10 clear ticks. Escape destinations use the existing
+collision-aware navigation with no block edits. Food is selected through vanilla inventory-menu
+operations; actual consumption/hunger and vanilla health regeneration are observed. Missing food,
+blocked paths and the 1200-tick recovery bound produce explicit failure. Fire/lava/air hazards retain
+their existing blocking behavior.
+
+The original Runtime task stays RUNNING during local handling; its behavior identity, durable
+blueprint steps, suspended route, combat session and original control identity are retained. On
+recovery it continues the same work. Owner/Runtime pause, cancellation, disconnect or death abort
+held inputs and prevent automatic resumption. A process restart retains the existing safe recovery
+requirements; it does not automatically resurrect a transient combat session.
+
+Authenticated hostile/low-health/damage events still use Feature 3 admission, priority, deduplication
+and cooldowns. A bounded Body handling marker prevents redundant Brain pause/replan for locally
+handled conditions; unrelated hazards and failed handling are not suppressed. External Brain
+remains the only source of open-ended tasks.
+
+Evidence is shared UNIT tests, Runtime dispatch INTEGRATION with a protocol fixture, and isolated
+REAL_MINECRAFT_GAMETEST on Forge 1.20.1 and Fabric 1.21.1. `tools/combat-threat-e2e.py` additionally
+runs an authenticated deterministic external-client Task Graph through the production Runtime and
+Bridge, interrupts a partially completed blueprint, verifies recovery and the original durable task,
+and checks one admitted low-health edge. These are not LIVE_PROVIDER or HUMAN_PLAYTEST.
+
+Forge verification uses a clean generated GameTest world: reusing `build/gametest/world` reproduced
+target-index loading failures; backing up that exact test world and rerunning clean passed.

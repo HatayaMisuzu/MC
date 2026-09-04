@@ -253,6 +253,9 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 if (task == null || !task.companionId().equals(context.companionId())) return Optional.empty();
                 ToolCall inspect = new ToolCall("recovery-inspect-" + handle.id(), handle.statusTool(),
                         Json.object().put(handle.field(), handle.id()));
+                if (task.state().terminal() && commands.leaseFor(task.companionId())
+                        .filter(lease -> lease.epoch() == task.controlEpoch()).isPresent())
+                    return Optional.of(controlReleaseUnconfirmed(inspect, task));
                 return Optional.of(task.state().terminal() || task.state() == TaskState.BLOCKED
                         || task.state() == TaskState.PAUSED || task.state() == TaskState.RECONCILIATION_REQUIRED
                         ? terminalResult(inspect, task) : progressResult(inspect, task));
@@ -282,9 +285,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             return;
         }
         if ("TASK".equals(handle.kind()) && tasks != null) {
+            try {
+                TaskRecord bound = tasks.forCommand("brain-" + context.brainSessionId() + '-' + call.callId()).orElse(null);
+                if (bound == null || !bound.taskId().equals(handle.id())
+                        || !bound.companionId().equals(context.companionId())
+                        || commands.activeTaskFor(context.companionId()).filter(t -> t.taskId().equals(handle.id())).isEmpty()) return;
+            } catch (java.sql.SQLException failure) {
+                throw new IllegalStateException("DURABLE_CANCEL_BINDING_UNAVAILABLE", failure);
+            }
             activeTasks.remove(key(context, call.callId()));
             commands.execute("brain-cancel-" + context.brainSessionId() + '-' + call.callId(),
-                    context.companionId(), stop(reason == null ? "cancel" : reason));
+                    context.companionId(), stop("cancel"));
             return;
         }
         cancel(context, call.callId(), reason);
@@ -318,11 +329,36 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
             values.add(definition("task_graph.resume", "Resume a safely paused task graph execution",
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
+            values.add(definition("task_graph.replan", "Validate and atomically replace only unfinished work for a pending event replan",
+                    replanSchema(), "MEDIUM", "CONTROL_TASK", true));
             values.add(definition("task_graph.cancel", "Cancel a session-owned task graph execution",
                     executionIdSchema(), "LOW", "CONTROL_TASK", false));
         }
-        if (available.contains("FollowOwner")) values.add(definition("movement.follow", "Follow the owner", Json.object(), "LOW", "MOVE", false));
+        if (available.contains("FollowOwner") || available.contains("FollowEntity")) values.add(definition(
+                "movement.follow", "Continuously follow the owner or one explicitly selected entity",
+                entityBehaviorSchema(false), "LOW", "MOVE", false));
+        if (available.contains("ApproachEntity")) values.add(definition("movement.approach",
+                "Approach one explicitly selected entity while locally tracking its movement",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("KeepDistanceFromEntity")) values.add(definition("movement.keep_distance",
+                "Continuously maintain a bounded distance band from one explicitly selected entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("ChaseEntity")) values.add(definition("movement.chase",
+                "Continuously chase one explicitly selected moving entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("EscortEntity")) values.add(definition("movement.escort",
+                "Continuously escort one explicitly selected moving entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("FleeFromEntity")) values.add(definition("movement.flee",
+                "Continuously keep a safe distance from one explicitly selected entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
+        if (available.contains("FaceEntity")) values.add(definition("movement.face_entity",
+                "Continuously face one explicitly selected moving entity",
+                entityBehaviorSchema(true), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.navigate", "Navigate in survival mode", coordinateSchema(), "LOW", "MOVE", false));
+        if (available.contains("NavigateWithWorldChanges")) values.add(definition("movement.navigate_survival",
+                "Complete survival navigation with bounded world changes in one call",
+                survivalNavigationSchema(), "HIGH", "WORLD_EDIT", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.return", "Return to the owner", Json.object(), "LOW", "MOVE", false));
         if (available.contains("NavigateTo")) values.add(definition("movement.step",
                 "Move a bounded relative step through normal navigation", stepSchema(), "LOW", "MOVE", false));
@@ -352,11 +388,24 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Place one declared block at an exact reachable position through vanilla player rules; the exact "
                         + "world block is authoritative in Survival, Creative, and reusable-item modes",
                 blockPlaceSchema(), "MEDIUM", "BUILD", false));
+        if (available.contains("BuildSmallBlueprint")) values.add(definition("build.small_blueprint",
+                "Build one bounded small blueprint through real navigation and vanilla block placement, with "
+                        + "material, occupancy, temporary-support, resume, and final-state verification",
+                smallBlueprintSchema(), "HIGH", "BUILD", false));
         if (available.contains("InteractEntity")) values.add(definition("entity.interact",
                 "Interact once with a visible reachable entity through vanilla player rules; success requires an "
                         + "observed entity, inventory, vehicle, or menu postcondition and otherwise returns "
                         + "UNCERTAIN_EFFECT",
                 entityInteractionSchema(), "LOW", "INTERACT", false));
+        if (available.contains("MeleeAttack")) values.add(definition("combat.melee",
+                "Continuously chase and melee one explicit living target until observed death or bounded failure",
+                combatSchema(), "MEDIUM", "COMBAT", false));
+        if (available.contains("ShieldCombat")) values.add(definition("combat.shield",
+                "Melee one explicit target with timed shield defense; requires a shield and lowers it between blocks",
+                combatSchema(), "MEDIUM", "COMBAT", false));
+        if (available.contains("BowAttack")) values.add(definition("combat.bow",
+                "Continuously draw, aim at and shoot one explicit moving target; requires a bow and ammunition",
+                combatSchema(), "MEDIUM", "COMBAT", false));
         if (available.contains("AttackEntity")) values.add(definition("entity.attack",
                 "Attack one externally selected visible reachable living entity through vanilla player rules",
                 entityAttackSchema(), "MEDIUM", "COMBAT", false));
@@ -398,7 +447,69 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 "Drop a bounded quantity from the connected body through vanilla player rules",
                 dropSchema(), "MEDIUM", "INVENTORY", false));
         if (available.contains("EatAndRecover")) values.add(definition("item.eat_and_recover", "Eat food using normal game interaction", foodSchema(), "LOW", "SURVIVAL", false));
+        addDailyActionDefinitions(values, available);
         return List.copyOf(values);
+    }
+
+    private static void addDailyActionDefinitions(List<ToolDefinition> values, Set<String> available) {
+        if (available.contains("EquipItem")) {
+            values.add(definition("equipment.equip", "Equip one declared item through the vanilla inventory/equipment path",
+                    equipmentSchema(true), "MEDIUM", "INVENTORY", false));
+            values.add(definition("equipment.unequip", "Unequip one declared item through the vanilla inventory/equipment path",
+                    equipmentSchema(false), "MEDIUM", "INVENTORY", false));
+            values.add(definition("equipment.best_tool", "Select the best available tool for one declared target",
+                    bestToolSchema(), "MEDIUM", "INVENTORY", false));
+            values.add(definition("equipment.best_weapon", "Select the best available weapon for one declared target",
+                    bestWeaponSchema(), "MEDIUM", "INVENTORY", false));
+        }
+        if (available.contains("SleepAtBed")) {
+            values.add(definition("survival.sleep", "Navigate to and sleep in a declared or nearby usable bed",
+                    sleepSchema(), "LOW", "SURVIVAL", false));
+            values.add(definition("survival.wake", "Wake from the current vanilla bed sleep state",
+                    emptyObjectSchema(), "LOW", "SURVIVAL", false));
+        }
+        if (available.contains("UseWaterBucket")) {
+            values.add(definition("bucket.fill_water", "Fill a held bucket from one declared water position",
+                    positionActionSchema("source", "minecraft:bucket"), "MEDIUM", "INTERACT", false));
+            values.add(definition("bucket.empty_water", "Empty a held water bucket at one declared position",
+                    positionActionSchema("target", "minecraft:water_bucket"), "MEDIUM", "INTERACT", false));
+        }
+        if (available.contains("UseVehicle")) {
+            values.add(definition("vehicle.mount", "Mount one externally selected live vehicle",
+                    vehicleSchema(false), "MEDIUM", "MOVE", false));
+            values.add(definition("vehicle.travel", "Drive or ride one mounted vehicle toward a bounded destination",
+                    vehicleSchema(true), "MEDIUM", "MOVE", false));
+            values.add(definition("vehicle.dismount", "Dismount the current vanilla vehicle safely",
+                    emptyObjectSchema(), "MEDIUM", "MOVE", false));
+        }
+        if (available.contains("Fish")) {
+            values.add(definition("fishing.fish", "Fish with a declared rod and wait for a bounded catch cycle",
+                    fishingSchema(), "LOW", "INTERACT", false));
+        }
+        if (available.contains("FarmCrop")) {
+            values.add(definition("farming.harvest_replant", "Harvest and replant a bounded crop area through vanilla block actions",
+                    farmingSchema(), "MEDIUM", "INTERACT", false));
+        }
+        if (available.contains("BreedAnimals")) {
+            values.add(definition("animal.breed", "Breed two externally selected compatible animals",
+                    breedingSchema(), "LOW", "INTERACT", false));
+        }
+        if (available.contains("TradeWithVillager")) {
+            values.add(definition("villager.trade", "Execute one explicitly selected villager trade offer",
+                    tradeSchema(), "MEDIUM", "INVENTORY", false));
+        }
+        if (available.contains("EnchantItem")) {
+            values.add(definition("enchanting.apply", "Apply one explicitly selected enchanting option",
+                    enchantingSchema(), "MEDIUM", "INVENTORY", false));
+        }
+        if (available.contains("BrewPotion")) {
+            values.add(definition("brewing.brew", "Brew a bounded number of bottles with one declared ingredient",
+                    brewingSchema(), "MEDIUM", "CRAFT", false));
+        }
+        if (available.contains("GlideWithElytra")) {
+            values.add(definition("elytra.glide", "Glide toward a bounded direction/destination with a declared timeout",
+                    glideSchema(), "MEDIUM", "MOVE", false));
+        }
     }
 
     @Override public ToolResult execute(ToolContext context, ToolCall call) {
@@ -449,6 +560,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 String label = call.arguments().path("label").asText("");
                 if (executionId.isBlank()) throw new IllegalArgumentException("executionId is required");
                 return taskGraphRuntime.checkpoint(context, call, executionId, label);
+            }
+            if (call.name().equals("task_graph.replan")) {
+                if (taskGraphRuntime == null) return ToolResult.rejected(call, "TASK_GRAPH_RUNTIME_UNAVAILABLE", "unavailable");
+                rejectUnexpected(call.arguments(), Set.of("executionId", "requestId", "epoch", "expectedRevision", "graph"));
+                for (String number : List.of("epoch", "expectedRevision")) {
+                    if (!call.arguments().path(number).isIntegralNumber() || call.arguments().path(number).asLong(-1) < 0)
+                        throw new IllegalArgumentException(number + " must be a nonnegative integer");
+                }
+                return taskGraphRuntime.replan(context, call, call.arguments().path("executionId").asText(),
+                        call.arguments().path("requestId").asText(), call.arguments().path("epoch").asLong(),
+                        call.arguments().path("expectedRevision").asLong(), call.arguments().path("graph"));
             }
             if (call.name().startsWith("task_graph.") && !call.name().equals("task_graph.validate")) {
                 if (taskGraphRuntime == null) {
@@ -607,14 +729,27 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     private static Intent intent(ToolCall call) {
         return switch (call.name()) {
-            case "movement.follow" -> noArguments(call, TaskType.FOLLOW);
+            case "movement.follow" -> call.arguments().size() == 0
+                    ? noArguments(call, TaskType.FOLLOW)
+                    : skill("FollowEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.approach" -> skill("ApproachEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.keep_distance" -> skill("KeepDistanceFromEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.chase" -> skill("ChaseEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.escort" -> skill("EscortEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.flee" -> skill("FleeFromEntity", validatedEntityBehavior(call.arguments()));
+            case "movement.face_entity" -> skill("FaceEntity", validatedEntityBehavior(call.arguments()));
             case "movement.return" -> noArguments(call, TaskType.RETURN);
             case "movement.navigate" -> navigate(call.arguments());
+            case "movement.navigate_survival" -> survivalNavigate(call.arguments());
             case "movement.look" -> skill("LookAt", validatedLook(call.arguments()));
             case "block.break" -> breakBlock(call.arguments());
             case "block.interact" -> skill("InteractBlock", validatedBlockInteraction(call.arguments()));
             case "block.place" -> skill("PlaceBlock", validatedBlockPlacement(call.arguments()));
+            case "build.small_blueprint" -> skill("BuildSmallBlueprint", validatedSmallBlueprint(call.arguments()));
             case "entity.interact" -> skill("InteractEntity", validatedEntityInteraction(call.arguments()));
+            case "combat.melee" -> skill("MeleeAttack", validatedCombat(call.arguments()));
+            case "combat.shield" -> skill("ShieldCombat", validatedCombat(call.arguments()));
+            case "combat.bow" -> skill("BowAttack", validatedCombat(call.arguments()));
             case "entity.attack" -> skill("AttackEntity", validatedEntityAttack(call.arguments()));
             case "menu.click" -> skill("MenuAction", validatedMenuAction(call.arguments(), "CLICK"));
             case "menu.quick_move" -> skill("MenuAction", validatedMenuAction(call.arguments(), "QUICK_MOVE"));
@@ -634,6 +769,24 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             case "inventory.deliver" -> skill("DeliverItem", validatedItemQuantity(call.arguments(), false));
             case "inventory.drop" -> skill("DropItem", validatedDrop(call.arguments()));
             case "item.eat_and_recover" -> skill("EatAndRecover", validatedFood(call.arguments()));
+            case "equipment.equip" -> skill("EquipItem", validatedEquipment(call.arguments(), true));
+            case "equipment.unequip" -> skill("EquipItem", validatedEquipment(call.arguments(), false));
+            case "equipment.best_tool" -> skill("EquipItem", validatedItemTarget(call.arguments(), "BEST_TOOL"));
+            case "equipment.best_weapon" -> skill("EquipItem", validatedItemTarget(call.arguments(), "BEST_WEAPON"));
+            case "survival.sleep" -> skill("SleepAtBed", validatedSleep(call.arguments()));
+            case "survival.wake" -> skill("SleepAtBed", Json.object().put("action", "WAKE"));
+            case "bucket.fill_water" -> skill("UseWaterBucket", validatedBucket(call.arguments(), "FILL"));
+            case "bucket.empty_water" -> skill("UseWaterBucket", validatedBucket(call.arguments(), "EMPTY"));
+            case "vehicle.mount" -> skill("UseVehicle", validatedVehicle(call.arguments(), "MOUNT"));
+            case "vehicle.travel" -> skill("UseVehicle", validatedVehicle(call.arguments(), "TRAVEL"));
+            case "vehicle.dismount" -> skill("UseVehicle", Json.object().put("action", "DISMOUNT"));
+            case "fishing.fish" -> skill("Fish", validatedFishing(call.arguments()));
+            case "farming.harvest_replant" -> skill("FarmCrop", validatedFarming(call.arguments()));
+            case "animal.breed" -> skill("BreedAnimals", validatedBreeding(call.arguments()));
+            case "villager.trade" -> skill("TradeWithVillager", validatedTrade(call.arguments()));
+            case "enchanting.apply" -> skill("EnchantItem", validatedEnchanting(call.arguments()));
+            case "brewing.brew" -> skill("BrewPotion", validatedBrewing(call.arguments()));
+            case "elytra.glide" -> skill("GlideWithElytra", validatedGlide(call.arguments()));
             case "task.pause" -> noArgumentsStop(call, "pause");
             case "task.resume" -> noArgumentsStop(call, "resume");
             case "task.cancel" -> noArgumentsStop(call, "cancel");
@@ -670,9 +823,142 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         return new Intent(TaskType.TRAVEL, Json.object().set("target", target), "movement.navigate");
     }
 
+    private static Intent survivalNavigate(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("x", "y", "z", "dimension", "maxBreakBlocks",
+                "allowedBreakBlocks", "maxPlaceBlocks", "allowedPlaceBlocks", "maxRiskUnits"));
+        for (String field : List.of("x", "y", "z")) {
+            if (!arguments.path(field).isIntegralNumber() || !arguments.path(field).canConvertToInt()) {
+                throw new IllegalArgumentException(field + " must be an integer");
+            }
+        }
+        int x = arguments.path("x").asInt();
+        int y = arguments.path("y").asInt();
+        int z = arguments.path("z").asInt();
+        if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000
+                || y < -2048 || y > 2048) {
+            throw new IllegalArgumentException("coordinates are outside safe bounds");
+        }
+        String dimension = arguments.has("dimension")
+                ? namespacedId(arguments.path("dimension").isTextual()
+                        ? arguments.path("dimension").asText() : "", "dimension")
+                : "minecraft:overworld";
+        int maxBreakBlocks = arguments.has("maxBreakBlocks")
+                ? boundedInteger(arguments.path("maxBreakBlocks"), "maxBreakBlocks", 0, 8) : 0;
+        JsonNode allowedBreakBlocks = validatedBlockIdList(arguments, "allowedBreakBlocks");
+        int maxPlaceBlocks = arguments.has("maxPlaceBlocks")
+                ? boundedInteger(arguments.path("maxPlaceBlocks"), "maxPlaceBlocks", 0, 8) : 0;
+        JsonNode allowedPlaceBlocks = validatedBlockIdList(arguments, "allowedPlaceBlocks");
+        if ((maxBreakBlocks > 0) != (!allowedBreakBlocks.isEmpty())) {
+            throw new IllegalArgumentException("maxBreakBlocks must be positive exactly when allowedBreakBlocks is nonempty");
+        }
+        if ((maxPlaceBlocks > 0) != (!allowedPlaceBlocks.isEmpty())) {
+            throw new IllegalArgumentException("maxPlaceBlocks must be positive exactly when allowedPlaceBlocks is nonempty");
+        }
+        if (maxBreakBlocks == 0 && maxPlaceBlocks == 0) {
+            throw new IllegalArgumentException("at least one world-change budget must be positive");
+        }
+        int maxRiskUnits = arguments.has("maxRiskUnits")
+                ? boundedInteger(arguments.path("maxRiskUnits"), "maxRiskUnits", 0, 16) : 8;
+        ObjectNode target = Json.object().put("dimension", dimension)
+                .put("x", x).put("y", y).put("z", z);
+        ObjectNode parameters = Json.object();
+        parameters.set("target", target);
+        parameters.put("maxBreakBlocks", maxBreakBlocks)
+                .put("maxPlaceBlocks", maxPlaceBlocks)
+                .put("maxRiskUnits", maxRiskUnits);
+        parameters.set("allowedBreakBlocks", allowedBreakBlocks.deepCopy());
+        parameters.set("allowedPlaceBlocks", allowedPlaceBlocks.deepCopy());
+        return skill("NavigateWithWorldChanges", parameters);
+    }
+
+    private static JsonNode validatedBlockIdList(JsonNode arguments, String field) {
+        if (!arguments.has(field)) return Json.MAPPER.createArrayNode();
+        JsonNode values = arguments.path(field);
+        if (!values.isArray() || values.size() < 1 || values.size() > 16) {
+            throw new IllegalArgumentException(field + " must contain 1..16 block ids");
+        }
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (int index = 0; index < values.size(); index++) {
+            JsonNode block = values.path(index);
+            if (!block.isTextual()) {
+                throw new IllegalArgumentException(field + "[" + index + "] must be a namespaced block id");
+            }
+            String id = namespacedId(block.asText(), field + "[" + index + "]");
+            if (!seen.add(id)) {
+                throw new IllegalArgumentException(field + " must contain unique block ids");
+            }
+        }
+        return values;
+    }
+
     private static JsonNode validatedLook(JsonNode arguments) {
         Intent target = navigate(arguments);
         return Json.object().set("target", target.arguments().path("target"));
+    }
+
+    private static JsonNode validatedEntityBehavior(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("target", "minimumDistance", "maximumDistance", "lostTimeoutTicks"));
+        JsonNode target = arguments.path("target");
+        if (!target.isObject()) throw new IllegalArgumentException("target must be an object");
+        rejectUnexpected(target, Set.of("uuid", "entityId", "playerIdentity", "name"));
+        int references = (target.has("uuid") ? 1 : 0) + (target.has("entityId") ? 1 : 0)
+                + (target.has("playerIdentity") ? 1 : 0) + (target.has("name") ? 1 : 0);
+        if (references != 1) throw new IllegalArgumentException("target must contain exactly one identity reference");
+        ObjectNode values = Json.object();
+        if (target.has("uuid")) {
+            values.put("entityId", normalizedUuid(target.path("uuid"), "target.uuid"));
+            values.put("targetReferenceKind", "UUID");
+        } else if (target.has("entityId")) {
+            if (!target.path("entityId").canConvertToInt() || target.path("entityId").asInt() < 0) {
+                throw new IllegalArgumentException("target.entityId must be a non-negative Minecraft entity id");
+            }
+            values.put("targetRuntimeId", target.path("entityId").asInt());
+            values.put("targetReferenceKind", "ENTITY_ID");
+        } else if (target.has("playerIdentity")) {
+            values.put("entityId", normalizedUuid(target.path("playerIdentity"), "target.playerIdentity"));
+            values.put("targetReferenceKind", "VERIFIED_PLAYER");
+        } else {
+            String name = target.path("name").asText("").strip();
+            if (name.isEmpty() || name.length() > 64 || name.chars().anyMatch(Character::isISOControl)) {
+                throw new IllegalArgumentException("target.name must contain 1..64 visible characters");
+            }
+            values.put("targetName", name);
+            values.put("targetReferenceKind", "NAME");
+        }
+        if (arguments.has("minimumDistance")) {
+            values.put("minimumDistance", boundedDistance(arguments.path("minimumDistance"), "minimumDistance"));
+        }
+        if (arguments.has("maximumDistance")) {
+            values.put("maximumDistance", boundedDistance(arguments.path("maximumDistance"), "maximumDistance"));
+        }
+        if (values.has("minimumDistance") && values.has("maximumDistance")
+                && values.path("minimumDistance").asDouble() > values.path("maximumDistance").asDouble()) {
+            throw new IllegalArgumentException("minimumDistance must not exceed maximumDistance");
+        }
+        if (arguments.has("lostTimeoutTicks")) {
+            if (!arguments.path("lostTimeoutTicks").canConvertToInt()) {
+                throw new IllegalArgumentException("lostTimeoutTicks must be an integer");
+            }
+            int timeout = arguments.path("lostTimeoutTicks").asInt();
+            if (timeout < 1 || timeout > 1200) throw new IllegalArgumentException("lostTimeoutTicks must be 1..1200");
+            values.put("lostTimeoutTicks", timeout);
+        }
+        return values;
+    }
+
+    private static String normalizedUuid(JsonNode value, String field) {
+        if (!value.isTextual()) throw new IllegalArgumentException(field + " must be a UUID");
+        try { return java.util.UUID.fromString(value.asText()).toString(); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException(field + " must be a UUID"); }
+    }
+
+    private static double boundedDistance(JsonNode value, String field) {
+        if (!value.isNumber()) throw new IllegalArgumentException(field + " must be a number");
+        double distance = value.asDouble();
+        if (!Double.isFinite(distance) || distance < 0.0D || distance > 64.0D) {
+            throw new IllegalArgumentException(field + " must be between 0 and 64");
+        }
+        return distance;
     }
 
     private static JsonNode validatedBlockInteraction(JsonNode arguments) {
@@ -716,6 +1002,30 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         String hand = enumValue(arguments.path("hand").asText("MAIN_HAND"), "hand",
                 Set.of("MAIN_HAND", "OFF_HAND"));
         return Json.object().put("entityId", entityId).put("hand", hand);
+    }
+
+    private static JsonNode validatedCombat(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("target", "durationTicks"));
+        ObjectNode identity = Json.object();
+        identity.set("target", arguments.path("target"));
+        ObjectNode values = (ObjectNode) validatedEntityBehavior(identity);
+        if (arguments.has("durationTicks")) {
+            JsonNode duration = arguments.path("durationTicks");
+            if (!duration.isIntegralNumber() || !duration.canConvertToInt()
+                    || duration.asInt() < 20 || duration.asInt() > 2400)
+                throw new IllegalArgumentException("durationTicks must be 20..2400");
+            values.put("durationTicks", duration.asInt());
+        }
+        return values;
+    }
+
+    private static ObjectNode combatSchema() {
+        ObjectNode schema = entityBehaviorSchema(true);
+        ObjectNode properties = (ObjectNode) schema.path("properties");
+        properties.remove(java.util.List.of("minimumDistance", "maximumDistance", "lostTimeoutTicks"));
+        properties.set("durationTicks", Json.object().put("type", "integer").put("minimum", 20)
+                .put("maximum", 2400).put("default", 1200));
+        return schema;
     }
 
     private static JsonNode validatedEntityAttack(JsonNode arguments) {
@@ -784,6 +1094,10 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     }
 
     private static ObjectNode validatedBoundedPosition(JsonNode position) {
+        if (position == null || !position.isObject()) {
+            throw new IllegalArgumentException("position must be an object");
+        }
+        rejectUnexpected(position, Set.of("dimension", "x", "y", "z"));
         ObjectNode target = Json.object();
         for (String field : List.of("x", "y", "z")) {
             if (!position.path(field).isIntegralNumber() || !position.path(field).canConvertToInt()) {
@@ -795,7 +1109,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         if (Math.abs((long) x) > 30_000_000 || Math.abs((long) z) > 30_000_000 || y < -2048 || y > 2048) {
             throw new IllegalArgumentException("position is outside safe world bounds");
         }
-        target.put("dimension", position.path("dimension").asText("minecraft:overworld"));
+        target.put("dimension", namespacedId(
+                position.path("dimension").asText("minecraft:overworld"), "position.dimension"));
         return target;
     }
 
@@ -916,6 +1231,170 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         return arguments;
     }
 
+    private static JsonNode validatedEquipment(JsonNode arguments, boolean equip) {
+        rejectUnexpected(arguments, equip ? Set.of("item", "slot") : Set.of("slot"));
+        if (!equip && !arguments.has("slot")) throw new IllegalArgumentException("slot is required");
+        ObjectNode values = Json.object().put("action", equip ? "EQUIP" : "UNEQUIP");
+        if (equip) values.put("item", namespacedId(arguments.path("item").asText(""), "item"));
+        Set<String> slots = equip
+                ? Set.of("AUTO", "MAIN_HAND", "OFF_HAND", "HEAD", "CHEST", "LEGS", "FEET")
+                : Set.of("MAIN_HAND", "OFF_HAND", "HEAD", "CHEST", "LEGS", "FEET");
+        String slot = enumValue(arguments.path("slot").asText(equip ? "AUTO" : "HEAD"), "slot", slots);
+        values.put("hand", slot);
+        return values;
+    }
+
+    private static JsonNode validatedItemTarget(JsonNode arguments, String action) {
+        if (action.equals("BEST_TOOL")) {
+            rejectUnexpected(arguments, Set.of("block"));
+            return Json.object().put("item", namespacedId(arguments.path("block").asText("")))
+                    .put("action", action);
+        }
+        rejectUnexpected(arguments, Set.of("preference"));
+        String preference = enumValue(arguments.path("preference").asText("ANY"), "preference",
+                Set.of("ANY", "MELEE", "RANGED"));
+        return Json.object().put("item", "").put("action", action + "_" + preference);
+    }
+
+    private static JsonNode validatedBucket(JsonNode arguments, String action) {
+        rejectUnexpected(arguments, Set.of("source", "target", "item"));
+        String field = action.equals("FILL") ? "source" : "target";
+        JsonNode position = arguments.path(field);
+        if (!position.isObject()) throw new IllegalArgumentException(field + " must be an object");
+        ObjectNode values = Json.object().set("target", validatedBoundedPosition(position));
+        if (arguments.has("item")) {
+            String item = namespacedId(arguments.path("item").asText(""));
+            String expected = action.equals("FILL") ? "minecraft:bucket" : "minecraft:water_bucket";
+            if (!item.equals(expected)) throw new IllegalArgumentException("item must be " + expected);
+            values.put("item", item);
+        }
+        values.put("action", action);
+        return values;
+    }
+
+    private static JsonNode validatedSleep(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("bed", "radius"));
+        ObjectNode values = Json.object().put("action", "SLEEP")
+                .put("quantity", arguments.has("radius")
+                        ? boundedInteger(arguments.path("radius"), "radius", 1, 16) : 16);
+        if (arguments.has("bed")) values.set("target", validatedBoundedPosition(arguments.path("bed")));
+        return values;
+    }
+
+    private static JsonNode validatedVehicle(JsonNode arguments, String action) {
+        rejectUnexpected(arguments, action.equals("TRAVEL")
+                ? Set.of("entityId", "vehicleType", "destination") : Set.of("entityId", "vehicleType"));
+        ObjectNode values = Json.object().put("action", action);
+        if (action.equals("MOUNT") && arguments.has("entityId") == arguments.has("vehicleType")) {
+            throw new IllegalArgumentException("exactly one of entityId or vehicleType is required");
+        }
+        if (action.equals("TRAVEL") && !arguments.has("destination")) {
+            throw new IllegalArgumentException("destination is required");
+        }
+        if (arguments.has("entityId")) values.put("entityId", uuid(arguments.path("entityId").asText(""), "entityId"));
+        if (arguments.has("vehicleType")) values.put("item", namespacedId(arguments.path("vehicleType").asText(""), "vehicleType"));
+        if (arguments.has("destination")) values.set("target", validatedBoundedPosition(arguments.path("destination")));
+        return values;
+    }
+
+    private static JsonNode validatedFishing(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "water", "times", "timeout"));
+        String item = namespacedId(arguments.path("item").asText("minecraft:fishing_rod"));
+        if (!item.equals("minecraft:fishing_rod")) {
+            throw new IllegalArgumentException("item must be minecraft:fishing_rod");
+        }
+        ObjectNode values = Json.object().put("item", item)
+                .put("action", "FISH");
+        if (arguments.has("water")) values.set("target", validatedBoundedPosition(arguments.path("water")));
+        if (arguments.has("times")) values.put("quantity", boundedInteger(arguments.path("times"), "times", 1, 64));
+        if (arguments.has("timeout")) values.put("durationTicks", boundedInteger(arguments.path("timeout"), "timeout", 1, 2400));
+        return values;
+    }
+
+    private static JsonNode validatedFarming(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("crop", "count", "radius", "origin"));
+        ObjectNode values = Json.object().put("item", namespacedId(arguments.path("crop").asText("")))
+                .put("action", "HARVEST_REPLANT");
+        values.put("quantity", boundedInteger(arguments.path("count"), "count", 1, 64));
+        if (arguments.has("radius")) values.put("button", boundedInteger(arguments.path("radius"), "radius", 1, 16));
+        if (arguments.has("origin")) values.set("target", validatedBoundedPosition(arguments.path("origin")));
+        return values;
+    }
+
+    private static JsonNode validatedBreeding(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("entityType", "entityId", "partnerEntityId", "times"));
+        boolean hasFirst = arguments.has("entityId"), hasPartner = arguments.has("partnerEntityId");
+        if (hasFirst != hasPartner) {
+            throw new IllegalArgumentException("entityId and partnerEntityId must be supplied together");
+        }
+        if (arguments.has("entityType") && (hasFirst || hasPartner)) {
+            throw new IllegalArgumentException("entityType cannot be combined with explicit entity IDs");
+        }
+        if (!arguments.has("entityType") && !hasFirst) {
+            throw new IllegalArgumentException("entityType or both entity IDs are required");
+        }
+        ObjectNode values = Json.object().put("action", "BREED");
+        if (arguments.has("entityType")) values.put("item", namespacedId(arguments.path("entityType").asText("")));
+        if (hasFirst) values.put("entityId", uuid(arguments.path("entityId").asText(""), "entityId"));
+        if (hasPartner) values.put("partnerEntityId", uuid(arguments.path("partnerEntityId").asText(""), "partnerEntityId"));
+        if (arguments.has("times")) values.put("quantity", boundedInteger(arguments.path("times"), "times", 1, 1));
+        return values;
+    }
+
+    private static JsonNode validatedTrade(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("villagerId", "offer", "count"));
+        ObjectNode values = Json.object().put("entityId", uuid(arguments.path("villagerId").asText(""), "villagerId"))
+                .put("slot", boundedInteger(arguments.path("offer"), "offer", 0, 127))
+                .put("action", "TRADE");
+        if (arguments.has("count")) values.put("quantity", boundedInteger(arguments.path("count"), "count", 1, 64));
+        return values;
+    }
+
+    private static JsonNode validatedEnchanting(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("item", "option", "station"));
+        ObjectNode values = Json.object().put("item", namespacedId(arguments.path("item").asText("")))
+                .put("slot", boundedInteger(arguments.path("option"), "option", 0, 2))
+                .put("action", "ENCHANT");
+        values.set("target", validatedBoundedPosition(arguments.path("station")));
+        return values;
+    }
+
+    private static JsonNode validatedBrewing(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("ingredient", "bottles", "timeout", "station"));
+        ObjectNode values = Json.object().put("item", namespacedId(arguments.path("ingredient").asText("")))
+                .put("quantity", boundedInteger(arguments.path("bottles"), "bottles", 1, 3))
+                .put("action", "BREW");
+        values.set("target", validatedBoundedPosition(arguments.path("station")));
+        if (arguments.has("timeout")) values.put("durationTicks", boundedInteger(arguments.path("timeout"), "timeout", 1, 2400));
+        return values;
+    }
+
+    private static JsonNode validatedGlide(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("target", "timeout"));
+        ObjectNode values = Json.object().put("action", "GLIDE");
+        values.set("target", validatedBoundedPosition(arguments.path("target")));
+        if (arguments.has("timeout")) values.put("durationTicks", boundedInteger(arguments.path("timeout"), "timeout", 1, 2400));
+        return values;
+    }
+
+    private static int boundedInteger(JsonNode value, String label, int minimum, int maximum) {
+        if (value == null || !value.isIntegralNumber() || !value.canConvertToInt()) {
+            throw new IllegalArgumentException(label + " must be an integer");
+        }
+        int result = value.asInt();
+        if (result < minimum || result > maximum) {
+            throw new IllegalArgumentException(label + " must be " + minimum + ".." + maximum);
+        }
+        return result;
+    }
+
+    private static String uuid(String value, String label) {
+        try { return java.util.UUID.fromString(value).toString(); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException(label + " must be a UUID"); }
+    }
+
+    private static String namespacedId(String value) { return namespacedId(value, "item"); }
+
     private static JsonNode validatedCraft(JsonNode arguments) {
         rejectUnexpected(arguments, Set.of("item", "quantity", "allowPartial", "station"));
         String item = arguments.path("item").asText("");
@@ -966,8 +1445,17 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private static ToolDefinition definition(String name, String description, JsonNode schema,
                                              String risk, String permission, boolean idempotent) {
         ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
-        root.set("properties", schema);
+        if (schema != null && schema.isObject() && "object".equals(schema.path("type").asText())
+                && schema.path("properties").isObject()) {
+            root.set("properties", schema.path("properties").deepCopy());
+            if (schema.has("required")) root.set("required", schema.path("required").deepCopy());
+            if (schema.has("oneOf")) root.set("oneOf", schema.path("oneOf").deepCopy());
+        } else {
+            root.set("properties", schema);
+        }
         if (name.equals("movement.navigate")) {
+            root.putArray("required").add("x").add("y").add("z");
+        } else if (name.equals("movement.navigate_survival")) {
             root.putArray("required").add("x").add("y").add("z");
         } else if (name.equals("movement.look")) {
             root.putArray("required").add("x").add("y").add("z");
@@ -979,6 +1467,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             root.putArray("required").add("position");
         } else if (name.equals("block.place")) {
             root.putArray("required").add("block").add("position");
+        } else if (name.equals("build.small_blueprint")) {
+            root.putArray("required").add("anchor").add("maxSize").add("blocks");
         } else if (name.equals("entity.interact") || name.equals("entity.attack")
                 || name.equals("safety.retreat")) {
             root.putArray("required").add("entityId");
@@ -1011,6 +1501,8 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         } else if (name.equals("task_graph.inspect") || name.equals("task_graph.pause")
                 || name.equals("task_graph.resume") || name.equals("task_graph.cancel")) {
             root.putArray("required").add("executionId");
+        } else if (name.equals("task_graph.replan")) {
+            root.putArray("required").add("executionId").add("requestId").add("epoch").add("expectedRevision").add("graph");
         } else if (name.equals("task.wait")) {
             root.putArray("required").add("durationMillis");
         } else if (name.equals("task.checkpoint")) {
@@ -1026,11 +1518,18 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
                 || name.startsWith("task.")) {
             return Duration.ofSeconds(5);
         }
+        if (name.equals("build.small_blueprint")) return Duration.ofMinutes(5);
         if (name.startsWith("movement.") || name.startsWith("resource.")
                 || name.startsWith("inventory.") || name.startsWith("combat.")
                 || name.startsWith("safety.") || name.equals("entity.collect")
                 || name.equals("item.smelt") || name.equals("item.craft")
-                || name.equals("item.eat_and_recover")) {
+                || name.equals("item.eat_and_recover")
+                || name.startsWith("equipment.") || name.startsWith("survival.")
+                || name.startsWith("bucket.") || name.startsWith("vehicle.")
+                || name.startsWith("fishing.") || name.startsWith("farming.")
+                || name.startsWith("animal.") || name.startsWith("villager.")
+                || name.startsWith("enchanting.") || name.startsWith("brewing.")
+                || name.startsWith("elytra.")) {
             return Duration.ofMinutes(5);
         }
         return Duration.ofSeconds(30);
@@ -1040,6 +1539,28 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
         properties.putObject("dimension").put("type", "string");
+        return properties;
+    }
+
+    private static ObjectNode survivalNavigationSchema() {
+        ObjectNode properties = Json.object();
+        for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
+        properties.putObject("dimension").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxBreakBlocks").put("type", "integer")
+                .put("minimum", 0).put("maximum", 8).put("default", 0);
+        ObjectNode allowed = properties.putObject("allowedBreakBlocks").put("type", "array")
+                .put("minItems", 1).put("maxItems", 16).put("uniqueItems", true);
+        allowed.putObject("items").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxPlaceBlocks").put("type", "integer")
+                .put("minimum", 0).put("maximum", 8).put("default", 0);
+        ObjectNode placeAllowed = properties.putObject("allowedPlaceBlocks").put("type", "array")
+                .put("minItems", 1).put("maxItems", 16).put("uniqueItems", true);
+        placeAllowed.putObject("items").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("maxRiskUnits").put("type", "integer")
+                .put("minimum", 0).put("maximum", 16).put("default", 8);
         return properties;
     }
 
@@ -1069,6 +1590,27 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     private static ObjectNode lookSchema() {
         return coordinateSchema();
+    }
+
+    private static ObjectNode entityBehaviorSchema(boolean targetRequired) {
+        ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = root.putObject("properties");
+        ObjectNode target = properties.putObject("target");
+        target.put("type", "object").put("additionalProperties", false);
+        ObjectNode targetProperties = target.putObject("properties");
+        targetProperties.putObject("uuid").put("type", "string").put("format", "uuid");
+        targetProperties.putObject("entityId").put("type", "integer").put("minimum", 0);
+        targetProperties.putObject("playerIdentity").put("type", "string").put("format", "uuid");
+        targetProperties.putObject("name").put("type", "string").put("minLength", 1).put("maxLength", 64);
+        var alternatives = target.putArray("oneOf");
+        for (String field : List.of("uuid", "entityId", "playerIdentity", "name")) {
+            alternatives.addObject().putArray("required").add(field);
+        }
+        properties.putObject("minimumDistance").put("type", "number").put("minimum", 0).put("maximum", 64);
+        properties.putObject("maximumDistance").put("type", "number").put("minimum", 0).put("maximum", 64);
+        properties.putObject("lostTimeoutTicks").put("type", "integer").put("minimum", 1).put("maximum", 1200);
+        if (targetRequired) root.putArray("required").add("target");
+        return root;
     }
 
     private static ObjectNode blockBreakSchema() {
@@ -1103,6 +1645,144 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = blockInteractionSchema();
         properties.putObject("block").put("type", "string")
                 .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        return properties;
+    }
+
+    private static JsonNode validatedSmallBlueprint(JsonNode arguments) {
+        rejectUnexpected(arguments, Set.of("anchor", "maxSize", "blocks", "temporarySupport"));
+        ObjectNode anchor = validatedBoundedPosition(arguments.path("anchor"));
+        JsonNode size = arguments.path("maxSize");
+        if (!size.isObject()) throw new IllegalArgumentException("maxSize must be an object");
+        rejectUnexpected(size, Set.of("x", "y", "z"));
+        ObjectNode normalizedSize = Json.object();
+        for (String axis : List.of("x", "y", "z")) {
+            normalizedSize.put(axis, boundedInteger(size.path(axis), "maxSize." + axis, 1, 7));
+        }
+        JsonNode blocks = arguments.path("blocks");
+        if (!blocks.isArray() || blocks.isEmpty() || blocks.size() > 128) {
+            throw new IllegalArgumentException("blocks must contain 1..128 entries");
+        }
+        var normalizedBlocks = Json.MAPPER.createArrayNode();
+        Set<String> positions = new java.util.HashSet<>();
+        for (JsonNode block : blocks) {
+            if (!block.isObject()) throw new IllegalArgumentException("each block must be an object");
+            rejectUnexpected(block, Set.of("position", "block", "state", "alternatives"));
+            JsonNode offset = block.path("position");
+            if (!offset.isObject()) throw new IllegalArgumentException("block.position must be an object");
+            rejectUnexpected(offset, Set.of("x", "y", "z"));
+            ObjectNode normalizedOffset = Json.object();
+            for (String axis : List.of("x", "y", "z")) {
+                int maximum = normalizedSize.path(axis).asInt() - 1;
+                normalizedOffset.put(axis, boundedInteger(offset.path(axis), "block.position." + axis, 0, maximum));
+            }
+            String positionKey = normalizedOffset.path("x").asInt() + ","
+                    + normalizedOffset.path("y").asInt() + "," + normalizedOffset.path("z").asInt();
+            if (!positions.add(positionKey)) throw new IllegalArgumentException("duplicate blueprint position");
+            ObjectNode normalizedBlock = Json.object();
+            normalizedBlock.set("position", normalizedOffset);
+            normalizedBlock.put("block", namespacedId(block.path("block").asText(""), "block"));
+            ObjectNode normalizedState = Json.object();
+            JsonNode state = block.path("state");
+            if (!state.isMissingNode()) {
+                if (!state.isObject() || state.size() > 8) {
+                    throw new IllegalArgumentException("state must be an object with at most 8 properties");
+                }
+                state.fields().forEachRemaining(property -> {
+                    if (!property.getKey().matches("[a-z0-9_]+") || !property.getValue().isTextual()
+                            || !property.getValue().asText().matches("[a-z0-9_.-]+")) {
+                        throw new IllegalArgumentException("invalid block state property");
+                    }
+                    normalizedState.put(property.getKey(), property.getValue().asText());
+                });
+            }
+            normalizedBlock.set("state", normalizedState);
+            var alternatives = Json.MAPPER.createArrayNode();
+            JsonNode suppliedAlternatives = block.path("alternatives");
+            if (!suppliedAlternatives.isMissingNode()) {
+                if (!suppliedAlternatives.isArray() || suppliedAlternatives.size() > 8) {
+                    throw new IllegalArgumentException("alternatives must contain at most 8 entries");
+                }
+                Set<String> unique = new java.util.HashSet<>();
+                unique.add(normalizedBlock.path("block").asText());
+                suppliedAlternatives.forEach(value -> {
+                    String id = namespacedId(value.asText(""), "material alternative");
+                    if (!unique.add(id)) throw new IllegalArgumentException("duplicate material alternative");
+                    alternatives.add(id);
+                });
+            }
+            normalizedBlock.set("alternatives", alternatives);
+            normalizedBlocks.add(normalizedBlock);
+        }
+        ObjectNode support = Json.object().put("maxBlocks", 0).put("cleanup", true);
+        support.set("blocks", Json.MAPPER.createArrayNode());
+        if (arguments.has("temporarySupport")) {
+            JsonNode supplied = arguments.path("temporarySupport");
+            if (!supplied.isObject()) throw new IllegalArgumentException("temporarySupport must be an object");
+            rejectUnexpected(supplied, Set.of("blocks", "maxBlocks", "cleanup"));
+            int maximum = boundedInteger(supplied.path("maxBlocks"), "temporarySupport.maxBlocks", 0, 16);
+            JsonNode values = supplied.path("blocks");
+            if (!values.isArray() || values.size() > 8 || (maximum > 0) != !values.isEmpty()) {
+                throw new IllegalArgumentException("temporary support blocks are required exactly when maxBlocks is positive");
+            }
+            var normalized = Json.MAPPER.createArrayNode();
+            Set<String> unique = new java.util.HashSet<>();
+            values.forEach(value -> {
+                String id = namespacedId(value.asText(""), "temporary support block");
+                if (!unique.add(id)) throw new IllegalArgumentException("duplicate temporary support block");
+                normalized.add(id);
+            });
+            support.set("blocks", normalized);
+            support.put("maxBlocks", maximum);
+            if (supplied.has("cleanup") && !supplied.path("cleanup").isBoolean()) {
+                throw new IllegalArgumentException("temporarySupport.cleanup must be boolean");
+            }
+            support.put("cleanup", supplied.path("cleanup").asBoolean(true));
+        }
+        ObjectNode blueprint = Json.object();
+        blueprint.set("anchor", anchor);
+        blueprint.set("maxSize", normalizedSize);
+        blueprint.set("blocks", normalizedBlocks);
+        blueprint.set("temporarySupport", support);
+        return Json.object().set("blueprint", blueprint);
+    }
+
+    private static ObjectNode smallBlueprintSchema() {
+        ObjectNode properties = Json.object();
+        properties.set("anchor", positionSchema());
+        ObjectNode size = properties.putObject("maxSize");
+        size.put("type", "object").put("additionalProperties", false);
+        ObjectNode sizeProperties = size.putObject("properties");
+        for (String axis : List.of("x", "y", "z")) {
+            sizeProperties.putObject(axis).put("type", "integer").put("minimum", 1).put("maximum", 7);
+        }
+        size.putArray("required").add("x").add("y").add("z");
+        ObjectNode blocks = properties.putObject("blocks");
+        blocks.put("type", "array").put("minItems", 1).put("maxItems", 128);
+        ObjectNode block = blocks.putObject("items");
+        block.put("type", "object").put("additionalProperties", false);
+        ObjectNode blockProperties = block.putObject("properties");
+        ObjectNode offset = blockProperties.putObject("position");
+        offset.put("type", "object").put("additionalProperties", false);
+        ObjectNode offsetProperties = offset.putObject("properties");
+        for (String axis : List.of("x", "y", "z")) offsetProperties.putObject(axis).put("type", "integer").put("minimum", 0).put("maximum", 6);
+        offset.putArray("required").add("x").add("y").add("z");
+        blockProperties.putObject("block").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        ObjectNode state = blockProperties.putObject("state");
+        state.put("type", "object").put("maxProperties", 8);
+        state.putObject("additionalProperties").put("type", "string").put("pattern", "^[a-z0-9_.-]+$");
+        ObjectNode alternatives = blockProperties.putObject("alternatives");
+        alternatives.put("type", "array").put("maxItems", 8).put("uniqueItems", true);
+        alternatives.putObject("items").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        block.putArray("required").add("position").add("block");
+        ObjectNode support = properties.putObject("temporarySupport");
+        support.put("type", "object").put("additionalProperties", false);
+        ObjectNode supportProperties = support.putObject("properties");
+        ObjectNode supportBlocks = supportProperties.putObject("blocks");
+        supportBlocks.put("type", "array").put("maxItems", 8).put("uniqueItems", true);
+        supportBlocks.putObject("items").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        supportProperties.putObject("maxBlocks").put("type", "integer").put("minimum", 0).put("maximum", 16).put("default", 0);
+        supportProperties.putObject("cleanup").put("type", "boolean").put("default", true);
+        support.putArray("required").add("blocks").add("maxBlocks");
         return properties;
     }
 
@@ -1196,6 +1876,15 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
             default -> throw new IllegalArgumentException("format must be json or yaml");
         };
         return TaskGraphCodec.parse(arguments.path("document").asText(), format);
+    }
+
+    private static ObjectNode replanSchema() {
+        ObjectNode properties = executionIdSchema();
+        properties.putObject("requestId").put("type", "string").put("minLength", 1).put("maxLength", 160);
+        properties.putObject("epoch").put("type", "integer").put("minimum", 0);
+        properties.putObject("expectedRevision").put("type", "integer").put("minimum", 0);
+        properties.putObject("graph").put("type", "object");
+        return properties;
     }
 
     private static ObjectNode executionIdSchema() {
@@ -1349,6 +2038,170 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
         ObjectNode properties = Json.object();
         properties.putObject("item").put("type", "string").put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
         return properties;
+    }
+
+    private static ObjectNode emptyObjectSchema() {
+        return Json.object().put("type", "object").put("additionalProperties", false);
+    }
+
+    private static ObjectNode equipmentSchema(boolean itemRequired) {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        var slots = properties.putObject("slot").put("type", "string").putArray("enum");
+        if (itemRequired) slots.add("AUTO");
+        slots.add("MAIN_HAND").add("OFF_HAND").add("HEAD").add("CHEST").add("LEGS").add("FEET");
+        if (itemRequired) root.putArray("required").add("item");
+        else root.putArray("required").add("slot");
+        return root;
+    }
+
+    private static ObjectNode bestToolSchema() {
+        ObjectNode root = emptyObjectSchema();
+        root.putObject("properties").putObject("block").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        root.putArray("required").add("block");
+        return root;
+    }
+
+    private static ObjectNode bestWeaponSchema() {
+        ObjectNode root = emptyObjectSchema();
+        root.putObject("properties").putObject("preference").put("type", "string").putArray("enum")
+                .add("ANY").add("MELEE").add("RANGED");
+        return root;
+    }
+
+    private static ObjectNode sleepSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("bed", positionSchema());
+        integerProperty(properties, "radius", 1, 16);
+        return root;
+    }
+
+    private static ObjectNode positionActionSchema(String field, String allowedItem) {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set(field, positionSchema());
+        if (allowedItem != null && !allowedItem.isBlank()) {
+            properties.putObject("item").put("type", "string").put("const", allowedItem);
+        }
+        root.putArray("required").add(field);
+        return root;
+    }
+
+    private static ObjectNode vehicleSchema(boolean travel) {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        properties.putObject("vehicleType").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.set("destination", positionSchema());
+        if (travel) root.putArray("required").add("destination");
+        else {
+            var alternatives = root.putArray("oneOf");
+            alternatives.addObject().putArray("required").add("entityId");
+            alternatives.addObject().putArray("required").add("vehicleType");
+        }
+        return root;
+    }
+
+    private static ObjectNode fishingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("item").put("type", "string")
+                .put("const", "minecraft:fishing_rod");
+        properties.set("water", positionSchema());
+        integerProperty(properties, "times", 1, 64);
+        integerProperty(properties, "timeout", 1, 2400);
+        return root;
+    }
+
+    private static ObjectNode farmingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("crop").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        integerProperty(properties, "count", 1, 64);
+        integerProperty(properties, "radius", 1, 16);
+        properties.set("origin", positionSchema());
+        root.putArray("required").add("crop").add("count");
+        return root;
+    }
+
+    private static ObjectNode breedingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("entityType").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        properties.putObject("entityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        properties.putObject("partnerEntityId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        integerProperty(properties, "times", 1, 1);
+        var alternatives = root.putArray("oneOf");
+        alternatives.addObject().putArray("required").add("entityType");
+        alternatives.addObject().putArray("required").add("entityId").add("partnerEntityId");
+        return root;
+    }
+
+    private static ObjectNode tradeSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("villagerId").put("type", "string")
+                .put("pattern", "^[0-9a-fA-F-]{36}$");
+        integerProperty(properties, "offer", 0, 127);
+        integerProperty(properties, "count", 1, 64);
+        root.putArray("required").add("villagerId").add("offer");
+        return root;
+    }
+
+    private static ObjectNode enchantingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("station", positionSchema());
+        properties.putObject("item").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        integerProperty(properties, "option", 0, 2);
+        root.putArray("required").add("item").add("option").add("station");
+        return root;
+    }
+
+    private static ObjectNode brewingSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("station", positionSchema());
+        properties.putObject("ingredient").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        integerProperty(properties, "bottles", 1, 3);
+        integerProperty(properties, "timeout", 1, 2400);
+        root.putArray("required").add("ingredient").add("bottles").add("station");
+        return root;
+    }
+
+    private static ObjectNode glideSchema() {
+        ObjectNode root = emptyObjectSchema();
+        ObjectNode properties = root.putObject("properties");
+        properties.set("target", positionSchema());
+        integerProperty(properties, "timeout", 1, 2400);
+        root.putArray("required").add("target");
+        return root;
+    }
+
+    private static void integerProperty(ObjectNode properties, String name, int minimum, int maximum) {
+        properties.putObject(name).put("type", "integer").put("minimum", minimum).put("maximum", maximum);
+    }
+
+    private static ObjectNode positionSchema() {
+        ObjectNode root = Json.object().put("type", "object").put("additionalProperties", false);
+        ObjectNode properties = root.putObject("properties");
+        properties.putObject("dimension").put("type", "string")
+                .put("pattern", "^[a-z0-9_.-]+:[a-z0-9_./-]+$");
+        for (String field : List.of("x", "y", "z")) properties.putObject(field).put("type", "integer");
+        root.putArray("required").add("x").add("y").add("z");
+        return root;
     }
 
     private static ObjectNode craftSchema() {

@@ -10,6 +10,27 @@ import { useResource } from '../hooks/useResource'
 import { useI18n } from '../i18n/I18nContext'
 import type { CompanionSnapshot, TaskGraphSnapshot } from '../types'
 
+const GRAPH_CONTROL_POLL_ATTEMPTS = 40
+const GRAPH_CONTROL_POLL_DELAY_MS = 125
+
+function graphControlSettled(state: string, action: 'pause' | 'resume' | 'cancel') {
+  const terminal = ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(state)
+  if (action === 'pause') return terminal || state === 'PAUSED'
+  if (action === 'resume') return terminal || !['PAUSED', 'RECONCILIATION_REQUIRED'].includes(state)
+  return terminal
+}
+
+async function waitForGraphControl(instanceId: string, companionId: string, executionId: string,
+  action: 'pause' | 'resume' | 'cancel') {
+  const path = `/api/task-graphs?instanceId=${encodeURIComponent(instanceId)}&companionId=${encodeURIComponent(companionId)}`
+  for (let attempt = 0; attempt < GRAPH_CONTROL_POLL_ATTEMPTS; attempt += 1) {
+    const snapshot = await api<TaskGraphSnapshot>(path)
+    const execution = snapshot.executions.find((value) => value.executionId === executionId)
+    if (!execution || graphControlSettled(execution.state, action)) return
+    await new Promise((resolve) => window.setTimeout(resolve, GRAPH_CONTROL_POLL_DELAY_MS))
+  }
+}
+
 export function CompanionsPage() {
   const { selected, selectedId, requestPlan, companionSnapshot } = useTerminal()
   const { locale, t } = useI18n()
@@ -36,6 +57,7 @@ export function CompanionsPage() {
     setGraphControlPending(`${executionId}:${action}`)
     try {
       await post('/api/task-graphs/control', { instanceId: selectedId, companionId: activeId, executionId, action })
+      await waitForGraphControl(selectedId, activeId, executionId, action)
       await taskGraphs.refresh()
     } catch (failure) {
       setGraphControlError(failure instanceof Error ? failure.message : String(failure))

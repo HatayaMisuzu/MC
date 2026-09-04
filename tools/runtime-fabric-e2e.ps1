@@ -66,6 +66,9 @@ brain:
   timeout_seconds: 10
   max_output_tokens: 1400
   max_tool_calls_per_turn: 12
+  # This replay verifies 11 Brain turns plus session setup with World Model context.
+  # Keep production defaults unchanged; budget this multi-action integration episode explicitly.
+  max_input_tokens: 200000
 logging:
   file: ./logs/runtime.log
   console: true
@@ -637,7 +640,8 @@ try {
     Copy-Item -LiteralPath $token -Destination $gameToken -Force
     $pairingToken = (Get-Content -Raw -LiteralPath $token).Trim()
 
-    $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon > `"$gameOutFile`" 2> `"$gameErrFile`"`""
+    $offlineArgument = if ($env:MCAC_TEST_OFFLINE -eq '1') { '--offline' } else { '' }
+    $gameArgs = "/d /s /c `"`"$fabric\gradlew.bat`" runGameTest -PmccompanionRuntimeE2E=true --no-daemon --no-parallel $offlineArgument > `"$gameOutFile`" 2> `"$gameErrFile`"`""
     $game = Start-TestProcess 'cmd.exe' $gameArgs $fabric $false
 
     $gameLog = Join-Path $gameRun 'logs\latest.log'
@@ -678,7 +682,30 @@ try {
     $graphBrainSession = "representative-graph-$([Guid]::NewGuid())"
     Wait-McpToolsAvailable $pairingToken $companionId $graphBrainSession @(
         'registry.search', 'recipe.query', 'registry.describe', 'item.inspect', 'movement.look',
-        'block.inspect', 'block.interact', 'menu.inspect', 'menu.quick_move', 'menu.close')
+        'block.inspect', 'block.interact', 'menu.inspect', 'menu.quick_move', 'menu.close',
+        'equipment.equip', 'equipment.unequip', 'equipment.best_tool', 'equipment.best_weapon',
+        'survival.sleep', 'survival.wake', 'bucket.fill_water', 'bucket.empty_water',
+        'vehicle.mount', 'vehicle.travel', 'vehicle.dismount', 'fishing.fish',
+        'farming.harvest_replant', 'animal.breed', 'villager.trade', 'enchanting.apply',
+        'brewing.brew', 'elytra.glide')
+
+    Write-Output '[runtime-e2e] executing one daily action through Runtime, Bridge, and the live body'
+    $equipmentReceipt = Invoke-McpTool $pairingToken $companionId $graphBrainSession 'equipment.equip' @{
+        item = 'minecraft:iron_helmet'
+        slot = 'HEAD'
+    }
+    $equipmentTaskId = $equipmentReceipt.observation.taskId
+    if (-not $equipmentTaskId) {
+        throw "Daily equipment Tool returned no durable task receipt: $($equipmentReceipt | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $equipmentTerminal = Wait-RuntimeTaskState $pairingToken $equipmentTaskId 'COMPLETED'
+    $equipmentEvidence = @($equipmentTerminal.events | Where-Object {
+        $_.payload.snapshot.equipment.head -like 'minecraft:iron_helmet:*'
+    })
+    if ($equipmentEvidence.Count -eq 0) {
+        throw "Daily equipment task completed without a verified terminal equipment snapshot: $($equipmentTerminal | ConvertTo-Json -Compress -Depth 30)"
+    }
+    Write-Output '[runtime-e2e] daily equipment macro produced a verified live HEAD-slot terminal snapshot'
     $graph = @{
         version = 'mcac-task-graph/1'
         id = 'unknown-registry-observation-chain'

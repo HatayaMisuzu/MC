@@ -7,9 +7,16 @@ import com.mccompanion.minecraft.forge.json.ObjectNode;
 import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
 import com.mccompanion.minecraft.v120.SkillParameters;
+import com.mccompanion.core.body.build.SmallBlueprint;
 import com.mccompanion.minecraft.bridge.ConversationDeliveryWindow;
 import com.mccompanion.minecraft.bridge.RuntimeCommandArguments;
 import com.mccompanion.minecraft.bridge.ConnectionEpochGate;
+import com.mccompanion.minecraft.bridge.EntityEventTracker;
+import com.mccompanion.minecraft.bridge.InventoryWorldEventTracker;
+import com.mccompanion.minecraft.bridge.SurvivalEventTracker;
+import com.mccompanion.minecraft.v120.EntityEventObservationService;
+import com.mccompanion.minecraft.v120.InventoryWorldEventObservationService;
+import com.mccompanion.minecraft.v120.SurvivalEventObservationService;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -56,12 +63,19 @@ final class RuntimeBridge implements AutoCloseable {
     private final AtomicBoolean connecting = new AtomicBoolean();
     private final ConnectionEpochGate<WebSocket> connections = new ConnectionEpochGate<>();
     private final Map<String, String> observedBehaviorStates = new ConcurrentHashMap<>();
+    private final java.util.Set<String> announcedCompanions = ConcurrentHashMap.newKeySet();
     private final Map<String, UUID> pendingPlayerRequests = new ConcurrentHashMap<>();
     private final Map<String, Long> pendingPlayerRequestTimes = new ConcurrentHashMap<>();
     private final Map<UUID, Long> playerRequestTimes = new ConcurrentHashMap<>();
     private final Map<String, Long> ownerActivityTimes = new ConcurrentHashMap<>();
     private final ConversationDeliveryWindow deliveredConversationEvents =
             new ConversationDeliveryWindow(512);
+    private final EntityEventTracker entityEvents = new EntityEventTracker();
+    private final EntityEventObservationService entityEventObservations;
+    private final SurvivalEventTracker survivalEvents = new SurvivalEventTracker();
+    private final SurvivalEventObservationService survivalEventObservations;
+    private final InventoryWorldEventTracker inventoryWorldEvents = new InventoryWorldEventTracker();
+    private final InventoryWorldEventObservationService inventoryWorldEventObservations;
     private volatile WebSocket socket;
     private volatile String sessionId;
     private volatile boolean closed;
@@ -72,6 +86,9 @@ final class RuntimeBridge implements AutoCloseable {
         this.registry = registry;
         this.logger = logger;
         this.settings = BridgeSettings.load(logger);
+        this.entityEventObservations = new EntityEventObservationService(server);
+        this.survivalEventObservations = new SurvivalEventObservationService();
+        this.inventoryWorldEventObservations = new InventoryWorldEventObservationService();
         this.executor = Executors.newSingleThreadScheduledExecutor(runnable -> {
             Thread thread = new Thread(runnable, "mc-companion-forge-runtime-bridge");
             thread.setDaemon(true);
@@ -152,7 +169,11 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("recipe_query", true)
                 .put("primitive_observation_query", true)
                 .put("primitive_lifecycle", true)
+                .put("player_entity_events", true)
+                .put("survival_events", true)
+                .put("inventory_world_events", true)
                 .put("NavigateTo", true)
+                .put("NavigateWithWorldChanges", true)
                 .put("FollowOwner", true)
                 .put("ExploreArea", true)
                 .put("LookAt", true)
@@ -162,7 +183,11 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("UseItem", true)
                 .put("DropItem", true)
                 .put("AttackEntity", true)
+                .put("MeleeAttack", true)
+                .put("ShieldCombat", true)
+                .put("BowAttack", true)
                 .put("PlaceBlock", true)
+                .put("BuildSmallBlueprint", true)
                 .put("CollectResource", true)
                 .put("MineResourceVein", true)
                 .put("WithdrawFromStorage", true)
@@ -173,6 +198,17 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("RetreatFromDanger", true)
                 .put("CraftItem", true)
                 .put("SmeltItem", true)
+                .put("EquipItem", true)
+                .put("SleepAtBed", true)
+                .put("UseWaterBucket", true)
+                .put("UseVehicle", true)
+                .put("Fish", true)
+                .put("FarmCrop", true)
+                .put("BreedAnimals", true)
+                .put("TradeWithVillager", true)
+                .put("EnchantItem", true)
+                .put("BrewPotion", true)
+                .put("GlideWithElytra", true)
                 .put("player_text_gateway", true)
                 .put("owner_activity_handoff", true)
                 .put("runtime_safe_idle", true);
@@ -200,6 +236,7 @@ final class RuntimeBridge implements AutoCloseable {
                 closeSocket(1008, "handshake rejected");
                 return;
             }
+            announcedCompanions.clear();
             sessionId = message.path("sessionId").asText();
             outgoingSequence.set(0);
             server.execute(() -> {
@@ -435,10 +472,57 @@ final class RuntimeBridge implements AutoCloseable {
                     values.path("action").asText(""),
                     values.path("durationTicks").canConvertToInt()
                             ? values.path("durationTicks").asInt()
-                            : null);
+                            : null,
+                    values.path("partnerEntityId").asText(""),
+                    stringList(values.path("allowedBreakBlocks")),
+                    stringList(values.path("allowedPlaceBlocks")),
+                    values.path("maxBreakBlocks").asInt(0),
+                    values.path("maxPlaceBlocks").asInt(0),
+                    values.path("maxRiskUnits").asInt(8),
+                    values.path("targetReferenceKind").asText(""),
+                    values.path("targetName").asText(""),
+                    values.path("targetRuntimeId").canConvertToInt()
+                            ? values.path("targetRuntimeId").asInt() : null,
+                    optionalDouble(values.path("minimumDistance")),
+                    optionalDouble(values.path("maximumDistance")),
+                    values.path("lostTimeoutTicks").canConvertToInt()
+                            ? values.path("lostTimeoutTicks").asInt() : null,
+                    smallBlueprint(values.path("blueprint")));
         } catch (IllegalArgumentException invalid) {
             return null;
         }
+    }
+
+    private static java.util.List<String> stringList(JsonNode value) {
+        if (!value.isArray()) return java.util.List.of();
+        java.util.ArrayList<String> result = new java.util.ArrayList<>();
+        value.forEach(entry -> { if (entry.isTextual()) result.add(entry.asText()); });
+        return java.util.List.copyOf(result);
+    }
+
+    private static SmallBlueprint smallBlueprint(JsonNode value) {
+        if (!value.isObject()) return null;
+        JsonNode anchor = value.path("anchor");
+        JsonNode size = value.path("maxSize");
+        java.util.ArrayList<SmallBlueprint.Block> blocks = new java.util.ArrayList<>();
+        for (JsonNode block : value.path("blocks")) {
+            JsonNode position = block.path("position");
+            java.util.Map<String, String> state = new java.util.LinkedHashMap<>();
+            block.path("state").fields().forEachRemaining(entry -> state.put(entry.getKey(), entry.getValue().asText()));
+            blocks.add(new SmallBlueprint.Block(new SmallBlueprint.Offset(
+                    position.path("x").asInt(), position.path("y").asInt(), position.path("z").asInt()),
+                    block.path("block").asText(), state, stringList(block.path("alternatives"))));
+        }
+        JsonNode support = value.path("temporarySupport");
+        return new SmallBlueprint(new SmallBlueprint.Anchor(anchor.path("dimension").asText(),
+                anchor.path("x").asInt(), anchor.path("y").asInt(), anchor.path("z").asInt()),
+                new SmallBlueprint.Size(size.path("x").asInt(), size.path("y").asInt(), size.path("z").asInt()),
+                blocks, new SmallBlueprint.SupportPolicy(stringList(support.path("blocks")),
+                        support.path("maxBlocks").asInt(), support.path("cleanup").asBoolean(true)));
+    }
+
+    private static Double optionalDouble(JsonNode value) {
+        return value.isNumber() ? value.asDouble() : null;
     }
 
     private void sendCommandAccepted(String commandId, CompanionRegistry.RuntimeResult result) {
@@ -473,7 +557,15 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("tick", server.getTickCount())
                 .put("progress", 0.0D)
                 .put("occurredAt", Instant.now().toString());
-        payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        ObjectNode eventSnapshot = payload.putObject("snapshot").put("controlEpoch", currentEpoch(companionId));
+        registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)
+                        && (value.behaviorId() == null || result.behaviorId().equals(value.behaviorId())))
+                .findFirst()
+                .ifPresent(value -> {
+                    appendRuntimeSnapshot(eventSnapshot, value);
+                    appendBehaviorObservation(eventSnapshot, value.behaviorObservation());
+                });
         sendEnvelope("behavior_event", payload);
     }
 
@@ -502,10 +594,122 @@ final class RuntimeBridge implements AutoCloseable {
         server.execute(this::publishStatusOnServerThread);
     }
 
+    /** Runs on the Minecraft server thread and observes only bounded areas around live bodies. */
+    void tick() {
+        if (closed || socket == null || sessionId == null || server.getTickCount() % 5 != 0) return;
+        // Register new/reconnected Bodies before their first authenticated event.
+        if (registry.runtimeSnapshots(false).stream().anyMatch(snapshot ->
+                !announcedCompanions.contains(snapshot.companionId()))) publishStatusOnServerThread();
+        java.util.Set<String> observedCompanions = new java.util.HashSet<>();
+        Instant observedAt = Instant.now();
+        for (CompanionRegistry.EntityEventBinding binding : registry.entityEventBindings()) {
+            observedCompanions.add(binding.companionId());
+            EntityEventTracker.Snapshot snapshot = entityEventObservations.snapshot(
+                    binding.body(), binding.behaviorId(), binding.target(), server.getTickCount(), observedAt);
+            for (EntityEventTracker.Event event : entityEvents.observe(snapshot)) sendEntityEvent(event);
+        }
+        entityEvents.retainCompanions(observedCompanions);
+        java.util.Set<String> observedSurvivalCompanions = new java.util.HashSet<>();
+        for (CompanionRegistry.SurvivalEventBinding binding : registry.survivalEventBindings()) {
+            observedSurvivalCompanions.add(binding.companionId());
+            SurvivalEventTracker.Snapshot snapshot = survivalEventObservations.snapshot(
+                    binding, server.getTickCount(), observedAt);
+            for (SurvivalEventTracker.Event event : survivalEvents.observe(snapshot)) {
+                sendSurvivalEvent(event);
+            }
+        }
+        survivalEvents.retainCompanions(observedSurvivalCompanions);
+        java.util.Set<String> observedInventoryWorldCompanions = new java.util.HashSet<>();
+        for (CompanionRegistry.InventoryWorldEventBinding binding : registry.inventoryWorldEventBindings()) {
+            observedInventoryWorldCompanions.add(binding.companionId());
+            InventoryWorldEventTracker.Snapshot snapshot = inventoryWorldEventObservations.snapshot(
+                    binding, server.getTickCount(), observedAt);
+            for (InventoryWorldEventTracker.Event event : inventoryWorldEvents.observe(snapshot)) {
+                sendInventoryWorldEvent(event);
+            }
+        }
+        inventoryWorldEvents.retainCompanions(observedInventoryWorldCompanions);
+    }
+
+    private void sendEntityEvent(EntityEventTracker.Event event) {
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", event.eventId())
+                .put("eventType", event.type().name())
+                .put("priority", event.priority().name())
+                .put("source", "MINECRAFT_ENTITY_OBSERVER")
+                .put("companionId", event.companionId())
+                .put("tick", event.tick())
+                .put("occurredAt", event.occurredAt().toString());
+        if (event.behaviorId() != null) payload.put("behaviorId", event.behaviorId());
+        EntityEventTracker.EntityFact target = event.target();
+        payload.putObject("target")
+                .put("entityId", target.identity()).put("entityType", target.type())
+                .put("displayName", target.displayName() == null ? "" : target.displayName())
+                .put("player", target.player()).put("hostile", target.hostile())
+                .put("alive", target.alive()).put("distanceSquared", target.distanceSquared());
+        payload.put("localSafetyHandling", registry.locallyHandlesSafetyEvent(event.companionId(), event.type().name()));
+        sendEnvelope("player_entity_event", payload);
+    }
+
+    private void sendSurvivalEvent(SurvivalEventTracker.Event event) {
+        SurvivalEventTracker.Snapshot snapshot = event.snapshot();
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", event.eventId()).put("eventType", event.type().name())
+                .put("priority", event.priority().name()).put("source", "MINECRAFT_SURVIVAL_OBSERVER")
+                .put("companionId", snapshot.companionId()).put("tick", snapshot.tick())
+                .put("occurredAt", snapshot.observedAt().toString())
+                .put("previousHealth", event.previousHealth()).put("damageAmount", event.damageAmount());
+        if (snapshot.behaviorId() != null) payload.put("behaviorId", snapshot.behaviorId());
+        payload.putObject("vitals")
+                .put("lifecycle", snapshot.lifecycle().name())
+                .put("health", snapshot.health()).put("maxHealth", snapshot.maxHealth())
+                .put("air", snapshot.air()).put("maxAir", snapshot.maxAir())
+                .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava())
+                .put("onGround", snapshot.onGround()).put("fallDistance", snapshot.fallDistance());
+        payload.put("localSafetyHandling", registry.locallyHandlesSafetyEvent(snapshot.companionId(), event.type().name()));
+        sendEnvelope("survival_event", payload);
+    }
+
+    private void sendInventoryWorldEvent(InventoryWorldEventTracker.Event event) {
+        InventoryWorldEventTracker.Snapshot snapshot = event.snapshot();
+        boolean inventoryCategory = event.type().ordinal()
+                <= InventoryWorldEventTracker.Type.RESOURCE_TARGET_REACHED.ordinal();
+        ObjectNode payload = JSON.createObjectNode()
+                .put("eventId", event.eventId()).put("eventType", event.type().name())
+                .put("category", inventoryCategory ? "INVENTORY" : "WORLD")
+                .put("priority", event.priority().name())
+                .put("source", "MINECRAFT_INVENTORY_WORLD_OBSERVER")
+                .put("companionId", snapshot.companionId()).put("tick", snapshot.tick())
+                .put("occurredAt", snapshot.observedAt().toString())
+                .put("previousValue", event.previousValue()).put("currentValue", event.currentValue());
+        if (snapshot.behaviorId() != null) payload.put("behaviorId", snapshot.behaviorId());
+        ObjectNode inventory = payload.putObject("inventory")
+                .put("slots", snapshot.inventorySlots()).put("freeSlots", snapshot.freeInventorySlots());
+        ObjectNode counts = inventory.putObject("counts");
+        snapshot.inventory().forEach(counts::put);
+        if (snapshot.resourceGoal() != null) inventory.putObject("goal")
+                .put("itemId", snapshot.resourceGoal().itemId())
+                .put("requiredCount", snapshot.resourceGoal().requiredCount())
+                .put("currentCount", snapshot.inventory().getOrDefault(snapshot.resourceGoal().itemId(), 0));
+        payload.putObject("world").put("dimension", snapshot.dimension())
+                .put("timeOfDay", snapshot.timeOfDay().name()).put("weather", snapshot.weather().name());
+        if (snapshot.target() != null) {
+            InventoryWorldEventTracker.Target target = snapshot.target();
+            payload.putObject("target").put("identity", target.identity())
+                    .put("kind", target.kind().name()).put("present", target.present())
+                    .put("blockId", target.blockId() == null ? "" : target.blockId())
+                    .put("blockFingerprint", target.blockFingerprint())
+                    .put("containerType", target.containerType() == null ? "" : target.containerType())
+                    .put("containerFingerprint", target.containerFingerprint());
+        }
+        sendEnvelope("inventory_world_event", payload);
+    }
+
     private void publishStatusOnServerThread() {
         if (socket == null || sessionId == null) return;
         ArrayNode companions = JSON.createArrayNode();
-        for (CompanionRegistry.RuntimeSnapshot snapshot : registry.runtimeSnapshots(true)) {
+        var snapshots = registry.runtimeSnapshots(true);
+        for (CompanionRegistry.RuntimeSnapshot snapshot : snapshots) {
             boolean activeBehavior =
                     snapshot.behaviorId() != null && !snapshot.behaviorState().equalsIgnoreCase("IDLE");
             ObjectNode status = companions.addObject()
@@ -534,18 +738,42 @@ final class RuntimeBridge implements AutoCloseable {
                     .put("freeSlots", snapshot.freeInventorySlots())
                     .putObject("counts");
             snapshot.inventory().forEach(counts::put);
+            putFacts(status,"equipment",snapshot.equipment());putFacts(status,"vehicle",snapshot.vehicle());
+            putFacts(status,"menu",snapshot.menu());putFacts(status,"sleep",snapshot.sleep());
+            putFacts(status,"fishing",snapshot.fish());putFacts(status,"glide",snapshot.glide());
+            putFacts(status,"bucket",snapshot.bucket());putFacts(status,"crop",snapshot.crop());
+            putFacts(status,"breed",snapshot.breed());putFacts(status,"trade",snapshot.trade());
+            putFacts(status,"enchant",snapshot.enchant());putFacts(status,"brew",snapshot.brew());
             // Connected Tool availability is negotiated by the hello capability flags. The status
             // protocol field is a map of structured CapabilityDescriptor values, not booleans.
+            status.set("observedContainers", PrimitiveObservationService.visibleContainers(registry, snapshot.companionId()));
+            status.set("localWorld", PrimitiveObservationService.localWorld(registry, snapshot.companionId()));
+            status.set("navigation", JSON.valueToTree(registry.worldNavigation(snapshot.companionId())));
+            ArrayNode resources = ((ObjectNode) status.path("localWorld")).putArray("resources");
+            if (snapshot.behaviorObservation() != null) snapshot.behaviorObservation().candidates().stream()
+                    .limit(16).forEach(candidate -> {
+                        // Reobserve historical candidates; their old result is not fresh evidence.
+                        ObjectNode query = JSON.createObjectNode().put("tool", "block.inspect");
+                        query.putObject("position").put("dimension", candidate.dimension())
+                                .put("x", candidate.x()).put("y", candidate.y()).put("z", candidate.z());
+                        var observed = PrimitiveObservationService.inspect(registry, snapshot.companionId(), query);
+                        if (observed.success() && candidate.block().equals(observed.observation().path("block").asText()))
+                            resources.add(observed.observation());
+                    });
             status.putObject("capabilities");
             if (activeBehavior) {
                 status.put("behaviorId", snapshot.behaviorId());
                 status.put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT));
             }
-            if (snapshot.behaviorId() != null) publishObservedLifecycle(snapshot);
         }
         ObjectNode payload = JSON.createObjectNode();
         payload.set("companions", companions);
         sendEnvelope("companion_list", payload);
+        announcedCompanions.clear();
+        for (CompanionRegistry.RuntimeSnapshot snapshot : snapshots) {
+            announcedCompanions.add(snapshot.companionId());
+            if (snapshot.behaviorId() != null) publishObservedLifecycle(snapshot);
+        }
     }
 
     private void publishObservedLifecycle(CompanionRegistry.RuntimeSnapshot snapshot) {
@@ -554,7 +782,12 @@ final class RuntimeBridge implements AutoCloseable {
         String previous = observedBehaviorStates.put(key, current);
         if (previous == null || previous.equals(current)) return;
         if (current.equals("IDLE")) {
-            sendObservedBehaviorEvent(snapshot, "completed", "completed", 1.0D, null);
+            String failure = terminalFailure(snapshot);
+            sendObservedBehaviorEvent(snapshot,
+                    failure == null ? "completed" : "blocked",
+                    failure == null ? "completed" : "blocked",
+                    failure == null ? 1.0D : 0.0D,
+                    failure);
         } else if (current.equals("PAUSED") && previous.equals("RUNNING")) {
             sendObservedBehaviorEvent(snapshot, "blocked", "blocked", 0.0D,
                     failureCode(snapshot.evidenceSummary()));
@@ -573,6 +806,7 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("positionY", snapshot.y())
                 .put("positionZ", snapshot.z())
                 .put("evidence", snapshot.evidenceSummary());
+        appendRuntimeSnapshot(evidence, snapshot);
         appendBehaviorObservation(evidence, snapshot.behaviorObservation());
         if (failureCode != null) evidence.put("failureCode", failureCode);
         ObjectNode payload = JSON.createObjectNode()
@@ -594,6 +828,42 @@ final class RuntimeBridge implements AutoCloseable {
         registry.recordRuntimeLifecyclePublished(snapshot.behaviorId());
     }
 
+    /**
+     * Copies the already observed body state into terminal behavior events. Keep the legacy
+     * positionX/Y/Z and controlEpoch fields for Runtime reconciliation, while mirroring the
+     * companion_list shape so a terminal TaskEvent is self-contained.
+     */
+    private void appendRuntimeSnapshot(ObjectNode evidence, CompanionRegistry.RuntimeSnapshot snapshot) {
+        evidence.put("worldId", worldId())
+                .put("ownerId", snapshot.ownerId())
+                .put("displayName", snapshot.displayName())
+                .put("dimension", snapshot.dimension())
+                .put("bodyState", snapshot.bodyState().toLowerCase(Locale.ROOT))
+                .put("behaviorId", snapshot.behaviorId())
+                .put("behaviorState", snapshot.behaviorState().toLowerCase(Locale.ROOT))
+                .put("behaviorRevision", snapshot.behaviorRevision())
+                .put("runtimeConnected", snapshot.runtimeConnected());
+        evidence.putObject("position").put("x", snapshot.x()).put("y", snapshot.y()).put("z", snapshot.z());
+        evidence.putObject("vitals").put("health", snapshot.health()).put("maxHealth", snapshot.maxHealth())
+                .put("food", snapshot.foodLevel()).put("air", snapshot.airSupply())
+                .put("onFire", snapshot.onFire()).put("inLava", snapshot.inLava());
+        ObjectNode inventory = evidence.putObject("inventory").put("freeSlots", snapshot.freeInventorySlots());
+        ObjectNode counts = inventory.putObject("counts");
+        snapshot.inventory().forEach(counts::put);
+        putFacts(evidence, "equipment", snapshot.equipment());
+        putFacts(evidence, "vehicle", snapshot.vehicle());
+        putFacts(evidence, "menu", snapshot.menu());
+        putFacts(evidence, "sleep", snapshot.sleep());
+        putFacts(evidence, "fishing", snapshot.fish());
+        putFacts(evidence, "glide", snapshot.glide());
+        putFacts(evidence, "bucket", snapshot.bucket());
+        putFacts(evidence, "crop", snapshot.crop());
+        putFacts(evidence, "breed", snapshot.breed());
+        putFacts(evidence, "trade", snapshot.trade());
+        putFacts(evidence, "enchant", snapshot.enchant());
+        putFacts(evidence, "brew", snapshot.brew());
+    }
+
     private static void appendBehaviorObservation(
             ObjectNode evidence,
             CompanionRegistry.BehaviorObservation observation) {
@@ -610,7 +880,11 @@ final class RuntimeBridge implements AutoCloseable {
                 .put("y", candidate.y())
                 .put("z", candidate.z())
                 .put("distanceSquared", candidate.distanceSquared()));
+        ObjectNode details = evidence.putObject("details");
+        observation.details().forEach(details::put);
     }
+
+    private static void putFacts(ObjectNode parent,String name,java.util.Map<String,String> facts){ObjectNode object=parent.putObject(name);facts.forEach(object::put);}
 
     private static String failureCode(String evidence) {
         if (evidence == null) return "ACTION_BLOCKED";
@@ -619,6 +893,18 @@ final class RuntimeBridge implements AutoCloseable {
         start += "failure=".length();
         int end = evidence.indexOf(' ', start);
         return evidence.substring(start, end < 0 ? evidence.length() : end);
+    }
+
+    private static String terminalFailure(CompanionRegistry.RuntimeSnapshot snapshot) {
+        String evidence = snapshot.evidenceSummary();
+        if (evidence != null && evidence.contains("success=true")) return null;
+        String failure = failureCode(evidence);
+        if (!failure.equals("ACTION_BLOCKED") && !failure.equals("NONE")) return failure;
+        CompanionRegistry.BehaviorObservation observation = snapshot.behaviorObservation();
+        if (observation == null || observation.failureCode().isBlank()
+                || observation.failureCode().equals("NONE")
+                || observation.failureCode().equals("VERIFIED")) return null;
+        return observation.failureCode();
     }
 
     private void deliverConversationEvent(JsonNode payload) {
@@ -683,6 +969,9 @@ final class RuntimeBridge implements AutoCloseable {
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
+        announcedCompanions.clear();
+        entityEvents.clear();
+        survivalEvents.clear();
         if (!closed) logger.warn("Runtime bridge disconnected: {}; companion enters safe pause", reason);
         server.execute(() -> {
             if (!connections.isLatestAttempt(attempt) && socket != null && sessionId != null) return;
@@ -791,6 +1080,9 @@ final class RuntimeBridge implements AutoCloseable {
         playerRequestTimes.clear();
         ownerActivityTimes.clear();
         observedBehaviorStates.clear();
+        announcedCompanions.clear();
+        entityEvents.clear();
+        survivalEvents.clear();
         executor.shutdownNow();
     }
 

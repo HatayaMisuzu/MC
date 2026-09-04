@@ -74,48 +74,51 @@ public final class ObservationToolGateway implements ToolGateway {
     private ToolResult query(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), Set.of("select"));
         String select = call.arguments().path("select").asText("");
-        if (!Set.of("position", "vitals", "inventory", "containers", "behavior", "all").contains(select)) {
+        if (!Set.of("position", "dimension", "vitals", "equipment", "inventory", "menu", "vehicle",
+                "containers", "behavior", "navigation", "nearby", "model", "all").contains(select)) {
             throw new IllegalArgumentException("select is invalid");
         }
-        JsonNode status = status(context);
-        JsonNode value = switch (select) {
-            case "position" -> status.path("position");
-            case "vitals" -> status.path("vitals");
-            case "inventory" -> status.path("inventory");
-            case "containers" -> status.path("observedContainers");
-            case "behavior" -> behavior(status);
-            case "all" -> status;
-            default -> throw new IllegalStateException();
-        };
-        if (value.isMissingNode() || value.isNull()) {
-            return ToolResult.rejected(call, "OBSERVATION_UNAVAILABLE",
-                    "Selected body observation is not available");
+        var model = companions.worldModel(context.companionId());
+        if (Set.of("all", "model", "nearby", "containers").contains(select)) {
+            var summary = model.summary(companions.observationTime(), List.of());
+            if (select.equals("all") || select.equals("model")) return ok(call, summary);
+            ArrayNode entries = Json.MAPPER.createArrayNode();
+            for (JsonNode entry : summary.path("nearby")) {
+                if (select.equals("nearby") || entry.path("kind").asText().equals("container")) entries.add(entry);
+            }
+            return ok(call, Json.object().put("kind", select).put("source", "WORLD_MODEL").set("value", entries));
         }
-        ObjectNode observation = envelope(status, select);
-        observation.set("value", value.deepCopy());
-        return ok(call, observation);
+        JsonNode fact = model.current(select, companions.observationTime());
+        if (fact.isEmpty()) return ToolResult.rejected(call, "OBSERVATION_UNAVAILABLE", "Selected observation is unavailable");
+        if (!fact.path("verified").asBoolean()) return new ToolResult(call.callId(), call.name(), false,
+                fact.path("stale").asBoolean() ? "OBSERVATION_STALE" : "OBSERVATION_INCOMPLETE", fact, true);
+        return ok(call, fact);
     }
 
     private ToolResult inventory(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), Set.of());
-        JsonNode status = status(context);
-        JsonNode inventory = status.path("inventory");
+        JsonNode fact = companions.worldModel(context.companionId()).current("inventory", companions.observationTime());
+        JsonNode inventory = fact.path("value");
         if (!inventory.isObject()) {
             return ToolResult.rejected(call, "OBSERVATION_UNAVAILABLE",
                     "Inventory observation is not available");
         }
-        ObjectNode observation = envelope(status, "inventory");
-        observation.set("inventory", inventory.deepCopy());
+        if (!fact.path("verified").asBoolean()) return new ToolResult(call.callId(), call.name(), false,
+                fact.path("stale").asBoolean() ? "OBSERVATION_STALE" : "OBSERVATION_INCOMPLETE", fact, true);
+        ObjectNode observation = (ObjectNode) fact.deepCopy();
+        observation.set("inventory", fact.path("value"));
         return ok(call, observation);
     }
 
     private ToolResult safety(ToolContext context, ToolCall call) throws SQLException {
         rejectUnexpected(call.arguments(), Set.of());
-        JsonNode status = status(context);
-        JsonNode vitals = status.path("vitals");
+        JsonNode fact = companions.worldModel(context.companionId()).current("vitals", companions.observationTime());
+        JsonNode vitals = fact.path("value");
         if (!vitals.isObject()) {
             return ToolResult.rejected(call, "OBSERVATION_UNAVAILABLE", "Vitals observation is not available");
         }
+        if (!fact.path("verified").asBoolean()) return new ToolResult(call.callId(), call.name(), false,
+                fact.path("stale").asBoolean() ? "OBSERVATION_STALE" : "OBSERVATION_INCOMPLETE", fact, true);
         ArrayNode hazards = Json.MAPPER.createArrayNode();
         if (vitals.path("onFire").asBoolean()) hazards.add("ON_FIRE");
         if (vitals.path("inLava").asBoolean()) hazards.add("IN_LAVA");
@@ -123,7 +126,7 @@ public final class ObservationToolGateway implements ToolGateway {
         double maximum = vitals.path("maxHealth").asDouble(0);
         double health = vitals.path("health").asDouble(maximum);
         if (maximum > 0 && health / maximum <= 0.3D) hazards.add("LOW_HEALTH");
-        ObjectNode observation = envelope(status, "safety");
+        ObjectNode observation = (ObjectNode) fact.deepCopy();
         observation.set("vitals", vitals.deepCopy());
         observation.set("hazards", hazards);
         observation.put("safe", hazards.isEmpty());
@@ -181,22 +184,6 @@ public final class ObservationToolGateway implements ToolGateway {
                 .orElseThrow(() -> new IllegalArgumentException("companion is unknown")).status();
     }
 
-    private static ObjectNode behavior(JsonNode status) {
-        ObjectNode value = Json.object().put("bodyState", status.path("bodyState").asText(""))
-                .put("behaviorState", status.path("behaviorState").asText("idle"))
-                .put("behaviorRevision", status.path("behaviorRevision").asLong(0))
-                .put("controlEpoch", status.path("controlEpoch").asLong(0));
-        if (status.has("behaviorId")) value.put("behaviorId", status.path("behaviorId").asText());
-        return value;
-    }
-
-    private static ObjectNode envelope(JsonNode status, String kind) {
-        return Json.object().put("kind", kind).put("verified", true)
-                .put("source", "CONNECTED_BODY_OBSERVATION")
-                .put("dimension", status.path("dimension").asText(""))
-                .put("observedAt", status.path("observedAt").asText(""));
-    }
-
     private static ToolDefinition definition(String name, String description, JsonNode schema,
                                              String permission) {
         return new ToolDefinition(name, "1.0", description, schema, "LOW", permission,
@@ -210,7 +197,9 @@ public final class ObservationToolGateway implements ToolGateway {
     private static ObjectNode querySchema() {
         ObjectNode schema = emptySchema();
         schema.putObject("properties").putObject("select").put("type", "string").putArray("enum")
-                .add("position").add("vitals").add("inventory").add("containers").add("behavior").add("all");
+                .add("position").add("dimension").add("vitals").add("equipment").add("inventory")
+                .add("menu").add("vehicle").add("containers").add("behavior").add("navigation")
+                .add("nearby").add("model").add("all");
         schema.putArray("required").add("select");
         return schema;
     }

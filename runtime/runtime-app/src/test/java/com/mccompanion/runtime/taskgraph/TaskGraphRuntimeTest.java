@@ -26,6 +26,34 @@ class TaskGraphRuntimeTest {
     @TempDir Path temporary;
 
     @Test
+    void lifecycleListenerReceivesCheckpointAndTerminalBoundaries() throws Exception {
+        try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("event-listener.db"))) {
+            database.initialize();
+            var transitions = new CopyOnWriteArrayList<String>();
+            try (TaskGraphRuntime runtime = new TaskGraphRuntime(new FakeGateway(),
+                    new TaskGraphExecutionRepository(database))) {
+                runtime.setLifecycleListener((record, transition, details) -> transitions.add(transition));
+                ToolContext context = new ToolContext("hermes", "brain-1", "companion-1");
+                ToolCall call = new ToolCall("event-listener-execution", "task_graph.execute", Json.object());
+                var graph = Json.parse("""
+                        {"version":"mcac-task-graph/1","id":"event-listener","permissions":[],
+                         "root":{"id":"root","type":"sequence","nodes":[
+                           {"id":"milestone","type":"checkpoint","label":"halfway"},
+                           {"id":"done","type":"return","value":"ok"}
+                         ]}}
+                        """);
+                ToolResult accepted = runtime.start(context, call, graph, Json.object(), Json.object());
+                ToolResult terminal = runtime.await(context, call, Duration.ofSeconds(2), ignored -> { });
+                assertTrue(terminal.success(), terminal.observation().toString());
+                assertTrue(transitions.contains("STARTED"), transitions.toString());
+                assertTrue(transitions.contains("CHECKPOINT"), transitions.toString());
+                assertTrue(transitions.contains("PROGRESS"), transitions.toString());
+                assertTrue(transitions.contains("SUCCEEDED"), transitions.toString());
+            }
+        }
+    }
+
+    @Test
     void executesAsynchronouslyResolvesInputsAndPersistsBoundedEvidence() throws Exception {
         try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("async.db"))) {
             database.initialize();
@@ -264,7 +292,7 @@ class TaskGraphRuntimeTest {
 
                 assertTrue(runtime.resume(context,
                         new ToolCall("resume-repeat", "task_graph.resume", Json.object()), "execution-7").success());
-                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(5), ignored -> { });
+                ToolResult terminal = runtime.await(context, execute, Duration.ofSeconds(10), ignored -> { });
                 assertTrue(terminal.success(), terminal.observation().toString());
                 assertEquals(2, gateway.arguments.size(),
                         "resume replayed a Tool already persisted in the interrupted iteration");

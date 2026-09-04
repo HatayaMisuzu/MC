@@ -1,0 +1,21 @@
+allprojects {
+    afterEvaluate { p ->
+        if (p.name == 'minecraft-ai-companion-forge-1.20.1') {
+            p.sourceSets.gameTest.java.setExcludes(p.sourceSets.gameTest.java.excludes.findAll {
+                it != '**/WorldModelForgeGameTests.java'
+            })
+            p.sourceSets.gameTest.java.exclude { d -> d.file.name.endsWith('GameTests.java') && d.file.name != 'WorldModelForgeGameTests.java' }
+        }
+        if (p.name == 'minecraft-ai-companion-fabric-1.21.1') {
+            p.tasks.named('processGametestResources').configure {
+                inputs.property('featureSevenWorldModel', true)
+                doLast {
+                    def descriptor = new File(destinationDir, 'fabric.mod.json')
+                    def data = new groovy.json.JsonSlurper().parse(descriptor)
+                    data.entrypoints['fabric-gametest'] = ['com.mccompanion.minecraft.v121.WorldModelGameTests']
+                    descriptor.text = groovy.json.JsonOutput.toJson(data)
+                }
+            }
+        }
+    }
+}

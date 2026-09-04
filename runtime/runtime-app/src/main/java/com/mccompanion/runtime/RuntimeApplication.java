@@ -14,6 +14,7 @@ import com.mccompanion.runtime.brain.HermesBrainAdapter;
 import com.mccompanion.runtime.brain.OpenAiCompatibleBrainAdapter;
 import com.mccompanion.runtime.brain.ProactiveMessageRepository;
 import com.mccompanion.runtime.brain.ProactiveMessageToolGateway;
+import com.mccompanion.runtime.brain.BrainContextAssembler;
 import com.mccompanion.runtime.config.RuntimeConfig;
 import com.mccompanion.runtime.capability.CapabilityRegistry;
 import com.mccompanion.runtime.capability.CapabilityVisibility;
@@ -22,6 +23,9 @@ import com.mccompanion.runtime.health.RuntimeHealthServer;
 import com.mccompanion.runtime.health.McpReplayRepository;
 import com.mccompanion.runtime.health.McpSessionRepository;
 import com.mccompanion.runtime.health.McpEventRepository;
+import com.mccompanion.runtime.event.RuntimeEventBrainDispatcher;
+import com.mccompanion.runtime.event.RuntimeEventRepository;
+import com.mccompanion.runtime.event.RuntimeEventService;
 import com.mccompanion.runtime.lease.LeaseService;
 import com.mccompanion.runtime.logging.Redactor;
 import com.mccompanion.runtime.logging.RuntimeLog;
@@ -76,6 +80,7 @@ public final class RuntimeApplication implements AutoCloseable {
     private final CommandService commands;
     private final ExternalBrainCoordinator externalBrain;
     private final CompositeToolGateway toolGateway;
+    private final RuntimeEventService runtimeEvents;
     private final RuntimeWebSocketServer webSocket;
     private final RuntimeHealthServer healthServer;
     private final ScheduledExecutorService maintenance;
@@ -92,6 +97,7 @@ public final class RuntimeApplication implements AutoCloseable {
             CommandService commands,
             ExternalBrainCoordinator externalBrain,
             CompositeToolGateway toolGateway,
+            RuntimeEventService runtimeEvents,
             RuntimeWebSocketServer webSocket,
             RuntimeHealthServer healthServer,
             ScheduledExecutorService maintenance,
@@ -104,6 +110,7 @@ public final class RuntimeApplication implements AutoCloseable {
         this.commands = commands;
         this.externalBrain = externalBrain;
         this.toolGateway = toolGateway;
+        this.runtimeEvents = runtimeEvents;
         this.webSocket = webSocket;
         this.healthServer = healthServer;
         this.maintenance = maintenance;
@@ -137,6 +144,7 @@ public final class RuntimeApplication implements AutoCloseable {
         RuntimeCli cli = null;
         ExternalBrainCoordinator externalBrain = null;
         CompositeToolGateway toolGateway = null;
+        RuntimeEventService runtimeEvents = null;
         try {
             database.initialize();
             McpReplayRepository mcpReplay = new McpReplayRepository(database);
@@ -187,6 +195,7 @@ public final class RuntimeApplication implements AutoCloseable {
             SearchSessionRepository searchSessions = new SearchSessionRepository(database);
             int expiredSearchSessions = searchSessions.expire();
             RegistryToolGateway registryTools = new RegistryToolGateway(sessions, commandSender);
+            registryTools.attachWorldModel(companions);
             java.util.concurrent.atomic.AtomicReference<CompositeToolGateway> toolGatewayReference =
                     new java.util.concurrent.atomic.AtomicReference<>();
             Path workspaceRoot = java.util.Objects.requireNonNull(config.databasePath().getParent(),
@@ -206,19 +215,35 @@ public final class RuntimeApplication implements AutoCloseable {
                             companionId -> activeSessionRegistry.forCompanion(companionId)
                                     .map(value -> value.handshake()).orElse(null)),
                     registryTools,
-                    new MemoryToolGateway(memories, conversationRepository), new SearchToolGateway(searchProvider,
+                    new MemoryToolGateway(memories, conversationRepository, companions), new SearchToolGateway(searchProvider,
                     config.search.allowedDomains, config.search.deniedDomains, searchSessions), skillTools,
                     new ProactiveMessageToolGateway(brainAudit,
                             new ProactiveMessageRepository(database), conversations)));
             toolGatewayReference.set(toolGateway);
             TaskGraphRuntime taskGraphRuntime = new TaskGraphRuntime(toolGateway, taskGraphs,
                     conversationRepository);
+            runtimeEvents = new RuntimeEventService(new RuntimeEventRepository(database));
+            runtimeEvents.attachWorldModel(companions);
+            commands.setTaskLifecycleListener(runtimeEvents);
+            RuntimeEventService graphEvents = runtimeEvents;
+            taskGraphRuntime.setLifecycleListener((record, transition, details) -> {
+                graphEvents.onLifecycle(record, transition, details);
+                // PROGRESS/CHECKPOINT update the World Model but do not append lifecycle feedback.
+                // Avoid doing synchronous conversation delivery on the graph worker's hot path.
+                if (switch (transition) {
+                    case "STARTED", "PAUSED", "RESUMED", "CANCELLED", "SUCCEEDED", "FAILED" -> true;
+                    default -> false;
+                }) {
+                    conversations.deliverPending(record.companionId());
+                }
+            });
             minecraftTools.attachTaskGraphRuntime(taskGraphRuntime);
             skillTools.attachTaskGraphRuntime(taskGraphRuntime);
             externalBrain = brainOverride == null
                     ? createExternalBrain(config, redactor, log, toolGateway, brainAudit, conversationRepository)
                     : new ExternalBrainCoordinator(brainOverride, toolGateway,
                     config.brain.maxToolCallsPerTurn, brainAudit, conversationRepository);
+            if (externalBrain != null) externalBrain.attachTaskGraphs(taskGraphRuntime);
             if (externalBrain != null && !recoveredDurableCalls.isEmpty()) {
                 externalBrain.restoreActiveDurableCalls(recoveredDurableCalls);
             }
@@ -259,7 +284,13 @@ public final class RuntimeApplication implements AutoCloseable {
                     taskGraphRuntime,
                     log);
             webSocket.attachRegistryQueries(registryTools);
+            webSocket.attachRuntimeEvents(runtimeEvents);
             webSocket.startAndAwait(Duration.ofSeconds(15));
+            var replanEvents = new RuntimeEventRepository(database);
+            for (var event : taskGraphs.pendingReplanEvents()) replanEvents.recoverReplan(event);
+            runtimeEvents.start(new RuntimeEventBrainDispatcher(externalBrain,
+                    new BrainContextAssembler(companions, sessions, capabilityVisibility,
+                            memories, conversations, commands), conversations));
             healthServer = new RuntimeHealthServer(config, pairingToken, sessions, commands, companions,
                     capabilityVisibility, conversations, memories, externalBrain, brainAudit,
                     toolGateway, taskGraphRuntime, skillRepository, skillTools, mcpReplay, mcpSessions, mcpEvents,
@@ -303,6 +334,7 @@ public final class RuntimeApplication implements AutoCloseable {
             }
             RuntimeApplication application = new RuntimeApplication(config, log, database, companions, sessions,
                     commands, externalBrain, toolGateway,
+                    runtimeEvents,
                     webSocket, healthServer, maintenance, cli);
             holder[0] = application;
             log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, legacyProvider=disabled"
@@ -316,6 +348,7 @@ public final class RuntimeApplication implements AutoCloseable {
         } catch (IOException | SQLException | InterruptedException | RuntimeException failure) {
             closeQuietly(cli);
             shutdownExecutor(maintenance);
+            closeQuietly(runtimeEvents);
             closeQuietly(webSocket);
             closeQuietly(healthServer);
             closeQuietly(externalBrain);
@@ -413,6 +446,7 @@ public final class RuntimeApplication implements AutoCloseable {
         log.info("Minecraft AI Companion Runtime shutting down");
         closeQuietly(cli);
         shutdownExecutor(maintenance);
+        closeQuietly(runtimeEvents);
         try {
             commands.releaseAllLeases();
         } catch (RuntimeException failure) {

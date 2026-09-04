@@ -12,6 +12,16 @@ class CapabilityVisibilityTest {
     private final CapabilityVisibility visibility = new CapabilityVisibility(CapabilityRegistry.standard());
 
     @Test
+    void durableRecoveryAcceptanceTaskIsExposedOnlyOnConnectedFullBodies() {
+        var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
+        for (var target : List.of(new String[]{"fabric", "1.21.1"}, new String[]{"forge", "1.20.1"})) {
+            var snapshot = visibility.resolve(handshake(target[0], target[1],
+                    Json.object().put("BuildSmallBlueprint", true)), status);
+            assertEquals(List.of("BuildSmallBlueprint"), snapshot.availableNames());
+        }
+    }
+
+    @Test
     void exposesOnlyFormallyImplementedConnectedFabricCapabilities() {
         var capabilities = Json.object().put("NavigateTo", true).put("FollowOwner", true)
                 .put("DeliverItem", true).put("EatAndRecover", true)
@@ -38,6 +48,34 @@ class CapabilityVisibilityTest {
 
         assertEquals(List.of("FollowOwner", "NavigateTo"), snapshot.availableNames());
         assertEquals("AVAILABLE_NOW", snapshot.toJson().path("FollowOwner").path("state").asText());
+    }
+
+    @Test
+    void exposesNavigateWithWorldChangesWhenTheConnectedBodyDeclaresIt() {
+        var capabilities = Json.object().put("NavigateWithWorldChanges", true);
+        var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
+
+        var snapshot = visibility.resolve(handshake("fabric", "1.21.1", capabilities), status);
+
+        assertEquals(List.of("NavigateWithWorldChanges"), snapshot.availableNames());
+        assertEquals("AVAILABLE_NOW",
+                snapshot.toJson().path("NavigateWithWorldChanges").path("state").asText());
+    }
+
+    @Test
+    void exposesDailyActionCapabilitiesWhenTheConnectedBodyDeclaresThem() {
+        var capabilities = Json.object().put("EquipItem", true).put("SleepAtBed", true)
+                .put("UseWaterBucket", true).put("UseVehicle", true).put("Fish", true)
+                .put("FarmCrop", true).put("BreedAnimals", true).put("TradeWithVillager", true)
+                .put("EnchantItem", true).put("BrewPotion", true).put("GlideWithElytra", true);
+        var status = Json.object().put("bodyState", "spawned").put("runtimeConnected", true);
+
+        var snapshot = visibility.resolve(handshake("fabric", "1.21.1", capabilities), status);
+
+        assertEquals(List.of("BreedAnimals", "BrewPotion", "EnchantItem", "EquipItem", "FarmCrop",
+                        "Fish", "GlideWithElytra", "SleepAtBed", "TradeWithVillager", "UseVehicle",
+                        "UseWaterBucket").stream().sorted().toList(),
+                snapshot.availableNames().stream().filter(name -> capabilities.has(name)).sorted().toList());
     }
 
     @Test

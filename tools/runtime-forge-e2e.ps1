@@ -179,7 +179,8 @@ try {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $gameToken) | Out-Null
     Copy-Item -LiteralPath $token -Destination $gameToken -Force
     $pairingToken = (Get-Content -Raw -LiteralPath $token).Trim()
-    $gameArgs = "/d /s /c `"`"$forge\gradlew.bat`" runGameTestServer -PmccompanionRuntimeE2E=true --no-daemon > `"$gameOut`" 2> `"$gameErr`"`""
+    $offlineArgument = if ($env:MCAC_TEST_OFFLINE -eq '1') { '--offline' } else { '' }
+    $gameArgs = "/d /s /c `"`"$forge\gradlew.bat`" runGameTestServer -PmccompanionRuntimeE2E=true --no-daemon --no-parallel $offlineArgument > `"$gameOut`" 2> `"$gameErr`"`""
     $game = Start-TestProcess 'cmd.exe' $gameArgs $forge $false
 
     $gameLog = Join-Path $gameRun 'logs\latest.log'

@@ -37,6 +37,7 @@ public class JsonNode implements Iterable<JsonNode> {
     public boolean isNull() { return value.isJsonNull(); }
     public boolean isEmpty() { return size() == 0; }
     public boolean isTextual() { return value.isJsonPrimitive() && value.getAsJsonPrimitive().isString(); }
+    public boolean isNumber() { return value.isJsonPrimitive() && value.getAsJsonPrimitive().isNumber(); }
     public boolean isIntegralNumber() {
         if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) return false;
         double number = value.getAsDouble();
@@ -76,6 +77,18 @@ public class JsonNode implements Iterable<JsonNode> {
     public int size() {
         return value.isJsonArray() ? value.getAsJsonArray().size()
                 : value.isJsonObject() ? value.getAsJsonObject().size() : 0;
+    }
+
+    public Iterator<java.util.Map.Entry<String, JsonNode>> fields() {
+        if (!value.isJsonObject()) return java.util.Collections.emptyIterator();
+        Iterator<java.util.Map.Entry<String, JsonElement>> delegate = value.getAsJsonObject().entrySet().iterator();
+        return new Iterator<>() {
+            @Override public boolean hasNext() { return delegate.hasNext(); }
+            @Override public java.util.Map.Entry<String, JsonNode> next() {
+                var entry = delegate.next();
+                return java.util.Map.entry(entry.getKey(), wrap(entry.getValue()));
+            }
+        };
     }
 
     @Override public Iterator<JsonNode> iterator() {

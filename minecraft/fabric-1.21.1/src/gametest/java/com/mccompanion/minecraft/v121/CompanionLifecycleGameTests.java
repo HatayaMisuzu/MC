@@ -1,5 +1,6 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.build.SmallBlueprint;
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import com.mccompanion.minecraft.fabric.PrimitiveObservationService;
 import com.mccompanion.minecraft.fabric.RegistryObservationService;
@@ -34,6 +35,188 @@ import org.slf4j.LoggerFactory;
 /** Headless integration tests that exercise the real ServerPlayer body and fake connection. */
 public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static final Logger LOGGER = LoggerFactory.getLogger("minecraft_ai_companion_gametest");
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1400, batch = "blueprint_examples")
+    public void smallBlueprintOrientsAlternativeStairsCleansSupportAndCancelsSafely(GameTestHelper helper) {
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Builder").success(), "example body create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        BlockPos origin = moveToIsolatedArena(owner, body, 1088, 1088, 1);
+        String id = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
+                .findFirst().orElseThrow().companionId();
+        String lease = "blueprint-examples";
+        helper.assertTrue(registry.runtimeAcquireLease(id, lease, 1L,
+                System.currentTimeMillis() + 120_000L).success(), "example lease failed");
+        BlockPos anchor = origin.offset(3, 0, 3);
+        var blocks = java.util.List.of(
+                exampleBlock(0, 0, "minecraft:oak_stairs", true),
+                exampleBlock(1, 0, "minecraft:cobblestone", false),
+                exampleBlock(2, 0, "minecraft:cobblestone", false),
+                exampleBlock(1, 1, "minecraft:oak_stairs", true),
+                exampleBlock(2, 1, "minecraft:cobblestone", false),
+                exampleBlock(2, 2, "minecraft:oak_stairs", true),
+                exampleBlock(4, 1, "minecraft:oak_planks", false));
+        SmallBlueprint plan = new SmallBlueprint(
+                new SmallBlueprint.Anchor(body.serverLevel().dimension().location().toString(),
+                        anchor.getX(), anchor.getY(), anchor.getZ()),
+                new SmallBlueprint.Size(5, 3, 1), blocks,
+                new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 1, true));
+        body.addItem(new ItemStack(Items.COBBLESTONE, 3));
+        body.addItem(new ItemStack(Items.SPRUCE_STAIRS, 3));
+        body.addItem(new ItemStack(Items.OAK_PLANKS, 1));
+        body.addItem(new ItemStack(Items.DIRT, 2));
+        helper.assertTrue(registry.runtimeStart(id, lease, 1L, "blueprint-stairs", "skill",
+                null, null, null, new SkillParameters("BuildSmallBlueprint", plan)).success(), "example start failed");
+        awaitExampleCondition(helper, registry, id, 1000, () -> registry.runtimeSnapshots(false).stream()
+                .anyMatch(value -> value.companionId().equals(id) && value.behaviorState().equals("IDLE")), () -> {
+            for (var block : blocks) {
+                var actual = body.serverLevel().getBlockState(anchor.offset(
+                        block.offset().x(), block.offset().y(), block.offset().z()));
+                String expected = block.alternatives().isEmpty() ? block.blockId() : block.alternatives().get(0);
+                helper.assertTrue(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(actual.getBlock())
+                        .toString().equals(expected), "example final block mismatch: " + block);
+                for (var property : block.state().entrySet()) {
+                    var key = actual.getBlock().getStateDefinition().getProperty(property.getKey());
+                    helper.assertTrue(key != null && actual.getValue(key).toString().equals(property.getValue()),
+                            "example final state mismatch: " + actual);
+                }
+            }
+            helper.assertTrue(body.serverLevel().getBlockState(anchor.offset(4, 0, 0)).isAir(),
+                    "temporary dirt was not cleaned through real mining");
+            BlockPos cancellationTarget = origin.offset(10, 1, 10);
+            SmallBlueprint cancelPlan = new SmallBlueprint(new SmallBlueprint.Anchor(
+                    body.serverLevel().dimension().location().toString(),
+                    cancellationTarget.getX(), cancellationTarget.getY(), cancellationTarget.getZ()),
+                    new SmallBlueprint.Size(1, 1, 1),
+                    java.util.List.of(exampleBlock(0, 0, "minecraft:oak_planks", false)),
+                    new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 1, true));
+            body.addItem(new ItemStack(Items.OAK_PLANKS));
+            helper.assertTrue(registry.runtimeStart(id, lease, 1L, "blueprint-cancel", "skill",
+                    null, null, null, new SkillParameters("BuildSmallBlueprint", cancelPlan)).success(),
+                    "cancellation start failed");
+            awaitExampleCondition(helper, registry, id, 300,
+                    () -> body.serverLevel().getBlockState(cancellationTarget.below()).is(Blocks.DIRT), () -> {
+                helper.assertTrue(registry.runtimeCancel(id, lease, 1L).success(), "blueprint cancel failed");
+                var snapshot = registry.runtimeSnapshots(false).stream()
+                        .filter(value -> value.companionId().equals(id)).findFirst().orElseThrow();
+                helper.assertTrue(snapshot.behaviorObservation().failureCode()
+                        .equals("BLUEPRINT_CANCELLED_SUPPORTS_RETAINED"),
+                        "cancel did not report retained supports: " + snapshot.behaviorObservation());
+                helper.runAfterDelay(5, () -> {
+                    helper.assertTrue(body.serverLevel().getBlockState(cancellationTarget).isAir()
+                            && body.serverLevel().getBlockState(cancellationTarget.below()).is(Blocks.DIRT),
+                            "cancel mutated world or silently removed supports");
+                    helper.assertTrue(registry.runtimeReleaseLease(id, lease, 1L).success(), "example release failed");
+                removeFixture(helper, registry, owner, "blueprint example cleanup failed");
+                    helper.succeed();
+                });
+            });
+        });
+    }
+
+    private static SmallBlueprint.Block exampleBlock(int x, int y, String id, boolean stairs) {
+        return new SmallBlueprint.Block(new SmallBlueprint.Offset(x, y, 0), id,
+                stairs ? java.util.Map.of("facing", "west", "half", "bottom") : java.util.Map.of(),
+                stairs ? java.util.List.of("minecraft:spruce_stairs") : java.util.List.of());
+    }
+
+    private static void awaitExampleCondition(GameTestHelper helper, CompanionRegistry registry, String id,
+            int remaining, java.util.function.BooleanSupplier condition, Runnable done) {
+        if (condition.getAsBoolean()) { done.run(); return; }
+        var snapshot = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.companionId().equals(id)).findFirst().orElseThrow();
+        helper.assertTrue(remaining > 0 && snapshot.behaviorState().equals("RUNNING"),
+                "blueprint example blocked: " + snapshot.behaviorState() + " " + snapshot.behaviorObservation());
+        helper.runAfterDelay(1, () -> awaitExampleCondition(helper, registry, id, remaining - 1, condition, done));
+    }
+
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 6000, batch = "small_blueprint")
+    public void smallBlueprintBuildsShelterAndHouseAndResumesAfterInterruption(GameTestHelper helper) {
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "Blueprint").success(), "blueprint create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "blueprint body missing");
+        BlockPos origin = moveToIsolatedArena(owner, body, 960, 960, 1);
+        for (int x = -4; x <= 15; x++) for (int z = -4; z <= 15; z++) for (int y = 4; y <= 6; y++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+        }
+        String companionId = registry.runtimeSnapshots(false).stream()
+                .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
+                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
+        String lease = "fabric-small-blueprint";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                System.currentTimeMillis() + 300_000L).success(), "blueprint lease failed");
+
+        BlockPos shelterAnchor = origin.offset(3, 0, 2);
+        SmallBlueprint shelter = shelterBlueprint(body, shelterAnchor, 3);
+        helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE, shelter.blocks().size())),
+                "shelter materials fixture failed");
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L, "blueprint-shelter", "skill",
+                null, null, null, new SkillParameters("BuildSmallBlueprint", shelter)).success(),
+                "shelter start failed");
+        awaitBlueprintProgress(helper, registry, companionId, body, shelter, 300, () -> {
+            int beforePause = matchingBlueprintBlocks(body, shelter);
+            helper.assertTrue(beforePause > 0 && beforePause < shelter.blocks().size(),
+                    "shelter interruption did not occur during partial construction");
+            helper.assertTrue(registry.runtimePause(companionId, lease, 1L).success(), "shelter pause failed");
+            CompanionSavedData data = helper.getLevel().getServer().overworld().getDataStorage().computeIfAbsent(
+                    CompanionSavedData.FACTORY, CompanionSavedData.STORAGE_ID);
+            CompanionEntry entry = data.get(owner.getUUID());
+            CompanionEntry restored = CompanionEntry.load(entry.save());
+            helper.assertTrue(restored.blueprintSession != null
+                            && restored.blueprintSession.completed().size() == beforePause,
+                    "durable record lost completed blueprint positions");
+            entry.blueprintSession = restored.blueprintSession;
+            helper.runAfterDelay(5, () -> {
+                helper.assertValueEqual(matchingBlueprintBlocks(body, shelter), beforePause,
+                        "paused shelter repeated or mutated completed positions");
+                helper.assertTrue(registry.runtimeResume(companionId, lease, 1L).success(), "shelter resume failed");
+                awaitBehaviorIdleForChain(helper, registry, companionId, 1800, ignored -> {
+                    assertBlueprint(helper, body, shelter, "3x3 shelter");
+                    BlockPos houseAnchor = origin.offset(8, 0, 0);
+                    SmallBlueprint house = shelterBlueprint(body, houseAnchor, 5);
+                    helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE, 64)),
+                            "house material stack one failed");
+                    helper.assertTrue(body.addItem(new ItemStack(Items.COBBLESTONE,
+                                    house.blocks().size() - 64)), "house material stack two failed");
+                    helper.assertTrue(registry.runtimeStart(companionId, lease, 1L, "blueprint-house", "skill",
+                            null, null, null, new SkillParameters("BuildSmallBlueprint", house)).success(),
+                            "house start failed");
+                    awaitBehaviorIdleForChain(helper, registry, companionId, 3000, houseDone -> {
+                        assertBlueprint(helper, body, house, "5x5 house");
+                        BlockPos repairTarget = origin.offset(2, 0, 10);
+                        SmallBlueprint repair = oneBlockBlueprint(body, repairTarget,
+                                "minecraft:oak_planks");
+                        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                                        "blueprint-material-recovery", "skill", null, null, null,
+                                        new SkillParameters("BuildSmallBlueprint", repair)).success(),
+                                "material recovery blueprint start failed");
+                        awaitBehaviorPaused(helper, registry, companionId, 40, paused -> {
+                            helper.assertValueEqual(paused.behaviorObservation().failureCode(),
+                                    "MATERIALS_INSUFFICIENT",
+                                    "missing blueprint material did not pause safely");
+                            helper.assertTrue(body.addItem(new ItemStack(Items.OAK_PLANKS)),
+                                    "material recovery fixture failed");
+                            helper.assertTrue(registry.runtimeResume(companionId, lease, 1L).success(),
+                                    "material recovery resume failed");
+                            awaitBehaviorIdleForChain(helper, registry, companionId, 300, repaired -> {
+                                helper.assertTrue(body.serverLevel().getBlockState(repairTarget).is(Blocks.OAK_PLANKS),
+                                        "resumed blueprint did not verify the recovered material placement");
+                                helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                                        "blueprint release failed");
+                                removeFixture(helper, registry, owner, "blueprint cleanup failed");
+                                helper.succeed();
+                            });
+                        });
+                    });
+                });
+            });
+        });
+    }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 200, batch = "controlArbitration")
     public void ownerTakeoverInvalidatesRuntimeLeaseAndControlOwnerIsObservable(GameTestHelper helper) {
@@ -146,6 +329,14 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             for (int y = 0; y <= 2; y++) {
                 body.serverLevel().setBlockAndUpdate(
                         observationOrigin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+        }
+        for (int z = 1; z <= 2; z++) {
+            body.serverLevel().setBlockAndUpdate(
+                    observationOrigin.offset(0, -1, z), Blocks.STONE.defaultBlockState());
+            for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        observationOrigin.offset(0, y, z), Blocks.AIR.defaultBlockState());
             }
         }
         BlockPos blockPosition = observationOrigin.offset(2, 1, 0);
@@ -632,31 +823,31 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "entity attack test create failed");
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "entity attack test created no live body");
-        var cow = EntityType.COW.create(body.serverLevel());
-        helper.assertTrue(cow != null, "entity attack test could not create cow");
-        cow.setNoAi(true);
-        cow.moveTo(body.getX() + 3.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
-        helper.assertTrue(body.serverLevel().addFreshEntity(cow),
-                "entity attack test could not add cow");
-        float healthBefore = cow.getHealth();
+        var husk = EntityType.HUSK.create(body.serverLevel());
+        helper.assertTrue(husk != null, "entity attack test could not create husk");
+        husk.setNoAi(true);
+        husk.moveTo(body.getX() + 2.0D, body.getY(), body.getZ(), 0.0F, 0.0F);
+        helper.assertTrue(body.serverLevel().addFreshEntity(husk),
+                "entity attack test could not add husk");
+        float healthBefore = husk.getHealth();
         String companionId = body.getUUID().toString();
         String leaseId = "gametest-entity-attack";
         helper.assertTrue(registry.runtimeAcquireLease(
                 companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
                 "entity attack lease acquisition failed");
-        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "attack-selected-cow", "skill",
+        helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "attack-selected-husk", "skill",
                 null, null, null, new SkillParameters("AttackEntity", "", 1, false,
                         body.serverLevel().dimension().location().toString(),
-                        null, null, null, cow.getUUID().toString(), "UP", "MAIN_HAND")).success(),
+                        null, null, null, husk.getUUID().toString(), "UP", "MAIN_HAND")).success(),
                 "entity attack failed to start");
         awaitBehaviorIdle(helper, registry, companionId, 20, snapshot -> {
-            helper.assertTrue(!cow.isAlive() || cow.getHealth() < healthBefore,
+            helper.assertTrue(!husk.isAlive() || husk.getHealth() < healthBefore,
                     "vanilla entity attack did not damage the selected living entity");
             helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "ENTITY_ATTACK_COMPLETE",
                     "entity attack observation code mismatch");
             helper.assertTrue(snapshot.evidenceSummary().contains("VANILLA_SERVER_PLAYER_ATTACK"),
                     "entity attack evidence did not identify ServerPlayer.attack");
-            cow.discard();
+            husk.discard();
             removeFixture(helper, registry, owner, "entity attack cleanup failed");
         });
     }
@@ -966,22 +1157,24 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.succeedWhen(() -> {
             var snapshot = registry.runtimeSnapshots(false).stream()
                     .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
-            helper.assertValueEqual(snapshot.behaviorState(), "PAUSED",
-                    "active task was not interrupted after safety retreat");
+            helper.assertValueEqual(snapshot.behaviorState(), "RUNNING",
+                    "original task was not resumed after safety retreat");
             helper.assertTrue(snapshot.behaviorObservation() != null,
                     "safety retreat has not reached a terminal observation");
-            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "SAFETY_RETREAT_COMPLETE",
-                    "retreat observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "LOCAL_THREAT_RESUMED",
+                    "recovery observation code mismatch");
+            helper.assertValueEqual(snapshot.behaviorId(), "unsafe-travel",
+                    "recovery replaced the interrupted behavior identity");
             // The reflex measures its three-block displacement from the exact tick on which it
             // preempts travel. Depending on server scheduling, travel may first move toward the
             // threat, so the net delta from this earlier setup position can be smaller.
             helper.assertTrue(body.position().distanceToSqr(start) >= 0.25D,
                     "retreat did not create a verified movement delta");
-            helper.assertTrue(zombie.distanceToSqr(body) >= 36.0D
+            helper.assertTrue(zombie.distanceToSqr(body) >= 49.0D
                             && zombie.distanceToSqr(body) > initialThreatDistance,
-                    "retreat did not reach the verified six-block hostile clearance");
-            helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
-                    "retreat did not produce successful movement evidence");
+                    "recovery did not reach the verified seven-block melee clearance");
+            helper.assertTrue(!registry.locallyHandlesSafetyEvent(companionId, "LOW_HEALTH"),
+                    "completed recovery left its local-handling marker latched");
             zombie.discard();
             removeFixture(helper, registry, owner, "retreat test cleanup failed");
         });
@@ -1088,10 +1281,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(usedSword.is(Items.IRON_SWORD) && usedSword.getDamageValue() >= 1,
                     "vanilla attack did not consume weapon durability");
             helper.assertTrue(snapshot.behaviorObservation() != null, "defense produced no observation");
-            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "DEFEND_COMPLETE",
+            helper.assertValueEqual(snapshot.behaviorObservation().failureCode(), "TARGET_DEAD_CONFIRMED",
                     "defense observation code mismatch");
-            helper.assertValueEqual(snapshot.behaviorObservation().itemId(), "THREAT_DEFEATED",
-                    "defense did not report the verified threat outcome");
+            helper.assertValueEqual(snapshot.behaviorObservation().details().get("targetId"), husk.getUUID().toString(),
+                    "defense did not report the verified target identity");
             helper.assertTrue(snapshot.evidenceSummary().contains("success=true"),
                     "defense did not produce successful action evidence");
             removeFixture(helper, registry, owner, "defend test cleanup failed");
@@ -1631,6 +1824,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             helper.assertTrue(ticksRemaining > 0,
                     "timed out waiting for behavior completion: behavior=" + snapshot.behaviorId()
                             + ", position=(" + snapshot.x() + "," + snapshot.y() + "," + snapshot.z() + ")"
+                            + ", observation=" + snapshot.behaviorObservation()
                             + ", evidence=" + snapshot.evidenceSummary());
             helper.runAfterDelay(1, () -> awaitBehaviorIdle(
                     helper, registry, companionId, ticksRemaining - 1, terminalAssertions, completeTest));
@@ -1875,6 +2069,419 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     "vertical navigation mutated the stair or platform");
             removeFixture(helper, registry, owner, "vertical path test cleanup failed");
         });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 600, batch = "nav2_locomotion")
+    public void navigationSprintsThenUsesABoundedSafeDrop(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(
+                helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SprintDropCompanion").success(),
+                "sprint/drop test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "sprint/drop test created no live body");
+        BlockPos origin = moveToIsolatedArena(owner, body, 640, 640, 1);
+        for (int x = -1; x <= 1; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, 2, 0), Blocks.STONE.defaultBlockState());
+        }
+        Vec3 highStart = Vec3.atBottomCenterOf(origin.offset(0, 3, 0));
+        owner.teleportTo(owner.serverLevel(), highStart.x, highStart.y, highStart.z - 2.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), highStart.x, highStart.y, highStart.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        body.setOnGround(true);
+        float healthBefore = body.getHealth();
+        boolean[] sprintObserved = {false};
+        trackSprinting(helper, body, sprintObserved, 160);
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(6, 0, 0));
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "sprint/drop navigation failed to start");
+        awaitPosition(helper, body, target, 400, () -> {
+            helper.assertTrue(sprintObserved[0],
+                    "flat safe route never applied real sprint state");
+            helper.assertTrue(body.getHealth() == healthBefore,
+                    "bounded three-block drop damaged the companion");
+            helper.assertTrue(body.serverLevel().getBlockState(origin.offset(0, 2, 0)).is(Blocks.STONE)
+                            && body.serverLevel().getBlockState(origin.offset(2, -1, 0)).is(Blocks.STONE),
+                    "sprint/drop navigation mutated its platforms");
+            removeFixture(helper, registry, owner, "sprint/drop cleanup failed");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 1000, batch = "nav2_breaking")
+    public void survivalNavigationEnforcesBreakBudgetThenVerifiesExactBlocksAndArrival(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(
+                helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SurvivalBreakCompanion").success(),
+                "survival break test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "survival break test created no live body");
+        BlockPos origin = moveToIsolatedArena(owner, body, 768, 768, 1);
+        buildSealedBreakCorridor(body, origin);
+        BlockPos lower = origin.offset(3, 0, 0);
+        BlockPos upper = lower.above();
+        body.serverLevel().setBlockAndUpdate(lower, Blocks.DIRT.defaultBlockState());
+        body.serverLevel().setBlockAndUpdate(upper, Blocks.DIRT.defaultBlockState());
+        ItemStack shovel = new ItemStack(Items.IRON_SHOVEL);
+        body.getInventory().setItem(12, shovel);
+        int damageBefore = shovel.getDamageValue();
+        String companionId = body.getUUID().toString();
+        String lease = "fabric-nav2-break-lease";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                        System.currentTimeMillis() + 120_000L).success(),
+                "survival break lease acquisition failed");
+        BlockPos target = origin.offset(6, 0, 0);
+        SkillParameters insufficient = survivalBreakParameters(body, target, 1);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                        "nav2-break-budget", "skill", null, null, null, insufficient).success(),
+                "bounded survival navigation did not start");
+        awaitRuntimeBehaviorState(helper, registry, companionId, "PAUSED", 180, blocked -> {
+            helper.assertTrue(blocked.behaviorObservation() != null
+                            && "PATH_BUDGET_EXCEEDED".equals(blocked.behaviorObservation().failureCode()),
+                    "insufficient break budget was not rejected honestly: " + blocked.behaviorObservation());
+            helper.assertTrue(body.serverLevel().getBlockState(lower).is(Blocks.DIRT)
+                            && body.serverLevel().getBlockState(upper).is(Blocks.DIRT),
+                    "budget rejection partially mutated the corridor");
+            helper.assertTrue(registry.runtimeCancel(companionId, lease, 1L).success(),
+                    "budget-rejected navigation could not be cancelled");
+            SkillParameters allowed = survivalBreakParameters(body, target, 2);
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                            "nav2-break-allowed", "skill", null, null, null, allowed).success(),
+                    "authorized survival navigation did not restart");
+            awaitRuntimeBehaviorState(helper, registry, companionId, "IDLE", 500, completed -> {
+                helper.assertTrue(body.serverLevel().getBlockState(lower).isAir()
+                                && body.serverLevel().getBlockState(upper).isAir(),
+                        "authorized route did not break the exact two-block obstruction");
+                helper.assertTrue(body.position().distanceToSqr(Vec3.atBottomCenterOf(target)) <= 2.25D,
+                        "authorized route broke blocks but did not reach its target");
+                helper.assertTrue(completed.behaviorObservation() != null
+                                && "NAVIGATION_COMPLETE".equals(completed.behaviorObservation().failureCode())
+                                && "2".equals(completed.behaviorObservation().details().get("brokenBlocks"))
+                                && completed.behaviorObservation().details().getOrDefault("destroyedBlocks", "")
+                                .contains("minecraft:dirt@" + lower.getX() + ',' + lower.getY() + ',' + lower.getZ()),
+                        "terminal navigation snapshot omitted exact verified break evidence: "
+                                + completed.behaviorObservation());
+                helper.assertTrue(body.getMainHandItem().is(Items.IRON_SHOVEL)
+                                && body.getMainHandItem().getDamageValue() >= damageBefore + 2,
+                        "navigation did not select and consume real tool durability");
+                helper.assertTrue(body.serverLevel().getBlockState(origin.offset(3, 2, 0)).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(origin.offset(3, 0, 1)).is(Blocks.COBBLESTONE),
+                        "survival navigation damaged a non-allowlisted corridor block");
+                removeFixture(helper, registry, owner, "survival break cleanup failed");
+                helper.succeed();
+            });
+        });
+    }
+
+    @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 4000, batch = "nav2_placement")
+    public void survivalNavigationBuildsBoundedBridgeAndJumpsSimpleGap(GameTestHelper helper) {
+        if (Boolean.getBoolean("mccompanion.persistence.seed")
+                || Boolean.getBoolean("mccompanion.persistence.verify")
+                || Boolean.getBoolean("mccompanion.runtime.e2e")
+                || Boolean.getBoolean("mccompanion.stability")) {
+            helper.succeed();
+            return;
+        }
+        CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(
+                helper.getLevel().getServer());
+        ServerPlayer owner = helper.makeMockServerPlayerInLevel();
+        helper.assertTrue(registry.create(owner, "SurvivalBridgeCompanion").success(),
+                "survival bridge test create failed");
+        CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
+        helper.assertTrue(body != null, "survival bridge test created no live body");
+        BlockPos origin = moveToIsolatedArena(owner, body, 1024, 1024, 1);
+        buildSealedBridgeCorridor(body, origin, true);
+        BlockPos firstBridge = origin.offset(1, -1, 0);
+        BlockPos secondBridge = origin.offset(2, -1, 0);
+        body.getInventory().setItem(14, new ItemStack(Items.COBBLESTONE, 2));
+        body.getInventory().setItem(15, new ItemStack(Items.DIAMOND_BLOCK));
+        int cobblestoneBefore = body.getInventory().countItem(Items.COBBLESTONE);
+        int valuableBefore = body.getInventory().countItem(Items.DIAMOND_BLOCK);
+        String companionId = body.getUUID().toString();
+        String lease = "fabric-nav2-place-lease";
+        helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
+                        System.currentTimeMillis() + 120_000L).success(),
+                "survival bridge lease acquisition failed");
+        BlockPos target = origin.offset(5, 0, 0);
+        helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                        "nav2-place-budget", "skill", null, null, null,
+                        survivalPlaceParameters(body, target, 1)).success(),
+                "bounded bridge navigation did not start");
+        awaitRuntimeBehaviorState(helper, registry, companionId, "PAUSED", 220, blocked -> {
+            helper.assertTrue(blocked.behaviorObservation() != null
+                            && "PATH_BUDGET_EXCEEDED".equals(blocked.behaviorObservation().failureCode()),
+                    "insufficient placement budget was not rejected honestly: "
+                            + blocked.behaviorObservation());
+            helper.assertTrue(body.serverLevel().getBlockState(firstBridge).isAir()
+                            && body.serverLevel().getBlockState(secondBridge).isAir(),
+                    "placement budget rejection partially built a bridge");
+            helper.assertTrue(registry.runtimeCancel(companionId, lease, 1L).success(),
+                    "budget-rejected bridge could not be cancelled");
+            helper.assertTrue(registry.runtimeStart(companionId, lease, 1L,
+                            "nav2-place-allowed", "skill", null, null, null,
+                            survivalPlaceParameters(body, target, 2)).success(),
+                    "authorized bridge navigation did not restart");
+            awaitRuntimeBehaviorState(helper, registry, companionId, "IDLE", 600, completed -> {
+                helper.assertTrue(body.serverLevel().getBlockState(firstBridge).is(Blocks.COBBLESTONE)
+                                && body.serverLevel().getBlockState(secondBridge).is(Blocks.COBBLESTONE),
+                        "authorized route did not build the exact two-block bridge");
+                helper.assertTrue(body.position().distanceToSqr(Vec3.atBottomCenterOf(target)) <= 2.25D,
+                        "authorized bridge route did not reach its target");
+                helper.assertTrue(body.getInventory().countItem(Items.COBBLESTONE) == cobblestoneBefore - 2
+                                && body.getInventory().countItem(Items.DIAMOND_BLOCK) == valuableBefore,
+                        "bridge did not consume exactly the allowed disposable blocks");
+                helper.assertTrue(completed.behaviorObservation() != null
+                                && "NAVIGATION_COMPLETE".equals(completed.behaviorObservation().failureCode())
+                                && "2".equals(completed.behaviorObservation().details().get("placedBlocks"))
+                                && completed.behaviorObservation().details()
+                                .getOrDefault("placedBlockPositions", "")
+                                .contains("minecraft:cobblestone@" + firstBridge.getX() + ','
+                                        + firstBridge.getY() + ',' + firstBridge.getZ()),
+                        "terminal bridge snapshot omitted exact placement evidence: "
+                                + completed.behaviorObservation());
+                helper.assertTrue(registry.runtimeReleaseLease(companionId, lease, 1L).success(),
+                        "survival bridge lease release failed");
+
+                buildSealedBridgeCorridor(body, origin, false);
+                Vec3 jumpStart = Vec3.atBottomCenterOf(origin);
+                owner.teleportTo(owner.serverLevel(), jumpStart.x, jumpStart.y, jumpStart.z - 2.0D,
+                        owner.getYRot(), owner.getXRot());
+                body.teleportTo(body.serverLevel(), jumpStart.x, jumpStart.y, jumpStart.z,
+                        body.getYRot(), body.getXRot());
+                body.setDeltaMovement(Vec3.ZERO);
+                body.setOnGround(true);
+                boolean[] airborne = {false};
+                trackAirborne(helper, body, airborne, 180);
+                Vec3 jumpTarget = Vec3.atBottomCenterOf(origin.offset(5, 0, 0));
+                helper.assertTrue(registry.goTo(owner, jumpTarget.x, jumpTarget.y, jumpTarget.z).success(),
+                        "simple gap navigation failed to start");
+                awaitSuccessfulNavigationPosition(
+                        helper, registry, owner, body, jumpTarget, 360, () -> awaitNavigationIdle(
+                        helper, registry, owner, 40, () -> {
+                    helper.assertTrue(airborne[0], "simple gap route never applied a real jump");
+                    helper.assertTrue(body.serverLevel().getBlockState(origin.offset(1, -1, 0)).isAir(),
+                            "simple gap crossing filled or mutated the gap");
+                    runAuditedPassageAndLongDistanceAcceptance(
+                            helper, registry, owner, body);
+                }));
+            });
+        });
+    }
+
+    private static SkillParameters survivalPlaceParameters(
+            CompanionPlayer body, BlockPos target, int maxPlaceBlocks) {
+        return new SkillParameters("NavigateWithWorldChanges", "", 1, false,
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "",
+                null, null, "", null, "", java.util.List.of(),
+                java.util.List.of("minecraft:cobblestone"), 0, maxPlaceBlocks, 8);
+    }
+
+    private static void buildSealedBridgeCorridor(
+            CompanionPlayer body, BlockPos origin, boolean lowRoof) {
+        for (int x = -1; x <= 7; x++) {
+            for (int y = 0; y <= 3; y++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+            for (int z : new int[] {-1, 1}) {
+                for (int y = -4; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0),
+                    x == 1 || x == 2 ? Blocks.AIR.defaultBlockState() : Blocks.STONE.defaultBlockState());
+            if (x == 1 || x == 2) {
+                for (int y = -4; y <= -2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+                }
+            }
+            if (lowRoof) {
+                body.serverLevel().setBlockAndUpdate(
+                        origin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        for (int x : new int[] {-1, 7}) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = -4; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        if (!lowRoof) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(2, -1, 0), Blocks.STONE.defaultBlockState());
+        }
+    }
+
+    private static void trackAirborne(GameTestHelper helper, CompanionPlayer body,
+                                      boolean[] observed, int remaining) {
+        if (!body.onGround()) observed[0] = true;
+        if (observed[0] || remaining <= 0) return;
+        helper.runAfterDelay(1, () -> trackAirborne(helper, body, observed, remaining - 1));
+    }
+
+    private static void runAuditedPassageAndLongDistanceAcceptance(
+            GameTestHelper helper, CompanionRegistry registry, ServerPlayer owner, CompanionPlayer body) {
+        BlockPos doorOrigin = moveToIsolatedArena(owner, body, 1216, 1216, 1);
+        for (int x = -1; x <= 7; x++) {
+            body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            for (int y = 0; y <= 1; y++) {
+                body.serverLevel().setBlockAndUpdate(doorOrigin.offset(x, y, 0), Blocks.AIR.defaultBlockState());
+            }
+            for (int z : new int[] {-1, 1}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            doorOrigin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-1, 7}) {
+            for (int z = -1; z <= 1; z++) for (int y = 0; y <= 2; y++) {
+                body.serverLevel().setBlockAndUpdate(
+                        doorOrigin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+            }
+        }
+        BlockPos door = doorOrigin.offset(3, 0, 0);
+        var lower = Blocks.IRON_DOOR.defaultBlockState()
+                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.EAST)
+                .setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.LOWER)
+                .setValue(BlockStateProperties.OPEN, false);
+        body.serverLevel().setBlockAndUpdate(door, lower);
+        body.serverLevel().setBlockAndUpdate(door.above(),
+                lower.setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER));
+        Vec3 doorStart = Vec3.atBottomCenterOf(doorOrigin);
+        owner.teleportTo(owner.serverLevel(), doorStart.x, doorStart.y, doorStart.z - 2.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), doorStart.x, doorStart.y, doorStart.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        Vec3 blockedTarget = Vec3.atBottomCenterOf(doorOrigin.offset(6, 0, 0));
+        helper.assertTrue(registry.goTo(owner, blockedTarget.x, blockedTarget.y, blockedTarget.z).success(),
+                "iron-door boundary navigation failed to start");
+        helper.runAfterDelay(12, () -> {
+            String status = registry.status(owner);
+            helper.assertTrue(status.contains("mode=PAUSED") && status.contains("failure=PATH_UNREACHABLE"),
+                    "non-hand-openable passage did not fail honestly: " + status);
+            helper.assertTrue(!body.serverLevel().getBlockState(door).getValue(BlockStateProperties.OPEN),
+                    "navigation silently opened an iron door");
+            helper.assertTrue(registry.stop(owner).success(), "iron-door boundary cleanup failed");
+            runLongDistanceAcceptance(helper, registry, owner, body);
+        });
+    }
+
+    private static void runLongDistanceAcceptance(
+            GameTestHelper helper, CompanionRegistry registry, ServerPlayer owner, CompanionPlayer body) {
+        BlockPos origin = moveToIsolatedArena(owner, body, 1344, 1344, 1);
+        BlockPos targetBlock = origin.offset(208, 0, 0);
+        int startChunk = (origin.getX() - 2) >> 4;
+        int endChunk = (targetBlock.getX() + 2) >> 4;
+        int centerChunkZ = origin.getZ() >> 4;
+        for (int chunkX = startChunk; chunkX <= endChunk; chunkX++) {
+            for (int chunkZ = centerChunkZ - 1; chunkZ <= centerChunkZ + 1; chunkZ++) {
+                body.serverLevel().setChunkForced(chunkX, chunkZ, true);
+            }
+        }
+        for (int x = -2; x <= 210; x++) {
+            for (int z = -1; z <= 1; z++) {
+                body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+        Vec3 start = Vec3.atBottomCenterOf(origin);
+        owner.teleportTo(owner.serverLevel(), start.x, start.y, start.z - 2.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), start.x, start.y, start.z,
+                body.getYRot(), body.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
+        body.setOnGround(true);
+        Vec3 target = Vec3.atBottomCenterOf(targetBlock);
+        helper.assertTrue(registry.goTo(owner, target.x, target.y, target.z).success(),
+                "representative long-distance navigation failed to start");
+        awaitSuccessfulNavigationPosition(
+                helper, registry, owner, body, target, 2800, () -> awaitNavigationIdle(
+                helper, registry, owner, 40, () -> {
+            helper.assertTrue(body.serverLevel().getBlockState(origin.offset(104, -1, 0)).is(Blocks.STONE),
+                    "long-distance route mutated its travel surface");
+            removeFixture(helper, registry, owner, "survival navigation audit cleanup failed");
+            helper.succeed();
+        }));
+    }
+
+    private static SkillParameters survivalBreakParameters(
+            CompanionPlayer body, BlockPos target, int maxBreakBlocks) {
+        return new SkillParameters("NavigateWithWorldChanges", "", 1, false,
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ(), "", "UP", "MAIN_HAND", "",
+                null, null, "", null, "", java.util.List.of("minecraft:dirt"),
+                java.util.List.of(), maxBreakBlocks, 0, 8);
+    }
+
+    private static void buildSealedBreakCorridor(CompanionPlayer body, BlockPos origin) {
+        for (int x = -1; x <= 8; x++) {
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
+            body.serverLevel().setBlockAndUpdate(origin.offset(x, 2, 0), Blocks.COBBLESTONE.defaultBlockState());
+            for (int z : new int[] {-1, 1}) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+        for (int x : new int[] {-1, 8}) {
+            for (int z = -1; z <= 1; z++) {
+                for (int y = 0; y <= 2; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            origin.offset(x, y, z), Blocks.COBBLESTONE.defaultBlockState());
+                }
+            }
+        }
+    }
+
+    private static void awaitRuntimeBehaviorState(
+            GameTestHelper helper, CompanionRegistry registry, String companionId,
+            String expectedState, int ticksRemaining,
+            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> completed) {
+        CompanionRegistry.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        if (expectedState.equals(snapshot.behaviorState())) {
+            completed.accept(snapshot);
+            return;
+        }
+        helper.assertTrue(!"PAUSED".equals(snapshot.behaviorState()) && ticksRemaining > 0,
+                "survival navigation stopped in an unexpected state: expected=" + expectedState
+                        + " actual=" + snapshot.behaviorState() + " observation="
+                        + snapshot.behaviorObservation());
+        helper.runAfterDelay(1, () -> awaitRuntimeBehaviorState(helper, registry, companionId,
+                expectedState, ticksRemaining - 1, completed));
+    }
+
+    private static void trackSprinting(GameTestHelper helper, CompanionPlayer body,
+                                       boolean[] observed, int remaining) {
+        if (body.isSprinting()) observed[0] = true;
+        if (observed[0] || remaining <= 0) return;
+        helper.runAfterDelay(1, () -> trackSprinting(helper, body, observed, remaining - 1));
     }
 
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 500, batch = "swim_navigation")
@@ -2255,6 +2862,47 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.runAfterDelay(1, () -> awaitPosition(helper, body, target, ticksRemaining - 1, reached));
     }
 
+    private static void awaitNavigationIdle(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            int ticksRemaining,
+            Runnable completed) {
+        String status = registry.status(owner);
+        if (status.contains("mode=IDLE")) {
+            completed.run();
+            return;
+        }
+        helper.assertTrue(!status.contains("mode=PAUSED"),
+                "navigation reached the target but ended unsuccessfully: " + status);
+        helper.assertTrue(ticksRemaining > 0,
+                "navigation reached the target but did not complete: " + status);
+        helper.runAfterDelay(1, () -> awaitNavigationIdle(
+                helper, registry, owner, ticksRemaining - 1, completed));
+    }
+
+    private static void awaitSuccessfulNavigationPosition(
+            GameTestHelper helper,
+            CompanionRegistry registry,
+            ServerPlayer owner,
+            CompanionPlayer body,
+            Vec3 target,
+            int ticksRemaining,
+            Runnable reached) {
+        String status = registry.status(owner);
+        helper.assertTrue(!status.contains("mode=PAUSED"),
+                "navigation stopped before reaching the target: " + status);
+        if (body.position().distanceToSqr(target) <= 2.25D) {
+            reached.run();
+            return;
+        }
+        helper.assertTrue(ticksRemaining > 0,
+                "navigation did not reach target: position=" + body.position()
+                        + " target=" + target + " status=" + status);
+        helper.runAfterDelay(1, () -> awaitSuccessfulNavigationPosition(
+                helper, registry, owner, body, target, ticksRemaining - 1, reached));
+    }
+
     private static void awaitFollowPosition(
             GameTestHelper helper,
             CompanionPlayer body,
@@ -2286,6 +2934,79 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionRegistry.Result removed = registry.remove(owner);
         helper.assertTrue(removed.success(), failureMessage + ": " + removed.code());
         helper.getLevel().getServer().getPlayerList().remove(owner);
+    }
+
+    private static SmallBlueprint shelterBlueprint(CompanionPlayer body, BlockPos anchor, int width) {
+        java.util.ArrayList<SmallBlueprint.Block> blocks = new java.util.ArrayList<>();
+        for (int z = 0; z < width; z++) for (int x = 0; x < width; x++) {
+            blocks.add(blueprintBlock(x, 0, z));
+        }
+        int wallTop = width == 3 ? 2 : 3;
+        for (int y = 1; y <= wallTop; y++) for (int z = 0; z < width; z++) for (int x = 0; x < width; x++) {
+            boolean perimeter = x == 0 || z == 0 || x == width - 1 || z == width - 1;
+            boolean doorway = z == 0 && x == width / 2 && y <= 2;
+            if (perimeter && !doorway) blocks.add(blueprintBlock(x, y, z));
+        }
+        for (int z = 0; z < width; z++) for (int x = 0; x < width; x++) {
+            blocks.add(blueprintBlock(x, wallTop + 1, z));
+        }
+        return new SmallBlueprint(new SmallBlueprint.Anchor(
+                body.serverLevel().dimension().location().toString(), anchor.getX(), anchor.getY(), anchor.getZ()),
+                new SmallBlueprint.Size(width, wallTop + 2, width), blocks,
+                new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 4, true));
+    }
+
+    private static SmallBlueprint.Block blueprintBlock(int x, int y, int z) {
+        return new SmallBlueprint.Block(new SmallBlueprint.Offset(x, y, z),
+                "minecraft:cobblestone", java.util.Map.of(), java.util.List.of("minecraft:stone"));
+    }
+
+    private static SmallBlueprint oneBlockBlueprint(CompanionPlayer body, BlockPos target, String blockId) {
+        return new SmallBlueprint(new SmallBlueprint.Anchor(
+                body.serverLevel().dimension().location().toString(),
+                target.getX(), target.getY(), target.getZ()),
+                new SmallBlueprint.Size(1, 1, 1),
+                java.util.List.of(new SmallBlueprint.Block(
+                        new SmallBlueprint.Offset(0, 0, 0), blockId, java.util.Map.of(), java.util.List.of())),
+                new SmallBlueprint.SupportPolicy(java.util.List.of("minecraft:dirt"), 1, true));
+    }
+
+    private static int matchingBlueprintBlocks(CompanionPlayer body, SmallBlueprint blueprint) {
+        int matching = 0;
+        for (SmallBlueprint.Block block : blueprint.blocks()) {
+            BlockPos target = new BlockPos(blueprint.anchor().x() + block.offset().x(),
+                    blueprint.anchor().y() + block.offset().y(), blueprint.anchor().z() + block.offset().z());
+            if (body.serverLevel().getBlockState(target).is(Blocks.COBBLESTONE)) matching++;
+        }
+        return matching;
+    }
+
+    private static void assertBlueprint(GameTestHelper helper, CompanionPlayer body,
+                                        SmallBlueprint blueprint, String label) {
+        helper.assertValueEqual(matchingBlueprintBlocks(body, blueprint), blueprint.blocks().size(),
+                label + " final world state was incomplete");
+    }
+
+    private static void awaitBlueprintProgress(GameTestHelper helper, CompanionRegistry registry,
+                                               String companionId, CompanionPlayer body,
+                                               SmallBlueprint blueprint, int ticksRemaining,
+                                               Runnable progressed) {
+        int matching = matchingBlueprintBlocks(body, blueprint);
+        if (matching >= 3 && matching < blueprint.blocks().size()) {
+            progressed.run();
+            return;
+        }
+        var snapshot = registry.runtimeSnapshots(false).stream()
+                .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
+        helper.assertTrue(snapshot.behaviorState().equals("RUNNING"),
+                "blueprint stopped before partial progress: state=" + snapshot.behaviorState()
+                        + " evidence=" + snapshot.evidenceSummary());
+        helper.assertTrue(ticksRemaining > 0,
+                "blueprint made no partial progress: position=" + body.position()
+                        + " observation=" + snapshot.behaviorObservation()
+                        + " evidence=" + snapshot.evidenceSummary());
+        helper.runAfterDelay(1, () -> awaitBlueprintProgress(
+                helper, registry, companionId, body, blueprint, ticksRemaining - 1, progressed));
     }
 
     private static BlockPos moveToIsolatedArena(
@@ -2501,6 +3222,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                         BlockPos unknownContainerPos = recovered.blockPosition().offset(-2, 0, 0);
                         recovered.serverLevel().setBlockAndUpdate(unknownContainerPos,
                                 RegistryFixtureInitializer.BLUE_BLOCK.defaultBlockState());
+                        recovered.getInventory().add(new ItemStack(Items.IRON_HELMET));
                         int ownerIronBaseline = count(owner, Items.IRON_INGOT);
                         LOGGER.info("runtime_e2e_ready companion={} chest={},{},{} unknown={},{},{}",
                                 recovered.getUUID(), shortageChestPos.getX(), shortageChestPos.getY(), shortageChestPos.getZ(),

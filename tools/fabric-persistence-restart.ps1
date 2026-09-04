@@ -2,10 +2,13 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+$offlineArguments = @()
+if ($env:MCAC_TEST_OFFLINE -eq '1') { $offlineArguments += '--offline' }
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $fabric = Join-Path $root 'minecraft\fabric-1.21.1'
 $runDirectory = Join-Path $fabric 'build\gametest'
 $evidence = Join-Path $root 'build\persistence-restart-evidence'
+$fixtureBoundary = Join-Path $root 'tools\persistence-tests.init.gradle'
 if (-not $runDirectory.StartsWith($fabric, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Refusing to clean a run directory outside the Fabric workspace.'
 }
@@ -17,7 +20,7 @@ New-Item -ItemType Directory -Force -Path $evidence | Out-Null
 Push-Location $fabric
 try {
 $ErrorActionPreference = 'Continue'
-$seed = & '.\gradlew.bat' runGameTest -PmccompanionPersistenceSeed=true --no-daemon 2>&1
+$seed = & '.\gradlew.bat' runGameTest -PmccompanionPersistenceSeed=true --init-script $fixtureBoundary --no-daemon --no-parallel @offlineArguments 2>&1
 $seedExit = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 $seed | Set-Content -LiteralPath (Join-Path $evidence 'seed-and-stop.log') -Encoding UTF8
@@ -26,7 +29,7 @@ if ($seedExit -ne 0 -or ($seed -join "`n") -notmatch 'All [0-9]+ required tests 
 }
 
 $ErrorActionPreference = 'Continue'
-$verify = & '.\gradlew.bat' runGameTest -PmccompanionPersistenceVerify=true --no-daemon 2>&1
+$verify = & '.\gradlew.bat' runGameTest -PmccompanionPersistenceVerify=true --init-script $fixtureBoundary --no-daemon --no-parallel @offlineArguments 2>&1
 $verifyExit = $LASTEXITCODE
 $ErrorActionPreference = 'Stop'
 $verify | Set-Content -LiteralPath (Join-Path $evidence 'restart-and-verify.log') -Encoding UTF8

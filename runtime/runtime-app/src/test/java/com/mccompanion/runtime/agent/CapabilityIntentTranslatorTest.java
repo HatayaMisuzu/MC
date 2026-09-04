@@ -27,12 +27,21 @@ class CapabilityIntentTranslatorTest {
                 Json.object().put("item", "minecraft:iron_pickaxe").put("quantity", 1)), "做铁镐").orElseThrow();
         assertEquals(TaskType.SKILL, craft.type());
         assertEquals("CraftItem", craft.arguments().path("capability").asText());
+        String target = "3c8c4692-4e23-4fe5-a4cb-17dcf8488f44";
+        var chase = translator.translate(step("ChaseEntity",
+                Json.object().set("target", Json.object().put("playerIdentity", target))), "追上他").orElseThrow();
+        assertEquals(TaskType.SKILL, chase.type());
+        assertEquals("VERIFIED_PLAYER", chase.arguments().path("parameters")
+                .path("targetReferenceKind").asText());
+        assertEquals(target, chase.arguments().path("parameters").path("entityId").asText());
     }
 
     @Test
     void refusesInvalidOrUnsafeCoordinates() {
         assertTrue(translator.translate(step("NavigateTo", Json.object().putObject("target")
                 .put("x", 30_000_001).put("y", 64).put("z", 0)), "go").isEmpty());
+        assertTrue(translator.translate(step("FollowEntity", Json.object().set("target",
+                Json.object().put("uuid", "not-a-uuid"))), "follow").isEmpty());
     }
 
     private static PlanStep step(String capability, com.fasterxml.jackson.databind.JsonNode parameters) {

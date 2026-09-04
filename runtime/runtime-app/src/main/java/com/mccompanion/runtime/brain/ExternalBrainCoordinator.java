@@ -11,6 +11,10 @@ import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.conversation.IncomingMessageResolution;
 import com.mccompanion.runtime.conversation.WaitingQuestion;
 import com.mccompanion.runtime.json.Json;
+import com.mccompanion.runtime.event.RuntimeEvent;
+import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
+import com.mccompanion.runtime.taskgraph.TaskGraphExecutionRecord;
+import com.mccompanion.runtime.taskgraph.TaskGraphReplan;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,6 +39,16 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
     private final Map<String, List<ToolResult>> interruptedObservations = new ConcurrentHashMap<>();
     private final Map<String, BrainSemanticState> semanticStates = new ConcurrentHashMap<>();
     private volatile String activeControllerId;
+    private TaskGraphRuntime taskGraphs;
+
+    public void attachTaskGraphs(TaskGraphRuntime taskGraphs) {
+        this.taskGraphs = java.util.Objects.requireNonNull(taskGraphs);
+    }
+
+    public boolean graphOwnsEvent(String controllerId, RuntimeEvent event) {
+        try { return taskGraphs != null && taskGraphs.ownsEvent(controllerId, event); }
+        catch (java.sql.SQLException failure) { throw new IllegalStateException("REPLAN_PERSISTENCE_ERROR", failure); }
+    }
 
     public ExternalBrainCoordinator(ExternalBrainAdapter adapter, ToolGateway tools, int maxToolCallsPerTurn) {
         this(adapter, tools, maxToolCallsPerTurn, null, null);
@@ -65,6 +79,75 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
         }
     }
 
+    /** Delivers one admitted event without treating it as a new user-authored goal. */
+    public BrainCoordinatorResult continueEvent(String controllerId, RuntimeEvent event,
+                                                AgentContext context) {
+        java.util.Objects.requireNonNull(event, "event");
+        if (!event.taskBound() && event.priority() != RuntimeEvent.Priority.CRITICAL) {
+            throw new IllegalArgumentException("ordinary event requires an existing task binding");
+        }
+        Object lock = companionLocks.computeIfAbsent(event.companionId(), ignored -> new Object());
+        synchronized (lock) {
+            boolean completed = event.eventType().equals("TASK_COMPLETED")
+                    || event.eventType().equals("TASK_GRAPH_TERMINAL")
+                        && event.payload().path("state").asText().equals("SUCCEEDED");
+            // Completed MCP/local work already has a durable receipt. Wake only the Brain
+            // actually waiting on that execution, rather than opening an unrelated session.
+            if (completed && activeFor(event.companionId()).stream().noneMatch(active ->
+                    active.handle() != null && controllerId.equals(active.context().controllerId())
+                    && ("TASK".equals(active.handle().kind()) && active.handle().id().equals(event.taskId())
+                        || "TASK_GRAPH".equals(active.handle().kind())
+                            && active.handle().id().equals(event.taskGraphExecutionId())))) {
+                return new BrainCoordinatorResult("", BrainTurnResult.Kind.WAIT, "", "EVENT_NO_REPLAN", List.of());
+            }
+            if (TaskGraphReplan.semantic(event) && graphOwnsEvent(controllerId, event)) {
+                try {
+                    var requests = taskGraphs.prepareReplan(controllerId, event, context.verifiedWorld());
+                    if (requests.isEmpty()) return new BrainCoordinatorResult("", BrainTurnResult.Kind.WAIT, "",
+                            "EVENT_NO_REPLAN", List.of());
+                    var pending = requests.stream().filter(r -> r.replan().path("phase").asText().equals("WAITING_BRAIN")).toList();
+                    BrainCoordinatorResult result = new BrainCoordinatorResult("", BrainTurnResult.Kind.WAIT, "", "OK", List.of());
+                    // Each request is separately bounded; do not concatenate 24 graph contexts into one prompt.
+                    for (var request : pending) {
+                        result = continueTurnLocked(controllerId, event.companionId(),
+                                Json.write(request.replan().path("request")), context, List.of(), List.of(request));
+                    }
+                    boolean resumed = true;
+                    for (var request : requests) resumed &= taskGraphs.resumeReplan(request).success();
+                    return new BrainCoordinatorResult(result.sessionId(), result.kind(), result.response(),
+                            resumed ? "REPLAN_RESUMED" : "REPLAN_PENDING", result.toolResults(), result.question());
+                } catch (java.sql.SQLException failure) {
+                    throw new IllegalStateException("REPLAN_PERSISTENCE_ERROR", failure);
+                }
+            }
+            return continueTurnLocked(controllerId, event.companionId(), eventMessage(event), context,
+                    boundExecutionObservations(event));
+        }
+    }
+
+    /** Authenticated user amendments preserve the original goal and all completed work. */
+    public BrainCoordinatorResult continueInstruction(String controllerId, String companionId,
+                                                       String text, AgentContext context) {
+        if (taskGraphs == null) return continueTurn(controllerId, companionId, text, context);
+        try {
+            if (!taskGraphs.hasUnfinishedUserGoal(controllerId, companionId))
+                return continueTurn(controllerId, companionId, text, context);
+        } catch (java.sql.SQLException failure) { throw new IllegalStateException("REPLAN_PERSISTENCE_ERROR", failure); }
+        Instant now = Instant.now();
+        String id = "user-instruction-" + java.util.UUID.randomUUID();
+        RuntimeEvent event = new RuntimeEvent(id, RuntimeEvent.Category.TASK, "USER_INSTRUCTION",
+                RuntimeEvent.Priority.CRITICAL, "AUTHENTICATED_USER", companionId, null, null,
+                Json.object(), id, null, null, now, now, now.plusSeconds(600),
+                Json.object().put("instruction", text).put("preserveOriginalGoal", true));
+        BrainCoordinatorResult result = continueEvent(controllerId, event, context);
+        if (!result.code().equals("EVENT_NO_REPLAN")) return result;
+        try {
+            if (taskGraphs.hasUnfinishedUserGoal(controllerId, companionId))
+                return new BrainCoordinatorResult("", BrainTurnResult.Kind.WAIT, "", "REPLAN_BLOCKED", List.of());
+        } catch (java.sql.SQLException failure) { throw new IllegalStateException("REPLAN_PERSISTENCE_ERROR", failure); }
+        return continueTurn(controllerId, companionId, text, context);
+    }
+
     public BrainCoordinatorResult answer(String controllerId, WaitingQuestion question,
                                          IncomingMessageResolution resolution, AgentContext context) {
         if (question == null || question.brainSessionId() == null) {
@@ -87,7 +170,7 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                         .put("questionId", answered.questionId())
                         .put("optionId", answered.answer().path("optionId").asText(""))
                         .put("text", answered.answer().path("text").asText(""));
-                return continueTurnLocked(controllerId, question.companionId(), Json.write(payload), context);
+                return continueTurnLocked(controllerId, question.companionId(), Json.write(payload), context, List.of());
             }
         } catch (java.sql.SQLException failure) {
             throw new IllegalStateException("BRAIN_QUESTION_PERSISTENCE_ERROR", failure);
@@ -96,13 +179,39 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
 
     private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
                                                        String userMessage, AgentContext context) {
+        return continueTurnLocked(controllerId, companionId, userMessage, context, List.of(), List.of(), userMessage);
+    }
+
+    private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
+                                                       String userMessage, AgentContext context,
+                                                       List<ToolResult> injectedObservations) {
+        return continueTurnLocked(controllerId, companionId, userMessage, context, injectedObservations, List.of());
+    }
+
+    private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
+                                                       String userMessage, AgentContext context,
+                                                       List<ToolResult> injectedObservations,
+                                                       List<TaskGraphExecutionRecord> replans) {
+        return continueTurnLocked(controllerId, companionId, userMessage, context, injectedObservations, replans, null);
+    }
+
+    private BrainCoordinatorResult continueTurnLocked(String controllerId, String companionId,
+                                                       String userMessage, AgentContext context,
+                                                       List<ToolResult> injectedObservations,
+                                                       List<TaskGraphExecutionRecord> replans, String originalGoal) {
         requireController(controllerId);
+        pendingInterruptions.remove(companionId); // This new serialized turn owns the already-paused instruction.
         BrainBehaviorSettings behaviorSettings = audit == null
                 ? BrainBehaviorSettings.defaults(companionId) : audit.behaviorSettings(companionId);
         AgentContext baseContext = context.withBrainBehaviorSettings(behaviorSettings.toJson());
         BrainSession session = sessions.get(companionId);
         List<ToolResult> recovered = interruptedObservations.remove(companionId);
         if (recovered == null) recovered = List.of();
+        if (injectedObservations != null && !injectedObservations.isEmpty()) {
+            List<ToolResult> combined = new ArrayList<>(recovered);
+            combined.addAll(injectedObservations);
+            recovered = List.copyOf(combined);
+        }
         if (session == null) {
             ToolContext provisional = new ToolContext(controllerId, "opening", companionId);
             BrainSessionRequest opening = new BrainSessionRequest(controllerId, companionId, baseContext,
@@ -208,8 +317,26 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                             "callId was already used with different tool input");
                 } else if (previous != null) {
                     accepted = previous.result();
+                } else if (!replans.isEmpty()) {
+                    var binding = replans.stream().filter(r -> r.executionId().equals(
+                            call.arguments().path("executionId").asText())).findFirst().orElse(null);
+                    if (binding != null && (call.name().equals("task_graph.replan") || call.name().equals("task_graph.inspect"))) {
+                        // A recovered Brain session gets this single execution capability, not ownership of other sessions.
+                        accepted = tools.execute(new ToolContext(binding.controllerId(), binding.brainSessionId(), companionId), call);
+                    } else if (java.util.Set.of("world.observe", "world.query", "world.scan", "inventory.inspect",
+                            "block.inspect", "entity.inspect", "item.inspect", "safety.inspect", "memory.search",
+                            "task_graph.validate").contains(call.name())) {
+                        accepted = tools.execute(toolContext, call);
+                    } else accepted = ToolResult.rejected(call, "REPLAN_TOOL_NOT_ALLOWED",
+                            "replanning may inspect context and rewrite the bound graph; it cannot start unrelated effects");
                 } else {
-                    accepted = tools.execute(toolContext, call);
+                    ToolCall executable = call;
+                    if (call.name().equals("task_graph.execute") && originalGoal != null && !originalGoal.isBlank()) {
+                        var arguments = (com.fasterxml.jackson.databind.node.ObjectNode) call.arguments().deepCopy();
+                        arguments.withObject("provenance").put("originalUserGoal", originalGoal);
+                        executable = new ToolCall(call.callId(), call.name(), arguments);
+                    }
+                    accepted = tools.execute(toolContext, executable);
                 }
                 if (audit != null) audit.tool(session.sessionId(), call, accepted);
                 var durableReceipt = DurableExecutionReceipt.fromAccepted(accepted);
@@ -327,6 +454,13 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
                 .reduce(false, Boolean::logicalOr);
         if (!accepted) pendingInterruptions.remove(companionId, reason);
         return accepted;
+    }
+
+    /** Critical observed events may preempt current bounded Tools without inventing a new plan. */
+    public boolean pauseActiveForCriticalEvent(String controllerId, String companionId,
+                                               String eventType) {
+        String reason = "CRITICAL_EVENT_" + (eventType == null ? "UNKNOWN" : eventType);
+        return pauseActiveForUserInstruction(controllerId, companionId, reason);
     }
 
     public void releaseController(String controllerId) {
@@ -479,6 +613,46 @@ public final class ExternalBrainCoordinator implements AutoCloseable {
             }
             if (companionTools.isEmpty()) activeTools.remove(companionId, companionTools);
         });
+    }
+
+    private List<ToolResult> boundExecutionObservations(RuntimeEvent event) {
+        String kind = event.taskId() != null ? "TASK"
+                : event.taskGraphExecutionId() != null ? "TASK_GRAPH" : null;
+        String id = event.taskId() != null ? event.taskId() : event.taskGraphExecutionId();
+        if (kind == null || id == null) return List.of();
+        List<ToolResult> observations = new ArrayList<>();
+        for (ActiveTool active : activeFor(event.companionId())) {
+            if (active.handle() == null || !kind.equals(active.handle().kind())
+                    || !id.equals(active.handle().id())) continue;
+            tools.inspectDurable(active.context(), active.handle()).filter(ToolResult::terminal)
+                    .ifPresent(observation -> {
+                        observations.add(observation);
+                        releaseCompletedDurable(event.companionId(), observation);
+                    });
+        }
+        return List.copyOf(observations);
+    }
+
+    private static String eventMessage(RuntimeEvent event) {
+        var value = Json.object().put("type", "runtime_event")
+                .put("eventId", event.eventId()).put("category", event.category().name())
+                .put("eventType", event.eventType()).put("priority", event.priority().name())
+                .put("source", event.source()).put("companionId", event.companionId())
+                .put("occurredAt", event.occurredAt().toString())
+                .put("observedAt", event.observedAt().toString())
+                .put("occurrenceCount", event.occurrenceCount());
+        if (event.taskId() != null) value.put("taskId", event.taskId());
+        if (event.taskGraphExecutionId() != null) {
+            value.put("taskGraphExecutionId", event.taskGraphExecutionId());
+        }
+        value.set("target", event.target());
+        value.set("payload", event.payload());
+        value.set("rules", Json.object()
+                .put("continueOnlyBoundGoal", true)
+                .put("doNotInventNewGoal", true)
+                .put("criticalMayInterrupt", event.priority() == RuntimeEvent.Priority.CRITICAL)
+                .put("ordinaryEventsWaitForCheckpoint", true));
+        return Json.write(value);
     }
 
     private void cancelActive(ActiveTool active, String reason) {

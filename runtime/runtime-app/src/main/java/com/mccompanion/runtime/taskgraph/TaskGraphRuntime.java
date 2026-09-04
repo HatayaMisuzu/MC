@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -63,6 +64,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
     private final Map<String, Running> active = new ConcurrentHashMap<>();
     private final Map<String, ScheduledFuture<?>> timedWaits = new ConcurrentHashMap<>();
     private final Object admissionLock = new Object();
+    private volatile LifecycleListener lifecycleListener = (record, transition, details) -> { };
 
     public TaskGraphRuntime(ToolGateway tools, TaskGraphExecutionRepository repository) {
         this(tools, repository, null);
@@ -332,6 +334,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
                             record.state(), record.currentNodeId(), record.completedNodes(), record.toolResults(),
                             record.variables(), record.outputs(), checkpoints, evidence, record.waitingQuestion(),
                             record.result(), "EXTERNAL_CHECKPOINT");
+                    notifyEventListener(saved, "CHECKPOINT", event);
                     return new ToolResult(call.callId(), call.name(), true, "OK",
                             inspectJson(saved), true);
                 } catch (IllegalStateException stale) {
@@ -350,6 +353,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
             TaskGraphExecutionRecord record = owned(context, executionId);
             if (TERMINAL.contains(record.state())) return terminal(call, record);
             if (record.state().equals("WAITING") && isTimedWait(record)) {
+                Running waitingWorker = active.get(executionId);
+                if (waitingWorker != null) waitingWorker.control.requestPause();
                 cancelTimedWait(executionId);
                 for (int attempt = 0; attempt < 20; attempt++) {
                     record = owned(context, executionId);
@@ -411,6 +416,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
     public ToolResult resume(ToolContext context, ToolCall call, String executionId) {
         try {
             TaskGraphExecutionRecord record = owned(context, executionId);
+            if (TaskGraphReplan.pending(record.replan())) {
+                return ToolResult.rejected(call, "REPLAN_REQUIRED", "remaining plan must be validated before resume");
+            }
             boolean recovery = record.state().equals("RECONCILIATION_REQUIRED");
             if (!record.state().equals("PAUSED") && !recovery) {
                 return ToolResult.rejected(call, "TASK_GRAPH_NOT_PAUSED",
@@ -461,6 +469,222 @@ public final class TaskGraphRuntime implements AutoCloseable {
         } catch (SQLException | IllegalArgumentException failure) {
             return ToolResult.rejected(call, "TASK_GRAPH_CONTROL_FAILED", failure.getMessage());
         }
+    }
+
+    /** Only normalized semantic events enter this boundary. No plan is generated here. */
+    public synchronized List<TaskGraphExecutionRecord> prepareReplan(String controllerId,
+            com.mccompanion.runtime.event.RuntimeEvent event, JsonNode world) throws SQLException {
+        if (!TaskGraphReplan.semantic(event)) return List.of();
+        List<TaskGraphExecutionRecord> prepared = new ArrayList<>();
+        for (TaskGraphExecutionRecord initial : repository.forEvent(event.companionId(),
+                event.taskGraphExecutionId(), event.taskId())) {
+            if (!initial.controllerId().equals(controllerId)
+                    || initial.replan().path("originalGoal").asText().isBlank()) continue;
+            TaskGraphExecutionRecord record = initial;
+            ObjectNode state = record.replan().deepCopy();
+            String eventKey = event.dedupKey();
+            boolean same = eventKey.equals(state.path("eventKey").asText());
+            if (same && state.path("phase").asText().equals("APPLIED")) {
+                prepared.add(record); continue; // crash after apply, before resume
+            }
+            if (same && state.path("phase").asText().equals("RESUMED")) continue;
+            if (!same) {
+                if (TaskGraphReplan.pending(state)
+                        && (!event.eventType().equals("USER_INSTRUCTION") || state.path("phase").asText().equals("BLOCKED"))) continue;
+                boolean seen = false;
+                for (JsonNode key : state.path("seenEvents")) if (key.asText().equals(eventKey)) seen = true;
+                if (seen || event.occurredAt().toEpochMilli() < state.path("appliedAt").asLong(0)) continue;
+                state.put("eventKey", eventKey).put("requestId", event.eventId())
+                        .put("phase", "REQUESTED").put("deliveries", 0);
+                state.withArray("seenEvents").add(eventKey);
+                state.set("event", Json.MAPPER.valueToTree(event));
+                if (event.eventType().equals("USER_INSTRUCTION"))
+                    state.withArray("goalAmendments").add(event.payload().path("instruction").asText());
+                state.put("used", state.path("used").asInt() + 1);
+                record = repository.saveReplan(record, state);
+            }
+            ToolContext owner = new ToolContext(record.controllerId(), record.brainSessionId(), record.companionId());
+            if (record.state().equals("WAITING") && !isTimedWait(record) && !active.containsKey(record.executionId())) {
+                cancelWaitingQuestion(record, "SEMANTIC_REPLAN");
+                record = repository.save(record.executionId(), record.revision(), "PAUSED", record.currentNodeId(),
+                        record.completedNodes(), record.toolResults(), record.variables(), record.outputs(),
+                        record.checkpoints(), record.evidence(), Json.MAPPER.nullNode(), record.result(), "REPLAN_PAUSED");
+            }
+            if (!Set.of("PAUSED", "FAILED", "RECONCILIATION_REQUIRED").contains(record.state())) {
+                pause(owner, new ToolCall("replan-pause-" + event.eventId(), "task_graph.pause", Json.object()),
+                        record.executionId());
+            }
+            record = repository.get(record.executionId()).orElseThrow();
+            long quiescenceDeadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
+            while (active.containsKey(record.executionId()) && System.nanoTime() < quiescenceDeadline) {
+                try { Thread.sleep(5); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt(); break;
+                }
+            }
+            record = repository.get(record.executionId()).orElseThrow();
+            if (active.containsKey(record.executionId())) {
+                prepared.add(record); continue; // durable REQUESTED, deferred without calling the Brain
+            }
+            if (record.state().equals("RECONCILIATION_REQUIRED")) {
+                record = reconcileConfirmedToolResult(record);
+                RecoveryAssessment recovery = assessRecovery(record);
+                if (!recovery.safe()) {
+                    state.put("phase", "BLOCKED").put("code", recovery.code());
+                    repository.saveReplan(record, state); continue;
+                }
+                record = repository.save(record.executionId(), record.revision(), "PAUSED",
+                        record.currentNodeId(), record.completedNodes(), record.toolResults(), record.variables(),
+                        record.outputs(), record.checkpoints(), record.evidence(), record.waitingQuestion(),
+                        record.result(), "REPLAN_RECOVERED");
+            }
+            if (!Set.of("PAUSED", "FAILED").contains(record.state())) {
+                if (!Set.of("SUCCEEDED", "CANCELLED").contains(record.state())) prepared.add(record);
+                continue;
+            }
+            try {
+                TaskGraphReplan.requireConfirmedEffects(record);
+                record = settleReplanChildren(record);
+            } catch (IllegalStateException | IllegalArgumentException failure) {
+                state.put("phase", "BLOCKED").put("code", failure.getMessage());
+                repository.saveReplan(record, state); continue;
+            }
+            if (state.path("used").asInt() > TaskGraphReplan.MAX_REPLANS
+                    || state.path("deliveries").asInt() >= TaskGraphReplan.MAX_DELIVERIES_PER_EVENT) {
+                state.put("phase", "BLOCKED").put("code", "REPLAN_BUDGET_EXHAUSTED");
+                repository.saveReplan(record, state); continue;
+            }
+            // Reserve the provider attempt durably BEFORE dispatch. Interrupted requests spend budget.
+            state.put("phase", "WAITING_BRAIN").put("deliveries", state.path("deliveries").asInt() + 1)
+                    .put("expectedRevision", record.revision());
+            ObjectNode request = Json.object().put("type", "task_graph_replan")
+                    .put("executionId", record.executionId()).put("requestId", state.path("requestId").asText())
+                    .put("originalGoal", state.path("originalGoal").asText())
+                    .put("epoch", state.path("epoch").asInt()).put("revision", record.revision())
+                    .put("remainingReplans", Math.max(0, TaskGraphReplan.MAX_REPLANS - state.path("used").asInt()));
+            request.set("completedNodes", record.completedNodes());
+            request.set("goalAmendments", state.path("goalAmendments"));
+            request.set("event", state.path("event"));
+            request.set("outputs", boundedEvidence(record.outputs(), 8_192));
+            request.set("failure", Json.object().put("state", record.state()).put("code", record.resultCode())
+                    .set("result", boundedEvidence(record.result(), 4_096)));
+            request.set("worldContext", boundedEvidence(world, 16_384));
+            request.set("graph", record.graph());
+            request.put("instruction", "Call task_graph.replan with requestId, epoch, expectedRevision and the updated full graph. "
+                    + "Change only unfinished work; preserve originalGoal, completed nodes and authority. "
+                    + "USER_INSTRUCTION is an explicit remaining-goal/priority amendment, not an implicit replacement. "
+                    + "No unrelated side effects; resume follows the validated rewrite.");
+            if (serializedBytes(request) > 65_536) {
+                request.remove("graph"); request.put("graphInspectionTool", "task_graph.inspect");
+            }
+            if (serializedBytes(request) > 65_536) {
+                state.put("phase", "BLOCKED").put("code", "REPLAN_CONTEXT_LIMIT");
+                repository.saveReplan(record, state); continue;
+            }
+            state.set("request", request);
+            prepared.add(repository.saveReplan(record, state));
+        }
+        return List.copyOf(prepared);
+    }
+
+    public synchronized ToolResult replan(ToolContext context, ToolCall call, String executionId,
+            String requestId, long epoch, long expectedRevision, JsonNode graph) {
+        try {
+            TaskGraphExecutionRecord record = owned(context, executionId);
+            ObjectNode state = record.replan().deepCopy();
+            TaskGraphReplan.require(requestId.equals(state.path("requestId").asText()), "REPLAN_REQUEST_MISMATCH");
+            String hash = Digests.sha256(Json.canonical(graph));
+            if (Set.of("APPLIED", "RESUMED").contains(state.path("phase").asText())) {
+                TaskGraphReplan.require(hash.equals(state.path("appliedHash").asText())
+                        && epoch + 1 == state.path("epoch").asLong(), "REPLAN_IDEMPOTENCY_CONFLICT");
+                return new ToolResult(call.callId(), call.name(), true, "REPLAN_ALREADY_APPLIED", inspectJson(record), true);
+            }
+            TaskGraphReplan.require(state.path("phase").asText().equals("WAITING_BRAIN"), "REPLAN_NOT_REQUESTED");
+            TaskGraphReplan.require(epoch == state.path("epoch").asLong()
+                    && expectedRevision == record.revision()
+                    && expectedRevision == state.path("expectedRevision").asLong(), "STALE_REPLAN_REVISION");
+            TaskGraphReplan.require(!active.containsKey(executionId)
+                    && Set.of("PAUSED", "FAILED").contains(record.state()), "REPLAN_NOT_QUIESCENT");
+            TaskGraphValidationResult validation = validator.validateExecutable(graph,
+                    ordinaryDefinitions(context), executableNodeTypes);
+            if (!validation.valid()) return new ToolResult(call.callId(), call.name(), false,
+                    "TASK_GRAPH_INVALID", validation.toJson(), true);
+            TaskGraphReplan.validateRewrite(record, graph);
+            TaskGraphReplan.removed(record.graph(), graph).forEach(state.withArray("retiredNodeIds")::add);
+            state.put("phase", "APPLIED").put("epoch", epoch + 1).put("appliedHash", hash)
+                    .put("appliedAt", System.currentTimeMillis());
+            record = repository.applyReplan(record, graph, state);
+            return new ToolResult(call.callId(), call.name(), true, "REPLAN_APPLIED", inspectJson(record), true);
+        } catch (SQLException failure) {
+            return ToolResult.rejected(call, "PERSISTENCE_ERROR", "replan state is unavailable");
+        } catch (IllegalArgumentException | IllegalStateException failure) {
+            return ToolResult.rejected(call, failure.getMessage(), "replan rejected; previous graph and goal retained");
+        }
+    }
+
+    /** Release only exact paused/blocked children, and confirm cancellation plus control release before replanning. */
+    private TaskGraphExecutionRecord settleReplanChildren(TaskGraphExecutionRecord record) throws SQLException {
+        ObjectNode results = record.toolResults().deepCopy();
+        boolean changed = false;
+        ToolContext owner = new ToolContext(record.controllerId(), record.brainSessionId(), record.companionId());
+        var entries = results.fields();
+        while (entries.hasNext()) {
+            var entry = entries.next();
+            JsonNode result = entry.getValue(), observation = result.path("observation");
+            if (!Set.of("PAUSED", "BLOCKED").contains(observation.path("state").asText())) continue;
+            var handle = com.mccompanion.runtime.tool.DurableExecutionReceipt.handleFromObservation(observation).orElse(null);
+            if (handle == null || !handle.kind().equals("TASK")) continue;
+            ToolCall call = new ToolCall(entry.getKey(), result.path("toolName").asText(), Json.object());
+            ToolResult inspected = tools.inspectDurable(owner, handle).orElse(null);
+            if (inspected == null) throw new IllegalStateException("REPLAN_CHILD_INSPECTION_REQUIRED");
+            if (!com.mccompanion.runtime.tool.DurableExecutionReceipt.isTerminalObservation(inspected.observation()))
+                tools.cancelDurable(owner, call, handle, "SEMANTIC_REPLAN");
+            long deadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
+            while (!com.mccompanion.runtime.tool.DurableExecutionReceipt.isTerminalObservation(inspected.observation())) {
+                if (System.nanoTime() >= deadline) throw new IllegalStateException("REPLAN_CHILD_CANCELLATION_UNCONFIRMED");
+                try { Thread.sleep(5); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt(); throw new IllegalStateException("REPLAN_INTERRUPTED");
+                }
+                inspected = tools.inspectDurable(owner, handle).orElseThrow(
+                        () -> new IllegalStateException("REPLAN_CHILD_INSPECTION_REQUIRED"));
+            }
+            ((ObjectNode) result).put("success", inspected.success()).put("code", inspected.code())
+                    .set("observation", inspected.observation());
+            changed = true;
+        }
+        if (!changed) return record;
+        return repository.save(record.executionId(), record.revision(), record.state(), record.currentNodeId(),
+                record.completedNodes(), results, record.variables(), record.outputs(), record.checkpoints(),
+                record.evidence(), record.waitingQuestion(), record.result(), "REPLAN_CHILDREN_SETTLED");
+    }
+
+    public boolean hasUnfinishedUserGoal(String controllerId, String companionId) throws SQLException {
+        return repository.forEvent(companionId, null, null).stream().anyMatch(record ->
+                record.controllerId().equals(controllerId) && !record.replan().path("originalGoal").asText().isBlank());
+    }
+
+    public boolean ownsEvent(String controllerId, com.mccompanion.runtime.event.RuntimeEvent event) throws SQLException {
+        return repository.ownsEvent(controllerId, event);
+    }
+
+    public synchronized ToolResult resumeReplan(TaskGraphExecutionRecord requested) throws SQLException {
+        TaskGraphExecutionRecord current = repository.get(requested.executionId()).orElseThrow();
+        ToolContext owner = new ToolContext(current.controllerId(), current.brainSessionId(), current.companionId());
+        ToolCall call = new ToolCall("replan-resume-" + current.replan().path("requestId").asText(),
+                "task_graph.resume", Json.object());
+        if (!current.replan().path("phase").asText().equals("APPLIED"))
+            return ToolResult.rejected(call, "REPLAN_PENDING", "Brain has not supplied a valid remaining plan");
+        // Crash after READY/RUNNING commit but before the phase update: never enqueue the graph twice.
+        ToolResult result = Set.of("READY", "RUNNING", "WAITING", "SUCCEEDED").contains(current.state())
+                ? new ToolResult(call.callId(), call.name(), true, "REPLAN_ALREADY_RESUMED", inspectJson(current), true)
+                : resume(owner, call, current.executionId());
+        if (result.success()) {
+            current = repository.get(current.executionId()).orElseThrow();
+            ObjectNode state = current.replan().deepCopy(); state.put("phase", "RESUMED");
+            repository.saveReplan(current, state);
+        }
+        return result;
     }
 
     private TaskGraphExecutionRecord reconcileConfirmedToolResult(TaskGraphExecutionRecord record)
@@ -667,6 +891,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
         ToolContext context = running.context();
         TaskGraphExecutionControl control = running.control();
         AtomicLong revision = new AtomicLong(record.revision());
+        String[] lastCheckpoint = {lastCheckpointIdentity(record.checkpoints())};
         try {
             TaskGraphExecutionResult result = new TaskGraphExecutor(
                     tools, validator, executableNodeTypes, parallelWorkers)
@@ -680,6 +905,19 @@ public final class TaskGraphRuntime implements AutoCloseable {
                                     snapshot.waitingQuestion(),
                                     snapshot.result(), snapshot.resultCode());
                             revision.set(saved.revision());
+                            if (!TERMINAL.contains(saved.state())) {
+                                notifyEventListener(saved, "PROGRESS", Json.object()
+                                        .put("currentNodeId", saved.currentNodeId() == null
+                                                ? "" : saved.currentNodeId())
+                                        .put("state", saved.state()));
+                            }
+                            String checkpointIdentity = lastCheckpointIdentity(saved.checkpoints());
+                            if (checkpointIdentity != null
+                                    && !java.util.Objects.equals(lastCheckpoint[0], checkpointIdentity)) {
+                                lastCheckpoint[0] = checkpointIdentity;
+                                notifyEventListener(saved, "CHECKPOINT",
+                                        saved.checkpoints().get(saved.checkpoints().size() - 1));
+                            }
                             notifyTerminalLifecycle(saved);
                         } catch (SQLException failure) {
                             throw new IllegalStateException("TASK_GRAPH_PERSISTENCE_ERROR", failure);
@@ -958,8 +1196,14 @@ public final class TaskGraphRuntime implements AutoCloseable {
     }
 
     private boolean notifyLifecycle(TaskGraphExecutionRecord record, String transition) {
-        if (conversations == null) return true;
         String reasonCode = boundedReasonCode(record);
+        JsonNode details = Json.object().put("source", "TASK_GRAPH_RUNTIME")
+                .put("executionId", record.executionId()).put("state", record.state())
+                .put("transition", transition).put("reasonCode", reasonCode);
+        if (conversations == null) {
+            notifyEventListener(record, transition, details);
+            return true;
+        }
         String message = switch (transition) {
             case "STARTED" -> "Task started.";
             case "PAUSED" -> "Task paused. Use the Terminal to resume or cancel.";
@@ -971,12 +1215,11 @@ public final class TaskGraphRuntime implements AutoCloseable {
         };
         String identity = record.executionId() + ':' + record.revision() + ':' + transition;
         String eventId = "task-graph-" + Digests.sha256(identity).substring(0, 32);
-        JsonNode details = Json.object().put("source", "TASK_GRAPH_RUNTIME")
-                .put("executionId", record.executionId()).put("state", record.state())
-                .put("transition", transition).put("reasonCode", reasonCode);
         try {
             conversations.appendOnce(eventId, record.companionId(), null, null,
                     "ASSISTANT", "TASK_GRAPH_LIFECYCLE", message, details);
+            // Observers may immediately deliver the outbox, so publish only after feedback is durable.
+            notifyEventListener(record, transition, details);
             return conversations.eventExists(eventId);
         } catch (SQLException | RuntimeException failure) {
             LOGGER.warn("Unable to enqueue Task Graph lifecycle feedback: execution={} transition={}",
@@ -989,6 +1232,30 @@ public final class TaskGraphRuntime implements AutoCloseable {
         String code = record.resultCode();
         if (code == null || !code.matches("[A-Z0-9_]{1,64}")) return record.state();
         return code;
+    }
+
+    public void setLifecycleListener(LifecycleListener listener) {
+        this.lifecycleListener = Objects.requireNonNull(listener, "listener");
+    }
+
+    private void notifyEventListener(TaskGraphExecutionRecord record, String transition, JsonNode details) {
+        try {
+            lifecycleListener.onLifecycle(record, transition,
+                    details == null ? Json.object() : details.deepCopy());
+        } catch (RuntimeException failure) {
+            LOGGER.warn("Task Graph event listener stopped safely: execution={} transition={}",
+                    record.executionId(), transition, failure);
+        }
+    }
+
+    private static String lastCheckpointIdentity(JsonNode checkpoints) {
+        if (checkpoints == null || !checkpoints.isArray() || checkpoints.isEmpty()) return null;
+        return Digests.sha256(Json.canonical(checkpoints.get(checkpoints.size() - 1)));
+    }
+
+    @FunctionalInterface
+    public interface LifecycleListener {
+        void onLifecycle(TaskGraphExecutionRecord record, String transition, JsonNode details);
     }
 
     private Map<String, ToolDefinition> ordinaryDefinitions(ToolContext context) {
@@ -1205,6 +1472,8 @@ public final class TaskGraphRuntime implements AutoCloseable {
         result.set("evidence", record.evidence());
         result.set("waitingQuestion", record.waitingQuestion());
         result.set("value", record.result());
+        result.set("graph", record.graph());
+        result.set("replan", record.replan());
         return result;
     }
 

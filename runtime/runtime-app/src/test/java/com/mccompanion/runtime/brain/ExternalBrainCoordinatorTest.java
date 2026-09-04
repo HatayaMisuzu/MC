@@ -13,11 +13,13 @@ import com.mccompanion.runtime.conversation.IncomingMessageKind;
 import com.mccompanion.runtime.conversation.IncomingMessageResolution;
 import com.mccompanion.runtime.conversation.WaitingQuestion;
 import com.mccompanion.runtime.db.RuntimeDatabase;
+import com.mccompanion.runtime.event.RuntimeEvent;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,6 +33,125 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ExternalBrainCoordinatorTest {
     @TempDir Path temporary;
+
+    @Test
+    void completedExternalClientWorkDoesNotOpenAnUnrelatedBrainSession() {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            turns.incrementAndGet();
+            return BrainTurnResult.finalResponse("unexpected");
+        });
+        Instant now = Instant.now();
+        RuntimeEvent completed = new RuntimeEvent("done", RuntimeEvent.Category.TASK, "TASK_COMPLETED",
+                RuntimeEvent.Priority.MEDIUM, "TASK_RUNTIME", "c1", "external-client-task", null,
+                Json.object(), "done", null, null, now, now, now.plusSeconds(60), Json.object());
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, new RecordingGateway(), 4)) {
+            assertEquals("EVENT_NO_REPLAN", coordinator.continueEvent("runtime-primary", completed, context()).code());
+            assertEquals(0, turns.get());
+        }
+    }
+
+    @Test
+    void taskBoundRuntimeEventWakesBrainWithoutBecomingANewUserGoal() {
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            assertEquals("runtime_event", event.path("type").asText());
+            assertEquals("TASK_BLOCKED", event.path("eventType").asText());
+            assertEquals("task-1", event.path("taskId").asText());
+            assertTrue(event.path("rules").path("continueOnlyBoundGoal").asBoolean());
+            assertTrue(event.path("rules").path("doNotInventNewGoal").asBoolean());
+            assertTrue(request.toolResults().isEmpty());
+            return BrainTurnResult.finalResponse("The existing task is blocked; no new goal was started.");
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                brain, new RecordingGateway(), 4)) {
+            BrainCoordinatorResult result = coordinator.continueEvent(
+                    "hermes-1", taskEvent(RuntimeEvent.Priority.CRITICAL), context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, result.kind());
+            assertTrue(result.response().contains("no new goal"));
+        }
+    }
+
+    @Test
+    void ordinaryUnboundRuntimeEventCannotOpenABrainGoal() {
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            turns.incrementAndGet();
+            return BrainTurnResult.finalResponse("unexpected");
+        });
+        RuntimeEvent unbound = new RuntimeEvent("world-event", RuntimeEvent.Category.WORLD,
+                "DAY_NIGHT_CHANGED", RuntimeEvent.Priority.MEDIUM, "WORLD_OBSERVER", "c1",
+                null, null, Json.object(), "world-event", null, null,
+                Instant.now(), Instant.now(), Instant.now().plusSeconds(60), Json.object());
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(
+                brain, new RecordingGateway(), 4)) {
+            IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
+                    () -> coordinator.continueEvent("hermes-1", unbound, context()));
+            assertEquals("ordinary event requires an existing task binding", failure.getMessage());
+            assertEquals(0, turns.get());
+        }
+    }
+
+    @Test
+    void criticalRuntimeEventPausesActiveToolBeforeWakingBrain() throws Exception {
+        CountDownLatch awaiting = new CountDownLatch(1);
+        CountDownLatch paused = new CountDownLatch(1);
+        ToolGateway gateway = new ToolGateway() {
+            @Override public List<ToolDefinition> definitions(ToolContext context) {
+                return List.of(new ToolDefinition("test.long", "1.0", "long task", Json.object(),
+                        "LOW", "MOVE", Duration.ofSeconds(5), false));
+            }
+
+            @Override public ToolResult execute(ToolContext context, ToolCall call) {
+                return new ToolResult(call.callId(), call.name(), true, "ACCEPTED",
+                        Json.object().put("state", "RUNNING"), false);
+            }
+
+            @Override public ToolResult awaitTerminal(ToolContext context, ToolCall call,
+                                                      ToolResult accepted, Duration timeout,
+                                                      java.util.function.Consumer<ToolResult> progress) {
+                awaiting.countDown();
+                try {
+                    assertTrue(paused.await(2, TimeUnit.SECONDS));
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new AssertionError(interrupted);
+                }
+                return new ToolResult(call.callId(), call.name(), false, "TASK_PAUSED",
+                        Json.object().put("state", "PAUSED"), true);
+            }
+
+            @Override public boolean pause(ToolContext context, String callId, String reason) {
+                assertTrue(reason.startsWith("CRITICAL_EVENT_"));
+                paused.countDown();
+                return true;
+            }
+        };
+        AtomicInteger turns = new AtomicInteger();
+        ReplayBrainAdapter brain = new ReplayBrainAdapter(request -> {
+            if (turns.getAndIncrement() == 0) {
+                return BrainTurnResult.tools(List.of(new ToolCall("long-1", "test.long", Json.object())));
+            }
+            assertEquals("runtime_event", Json.parse(request.userMessage()).path("type").asText());
+            assertEquals(1, request.toolResults().size());
+            assertEquals("PAUSED", request.toolResults().getFirst().observation().path("state").asText());
+            return BrainTurnResult.finalResponse("The bound task was paused for the critical event.");
+        });
+        try (ExternalBrainCoordinator coordinator = new ExternalBrainCoordinator(brain, gateway, 4)) {
+            CompletableFuture<BrainCoordinatorResult> original = CompletableFuture.supplyAsync(() ->
+                    coordinator.continueTurn("hermes-1", "c1", "run existing task", context()));
+            assertTrue(awaiting.await(1, TimeUnit.SECONDS));
+            assertTrue(coordinator.pauseActiveForCriticalEvent(
+                    "hermes-1", "c1", "TASK_BLOCKED"));
+            assertEquals("BRAIN_TURN_PAUSED_FOR_USER_INSTRUCTION",
+                    original.get(2, TimeUnit.SECONDS).code());
+
+            BrainCoordinatorResult eventTurn = coordinator.continueEvent(
+                    "hermes-1", taskEvent(RuntimeEvent.Priority.CRITICAL), context());
+            assertEquals(BrainTurnResult.Kind.FINAL_RESPONSE, eventTurn.kind());
+            assertEquals(2, turns.get());
+        }
+    }
 
     @Test
     void replayBrainCanChatWithoutCreatingOrCallingAnyTool() {
@@ -744,6 +865,14 @@ class ExternalBrainCoordinatorTest {
 
     private static AgentContext context() {
         return AgentContext.empty("c1", List.of("NavigateTo", "FollowOwner"));
+    }
+
+    private static RuntimeEvent taskEvent(RuntimeEvent.Priority priority) {
+        Instant now = Instant.now();
+        return new RuntimeEvent("task-event", RuntimeEvent.Category.TASK, "TASK_BLOCKED", priority,
+                "TASK_RUNTIME", "c1", "task-1", null, Json.object(), "task-event",
+                null, null, now, now, now.plusSeconds(60),
+                Json.object().put("state", "BLOCKED").put("code", "PATH_UNREACHABLE"));
     }
 
     private static final class RecordingGateway implements ToolGateway {

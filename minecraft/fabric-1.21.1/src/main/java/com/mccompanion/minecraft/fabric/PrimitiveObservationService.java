@@ -45,6 +45,47 @@ public final class PrimitiveObservationService {
         }
     }
 
+    /** Server-thread projection reusing primitive serializers and the active stable target. */
+    public static ObjectNode localWorld(CompanionRegistry registry, String companionId) {
+        CompanionPlayer body = registry.runtimeBody(companionId);
+        ObjectNode result = JSON.createObjectNode();
+        ArrayNode entities = result.putArray("entities");
+        ArrayNode targets = result.putArray("targets");
+        if (body == null || !body.isAlive()) return result;
+        var targetBinding = registry.entityEventTarget(companionId);
+        // One local query; entity.inspect and the event observer retain the same UUID identity.
+        body.serverLevel().getEntities(body, body.getBoundingBox().inflate(16),
+                value -> value.isAlive() && body.distanceToSqr(value) <= 256 && body.hasLineOfSight(value))
+                .stream().sorted(Comparator.comparingInt((Entity value) ->
+                        targetBinding != null && value.getUUID().toString().equals(targetBinding.identity()) ? 0
+                        : value instanceof net.minecraft.world.entity.monster.Enemy ? 1
+                        : value instanceof net.minecraft.server.level.ServerPlayer ? 2 : 3)
+                        .thenComparingDouble(value -> value.distanceToSqr(body)))
+                .limit(32).forEach(value -> {
+                    ObjectNode fact = entity(body, value)
+                            .put("player", value instanceof net.minecraft.server.level.ServerPlayer)
+                            .put("hostile", value instanceof net.minecraft.world.entity.monster.Enemy)
+                            .put("dimension", body.serverLevel().dimension().location().toString());
+                    entities.add(fact);
+                    if (targetBinding != null && value.getUUID().toString().equals(targetBinding.identity())) {
+                        targets.add(fact.deepCopy());
+                    }
+                });
+        if (targetBinding != null && targets.isEmpty()) {
+            targets.addObject().put("entityId", targetBinding.identity()).put("verified", false);
+        }
+        var parameters = registry.worldTargetParameters(companionId);
+        if (parameters != null && parameters.hasBlockTarget()) {
+            ObjectNode pos = JSON.createObjectNode().put("dimension", parameters.dimension())
+                    .put("x", parameters.x()).put("y", parameters.y()).put("z", parameters.z());
+            Result observation = block(body, pos);
+            ObjectNode fact = observation.observation().deepCopy();
+            fact.set("position", pos);
+            targets.add(fact);
+        }
+        return result;
+    }
+
     private static Result block(CompanionPlayer body, JsonNode position) {
         BlockPos target = position(position);
         String dimension = position.path("dimension").asText(body.serverLevel().dimension().location().toString());
@@ -65,6 +106,7 @@ public final class PrimitiveObservationService {
         var state = body.serverLevel().getBlockState(target);
         ObjectNode observation = envelope(body, "BLOCK").put("visible", true);
         observation.set("position", position(target, dimension));
+        observation.put("container", body.serverLevel().getBlockEntity(target) instanceof net.minecraft.world.Container);
         observation.put("block", BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString())
                 .put("air", state.isAir())
                 .put("destroySpeed", state.getDestroySpeed(body.serverLevel(), target))

@@ -1,7 +1,15 @@
 package com.mccompanion.minecraft.v121;
 
 import com.mccompanion.core.body.BodyControlArbiter;
+import com.mccompanion.core.body.combat.CombatController;
+import com.mccompanion.core.body.combat.ThreatPolicy;
+import com.mccompanion.core.body.interaction.EntityInteractionController;
+import com.mccompanion.core.body.interaction.EntityTargetIdentity;
 import com.mccompanion.core.navigation.GridPathPlanner;
+import com.mccompanion.core.navigation.RouteExecutionController;
+import com.mccompanion.core.navigation.SurvivalNavigationPolicy;
+import com.mccompanion.minecraft.navigation.MinecraftSurvivalNavigationExecution;
+import com.mccompanion.minecraft.bridge.EntityEventTracker;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -47,9 +55,6 @@ import org.slf4j.Logger;
 
 /** Starts, ticks, pauses, resumes and terminates the local Alpha movement behaviors. */
 final class BehaviorDirector {
-    private static final int STUCK_TICKS = 80;
-    private static final int MAX_REPLANS = 3;
-    private static final int BEHAVIOR_TIMEOUT_TICKS = 20 * 60 * 5;
     private static final double ARRIVAL_DISTANCE_SQUARED = 1.5D * 1.5D;
     private static final double FOLLOW_DISTANCE_SQUARED = 3.0D * 3.0D;
 
@@ -58,9 +63,14 @@ final class BehaviorDirector {
     private final Logger logger;
     private final PlayerActionGateway actionGateway = new PlayerActionGateway();
     private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
+    private final Map<UUID, MinecraftThreatRecovery> threatRecoveries = new HashMap<>();
     private final ReflexController reflexController = new ReflexController();
     private final BodyControlArbiter controlArbiter = new BodyControlArbiter();
-    private final Map<UUID, NavigationProgress> navigation = new HashMap<>();
+    private final DailyActionAdapter dailyActions;
+    private final MinecraftSmallBlueprintBuilder smallBlueprints;
+    private final Map<UUID, RouteExecutionController.Session> navigation = new HashMap<>();
+    private final Map<UUID, MinecraftSurvivalNavigationExecution> survivalNavigations = new HashMap<>();
+    private final Map<UUID, SkillParameters> survivalNavigationParameters = new HashMap<>();
     private final Map<UUID, SkillProgress> skills = new HashMap<>();
     private final Map<UUID, ScanProgress> scans = new HashMap<>();
     private final Map<UUID, MineProgress> mines = new HashMap<>();
@@ -69,6 +79,12 @@ final class BehaviorDirector {
     private final Map<UUID, DefendProgress> defends = new HashMap<>();
     private final Map<UUID, InteractionProgress> interactions = new HashMap<>();
     private final Map<UUID, MenuProgress> menuActions = new HashMap<>();
+    private final Map<UUID, MinecraftCombatController> combats = new HashMap<>();
+    private final Map<UUID, EntityBehaviorProgress> entityBehaviors = new HashMap<>();
+    private final Map<UUID, EntityEventTracker.TargetBinding> recentEntityTargets = new HashMap<>();
+    private final Map<UUID, Long> recentEntityTargetExpiryTicks = new HashMap<>();
+    private final Map<UUID, SkillParameters> eventParameters = new HashMap<>();
+    private final Map<UUID, Long> eventParameterExpiryTicks = new HashMap<>();
     private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
     private final Map<UUID, Map<BodyControlArbiter.Authority, String>> controlTokens = new HashMap<>();
 
@@ -76,18 +92,105 @@ final class BehaviorDirector {
         this.server = server;
         this.savedData = savedData;
         this.logger = logger;
+        this.dailyActions = new DailyActionAdapter(server, actionGateway, navigationAdapter);
+        this.smallBlueprints = new MinecraftSmallBlueprintBuilder(actionGateway, navigationAdapter);
     }
 
     void start(CompanionEntry entry, CompanionPlayer body) {
-        navigation.put(entry.companionId, new NavigationProgress(server.getTickCount()));
+        supersedeActive(entry, body);
+        observations.remove(entry.companionId);
+        eventParameters.remove(entry.companionId);
+        eventParameterExpiryTicks.remove(entry.companionId);
+        navigation.put(entry.companionId, new RouteExecutionController.Session(server.getTickCount(),
+                body.serverLevel().dimension().location().toString()));
+        actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+    }
+
+    java.util.Map<String, Object> worldNavigation(UUID companionId) {
+        RouteExecutionController.Session route = navigation.get(companionId);
+        return route == null ? java.util.Map.of("active", false) : route.localSummary();
+    }
+
+    void resumeNavigation(CompanionEntry entry, CompanionPlayer body) {
+        RouteExecutionController.Session session = navigation.get(entry.companionId);
+        if (session == null) {
+            start(entry, body);
+            return;
+        }
+        session.resume(server.getTickCount());
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
     void startSkill(CompanionEntry entry, CompanionPlayer body, SkillParameters parameters) {
+        supersedeActive(entry, body);
         observations.remove(entry.companionId);
+        eventParameters.put(entry.companionId, parameters);
+        eventParameterExpiryTicks.put(entry.companionId, Long.MAX_VALUE);
         interactions.remove(entry.companionId);
         menuActions.remove(entry.companionId);
-        if (parameters.capability().equals("RetreatFromDanger")) {
+        survivalNavigations.remove(entry.companionId);
+        survivalNavigationParameters.remove(entry.companionId);
+        if (parameters.capability().equals("DefendOwner")) {
+            ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+            if (owner == null || owner.level() != body.level()) throw new IllegalArgumentException("OWNER_OFFLINE");
+            var target = MinecraftThreatRecovery.observe(body, owner).stream()
+                    .filter(seen -> seen.entity().distanceToSqr(owner) <= 64)
+                    .sorted(java.util.Comparator.comparing((MinecraftThreatRecovery.Seen seen) -> !seen.fact().ownerAttacked())
+                            .thenComparingDouble(seen -> seen.entity().distanceToSqr(owner)))
+                    .map(MinecraftThreatRecovery.Seen::entity).findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("NO_OWNER_THREAT"));
+            combats.put(entry.companionId, new MinecraftCombatController(new EntityTargetIdentity(target.getUUID(),
+                    EntityTargetIdentity.Source.UUID, "", false), MinecraftThreatRecovery.defenseStyle(body, target),
+                    parameters.durationTicks() == null ? 1200 : parameters.durationTicks(), body, actionGateway));
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
+        if (MinecraftCombatController.supports(parameters.capability())) {
+            TargetResolution target = resolveInitialTarget(body, parameters);
+            if (target.failureCode != null) throw new IllegalArgumentException(target.failureCode);
+            combats.put(entry.companionId, new MinecraftCombatController(target.identity,
+                    parameters.capability(), parameters.durationTicks() == null ? 1200 : parameters.durationTicks(),
+                    body, actionGateway));
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
+        if (supportsEntityBehavior(parameters.capability())) {
+            entityBehaviors.put(entry.companionId, createEntityBehavior(body, parameters));
+        } else if (DailyActionAdapter.supports(parameters.capability())) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
+            retreats.remove(entry.companionId);
+            dailyActions.start(entry, body, parameters);
+            return;
+        }
+        if (parameters.capability().equals("BuildSmallBlueprint")) {
+            if (parameters.blueprint() == null) throw new IllegalArgumentException("BLUEPRINT_MISSING");
+            entry.blueprintSession = new com.mccompanion.core.body.build.SmallBlueprintExecutor.Session(
+                    parameters.blueprint());
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            savedData.changed();
+            return;
+        }
+        if (parameters.capability().equals("NavigateWithWorldChanges")) {
+            skills.remove(entry.companionId);
+            scans.remove(entry.companionId);
+            mines.remove(entry.companionId);
+            smelts.remove(entry.companionId);
+            defends.remove(entry.companionId);
+            navigation.remove(entry.companionId);
+            SurvivalNavigationPolicy policy = survivalPolicy(parameters);
+            survivalNavigations.put(entry.companionId, new MinecraftSurvivalNavigationExecution(
+                    server.getTickCount(), body.serverLevel().dimension().location().toString(), policy));
+            survivalNavigationParameters.put(entry.companionId, parameters);
+        } else if (parameters.capability().equals("RetreatFromDanger")) {
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
@@ -145,21 +248,120 @@ final class BehaviorDirector {
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
+    private void supersedeActive(CompanionEntry entry, CompanionPlayer body) {
+        endThreatRecovery(entry, body);
+        if (entry.blueprintSession != null && !entry.blueprintSession.temporarySupports().isEmpty()) {
+            logger.info("blueprint_superseded_supports_retained companion={} supports={}",
+                    entry.companionId, entry.blueprintSession.temporarySupports());
+        }
+        MinecraftCombatController combat = combats.get(entry.companionId);
+        if (combat != null) combat.pause(body);
+        smallBlueprints.forget(body);
+        actionGateway.stopInput(body);
+        if (dailyActions.has(entry.companionId)) {
+            dailyActions.stop(entry.companionId, "SUPERSEDED", false);
+            dailyActions.forget(entry.companionId);
+        }
+        actionGateway.completeBehavior(body, false, "SUPERSEDED", server.getTickCount());
+        navigation.remove(entry.companionId);
+        survivalNavigations.remove(entry.companionId);
+        survivalNavigationParameters.remove(entry.companionId);
+        skills.remove(entry.companionId);
+        scans.remove(entry.companionId);
+        mines.remove(entry.companionId);
+        smelts.remove(entry.companionId);
+        retreats.remove(entry.companionId);
+        defends.remove(entry.companionId);
+        interactions.remove(entry.companionId);
+        menuActions.remove(entry.companionId);
+        entityBehaviors.remove(entry.companionId);
+        combats.remove(entry.companionId);
+        recentEntityTargets.remove(entry.companionId);
+        recentEntityTargetExpiryTicks.remove(entry.companionId);
+        entry.blueprintSession = null;
+    }
+
+    void validateSkill(CompanionPlayer body, SkillParameters parameters) {
+        if (MinecraftCombatController.supports(parameters.capability())) {
+            new CombatController.Session(MinecraftCombatController.style(parameters.capability()),
+                    parameters.durationTicks() == null ? 1200 : parameters.durationTicks());
+            TargetResolution resolution = resolveInitialTarget(body, parameters);
+            if (resolution.failureCode != null) throw new IllegalArgumentException(resolution.failureCode);
+        }
+        else if (supportsEntityBehavior(parameters.capability())) validateEntityBehaviorParameters(parameters);
+        else if (DailyActionAdapter.supports(parameters.capability())) dailyActions.validate(body, parameters);
+        else if (parameters.capability().equals("NavigateWithWorldChanges")) {
+            validateSurvivalNavigation(body, parameters);
+        } else if (parameters.capability().equals("BuildSmallBlueprint")) {
+            if (parameters.blueprint() == null) throw new IllegalArgumentException("BLUEPRINT_MISSING");
+            if (!body.serverLevel().dimension().location().toString()
+                    .equals(parameters.blueprint().anchor().dimension())) {
+                throw new IllegalArgumentException("WORLD_CHANGED");
+            }
+        }
+    }
+
+    boolean canResumeSkill(UUID companionId) {
+        return combats.containsKey(companionId) || dailyActions.has(companionId) || skills.containsKey(companionId) || scans.containsKey(companionId)
+                || mines.containsKey(companionId) || smelts.containsKey(companionId)
+                || defends.containsKey(companionId) || interactions.containsKey(companionId)
+                || menuActions.containsKey(companionId) || retreats.containsKey(companionId)
+                || survivalNavigations.containsKey(companionId) || entityBehaviors.containsKey(companionId);
+    }
+
     void resumeSkill(CompanionEntry entry, CompanionPlayer body) {
-        if (!skills.containsKey(entry.companionId) && !scans.containsKey(entry.companionId)
-                && !mines.containsKey(entry.companionId) && !smelts.containsKey(entry.companionId)
-                && !defends.containsKey(entry.companionId) && !interactions.containsKey(entry.companionId)
-                && !menuActions.containsKey(entry.companionId) && !retreats.containsKey(entry.companionId)) {
+        if (dailyActions.has(entry.companionId)) {
+            dailyActions.resume(entry, body);
+            return;
+        }
+        if (entry.blueprintSession != null) {
+            entry.blueprintSession.requireReconciliation();
+            RouteExecutionController.Session route = navigation.get(entry.companionId);
+            if (route != null) route.resume(server.getTickCount());
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            return;
+        }
+        if (!canResumeSkill(entry.companionId)) {
             pauseSafely(entry, body, "RECOVERY_REQUIRED");
             return;
         }
+        if (combats.containsKey(entry.companionId)) {
+            RouteExecutionController.Session route = navigation.get(entry.companionId);
+            if (route != null) route.resume(server.getTickCount());
+        }
+        MinecraftSurvivalNavigationExecution survival = survivalNavigations.get(entry.companionId);
+        if (survival != null) survival.resume(server.getTickCount());
         actionGateway.startBehavior(body, entry.mode, server.getTickCount());
     }
 
     void stop(CompanionEntry entry, CompanionPlayer body, boolean success, String code) {
+        endThreatRecovery(entry, body);
+        actionGateway.cancelUsing(body);
+        MinecraftCombatController combat = combats.get(entry.companionId);
+        if (combat != null) combat.pause(body);
+        smallBlueprints.forget(body);
         actionGateway.stopInput(body);
+        if (success || code.equals("RUNTIME_CANCEL") || code.equals("CANCELLED_BY_OWNER")
+                || code.equals("SUPERSEDED") || code.equals("BODY_DEAD")) {
+            if (entry.blueprintSession != null && !entry.blueprintSession.temporarySupports().isEmpty()) {
+                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                        "BLUEPRINT_CANCELLED_SUPPORTS_RETAINED", "", 0, 0, java.util.List.of(), Map.of(
+                        "reason", code, "retainedSupports", entry.blueprintSession.temporarySupports().toString())));
+            }
+            entry.blueprintSession = null;
+        }
+        boolean daily = dailyActions.has(entry.companionId);
+        if (daily) dailyActions.stop(entry.companionId, code, isSuspension(code));
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
-        navigation.remove(entry.companionId);
+        RouteExecutionController.Session route = navigation.get(entry.companionId);
+        if (route != null && isSuspension(code)) route.pause(server.getTickCount());
+        else navigation.remove(entry.companionId);
+        MinecraftSurvivalNavigationExecution survival = survivalNavigations.get(entry.companionId);
+        if (survival != null && isSuspension(code)) survival.pause(server.getTickCount());
+        else {
+            survivalNavigations.remove(entry.companionId);
+            survivalNavigationParameters.remove(entry.companionId);
+        }
         SkillProgress skill = skills.get(entry.companionId);
         if (skill != null && skill.parameters.capability().equals("UseItem") && body.isUsingItem()) {
             body.releaseUsingItem();
@@ -174,9 +376,9 @@ final class BehaviorDirector {
             returnFurnaceInputs(body);
             body.closeContainer();
         }
-        if (success || !(code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
-                || code.equals("RUNTIME_OFFLINE")
-                || code.equals("LEASE_EXPIRED"))) {
+        if (success || !isSuspension(code)) {
+            EntityBehaviorProgress entityBehavior = entityBehaviors.get(entry.companionId);
+            if (entityBehavior != null) rememberEntityEventTarget(entry.companionId, entityBehavior);
             skills.remove(entry.companionId);
             scans.remove(entry.companionId);
             mines.remove(entry.companionId);
@@ -185,6 +387,9 @@ final class BehaviorDirector {
             interactions.remove(entry.companionId);
             menuActions.remove(entry.companionId);
             retreats.remove(entry.companionId);
+            entityBehaviors.remove(entry.companionId);
+            combats.remove(entry.companionId);
+            eventParameterExpiryTicks.put(entry.companionId, (long) server.getTickCount() + 10L);
         }
         if ((success || !isSuspension(code))
                 && controlArbiter.snapshot(entry.companionId).authority()
@@ -225,8 +430,10 @@ final class BehaviorDirector {
     }
 
     void forget(UUID companionId) {
+        threatRecoveries.remove(companionId);
         navigation.remove(companionId);
-        actionGateway.discard(companionId);
+        survivalNavigations.remove(companionId);
+        survivalNavigationParameters.remove(companionId);
         skills.remove(companionId);
         scans.remove(companionId);
         mines.remove(companionId);
@@ -235,6 +442,14 @@ final class BehaviorDirector {
         defends.remove(companionId);
         interactions.remove(companionId);
         menuActions.remove(companionId);
+        entityBehaviors.remove(companionId);
+        combats.remove(companionId);
+        recentEntityTargets.remove(companionId);
+        recentEntityTargetExpiryTicks.remove(companionId);
+        eventParameters.remove(companionId);
+        eventParameterExpiryTicks.remove(companionId);
+        dailyActions.forget(companionId);
+        actionGateway.discard(companionId);
         MenuSessionTracker.invalidate(companionId);
         observations.remove(companionId);
         controlTokens.remove(companionId);
@@ -250,7 +465,64 @@ final class BehaviorDirector {
     }
 
     CompanionRegistry.BehaviorObservation behaviorObservation(UUID companionId) {
+        var daily = dailyActions.observation(companionId);
+        if (daily != null) return dailyObservation(daily);
         return observations.get(companionId);
+    }
+
+    SkillParameters eventParameters(UUID companionId) {
+        Long expiry = eventParameterExpiryTicks.get(companionId);
+        if (expiry != null && expiry != Long.MAX_VALUE && server.getTickCount() > expiry) {
+            eventParameterExpiryTicks.remove(companionId);
+            eventParameters.remove(companionId);
+            return null;
+        }
+        return eventParameters.get(companionId);
+    }
+
+    EntityEventTracker.TargetBinding entityEventTarget(CompanionEntry entry) {
+        MinecraftCombatController combat = combats.get(entry.companionId);
+        if (combat != null) return currentTarget(combat.identity.uuid());
+        EntityBehaviorProgress entityBehavior = entityBehaviors.get(entry.companionId);
+        if (entityBehavior != null && entityBehavior.identity != null) return entityBehaviorTarget(entityBehavior);
+        CompanionEntry.Mode effective = entry.mode == CompanionEntry.Mode.PAUSED ? entry.resumeMode : entry.mode;
+        if (effective == CompanionEntry.Mode.FOLLOW) {
+            return new EntityEventTracker.TargetBinding(
+                    entry.ownerId.toString(), EntityEventTracker.TargetKind.FOLLOW);
+        }
+        EntityEventTracker.TargetBinding dailyTarget = dailyActions.entityEventTarget(entry.companionId);
+        if (dailyTarget != null) return dailyTarget;
+        RetreatProgress retreat = retreats.get(entry.companionId);
+        if (retreat != null && retreat.threatId != null) return currentTarget(retreat.threatId);
+        DefendProgress defend = defends.get(entry.companionId);
+        if (defend != null && !defend.threatId.equals(new UUID(0L, 0L))) return currentTarget(defend.threatId);
+        InteractionProgress interaction = interactions.get(entry.companionId);
+        if (interaction != null && interaction.entityId != null) return currentTarget(interaction.entityId);
+        SkillProgress skill = skills.get(entry.companionId);
+        EntityEventTracker.TargetBinding skillTarget = skill == null ? null : targetId(skill.parameters.targetId());
+        if (skillTarget != null) return skillTarget;
+        Long expiry = recentEntityTargetExpiryTicks.get(entry.companionId);
+        if (expiry != null && server.getTickCount() <= expiry) return recentEntityTargets.get(entry.companionId);
+        recentEntityTargetExpiryTicks.remove(entry.companionId);
+        return recentEntityTargets.remove(entry.companionId);
+    }
+
+    private static EntityEventTracker.TargetBinding targetId(String value) {
+        if (value == null || value.isBlank()) return null;
+        try { return currentTarget(UUID.fromString(value)); }
+        catch (IllegalArgumentException ignored) { return null; }
+    }
+
+    private static EntityEventTracker.TargetBinding currentTarget(UUID targetId) {
+        return new EntityEventTracker.TargetBinding(
+                targetId.toString(), EntityEventTracker.TargetKind.CURRENT);
+    }
+
+    private static CompanionRegistry.BehaviorObservation dailyObservation(
+            com.mccompanion.core.body.daily.DailyActionEngine.Observation daily) {
+        var mapped = com.mccompanion.core.body.daily.DailyActionOutcome.forRuntime(daily);
+        return new CompanionRegistry.BehaviorObservation(
+                mapped.code(), "", 0, 0, java.util.List.of(), mapped.details());
     }
 
     void tick(CompanionEntry entry, CompanionPlayer body) {
@@ -260,13 +532,8 @@ final class BehaviorDirector {
             tickRetreat(entry, body, retreat);
             return;
         }
-        if (entry.mode != CompanionEntry.Mode.PAUSED && !defends.containsKey(entry.companionId)) {
-            var threat = reflexController.nearestRetreatThreat(body);
-            if (threat.isPresent() && threat.get().distanceToSqr(body) <= 9.0D) {
-                beginRetreat(entry, body, threat.get());
-                return;
-            }
-        }
+        if (entry.mode != CompanionEntry.Mode.PAUSED && !body.isInLava() && !body.isOnFire()
+                && !(body.isInWater() && body.getAirSupply() <= 40) && tickThreatRecovery(entry, body)) return;
         var reflex = reflexController.blockingReason(body);
         if (reflex.isPresent()) {
             claimSafety(entry, reflex.get());
@@ -278,6 +545,38 @@ final class BehaviorDirector {
             return;
         }
         if (entry.mode == CompanionEntry.Mode.SKILL) {
+            if (combats.containsKey(entry.companionId)) {
+                tickCombat(entry, body, combats.get(entry.companionId));
+                return;
+            }
+            if (entityBehaviors.containsKey(entry.companionId)) {
+                tickEntityBehavior(entry, body, entityBehaviors.get(entry.companionId));
+                return;
+            }
+            if (dailyActions.has(entry.companionId)) {
+                try {
+                    if (!dailyActions.tick(entry, body) || !dailyActions.terminal(entry.companionId)) return;
+                    var daily = dailyActions.observation(entry.companionId);
+                    boolean success = daily != null
+                            && daily.status() == com.mccompanion.core.body.daily.DailyActionEngine.Status.COMPLETE;
+                    entry.mode = CompanionEntry.Mode.IDLE;
+                    entry.resumeMode = CompanionEntry.Mode.IDLE;
+                    entry.hasTarget = false;
+                    savedData.changed();
+                    stop(entry, body, success, daily == null ? "DAILY_ACTION_TERMINAL" : daily.code());
+                } catch (RuntimeException failure) {
+                    entry.mode = CompanionEntry.Mode.IDLE;
+                    entry.resumeMode = CompanionEntry.Mode.IDLE;
+                    entry.hasTarget = false;
+                    savedData.changed();
+                    stop(entry, body, false, "DAILY_ACTION_ERROR");
+                    dailyActions.forget(entry.companionId);
+                    observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                            "DAILY_ACTION_ERROR", "", 0, 0, java.util.List.of(),
+                            java.util.Map.of("exception", failure.getClass().getSimpleName())));
+                }
+                return;
+            }
             tickSkill(entry, body);
             return;
         }
@@ -312,15 +611,57 @@ final class BehaviorDirector {
             CompanionPlayer body,
             Vec3 target,
             double arrivalDistanceSquared) {
-        NavigationProgress progress = navigation.computeIfAbsent(
-                entry.companionId,
-                ignored -> new NavigationProgress(server.getTickCount()));
-        if (server.getTickCount() - progress.startedTick > BEHAVIOR_TIMEOUT_TICKS) {
-            pauseSafely(entry, body, "BEHAVIOR_TIMEOUT");
-            return;
+        tickNavigation(entry, body, target, arrivalDistanceSquared, false);
+    }
+
+    private RouteExecutionController.Status tickNavigation(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            Vec3 target,
+            double arrivalDistanceSquared,
+            boolean continuous) {
+        return tickNavigation(entry, body, target, arrivalDistanceSquared, continuous, null);
+    }
+
+    private RouteExecutionController.Status tickNavigation(
+            CompanionEntry entry,
+            CompanionPlayer body,
+            Vec3 target,
+            double arrivalDistanceSquared,
+            boolean continuous,
+            UUID ignoredTargetId) {
+        RouteExecutionController.Session session = navigation.computeIfAbsent(entry.companionId,
+                ignored -> new RouteExecutionController.Session(server.getTickCount(),
+                        body.serverLevel().dimension().location().toString()));
+        RouteExecutionController.Position currentPosition = position(body.position());
+        RouteExecutionController.Position targetPosition = position(target);
+        GridPathPlanner.Point currentCell = SurvivalNavigationAdapter.point(body.blockPosition());
+        GridPathPlanner.Point targetCell = SurvivalNavigationAdapter.point(BlockPos.containing(target));
+        RouteExecutionController.Result result = session.tick(new RouteExecutionController.Input(
+                        server.getTickCount(), body.serverLevel().dimension().location().toString(),
+                        currentPosition, currentCell, targetPosition, targetCell,
+                        arrivalDistanceSquared, GridPathPlanner.Budget.safeLocomotion()),
+                new RouteExecutionController.Environment() {
+                    @Override public GridPathPlanner.Plan plan(
+                            RouteExecutionController.Position destination, GridPathPlanner.Budget budget) {
+                        return navigationAdapter.plan(body,
+                                new Vec3(destination.x(), destination.y(), destination.z()), budget,
+                                ignoredTargetId);
+                    }
+
+                    @Override public boolean remainsTraversable(
+                            GridPathPlanner.Point from, GridPathPlanner.RouteStep next) {
+                        return navigationAdapter.remainsTraversable(body, from, next, ignoredTargetId);
+                    }
+                });
+        if (result.status() == RouteExecutionController.Status.BLOCKED) {
+            if (!threatRecoveries.containsKey(entry.companionId)) pauseSafely(entry, body, result.code());
+            return result.status();
         }
-        Vec3 targetDelta = target.subtract(body.position());
-        if (targetDelta.lengthSqr() <= arrivalDistanceSquared) {
+        if (result.status() == RouteExecutionController.Status.PAUSED) return result.status();
+        if (result.status() == RouteExecutionController.Status.ARRIVED) {
+            actionGateway.stopInput(body);
+            if (continuous) return result.status();
             stop(entry, body, true, "NONE");
             if (entry.mode == CompanionEntry.Mode.GOTO) {
                 entry.mode = CompanionEntry.Mode.IDLE;
@@ -328,116 +669,367 @@ final class BehaviorDirector {
                 entry.hasTarget = false;
                 savedData.changed();
             }
-            return;
+            return result.status();
+        }
+        if (result.direct()) {
+            actionGateway.applyMoveInput(body,
+                    (float) Math.toDegrees(Math.atan2(-result.delta().x(), result.delta().z())),
+                    result.delta().y() > 0.6D || body.horizontalCollision);
+            return result.status();
         }
 
-        GridPathPlanner.Point goal = SurvivalNavigationAdapter.point(BlockPos.containing(target));
-        GridPathPlanner.Point current = SurvivalNavigationAdapter.point(body.blockPosition());
-        boolean targetMoved = !goal.equals(progress.goal);
-        boolean routeMissing = progress.waypointIndex >= progress.route.size();
-        GridPathPlanner.Point plannedFrom = progress.waypointIndex == 0
-                ? current
-                : progress.route.get(progress.waypointIndex - 1);
-        boolean routeInvalid = !routeMissing
-                && !navigationAdapter.remainsTraversable(
-                        body,
-                        plannedFrom,
-                        progress.route.get(progress.waypointIndex));
-        if (targetMoved || routeMissing || routeInvalid) {
-            if (routeInvalid && ++progress.replanCount > MAX_REPLANS) {
-                pauseSafely(entry, body, "STUCK");
-                return;
+        GridPathPlanner.RouteStep routeStep = result.step();
+        GridPathPlanner.Point waypointPoint = routeStep.point();
+        if (navigationAdapter.requiresPassageOpening(body, waypointPoint)) {
+            if (!navigationAdapter.openDoorIfNeeded(body, waypointPoint)) {
+                if (!threatRecoveries.containsKey(entry.companionId)) pauseSafely(entry, body, "PASSAGE_INTERACTION_FAILED");
+                return RouteExecutionController.Status.BLOCKED;
             }
-            String failure = replanNavigation(body, target, progress, goal);
-            if (failure != null) {
-                pauseSafely(entry, body, failure);
-                return;
-            }
-        }
-
-        while (progress.waypointIndex < progress.route.size()) {
-            Vec3 candidate = SurvivalNavigationAdapter.waypoint(
-                    progress.route.get(progress.waypointIndex));
-            double horizontal = horizontalDistanceSquared(body.position(), candidate);
-            if (horizontal > 0.45D || Math.abs(body.getY() - candidate.y) > 1.1D) break;
-            progress.waypointIndex++;
-            progress.bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
-            progress.stagnantTicks = 0;
-        }
-        if (progress.waypointIndex >= progress.route.size()) {
-            String failure = replanNavigation(body, target, progress, goal);
-            if (failure != null || progress.route.isEmpty()) {
-                if (failure != null) pauseSafely(entry, body, failure);
-                else actionGateway.applyMoveInput(
-                        body,
-                        (float) Math.toDegrees(Math.atan2(-targetDelta.x, targetDelta.z)),
-                        targetDelta.y > 0.6D || body.horizontalCollision);
-                return;
-            }
-        }
-
-        GridPathPlanner.Point waypointPoint = progress.route.get(progress.waypointIndex);
-        if (navigationAdapter.openDoorIfNeeded(body, waypointPoint)) {
             actionGateway.markVanillaGameModeAction(body);
         }
-        Vec3 waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
-        Vec3 delta = waypoint.subtract(body.position());
-        double waypointDistanceSquared = delta.lengthSqr();
-        if (waypointDistanceSquared + 0.04D < progress.bestWaypointDistanceSquared) {
-            progress.bestWaypointDistanceSquared = waypointDistanceSquared;
-            progress.stagnantTicks = 0;
-        } else if (++progress.stagnantTicks >= STUCK_TICKS) {
-            if (++progress.replanCount > MAX_REPLANS) {
-                pauseSafely(entry, body, "STUCK");
-                return;
-            }
-            String failure = replanNavigation(body, target, progress, goal);
-            if (failure != null) {
-                pauseSafely(entry, body, failure);
-                return;
-            }
+        Vec3 delta = new Vec3(result.delta().x(), result.delta().y(), result.delta().z());
+        if (result.replanned() && result.replanCount() > 0) {
             logger.info(
                     "companion_replan companion={} attempt={} reason=NO_WAYPOINT_PROGRESS",
-                    entry.companionId,
-                    progress.replanCount);
-            waypointPoint = progress.route.get(progress.waypointIndex);
-            waypoint = SurvivalNavigationAdapter.waypoint(waypointPoint);
-            delta = waypoint.subtract(body.position());
+                    entry.companionId, result.replanCount());
         }
         float yaw = navigationAdapter.movementYaw(body, waypointPoint, delta);
-        actionGateway.applyMoveInput(
-                body,
-                yaw,
+        boolean gapJump = routeStep.movement() == GridPathPlanner.Movement.JUMP_GAP;
+        if (gapJump && !navigationAdapter.canExecuteGapJump(body)) {
+            if (!threatRecoveries.containsKey(entry.companionId)) pauseSafely(entry, body, "GAP_JUMP_UNSAFE");
+            return RouteExecutionController.Status.BLOCKED;
+        }
+        actionGateway.applyMoveInput(body, yaw,
                 waypointPoint.y() > body.blockPosition().getY()
-                        || body.horizontalCollision);
+                        || body.horizontalCollision
+                        || gapJump && navigationAdapter.gapTakeoffReady(body, waypointPoint),
+                routeStep.movement() == GridPathPlanner.Movement.SPRINT || gapJump);
+        return result.status();
     }
 
-    private String replanNavigation(
-            CompanionPlayer body,
-            Vec3 target,
-            NavigationProgress progress,
-            GridPathPlanner.Point goal) {
-        GridPathPlanner.Plan plan = navigationAdapter.plan(body, target);
-        if (plan.status() != GridPathPlanner.Status.READY) {
-            return switch (plan.status()) {
-                case TARGET_UNLOADED -> "TARGET_CHUNK_UNLOADED";
-                case OUT_OF_RANGE -> "TARGET_OUT_OF_RANGE";
-                case UNREACHABLE -> "PATH_UNREACHABLE";
-                case READY -> null;
-            };
+    private static RouteExecutionController.Position position(Vec3 value) {
+        return new RouteExecutionController.Position(value.x, value.y, value.z);
+    }
+
+    private static boolean supportsEntityBehavior(String capability) {
+        return switch (capability) {
+            case "FollowEntity", "ApproachEntity", "KeepDistanceFromEntity", "ChaseEntity",
+                    "EscortEntity", "FleeFromEntity", "FaceEntity" -> true;
+            default -> false;
+        };
+    }
+
+    private static EntityInteractionController.Behavior entityBehavior(String capability) {
+        return switch (capability) {
+            case "FollowEntity" -> EntityInteractionController.Behavior.FOLLOW;
+            case "ApproachEntity" -> EntityInteractionController.Behavior.APPROACH;
+            case "KeepDistanceFromEntity" -> EntityInteractionController.Behavior.KEEP_DISTANCE;
+            case "ChaseEntity" -> EntityInteractionController.Behavior.CHASE;
+            case "EscortEntity" -> EntityInteractionController.Behavior.ESCORT;
+            case "FleeFromEntity" -> EntityInteractionController.Behavior.FLEE;
+            case "FaceEntity" -> EntityInteractionController.Behavior.FACE;
+            default -> throw new IllegalArgumentException("unsupported entity behavior");
+        };
+    }
+
+    private static void validateEntityBehaviorParameters(SkillParameters parameters) {
+        EntityInteractionController.Behavior behavior = entityBehavior(parameters.capability());
+        EntityInteractionController.Config defaults = EntityInteractionController.Config.defaults(behavior);
+        new EntityInteractionController.Config(
+                parameters.minimumDistance() == null ? defaults.minimumDistance() : parameters.minimumDistance(),
+                parameters.maximumDistance() == null ? defaults.maximumDistance() : parameters.maximumDistance(),
+                parameters.lostTimeoutTicks() == null ? defaults.lostTimeoutTicks() : parameters.lostTimeoutTicks());
+        String kind = parameters.targetReferenceKind().isBlank()
+                ? (parameters.targetId().isBlank() ? "" : "UUID") : parameters.targetReferenceKind();
+        try { EntityTargetIdentity.Source.valueOf(kind); }
+        catch (IllegalArgumentException invalid) { throw new IllegalArgumentException("invalid entity target reference"); }
+        if ((kind.equals("UUID") || kind.equals("VERIFIED_PLAYER")) && parameters.targetId().isBlank()
+                || kind.equals("ENTITY_ID") && parameters.targetRuntimeId() == null
+                || kind.equals("NAME") && parameters.targetName().isBlank()) {
+            throw new IllegalArgumentException("entity target reference is incomplete");
         }
-        progress.goal = goal;
-        progress.route = plan.points();
-        progress.waypointIndex = 0;
-        progress.bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
-        progress.stagnantTicks = 0;
+        if (!parameters.targetId().isBlank()) UUID.fromString(parameters.targetId());
+    }
+
+    private EntityBehaviorProgress createEntityBehavior(CompanionPlayer body, SkillParameters parameters) {
+        EntityInteractionController.Behavior behavior = entityBehavior(parameters.capability());
+        EntityInteractionController.Config defaults = EntityInteractionController.Config.defaults(behavior);
+        EntityInteractionController.Config config;
+        try {
+            config = new EntityInteractionController.Config(
+                    parameters.minimumDistance() == null ? defaults.minimumDistance() : parameters.minimumDistance(),
+                    parameters.maximumDistance() == null ? defaults.maximumDistance() : parameters.maximumDistance(),
+                    parameters.lostTimeoutTicks() == null ? defaults.lostTimeoutTicks() : parameters.lostTimeoutTicks());
+        } catch (IllegalArgumentException invalid) {
+            return EntityBehaviorProgress.failed(parameters, behavior, "ENTITY_DISTANCE_INVALID");
+        }
+        TargetResolution resolution = resolveInitialTarget(body, parameters);
+        if (resolution.failureCode != null) {
+            return EntityBehaviorProgress.failed(parameters, behavior, resolution.failureCode);
+        }
+        return new EntityBehaviorProgress(parameters, resolution.identity,
+                new EntityInteractionController.Session(behavior, config), null);
+    }
+
+    private TargetResolution resolveInitialTarget(CompanionPlayer body, SkillParameters parameters) {
+        String rawKind = parameters.targetReferenceKind().isBlank()
+                ? (parameters.targetId().isBlank() ? "" : "UUID") : parameters.targetReferenceKind();
+        EntityTargetIdentity.Source source;
+        try { source = EntityTargetIdentity.Source.valueOf(rawKind); }
+        catch (IllegalArgumentException invalid) { return TargetResolution.failed("TARGET_REFERENCE_INVALID"); }
+        Entity entity;
+        UUID uuid;
+        try {
+            switch (source) {
+                case UUID -> {
+                    uuid = UUID.fromString(parameters.targetId());
+                    entity = findEntity(uuid);
+                }
+                case VERIFIED_PLAYER -> {
+                    uuid = UUID.fromString(parameters.targetId());
+                    entity = server.getPlayerList().getPlayer(uuid);
+                    if (!(entity instanceof ServerPlayer)) return TargetResolution.failed("TARGET_PLAYER_NOT_VERIFIED");
+                }
+                case ENTITY_ID -> {
+                    if (parameters.targetRuntimeId() == null) return TargetResolution.failed("TARGET_REFERENCE_INVALID");
+                    entity = body.serverLevel().getEntity(parameters.targetRuntimeId());
+                    if (entity == null) return TargetResolution.failed("TARGET_NOT_FOUND");
+                    uuid = entity.getUUID();
+                }
+                case NAME -> {
+                    entity = resolveUniqueName(body, parameters.targetName());
+                    if (entity == null) return TargetResolution.failed("TARGET_NAME_NOT_UNIQUE");
+                    uuid = entity.getUUID();
+                }
+                default -> throw new IllegalStateException("unsupported target source");
+            }
+        } catch (IllegalArgumentException invalid) {
+            return TargetResolution.failed("TARGET_REFERENCE_INVALID");
+        }
+        if (uuid.equals(body.getUUID())) return TargetResolution.failed("TARGET_IS_COMPANION");
+        String name = entity == null ? "" : entity.getDisplayName().getString();
+        boolean player = entity instanceof ServerPlayer;
+        return TargetResolution.resolved(new EntityTargetIdentity(uuid, source, name, player));
+    }
+
+    private Entity resolveUniqueName(CompanionPlayer body, String requestedName) {
+        if (requestedName == null || requestedName.isBlank()) return null;
+        Map<UUID, Entity> matches = new HashMap<>();
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (matchesName(player, requestedName)) matches.put(player.getUUID(), player);
+        }
+        for (Entity entity : body.serverLevel().getAllEntities()) {
+            if (entity != body && matchesName(entity, requestedName)) matches.put(entity.getUUID(), entity);
+        }
+        return matches.size() == 1 ? matches.values().iterator().next() : null;
+    }
+
+    private static boolean matchesName(Entity entity, String requestedName) {
+        return entity.getName().getString().equalsIgnoreCase(requestedName)
+                || entity.getDisplayName().getString().equalsIgnoreCase(requestedName);
+    }
+
+    private Entity findEntity(UUID targetId) {
+        ServerPlayer player = server.getPlayerList().getPlayer(targetId);
+        if (player != null) return player;
+        for (var level : server.getAllLevels()) {
+            Entity entity = level.getEntity(targetId);
+            if (entity != null) return entity;
+        }
         return null;
     }
 
-    private static double horizontalDistanceSquared(Vec3 first, Vec3 second) {
-        double x = first.x - second.x;
-        double z = first.z - second.z;
-        return x * x + z * z;
+    boolean locallyHandlesSafetyEvent(CompanionEntry entry, String type) {
+        if (entry.mode == CompanionEntry.Mode.PAUSED) return false;
+        boolean handling = threatRecoveries.containsKey(entry.companionId);
+        return switch (type) {
+            case "LOW_HEALTH", "HEALTH_RECOVERED" -> handling;
+            case "CURRENT_TARGET_DIED" -> handling || combats.containsKey(entry.companionId)
+                    || recentEntityTargetExpiryTicks.getOrDefault(entry.companionId, 0L) >= server.getTickCount();
+            case "DAMAGE", "HOSTILE_ENTERED_THREAT_RANGE" ->
+                    handling || combats.containsKey(entry.companionId);
+            default -> false;
+        };
+    }
+
+    private void endThreatRecovery(CompanionEntry entry, CompanionPlayer body) {
+        MinecraftThreatRecovery recovery = threatRecoveries.remove(entry.companionId);
+        if (recovery == null) return;
+        recovery.stop(body);
+        navigation.remove(entry.companionId);
+        if (recovery.interruptedRoute != null) navigation.put(entry.companionId, recovery.interruptedRoute);
+        releaseSafety(entry);
+    }
+
+    private boolean tickThreatRecovery(CompanionEntry entry, CompanionPlayer body) {
+        ServerPlayer owner = server.getPlayerList().getPlayer(entry.ownerId);
+        var seen = MinecraftThreatRecovery.observe(body, owner);
+        MinecraftThreatRecovery recovery = threatRecoveries.get(entry.companionId);
+        if (recovery == null) {
+            MinecraftCombatController combat = combats.get(entry.companionId);
+            UUID selectedTarget = combat == null ? null : combat.identity.uuid();
+            InteractionProgress interaction = interactions.get(entry.companionId);
+            if (selectedTarget == null && interaction != null && interaction.parameters.capability().equals("AttackEntity")) {
+                selectedTarget = interaction.entityId;
+            }
+            var decision = MinecraftThreatRecovery.decision(body, selectedTarget, seen);
+            if (decision.action() == ThreatPolicy.Action.CONTINUE) return false;
+            // Suspend existing executors, retaining their exact identity and progress. The durable
+            // Runtime task stays RUNNING while this bounded Body operation is in progress.
+            stop(entry, body, false, "LOCAL_THREAT_HANDLING");
+            recovery = new MinecraftThreatRecovery(entry, body, decision, navigation.remove(entry.companionId),
+                    actionGateway, navigationAdapter, server.getTickCount(), controlArbiter.snapshot(entry.companionId));
+            threatRecoveries.put(entry.companionId, recovery);
+            claimSafety(entry, "LOCAL_THREAT_HANDLING");
+            actionGateway.startBehavior(body, entry.mode, server.getTickCount());
+            savedData.changed();
+        }
+        String result = recovery.tick(body, owner, seen, server.getTickCount(),
+                (target, ignored) -> tickNavigation(entry, body, target, 0.25, true, ignored)
+                        != RouteExecutionController.Status.BLOCKED);
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result == null ? "LOCAL_THREAT_HANDLING" : result.equals("COMPLETE") ? "LOCAL_THREAT_RESUMED" : result,
+                "", 0, 0, java.util.List.of(), recovery.details()));
+        if (result == null) return true;
+        endThreatRecovery(entry, body);
+        if (!result.equals("COMPLETE")) {
+            if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, result);
+            return true;
+        }
+        if (recovery.interruptedControl.authority() != BodyControlArbiter.Authority.IDLE) {
+            String failure = claim(entry, recovery.interruptedControl.authority(),
+                    recovery.interruptedControl.ownerIdentity(), "LOCAL_THREAT_RESUMED");
+            if (failure != null) { pauseSafely(entry, body, failure); return true; }
+        }
+        if (entry.mode == CompanionEntry.Mode.SKILL) resumeSkill(entry, body);
+        else if (entry.mode != CompanionEntry.Mode.IDLE) resumeNavigation(entry, body);
+        else actionGateway.completeBehavior(body, true, "LOCAL_THREAT_RESUMED", server.getTickCount());
+        savedData.changed();
+        return true;
+    }
+
+    private void tickCombat(CompanionEntry entry, CompanionPlayer body, MinecraftCombatController combat) {
+        Entity target = findEntity(combat.identity.uuid());
+        CombatController.Result result = combat.tick(body, target, server.getTickCount());
+        if (result.status() == CombatController.Status.RUNNING && target != null
+                && (result.action() == CombatController.Action.CHASE
+                || result.action() == CombatController.Action.BACK_OFF)) {
+            Vec3 offset = body.position().subtract(target.position()).multiply(1, 0, 1);
+            if (offset.lengthSqr() < 0.0001) offset = new Vec3(1, 0, 0);
+            double standOff = result.action() == CombatController.Action.BACK_OFF ? 7.0
+                    : combat.style() == CombatController.Style.BOW ? 10.0 : 1.8;
+            Vec3 destination = target.position().add(offset.normalize().scale(standOff));
+            var navigationStatus = tickNavigation(entry, body, destination, 0.25, true, combat.identity.uuid());
+            if (navigationStatus == RouteExecutionController.Status.BLOCKED)
+                result = combat.fail("TARGET_UNREACHABLE");
+        } else actionGateway.stopInput(body);
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result.code(), "", 0, 0, java.util.List.of(), combat.details(body, result)));
+        if (result.status() == CombatController.Status.FAILED) {
+            if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, result.code());
+        } else if (result.status() == CombatController.Status.COMPLETE) {
+            recentEntityTargets.put(entry.companionId, currentTarget(combat.identity.uuid()));
+            recentEntityTargetExpiryTicks.put(entry.companionId, (long) server.getTickCount() + 10);
+            stop(entry, body, true, result.code());
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            entry.hasTarget = false;
+            savedData.changed();
+        }
+    }
+
+    private void tickEntityBehavior(CompanionEntry entry, CompanionPlayer body, EntityBehaviorProgress progress) {
+        if (progress.failureCode != null) {
+            finishEntityBehavior(entry, body, progress, false, progress.failureCode);
+            return;
+        }
+        Entity target = findEntity(progress.identity.uuid());
+        EntityInteractionController.TargetState targetState;
+        if (target == null) targetState = EntityInteractionController.TargetState.TEMPORARILY_MISSING;
+        else if (!target.isAlive()) targetState = EntityInteractionController.TargetState.DEAD;
+        else if (target.level() != body.level()) targetState = EntityInteractionController.TargetState.OTHER_WORLD;
+        else targetState = EntityInteractionController.TargetState.PRESENT;
+        EntityInteractionController.Position targetPosition = targetState == EntityInteractionController.TargetState.PRESENT
+                ? interactionPosition(target.position()) : null;
+        EntityInteractionController.Result result = progress.session.tick(new EntityInteractionController.Input(
+                server.getTickCount(), targetState, interactionPosition(body.position()), targetPosition,
+                target != null && target.level() == body.level() && body.hasLineOfSight(target)));
+        recordEntityBehaviorObservation(entry, progress, result, target);
+        if (result.status() == EntityInteractionController.Status.FAILED) {
+            finishEntityBehavior(entry, body, progress, false, result.code());
+            return;
+        }
+        if (result.status() == EntityInteractionController.Status.COMPLETE) {
+            finishEntityBehavior(entry, body, progress, true, result.code());
+            return;
+        }
+        if (target == null || target.level() != body.level()) {
+            actionGateway.stopInput(body);
+            return;
+        }
+        switch (result.action()) {
+            case HOLD -> actionGateway.stopInput(body);
+            case FACE -> {
+                actionGateway.stopInput(body);
+                actionGateway.lookAt(body, target.getEyePosition());
+            }
+            case MOVE_TOWARD -> {
+                Vec3 offset = body.position().subtract(target.position());
+                offset = new Vec3(offset.x, 0.0D, offset.z);
+                if (offset.lengthSqr() < 0.0001D) offset = new Vec3(1.0D, 0.0D, 0.0D);
+                double standOff = Math.max(1.0D, progress.session.config().maximumDistance() - 0.5D);
+                Vec3 destination = target.position().add(offset.normalize().scale(standOff));
+                tickNavigation(entry, body, destination, 0.5D * 0.5D, true, progress.identity.uuid());
+            }
+            case MOVE_AWAY -> {
+                Vec3 away = body.position().subtract(target.position());
+                away = new Vec3(away.x, 0.0D, away.z);
+                if (away.lengthSqr() < 0.0001D) away = new Vec3(1.0D, 0.0D, 0.0D);
+                double stride = Math.max(6.0D, progress.session.config().minimumDistance());
+                tickNavigation(entry, body, body.position().add(away.normalize().scale(stride)),
+                        ARRIVAL_DISTANCE_SQUARED, true, progress.identity.uuid());
+            }
+        }
+    }
+
+    private static EntityInteractionController.Position interactionPosition(Vec3 position) {
+        return new EntityInteractionController.Position(position.x, position.y, position.z);
+    }
+
+    private void finishEntityBehavior(CompanionEntry entry, CompanionPlayer body,
+                                      EntityBehaviorProgress progress, boolean success, String code) {
+        rememberEntityEventTarget(entry.companionId, progress);
+        entry.mode = CompanionEntry.Mode.IDLE;
+        entry.resumeMode = CompanionEntry.Mode.IDLE;
+        entry.hasTarget = false;
+        stop(entry, body, success, code);
+        savedData.changed();
+    }
+
+    private void recordEntityBehaviorObservation(CompanionEntry entry, EntityBehaviorProgress progress,
+                                                 EntityInteractionController.Result result, Entity target) {
+        Map<String, String> details = new java.util.TreeMap<>();
+        details.put("behavior", progress.session.behavior().name());
+        details.put("targetId", progress.identity.uuid().toString());
+        details.put("targetSource", progress.identity.source().name());
+        details.put("distanceSquared", Double.toString(result.distanceSquared()));
+        details.put("action", result.action().name());
+        details.put("targetPresent", Boolean.toString(target != null));
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result.code(), "", 0, 0, java.util.List.of(), details));
+    }
+
+    private void rememberEntityEventTarget(UUID companionId, EntityBehaviorProgress progress) {
+        if (progress == null || progress.identity == null) return;
+        recentEntityTargets.put(companionId, entityBehaviorTarget(progress));
+        recentEntityTargetExpiryTicks.put(companionId, (long) server.getTickCount() + 10L);
+    }
+
+    private static EntityEventTracker.TargetBinding entityBehaviorTarget(EntityBehaviorProgress progress) {
+        EntityEventTracker.TargetKind kind = progress.session.behavior() == EntityInteractionController.Behavior.FOLLOW
+                || progress.session.behavior() == EntityInteractionController.Behavior.ESCORT
+                ? EntityEventTracker.TargetKind.FOLLOW : EntityEventTracker.TargetKind.CURRENT;
+        return new EntityEventTracker.TargetBinding(progress.identity.uuid().toString(), kind);
     }
 
     private void beginRetreat(CompanionEntry entry, CompanionPlayer body, Entity threat) {
@@ -829,6 +1421,9 @@ final class BehaviorDirector {
     }
 
     private void tickSkill(CompanionEntry entry, CompanionPlayer body) {
+        if (entry.blueprintSession != null) { tickSmallBlueprint(entry, body); return; }
+        MinecraftSurvivalNavigationExecution survival = survivalNavigations.get(entry.companionId);
+        if (survival != null) { tickSurvivalNavigation(entry, body, survival); return; }
         ScanProgress scan = scans.get(entry.companionId);
         if (scan != null) { tickScan(entry, body, scan); return; }
         MineProgress mine = mines.get(entry.companionId);
@@ -856,6 +1451,128 @@ final class BehaviorDirector {
         else if (progress.parameters.capability().equals("CraftItem")) tickCraft(entry, body, progress);
         else if (progress.parameters.capability().equals("CollectResource")) tickCollection(entry, body, progress);
         else tickEating(entry, body, progress);
+    }
+
+    private void tickSmallBlueprint(CompanionEntry entry, CompanionPlayer body) {
+        if (!entry.blueprintSession.plan().anchor().dimension()
+                .equals(body.serverLevel().dimension().location().toString())) {
+            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    "BLUEPRINT_DIMENSION_CHANGED", "", 0, 0));
+            pauseSafely(entry, body, "BLUEPRINT_DIMENSION_CHANGED");
+            return;
+        }
+        int completedBeforeTick = entry.blueprintSession.completed().size();
+        var result = smallBlueprints.tick(body, entry.blueprintSession,
+                target -> tickNavigation(entry, body, target, 0.10D * 0.10D, true));
+        if (result.completed() != completedBeforeTick) navigation.remove(entry.companionId);
+        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                result.code(), "", result.total(), result.completed(), java.util.List.of(), java.util.Map.of(
+                "completedBlocks", Integer.toString(result.completed()),
+                "totalBlocks", Integer.toString(result.total()),
+                "temporarySupports", Integer.toString(result.temporarySupports()),
+                "preparation", smallBlueprints.preparationDiagnostic(),
+                "activePosition", result.activePosition() == null ? "" : result.activePosition().toString())));
+        savedData.changed();
+        if (result.status() == com.mccompanion.core.body.build.SmallBlueprintExecutor.Status.BLOCKED) {
+            if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, result.code());
+            return;
+        }
+        if (result.status() == com.mccompanion.core.body.build.SmallBlueprintExecutor.Status.COMPLETE) {
+            entry.blueprintSession = null;
+            stop(entry, body, true, "NONE");
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            savedData.changed();
+        }
+    }
+
+    private void tickSurvivalNavigation(CompanionEntry entry, CompanionPlayer body,
+                                        MinecraftSurvivalNavigationExecution execution) {
+        SkillParameters parameters = survivalNavigationParameters.get(entry.companionId);
+        if (parameters == null || !parameters.hasBlockTarget()) {
+            pauseSafely(entry, body, "RECOVERY_REQUIRED");
+            return;
+        }
+        if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+            pauseSafely(entry, body, "WORLD_CHANGED");
+            return;
+        }
+        Vec3 target = Vec3.atBottomCenterOf(new BlockPos(
+                parameters.x(), parameters.y(), parameters.z()));
+        MinecraftSurvivalNavigationExecution.Result result = execution.tick(body, body.ownerId(), target,
+                ARRIVAL_DISTANCE_SQUARED, server.getTickCount(),
+                () -> actionGateway.markVanillaGameModeAction(body),
+                () -> actionGateway.markVanillaMenuAction(body),
+                slot -> actionGateway.selectHotbarSlot(body, slot));
+        if (result.replanned() && result.replanCount() > 0) {
+            logger.info("companion_survival_replan companion={} attempt={} code={}",
+                    entry.companionId, result.replanCount(), result.code());
+        }
+        if (result.mutationOccurred()) {
+            observations.put(entry.companionId, survivalObservation(
+                    "NAVIGATION_ACTION_VERIFIED", parameters, result));
+        }
+        if (result.status() == MinecraftSurvivalNavigationExecution.Status.BLOCKED) {
+            observations.put(entry.companionId, survivalObservation(result.code(), parameters, result));
+            pauseSafely(entry, body, result.code());
+            return;
+        }
+        if (result.status() == MinecraftSurvivalNavigationExecution.Status.ARRIVED) {
+            if (body.distanceToSqr(target) > ARRIVAL_DISTANCE_SQUARED) {
+                observations.put(entry.companionId, survivalObservation(
+                        "NAVIGATION_POSTCONDITION_MISSING", parameters, result));
+                pauseSafely(entry, body, "NAVIGATION_POSTCONDITION_MISSING");
+                return;
+            }
+            observations.put(entry.companionId, survivalObservation(
+                    "NAVIGATION_COMPLETE", parameters, result));
+            stop(entry, body, true, "NONE");
+            entry.mode = CompanionEntry.Mode.IDLE;
+            entry.resumeMode = CompanionEntry.Mode.IDLE;
+            entry.hasTarget = false;
+            savedData.changed();
+            return;
+        }
+        if (result.status() == MinecraftSurvivalNavigationExecution.Status.ACTION) {
+            actionGateway.stopInput(body);
+            return;
+        }
+        actionGateway.applyMoveInput(body, result.yaw(), result.jump(), result.sprint());
+    }
+
+    private static CompanionRegistry.BehaviorObservation survivalObservation(
+            String code, SkillParameters parameters, MinecraftSurvivalNavigationExecution.Result result) {
+        String destroyed = result.destroyed().stream().map(action -> action.expectedBlockId() + '@'
+                        + action.position().x() + ',' + action.position().y() + ',' + action.position().z())
+                .collect(java.util.stream.Collectors.joining(";"));
+        String placed = result.placed().stream().map(action -> action.expectedBlockId() + '@'
+                        + action.position().x() + ',' + action.position().y() + ',' + action.position().z())
+                .collect(java.util.stream.Collectors.joining(";"));
+        return new CompanionRegistry.BehaviorObservation(code, "",
+                parameters.maxBreakBlocks() + parameters.maxPlaceBlocks(),
+                result.brokenBlocks() + result.placedBlocks(), java.util.List.of(), java.util.Map.of(
+                "target", parameters.dimension() + ':' + parameters.x() + ',' + parameters.y() + ',' + parameters.z(),
+                "brokenBlocks", Integer.toString(result.brokenBlocks()),
+                "maxBreakBlocks", Integer.toString(parameters.maxBreakBlocks()),
+                "destroyedBlocks", destroyed,
+                "placedBlocks", Integer.toString(result.placedBlocks()),
+                "maxPlaceBlocks", Integer.toString(parameters.maxPlaceBlocks()),
+                "placedBlockPositions", placed,
+                "replanCount", Integer.toString(result.replanCount())));
+    }
+
+    private static void validateSurvivalNavigation(CompanionPlayer body, SkillParameters parameters) {
+        if (!parameters.hasBlockTarget()) throw new IllegalArgumentException("NAVIGATION_TARGET_MISSING");
+        if (!body.serverLevel().dimension().location().toString().equals(parameters.dimension())) {
+            throw new IllegalArgumentException("WORLD_CHANGED");
+        }
+        survivalPolicy(parameters);
+    }
+
+    private static SurvivalNavigationPolicy survivalPolicy(SkillParameters parameters) {
+        return new SurvivalNavigationPolicy(parameters.maxBreakBlocks(), parameters.maxPlaceBlocks(),
+                parameters.maxRiskUnits(), new java.util.LinkedHashSet<>(parameters.allowedBreakBlocks()),
+                new java.util.LinkedHashSet<>(parameters.allowedPlaceBlocks()));
     }
 
     private void tickLook(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
@@ -1796,7 +2513,7 @@ final class BehaviorDirector {
     }
 
     /** Moves an existing main-inventory stack through the vanilla InventoryMenu before handoff. */
-    private static int ensureHotbarItem(CompanionPlayer body, Item item) {
+    static int ensureHotbarItem(CompanionPlayer body, Item item) {
         int existing = findSlot(body, item);
         if (existing >= 0) return existing;
         int sourceInventory = -1;
@@ -2111,22 +2828,51 @@ final class BehaviorDirector {
     }
 
     private static boolean isSuspension(String code) {
-        return code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
+        return code.equals("LOCAL_THREAT_HANDLING") || code.startsWith("RECOVERY_")
+                || code.equals("THREAT_RECOVERY_TIMEOUT") || code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
                 || code.equals("RUNTIME_OFFLINE") || code.equals("LEASE_EXPIRED")
-                || code.equals("PAUSED_BY_OWNER");
+                || code.equals("PAUSED_BY_OWNER") || code.equals("LOW_HEALTH")
+                || code.equals("ENVIRONMENT_HAZARD") || code.equals("DROWNING_RISK");
     }
 
-    private static final class NavigationProgress {
-        private List<GridPathPlanner.Point> route = List.of();
-        private GridPathPlanner.Point goal;
-        private int waypointIndex;
-        private double bestWaypointDistanceSquared = Double.POSITIVE_INFINITY;
-        private int stagnantTicks;
-        private int replanCount;
-        private final int startedTick;
+    private static final class EntityBehaviorProgress {
+        private final SkillParameters parameters;
+        private final EntityTargetIdentity identity;
+        private final EntityInteractionController.Session session;
+        private final String failureCode;
 
-        private NavigationProgress(int startedTick) {
-            this.startedTick = startedTick;
+        private EntityBehaviorProgress(SkillParameters parameters, EntityTargetIdentity identity,
+                                       EntityInteractionController.Session session, String failureCode) {
+            this.parameters = parameters;
+            this.identity = identity;
+            this.session = session;
+            this.failureCode = failureCode;
+        }
+
+        private static EntityBehaviorProgress failed(SkillParameters parameters,
+                                                     EntityInteractionController.Behavior behavior,
+                                                     String failureCode) {
+            return new EntityBehaviorProgress(parameters, null,
+                    new EntityInteractionController.Session(behavior,
+                            EntityInteractionController.Config.defaults(behavior)), failureCode);
+        }
+    }
+
+    private static final class TargetResolution {
+        private final EntityTargetIdentity identity;
+        private final String failureCode;
+
+        private TargetResolution(EntityTargetIdentity identity, String failureCode) {
+            this.identity = identity;
+            this.failureCode = failureCode;
+        }
+
+        private static TargetResolution resolved(EntityTargetIdentity identity) {
+            return new TargetResolution(identity, null);
+        }
+
+        private static TargetResolution failed(String code) {
+            return new TargetResolution(null, code);
         }
     }
 

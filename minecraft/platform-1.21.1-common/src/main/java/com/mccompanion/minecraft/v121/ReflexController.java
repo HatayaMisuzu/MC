@@ -7,13 +7,19 @@ import net.minecraft.world.entity.monster.Enemy;
 /** Runtime-independent safety reflexes evaluated before every behavior tick. */
 final class ReflexController {
     Optional<Entity> nearestRetreatThreat(CompanionPlayer body) {
+        return nearestRetreatThreat(body, null);
+    }
+
+    /** The explicit combat target is handled locally; other threats retain the existing reflex. */
+    Optional<Entity> nearestRetreatThreat(CompanionPlayer body, java.util.UUID combatTarget) {
         return body.serverLevel().getEntities(body, body.getBoundingBox().inflate(6.0D),
-                        entity -> entity.isAlive() && entity instanceof Enemy)
+                        entity -> entity.isAlive() && entity instanceof Enemy
+                                && !entity.getUUID().equals(combatTarget))
                 .stream().min(java.util.Comparator.comparingDouble(entity -> entity.distanceToSqr(body)));
     }
 
     Optional<String> blockingReason(CompanionPlayer body) {
-        if (body.getHealth() <= Math.min(4.0F, body.getMaxHealth() * 0.2F)) {
+        if (com.mccompanion.core.body.combat.ThreatPolicy.lowHealth(body.getHealth(), body.getMaxHealth())) {
             return Optional.of("LOW_HEALTH");
         }
         if (body.isInLava() || body.isOnFire()) {

@@ -6,6 +6,8 @@ import com.google.gson.JsonParser;
 import java.io.IOException;
 
 public final class ObjectMapper {
+    private static final com.google.gson.Gson GSON = new com.google.gson.Gson();
+    public JsonNode valueToTree(Object value) { return JsonNode.wrap(GSON.toJsonTree(value)); }
     public ObjectNode createObjectNode() { return new ObjectNode(new JsonObject()); }
     public ArrayNode createArrayNode() { return new ArrayNode(new JsonArray()); }
     public JsonNode readTree(String text) throws IOException {

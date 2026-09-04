@@ -1,6 +1,6 @@
 # MCAC documentation
 
-Updated: 2026-07-31
+Updated: 2026-09-04
 
 This is the current documentation entry point. It separates product status, evidence, user
 instructions, developer contracts and historical logs so one old milestone cannot override the
@@ -39,6 +39,8 @@ RC matrix as a current status source.
 - [Task Graph DSL](TASK_GRAPH_DSL.md)
 - [MCP protocol](MCP_PROTOCOL.md)
 - [Primitive Tools](PRIMITIVE_TOOLS.md)
+- [Bounded World Model](WORLD_MODEL.md)
+- [Event-driven replanning](EVENT_DRIVEN_REPLAN.md)
 - [Agent Workspace](AGENT_WORKSPACE.md)
 - [Built-in Skill scope](product/BUILTIN_SKILL_SCOPE.md)
 - [First real Compatibility Pack acceptance](compatibility/FIRST_REAL_PACK_ACCEPTANCE.md)

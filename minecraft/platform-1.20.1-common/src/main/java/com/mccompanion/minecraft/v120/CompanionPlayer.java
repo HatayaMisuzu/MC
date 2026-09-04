@@ -37,6 +37,10 @@ public final class CompanionPlayer extends ServerPlayer {
 
     /** Sets ordinary player input; {@link #doTick()} applies vanilla travel, collision and movement attributes. */
     public void applyWalkingInput(float yawDegrees, boolean jumpRequested) {
+        applyWalkingInput(yawDegrees, jumpRequested, false);
+    }
+
+    public void applyWalkingInput(float yawDegrees, boolean jumpRequested, boolean sprintRequested) {
         setYRot(yawDegrees);
         setYHeadRot(yawDegrees);
         setXRot(0.0F);
@@ -46,6 +50,9 @@ public final class CompanionPlayer extends ServerPlayer {
                 jumpRequested && (onGround() || isInWater() || onClimbable())
                         || horizontalCollision && onGround());
         setShiftKeyDown(false);
+        setSprinting(sprintRequested && (onGround() || isSprinting())
+                && !isInWater() && !onClimbable() && !isUsingItem()
+                && getFoodData().getFoodLevel() > 6);
     }
 
     public void stopWalking() {
@@ -53,6 +60,7 @@ public final class CompanionPlayer extends ServerPlayer {
         zza = 0.0F;
         setJumping(false);
         setShiftKeyDown(false);
+        setSprinting(false);
         Vec3 velocity = getDeltaMovement();
         setDeltaMovement(0.0D, velocity.y, 0.0D);
     }

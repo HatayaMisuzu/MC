@@ -3,10 +3,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CompanionsPage } from './CompanionsPage'
 
 const requestPlan = vi.fn()
-const { post } = vi.hoisted(() => ({ post: vi.fn(() => Promise.resolve({})) }))
+const { api, post } = vi.hoisted(() => ({
+  api: vi.fn(() => Promise.resolve({ companionId: 'companion-1', executions: [{
+    executionId: 'graph-execution-1', state: 'SUCCEEDED',
+  }] })),
+  post: vi.fn(() => Promise.resolve({})),
+}))
 afterEach(() => cleanup())
 
-vi.mock('../api/client', () => ({ api: vi.fn(), post }))
+vi.mock('../api/client', () => ({ api, post }))
 
 vi.mock('../context/TerminalContext', () => ({
   useTerminal: () => ({
@@ -97,6 +102,19 @@ describe('CompanionsPage text companion input', () => {
       instanceId: 'instance-1', companionId: 'companion-1',
       executionId: 'graph-execution-1', action: 'resume',
     })
+  })
+
+  it('polls an asynchronously accepted Task Graph cancellation to its durable state', async () => {
+    api.mockClear()
+    post.mockClear()
+    api.mockResolvedValueOnce({ companionId: 'companion-1', executions: [{
+      executionId: 'graph-execution-1', state: 'RUNNING',
+    }] }).mockResolvedValueOnce({ companionId: 'companion-1', executions: [{
+      executionId: 'graph-execution-1', state: 'CANCELLED',
+    }] })
+    render(<CompanionsPage />)
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(api).toHaveBeenCalledTimes(2))
   })
 
   it('shows Task Graph control failures instead of swallowing them', async () => {

@@ -12,6 +12,12 @@ import com.mccompanion.runtime.tool.ToolCall;
 import com.mccompanion.runtime.workspace.SkillRepository;
 import com.mccompanion.runtime.workspace.AgentWorkspace;
 import com.mccompanion.runtime.security.Digests;
+import com.mccompanion.runtime.intent.Intent;
+import com.mccompanion.runtime.task.TaskType;
+import com.mccompanion.protocol.BehaviorEvent;
+import com.mccompanion.protocol.BehaviorEventType;
+import com.mccompanion.protocol.CommandAccepted;
+import com.mccompanion.protocol.ProtocolBehaviorState;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.handshake.ServerHandshake;
 import org.junit.jupiter.api.Test;
@@ -40,6 +46,250 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class RuntimeApplicationTest {
     @TempDir Path temporary;
+
+    @Test
+    void authenticatedHostileEntityEventUsesDurableQueueAndWakesBrain() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("hostile-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("A hostile entered the companion's threat range.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"entity-event-world","capabilities":{"player_entity_events":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"entity-event-companion","ownerId":"event-owner",
+                      "displayName":"Entity Event Companion","worldId":"entity-event-world",
+                      "dimension":"minecraft:overworld","position":{"x":0,"y":64,"z":0},
+                      "bodyState":"spawned","behaviorRevision":0,"controlEpoch":0,
+                      "runtimeConnected":true,"capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("entity-event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            client.send("""
+                    {"type":"player_entity_event","sessionId":"%s","sequence":1,"payload":{
+                      "eventId":"hostile-edge-1","eventType":"HOSTILE_ENTERED_THREAT_RANGE",
+                      "priority":"LOW","source":"UNTRUSTED","companionId":"entity-event-companion",
+                      "tick":42,"occurredAt":"%s","target":{"entityId":"zombie-uuid",
+                      "entityType":"minecraft:zombie","displayName":"Zombie","player":false,
+                      "hostile":true,"alive":true,"distanceSquared":9.0}}}
+                    """.formatted(sessionId, Instant.now()));
+
+            client.awaitConversationReplies(List.of(
+                    "A hostile entered the companion's threat range."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("HOSTILE_ENTERED_THREAT_RANGE", event.path("eventType").asText());
+            assertEquals("CRITICAL", event.path("priority").asText());
+            assertEquals("zombie-uuid", event.path("target").path("entityId").asText());
+            assertTrue(event.path("rules").path("criticalMayInterrupt").asBoolean());
+            assertFalse(event.has("taskId"), "unbound critical threat must not fabricate a task binding");
+            client.closeBlocking();
+        }
+    }
+
+    @Test
+    void authenticatedCriticalSurvivalEventPersistsAndWakesBrain() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("survival-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("The companion has entered a critical low-health state.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"survival-event-world","capabilities":{"survival_events":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"survival-event-companion","ownerId":"event-owner",
+                      "displayName":"Survival Event Companion","worldId":"survival-event-world",
+                      "dimension":"minecraft:overworld","position":{"x":0,"y":64,"z":0},
+                      "bodyState":"spawned","behaviorRevision":0,"controlEpoch":0,
+                      "runtimeConnected":true,"capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("survival-event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            client.send("""
+                    {"type":"survival_event","sessionId":"%s","sequence":1,"payload":{
+                      "eventId":"low-health-edge-1","eventType":"LOW_HEALTH",
+                      "priority":"LOW","source":"UNTRUSTED","companionId":"survival-event-companion",
+                      "tick":42,"occurredAt":"%s","previousHealth":10.0,"damageAmount":0.0,
+                      "vitals":{"lifecycle":"ACTIVE","health":5.0,"maxHealth":20.0,
+                      "air":300,"maxAir":300,"onFire":false,"inLava":false,
+                      "onGround":true,"fallDistance":0.0}}}
+                    """.formatted(sessionId, Instant.now()));
+
+            client.awaitConversationReplies(List.of(
+                    "The companion has entered a critical low-health state."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("LOW_HEALTH", event.path("eventType").asText());
+            assertEquals("CRITICAL", event.path("priority").asText());
+            assertEquals(5.0D, event.path("target").path("vitals").path("health").asDouble());
+            assertTrue(event.path("rules").path("criticalMayInterrupt").asBoolean());
+            assertFalse(event.has("taskId"), "unbound critical survival edge must not fabricate a task binding");
+            client.closeBlocking();
+        }
+    }
+
+    @Test
+    void authenticatedInventoryFullEdgeTraversesBridgeIngressQueueAndBrain() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("inventory-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("The companion inventory is full.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"inventory-event-world","capabilities":{"inventory_world_events":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"inventory-event-companion","ownerId":"event-owner",
+                      "displayName":"Inventory Event Companion","worldId":"inventory-event-world",
+                      "dimension":"minecraft:overworld","position":{"x":0,"y":64,"z":0},
+                      "bodyState":"spawned","behaviorRevision":0,"controlEpoch":0,
+                      "runtimeConnected":true,"capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("inventory-event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            client.send("""
+                    {"type":"inventory_world_event","sessionId":"%s","sequence":1,"payload":{
+                      "eventId":"inventory-full-edge-1","eventType":"INVENTORY_FULL",
+                      "category":"INVENTORY","priority":"LOW","source":"UNTRUSTED",
+                      "companionId":"inventory-event-companion","tick":42,"occurredAt":"%s",
+                      "previousValue":"1","currentValue":"0",
+                      "inventory":{"slots":36,"freeSlots":0,"counts":{"minecraft:cobblestone":2304}},
+                      "world":{"dimension":"minecraft:overworld","timeOfDay":"DAY","weather":"CLEAR"}}}
+                    """.formatted(sessionId, Instant.now()));
+
+            client.awaitConversationReplies(List.of("The companion inventory is full."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("INVENTORY_FULL", event.path("eventType").asText());
+            assertEquals("CRITICAL", event.path("priority").asText());
+            assertEquals(0, event.path("target").path("freeSlots").asInt());
+            assertTrue(event.path("rules").path("criticalMayInterrupt").asBoolean());
+            assertFalse(event.has("taskId"), "unbound critical inventory edge must not fabricate a task binding");
+            client.closeBlocking();
+        }
+    }
+
+    @Test
+    void blockedTaskEventWakesExternalBrainAndQueuesOwnerVisibleReply() throws Exception {
+        RuntimeConfig config = RuntimeConfig.defaults(temporary.resolve("task-event-brain-wake"));
+        config.server.port = 0;
+        config.server.managementPort = freePort();
+        config.logging.console = false;
+        AtomicReference<JsonNode> observedEvent = new AtomicReference<>();
+        ReplayBrainAdapter replay = new ReplayBrainAdapter(request -> {
+            JsonNode event = Json.parse(request.userMessage());
+            if (!"runtime_event".equals(event.path("type").asText())) {
+                return new BrainTurnResult(BrainTurnResult.Kind.WAIT, "", List.of(), "EVENT_ONLY_TEST");
+            }
+            observedEvent.set(event);
+            return BrainTurnResult.finalResponse("Existing navigation is blocked; I did not start another goal.");
+        });
+        try (RuntimeApplication application = RuntimeApplication.start(config, false, replay)) {
+            String token = Files.readString(config.tokenPath()).trim();
+            TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
+            assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
+            client.send("""
+                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
+                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
+                     "worldId":"event-world","capabilities":{"NavigateTo":true}}
+                    """.formatted(token));
+            String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
+            client.send("""
+                    {"type":"companion_status","sessionId":"%s","sequence":0,"payload":{
+                      "companionId":"event-companion","ownerId":"event-owner","displayName":"Event Companion",
+                      "worldId":"event-world","dimension":"minecraft:overworld",
+                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
+                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
+                      "capabilities":{},"observedAt":"%s"}}
+                    """.formatted(sessionId, Instant.now()));
+            long registered = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (application.companions().get("event-companion").isEmpty()
+                    && System.nanoTime() < registered) Thread.sleep(20);
+
+            var started = application.commands().execute("event-start", "event-companion",
+                    new Intent(TaskType.TRAVEL,
+                            Json.object().put("dimension", "minecraft:overworld")
+                                    .put("x", 8).put("y", 64).put("z", 0), "go to the marker"));
+            assertTrue(started.accepted());
+            client.awaitCommand("start_behavior", 5);
+            var task = application.commands().task(started.taskId()).orElseThrow();
+            application.commands().onCommandAccepted(new CommandAccepted(
+                    "event-start", false, task.behaviorId(), 1, Instant.now()));
+            application.commands().onBehaviorEvent(new BehaviorEvent(
+                    "blocked-event", task.behaviorId(), "event-start", "event-companion",
+                    BehaviorEventType.BLOCKED, ProtocolBehaviorState.BLOCKED, 2, 20, 0.0,
+                    "PATH_UNREACHABLE", "The target cannot be reached", Instant.now(),
+                    Json.object().put("controlEpoch", task.controlEpoch())
+                            .put("dimension", "minecraft:overworld")));
+
+            client.awaitConversationReplies(List.of(
+                    "Existing navigation is blocked; I did not start another goal."), 5);
+            JsonNode event = observedEvent.get();
+            assertNotNull(event);
+            assertEquals("TASK_BLOCKED", event.path("eventType").asText());
+            assertEquals(started.taskId(), event.path("taskId").asText());
+            assertTrue(event.path("rules").path("doNotInventNewGoal").asBoolean());
+            assertEquals("BLOCKED", application.commands().task(started.taskId())
+                    .orElseThrow().state().name());
+            client.closeBlocking();
+        }
+    }
 
     @Test
     void startsCliWhenLegacyProviderAndExternalBrainAreDisabled() throws Exception {
@@ -1180,14 +1430,7 @@ class RuntimeApplicationTest {
             JsonNode inspectedGraph = awaitTaskGraphState(http, mcpRequest, executionId, "SUCCEEDED");
             assertEquals("SUCCEEDED", inspectedGraph.path("state").asText(), inspectedGraph.toString());
             assertEquals("Yes", inspectedGraph.path("value").asText());
-            client.send("""
-                    {"type":"companion_status","sessionId":"%s","sequence":3,"payload":{
-                      "companionId":"graph-companion","ownerId":"owner-1","displayName":"Graph Companion",
-                      "worldId":"graph-world","dimension":"minecraft:overworld",
-                      "position":{"x":0,"y":64,"z":0},"bodyState":"spawned",
-                      "behaviorRevision":0,"controlEpoch":0,"runtimeConnected":true,
-                      "capabilities":{},"observedAt":"%s"}}
-                    """.formatted(sessionId, Instant.now()));
+            // Completion feedback must arrive without another Body status packet or Brain turn.
             client.awaitConversationReplies(List.of(
                     "Task started.", "Continue?", "Task resumed.", "Task completed."), 5);
             URI graphManagement = new URI("http://127.0.0.1:" + config.server.managementPort
@@ -1256,7 +1499,13 @@ class RuntimeApplicationTest {
                     HttpResponse.BodyHandlers.ofString());
             latestBody = inspected.body();
             latest = Json.parse(latestBody).path("result").path("structuredContent").path("observation");
-            if (expectedState.equals(latest.path("state").asText())) return latest;
+            String state = latest.path("state").asText();
+            // WAITING is persisted before its durable user question is materialized. Answer only
+            // after that actual question exists, just as a user waits to receive the prompt.
+            if (expectedState.equals(state) && (!state.equals("WAITING")
+                    || latest.path("waitingQuestion").hasNonNull("questionId"))) return latest;
+            assertFalse(java.util.Set.of("FAILED", "CANCELLED", "RECONCILIATION_REQUIRED", "PAUSED")
+                    .contains(state), "Task Graph stopped before " + expectedState + ": " + latestBody);
             Thread.sleep(20);
         }
         fail("Task Graph did not reach " + expectedState + "; latest=" + latestBody);

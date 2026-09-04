@@ -298,6 +298,8 @@ public final class CommandService implements SessionRegistry.Listener {
             }
             TaskState next = taskState(event.state());
             ObjectNode payload = Json.object().put("event", event.event().name())
+                    .put("eventId", event.eventId()).put("source", "MINECRAFT_BEHAVIOR")
+                    .put("occurredAt", event.occurredAt().toString())
                     .put("tick", event.tick()).put("progress", event.progress());
             if (event.failureCode() != null) payload.put("code", event.failureCode());
             if (event.message() != null) payload.put("message", event.message());
@@ -442,8 +444,13 @@ public final class CommandService implements SessionRegistry.Listener {
             Optional<TaskRecord> active = tasks.activeForCompanion(companionId);
             if (active.isPresent() && active.get().state() != TaskState.RECONCILIATION_REQUIRED) {
                 TaskRecord task = active.get();
-                tasks.transition(task.taskId(), task.revision(), TaskState.RECONCILIATION_REQUIRED,
-                        "ReconciliationRequired", Json.object().put("reason", reason));
+                ObjectNode observation = Json.object().put("event", "BLOCKED")
+                        .put("source", "RUNTIME_SESSION")
+                        .put("occurredAt", java.time.Instant.now().toString())
+                        .put("code", "RECONCILIATION_REQUIRED").put("reason", reason);
+                TaskRecord updated = tasks.transition(task.taskId(), task.revision(),
+                        TaskState.RECONCILIATION_REQUIRED, "ReconciliationRequired", observation);
+                taskLifecycleListener.onTaskUpdated(updated, observation);
             }
         } catch (SQLException | RuntimeException failure) {
             log.error("Unable to mark task for reconciliation for companion=" + companionId, failure);
@@ -476,8 +483,12 @@ public final class CommandService implements SessionRegistry.Listener {
         try {
             TaskRecord latest = tasks.get(task.taskId()).orElse(task);
             if (!latest.state().terminal() && latest.state() == TaskState.CREATED) {
-                tasks.transition(latest.taskId(), latest.revision(), TaskState.FAILED, "BehaviorFailed",
-                        Json.object().put("code", code));
+                ObjectNode observation = Json.object().put("event", "FAILED")
+                        .put("source", "RUNTIME_COMMAND")
+                        .put("occurredAt", java.time.Instant.now().toString()).put("code", code);
+                TaskRecord updated = tasks.transition(latest.taskId(), latest.revision(),
+                        TaskState.FAILED, "BehaviorFailed", observation);
+                taskLifecycleListener.onTaskUpdated(updated, observation);
             }
         } catch (SQLException | RuntimeException failure) {
             log.error("Unable to mark failed task=" + task.taskId(), failure);

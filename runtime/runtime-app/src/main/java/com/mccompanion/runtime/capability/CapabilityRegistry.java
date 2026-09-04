@@ -22,17 +22,30 @@ public final class CapabilityRegistry {
     public static CapabilityRegistry standard() {
         return new CapabilityRegistry(List.of(
                 implemented("NavigateTo", RiskLevel.LOW), implemented("FollowOwner", RiskLevel.LOW),
+                implemented("FollowEntity", RiskLevel.LOW), implemented("ApproachEntity", RiskLevel.LOW),
+                implemented("KeepDistanceFromEntity", RiskLevel.LOW), implemented("ChaseEntity", RiskLevel.LOW),
+                implemented("EscortEntity", RiskLevel.LOW), implemented("FleeFromEntity", RiskLevel.LOW),
+                implemented("FaceEntity", RiskLevel.LOW),
                 implemented("LookAt", RiskLevel.LOW), implemented("InteractBlock", RiskLevel.LOW),
                 implemented("InteractEntity", RiskLevel.LOW), implemented("MenuAction", RiskLevel.LOW),
                 implemented("UseItem", RiskLevel.LOW), implemented("DropItem", RiskLevel.MEDIUM),
-                implemented("AttackEntity", RiskLevel.MEDIUM), implemented("PlaceBlock", RiskLevel.MEDIUM),
+                implemented("AttackEntity", RiskLevel.MEDIUM),
+                implemented("MeleeAttack", RiskLevel.MEDIUM), implemented("ShieldCombat", RiskLevel.MEDIUM),
+                implemented("BowAttack", RiskLevel.MEDIUM), implemented("PlaceBlock", RiskLevel.MEDIUM),
                 implemented("ExploreArea", RiskLevel.MEDIUM), implemented("LocateKnownContainer", RiskLevel.LOW),
                 implemented("WithdrawFromStorage", RiskLevel.LOW), implemented("DepositToStorage", RiskLevel.LOW),
                 implemented("CollectResource", RiskLevel.MEDIUM), implemented("MineResourceVein", RiskLevel.MEDIUM),
                 implemented("CraftItem", RiskLevel.LOW), implemented("SmeltItem", RiskLevel.LOW),
                 implemented("DeliverItem", RiskLevel.LOW), implemented("EatAndRecover", RiskLevel.LOW),
                 implemented("DefendOwner", RiskLevel.MEDIUM), implemented("RetreatFromDanger", RiskLevel.LOW),
-                capability("BuildSmallBlueprint", RiskLevel.HIGH)));
+                implemented("EquipItem", RiskLevel.MEDIUM), implemented("SleepAtBed", RiskLevel.LOW),
+                implemented("UseWaterBucket", RiskLevel.MEDIUM), implemented("UseVehicle", RiskLevel.MEDIUM),
+                implemented("Fish", RiskLevel.LOW), implemented("FarmCrop", RiskLevel.MEDIUM),
+                implemented("BreedAnimals", RiskLevel.LOW), implemented("TradeWithVillager", RiskLevel.MEDIUM),
+                implemented("EnchantItem", RiskLevel.MEDIUM), implemented("BrewPotion", RiskLevel.MEDIUM),
+                implemented("GlideWithElytra", RiskLevel.MEDIUM),
+                implemented("NavigateWithWorldChanges", RiskLevel.HIGH),
+                implemented("BuildSmallBlueprint", RiskLevel.HIGH)));
     }
 
     private static CapabilityDefinition capability(String name, RiskLevel risk) {

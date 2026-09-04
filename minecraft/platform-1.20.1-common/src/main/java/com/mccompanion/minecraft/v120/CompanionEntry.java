@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.build.SmallBlueprintExecutor;
+import com.mccompanion.minecraft.bootstrap.SmallBlueprintNbt;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
@@ -28,6 +30,8 @@ final class CompanionEntry {
     long runtimeEpoch;
     String runtimeBehaviorId;
     long runtimeBehaviorRevision;
+    boolean skillRecoveryRequired;
+    SmallBlueprintExecutor.Session blueprintSession;
 
     CompanionEntry(UUID companionId, UUID ownerId, String profileName) {
         this.companionId = Objects.requireNonNull(companionId, "companionId");
@@ -54,6 +58,10 @@ final class CompanionEntry {
         entry.runtimeEpoch = Math.max(0L, tag.getLong("runtimeEpoch"));
         entry.runtimeBehaviorId = tag.getString("runtimeBehaviorId");
         entry.runtimeBehaviorRevision = Math.max(0L, tag.getLong("runtimeBehaviorRevision"));
+        if (tag.contains("smallBlueprint", net.minecraft.nbt.Tag.TAG_COMPOUND)) {
+            try { entry.blueprintSession = SmallBlueprintNbt.load(tag.getCompound("smallBlueprint")); }
+            catch (IllegalArgumentException ignored) { entry.blueprintSession = null; }
+        }
         return entry;
     }
 
@@ -75,6 +83,7 @@ final class CompanionEntry {
             tag.putString("runtimeBehaviorId", runtimeBehaviorId);
         }
         tag.putLong("runtimeBehaviorRevision", runtimeBehaviorRevision);
+        if (blueprintSession != null) tag.put("smallBlueprint", SmallBlueprintNbt.save(blueprintSession));
         return tag;
     }
 

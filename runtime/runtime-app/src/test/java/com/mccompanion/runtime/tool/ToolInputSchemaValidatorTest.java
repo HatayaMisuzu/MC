@@ -40,4 +40,25 @@ class ToolInputSchemaValidatorTest {
                 Json.MAPPER.getNodeFactory().textNode("count=${inputs.count}"), true)
                 .getFirst().code());
     }
+
+    @Test
+    void validatesConstantsAndStringPatternsUsedByDailyActionSchemas() {
+        var schema = Json.parse("""
+                {"type":"object","additionalProperties":false,
+                 "required":["item","dimension"],"properties":{
+                   "item":{"type":"string","const":"minecraft:fishing_rod"},
+                   "dimension":{"type":"string","pattern":"^[a-z0-9_.-]+:[a-z0-9_./-]+$"}
+                 }}
+                """);
+
+        assertTrue(ToolInputSchemaValidator.validate(schema,
+                Json.parse("{\"item\":\"minecraft:fishing_rod\",\"dimension\":\"minecraft:overworld\"}"),
+                false).isEmpty());
+        var violations = ToolInputSchemaValidator.validate(schema,
+                Json.parse("{\"item\":\"minecraft:stick\",\"dimension\":\"not a dimension\"}"), false);
+
+        assertEquals(2, violations.size());
+        assertTrue(violations.stream().anyMatch(value -> value.code().equals("CONST")));
+        assertTrue(violations.stream().anyMatch(value -> value.code().equals("PATTERN")));
+    }
 }

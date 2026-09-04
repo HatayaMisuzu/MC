@@ -26,6 +26,11 @@ import com.mccompanion.runtime.session.SessionRegistry;
 import com.mccompanion.runtime.session.CompanionRepository;
 import com.mccompanion.runtime.brain.ExternalBrainCoordinator;
 import com.mccompanion.runtime.brain.BrainTurnResult;
+import com.mccompanion.runtime.brain.BrainContextAssembler;
+import com.mccompanion.runtime.event.PlayerEntityEventNormalizer;
+import com.mccompanion.runtime.event.InventoryWorldEventNormalizer;
+import com.mccompanion.runtime.event.SurvivalEventNormalizer;
+import com.mccompanion.runtime.event.RuntimeEventService;
 import com.mccompanion.runtime.taskgraph.TaskGraphRuntime;
 import com.mccompanion.runtime.tool.RegistryToolGateway;
 import org.java_websocket.WebSocket;
@@ -59,8 +64,13 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     private final MemoryRepository memories;
     private final ConversationService conversations;
     private final ExternalBrainCoordinator externalBrain;
+    private final BrainContextAssembler brainContexts;
     private final TaskGraphRuntime taskGraphRuntime;
     private volatile RegistryToolGateway registryQueries;
+    private volatile RuntimeEventService runtimeEvents;
+    private final PlayerEntityEventNormalizer playerEntityEvents;
+    private final SurvivalEventNormalizer survivalEvents;
+    private final InventoryWorldEventNormalizer inventoryWorldEvents;
     private final IncomingMessageClassifier incomingMessages = new IncomingMessageClassifier();
     private final ExecutorService planningExecutor;
     private final RuntimeLog log;
@@ -94,9 +104,14 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         this.memories = memories;
         this.conversations = conversations;
         this.externalBrain = externalBrain;
+        this.brainContexts = new BrainContextAssembler(companions, sessions, capabilityVisibility,
+                memories, conversations, commands);
         this.taskGraphRuntime = taskGraphRuntime;
         this.log = log;
         this.clock = clock;
+        this.playerEntityEvents = new PlayerEntityEventNormalizer();
+        this.survivalEvents = new SurvivalEventNormalizer();
+        this.inventoryWorldEvents = new InventoryWorldEventNormalizer();
         this.planningExecutor = boundedPlanningExecutor();
         setConnectionLostTimeout(30);
         setReuseAddr(true);
@@ -112,6 +127,11 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
     public void attachRegistryQueries(RegistryToolGateway gateway) {
         if (registryQueries != null) throw new IllegalStateException("Registry query gateway is already attached");
         registryQueries = java.util.Objects.requireNonNull(gateway, "gateway");
+    }
+
+    public void attachRuntimeEvents(RuntimeEventService service) {
+        if (runtimeEvents != null) throw new IllegalStateException("Runtime event service is already attached");
+        runtimeEvents = java.util.Objects.requireNonNull(service, "service");
     }
 
     @Override
@@ -247,10 +267,41 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             }
             case "player_request" -> handlePlayerRequest(session, payload);
             case "owner_activity" -> handleOwnerActivity(session, payload);
+            case "player_entity_event" -> handlePlayerEntityEvent(session, payload);
+            case "survival_event" -> handleSurvivalEvent(session, payload);
+            case "inventory_world_event" -> handleInventoryWorldEvent(session, payload);
             case "conversation_delivery_ack" -> acknowledgeConversationDelivery(session, payload);
             case "ack", "gap_summary" -> { /* ACK/gap is intentionally non-blocking; durable task events arrive separately. */ }
             default -> sendError(session.peer(), session, "UNKNOWN_MESSAGE_TYPE", "Unsupported message type");
         }
+    }
+
+    private void handlePlayerEntityEvent(RuntimeSession session, JsonNode payload) throws SQLException {
+        String companionId = required(payload, "companionId");
+        requireAuthority(session, companionId);
+        RuntimeEventService service = runtimeEvents;
+        if (service == null) throw new IllegalStateException("RUNTIME_EVENT_SERVICE_UNAVAILABLE");
+        PlayerEntityEventNormalizer.Normalized normalized = playerEntityEvents.normalize(
+                payload, commands.activeTaskFor(companionId));
+        service.admit(normalized.event(), normalized.policy());
+    }
+
+    private void handleSurvivalEvent(RuntimeSession session, JsonNode payload) throws SQLException {
+        String companionId = required(payload, "companionId");
+        requireAuthority(session, companionId);
+        RuntimeEventService service = runtimeEvents;
+        if (service == null) throw new IllegalStateException("RUNTIME_EVENT_SERVICE_UNAVAILABLE");
+        service.admitSurvival(survivalEvents.normalize(payload, commands.activeTaskFor(companionId)));
+    }
+
+    private void handleInventoryWorldEvent(RuntimeSession session, JsonNode payload) throws SQLException {
+        String companionId = required(payload, "companionId");
+        requireAuthority(session, companionId);
+        RuntimeEventService service = runtimeEvents;
+        if (service == null) throw new IllegalStateException("RUNTIME_EVENT_SERVICE_UNAVAILABLE");
+        InventoryWorldEventNormalizer.Normalized normalized = inventoryWorldEvents.normalize(
+                payload, commands.activeTaskFor(companionId));
+        service.admit(normalized.event(), normalized.policy());
     }
 
     private void acknowledgeConversationDelivery(RuntimeSession session, JsonNode payload) throws SQLException {
@@ -332,7 +383,6 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                 if (!sessions.isAuthoritative(session, companionId) || !ownerId.equals(companion.ownerId())) {
                     throw new IllegalArgumentException("OWNER_AUTHORIZATION_FAILED");
                 }
-                var active = commands.activeTaskFor(companionId);
                 var waiting = conversations.repository().activeForCompanion(companionId);
                 var incoming = incomingMessages.classify(text, waiting.orElse(null));
                 if (waiting.isPresent() && taskGraphRuntime != null
@@ -360,22 +410,16 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
-                        taskGraphRuntime.cancel(waiting.orElseThrow(), "OWNER_MODIFIED_GOAL");
                         waiting = java.util.Optional.empty();
                     }
                 }
-                var recentConversation = conversations.recentTranscript(companionId, 12);
                 if (incoming.kind() != IncomingMessageKind.WAITING_ANSWER) {
                     conversations.hear(companionId, null,
                             "MESSAGE", text, Json.object().put("channel", "GAME"));
                 }
-                var visible = capabilityVisibility.resolve(session.handshake(), companion.status());
-                JsonNode verifiedWorld = memories.enrichVerifiedWorld(companionId, companion.status());
-                AgentContext context = new AgentContext(companionId, verifiedWorld, recentConversation,
-                        active.<JsonNode>map(Json.MAPPER::valueToTree).orElseGet(Json::object),
-                        memories.verifiedLandmarkKeys(companionId),
-                        visible.availableNames(), memories.preferenceContext(companionId, 24),
-                        memories.latestCapsuleContext(companionId), 5);
+                BrainContextAssembler.Prepared prepared = brainContexts.prepare(companionId);
+                var visible = prepared.capabilities();
+                AgentContext context = prepared.context();
                 if (externalBrain == null) {
                     reply.put("accepted", false).put("source", "external-brain")
                             .put("code", "EXTERNAL_BRAIN_UNAVAILABLE")
@@ -421,11 +465,14 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                             conversations.repository().cancel(waiting.orElseThrow().questionId(), "GOAL_MODIFIED");
                             waiting = java.util.Optional.empty();
                         }
-                        externalBrain.cancel("runtime-primary", companionId, "OWNER_MODIFIED_GOAL");
+                        externalBrain.pauseActiveForUserInstruction("runtime-primary", companionId, "OWNER_MODIFIED_GOAL");
                     }
                     var brainResult = waiting.isPresent() && waiting.orElseThrow().brainSessionId() != null
                             && incoming.kind() == IncomingMessageKind.WAITING_ANSWER
                             ? externalBrain.answer("runtime-primary", waiting.orElseThrow(), incoming, context)
+                            : incoming.kind() == IncomingMessageKind.IMMEDIATE_INSTRUCTION
+                                || incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION
+                            ? externalBrain.continueInstruction("runtime-primary", companionId, text, context)
                             : externalBrain.continueTurn("runtime-primary", companionId, text, context);
                     reply.put("accepted", true).put("source", "external-brain").put("code", brainResult.code())
                             .put("decision", brainResult.kind().name()).put("reply", brainResult.response());
@@ -501,7 +548,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         }
         CompanionStatus status = convert(protocolView, CompanionStatus.class);
         sessions.registerCompanion(session, status, normalized);
-        memories.rememberObservedContainers(status.companionId(), normalized);
+        // registerCompanion persisted visible containers in the bounded World Model.
         conversations.deliverPending(status.companionId());
     }
 

@@ -25,6 +25,11 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
     private static final int MAX_RESULT_CHARS = 262_144;
     private final SessionRegistry sessions;
     private final ProtocolCommandSender sender;
+    private com.mccompanion.runtime.session.CompanionRepository companions;
+
+    public void attachWorldModel(com.mccompanion.runtime.session.CompanionRepository companions) {
+        this.companions = java.util.Objects.requireNonNull(companions);
+    }
     private final ConcurrentHashMap<String, Pending> pendingByQuery = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> queryByCall = new ConcurrentHashMap<>();
 
@@ -133,7 +138,15 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
         }
         Duration bounded = timeout.compareTo(QUERY_TIMEOUT) > 0 ? QUERY_TIMEOUT : timeout;
         try {
-            return pending.result().get(Math.max(1L, bounded.toMillis()), TimeUnit.MILLISECONDS);
+            ToolResult result = pending.result().get(Math.max(1L, bounded.toMillis()), TimeUnit.MILLISECONDS);
+            if (companions != null && result.success() && sessions.forCompanion(context.companionId())
+                    .map(session -> session.sessionId().equals(pending.runtimeSessionId())).orElse(false)) {
+                companions.updateWorldModel(context.companionId(), model -> model.observeQuery(
+                        call.name(), result.observation(), companions.observationTime()));
+            }
+            return result;
+        } catch (java.sql.SQLException failure) {
+            return ToolResult.rejected(call, "PERSISTENCE_ERROR", "World observation could not be persisted");
         } catch (TimeoutException timeoutFailure) {
             return ToolResult.rejected(call, "QUERY_TIMEOUT", "Connected server did not answer the bounded query");
         } catch (InterruptedException interrupted) {

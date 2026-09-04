@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Mark all bundled jpackage launchers as UTF-8-aware so the Windows package resolves its bundled
+  Runtime when extracted below a Unicode path that the host ANSI code page cannot represent. The
+  final artifact test now includes such a cross-code-page path instead of relying on the host locale.
+- Preserve explicit primitive attack targets during bounded threat evaluation on both Minecraft
+  versions; low health, explosive threats and multiple hostiles still preempt execution.
+- Deliver durable Task Graph lifecycle feedback immediately, including completion without another
+  game status packet, while keeping progress/checkpoint callbacks off the synchronous conversation
+  delivery path so pause/resume/cancel controls remain responsive. The Terminal now follows an
+  asynchronously accepted graph control to its durable state before clearing the control status,
+  avoiding stale `RUNNING` displays. Restore NeoForge's existing shared navigation/event bindings.
+- Prevent unrelated task-completion events from opening Brain sessions, stop failed event dispatch
+  after bounded attempts, and announce reconnected Bodies before their first authenticated events.
+- Integrate bounded daily actions, survival navigation, durable player/world/inventory events,
+  arbitrary entity interaction, small blueprint construction, continuous combat/recovery,
+  a persisted World Model and external-Brain event replanning on Fabric 1.21.1 and Forge 1.20.1.
+  Shared Java controllers retain version-specific Minecraft adapters; NeoForge remains `LOCAL_ONLY`.
+- Keep admitted critical notifications deliverable without executable Body capabilities while
+  graph replanning waits for its connected Tool contract. Isolate Forge GameTests from production
+  artifacts, preserve offline nested Loader builds and remove repeated implicit clean builds.
+- Include World Model and replanning contracts in the product documentation and document the
+  existing shared/version/Loader boundaries for future targets. The frozen 0.3.1 release remains
+  unchanged; new capability evidence is automated and does not establish Live/Human coverage.
 - Repair the release documentation boundary: the staged package now ships only current
   user/operator and external-Brain integration documentation plus machine-readable product
   facts; repository-internal execution rules, historical reports and archived evidence are no

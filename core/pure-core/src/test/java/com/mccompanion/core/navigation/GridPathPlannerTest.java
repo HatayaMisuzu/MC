@@ -77,13 +77,102 @@ final class GridPathPlannerTest {
                     public GridPathPlanner.Traversal traversal(
                             GridPathPlanner.Point from,
                             GridPathPlanner.Point to) {
-                        if (to.y() != 0) return GridPathPlanner.Traversal.blocked();
+                        if (to.y() != 0 || manhattan(from, to) != 1) {
+                            return GridPathPlanner.Traversal.blocked();
+                        }
                         return GridPathPlanner.Traversal.passable(expensive.contains(to) ? 8.0D : 1.0D);
                     }
                 });
 
         assertEquals(GridPathPlanner.Status.READY, plan.status());
         assertTrue(plan.points().stream().noneMatch(expensive::contains));
+        assertEquals(target, plan.points().get(plan.points().size() - 1));
+    }
+
+    @Test
+    void carriesTypedWorldActionsAndEnforcesCumulativeMutationBudgets() {
+        GridPathPlanner.Point start = new GridPathPlanner.Point(0, 0, 0);
+        GridPathPlanner.Point target = new GridPathPlanner.Point(2, 0, 0);
+        GridPathPlanner.WorldAction breakStone = new GridPathPlanner.WorldAction(
+                GridPathPlanner.ActionType.BREAK_BLOCK,
+                new GridPathPlanner.Point(1, 1, 0), "minecraft:stone");
+        GridPathPlanner.Environment corridor = new GridPathPlanner.Environment() {
+            @Override public boolean loaded(GridPathPlanner.Point point) { return true; }
+
+            @Override public GridPathPlanner.Traversal traversal(
+                    GridPathPlanner.Point from, GridPathPlanner.Point to) {
+                if (to.y() != 0 || to.z() != 0 || to.x() < 0 || to.x() > 2) {
+                    return GridPathPlanner.Traversal.blocked();
+                }
+                if (manhattan(from, to) != 1) return GridPathPlanner.Traversal.blocked();
+                return to.x() == 1
+                        ? GridPathPlanner.Traversal.withActions(
+                        GridPathPlanner.Movement.BREAK_AND_MOVE, 4.0D, 0, java.util.List.of(breakStone))
+                        : GridPathPlanner.Traversal.move(GridPathPlanner.Movement.WALK, 1.0D, 0);
+            }
+        };
+
+        GridPathPlanner.Plan denied = GridPathPlanner.plan(start, target, corridor);
+        assertEquals(GridPathPlanner.Status.BUDGET_EXCEEDED, denied.status());
+
+        GridPathPlanner.Plan allowed = GridPathPlanner.plan(start, target, corridor,
+                GridPathPlanner.DEFAULT_LIMITS, new GridPathPlanner.Budget(1, 0, 0, 1));
+        assertEquals(GridPathPlanner.Status.READY, allowed.status());
+        assertEquals(1, allowed.budgetUse().brokenBlocks());
+        assertEquals(0, allowed.budgetUse().placedBlocks());
+        assertEquals(GridPathPlanner.Movement.BREAK_AND_MOVE, allowed.steps().get(0).movement());
+        assertEquals(breakStone, allowed.steps().get(0).actions().get(0));
+        assertEquals(5.0D, allowed.totalCost());
+    }
+
+    @Test
+    void riskBudgetCanChooseALongerSafeTypedRoute() {
+        GridPathPlanner.Point start = new GridPathPlanner.Point(0, 0, 0);
+        GridPathPlanner.Point target = new GridPathPlanner.Point(3, 0, 0);
+        GridPathPlanner.Plan plan = GridPathPlanner.plan(start, target,
+                new GridPathPlanner.Environment() {
+                    @Override public boolean loaded(GridPathPlanner.Point point) { return true; }
+
+                    @Override public GridPathPlanner.Traversal traversal(
+                            GridPathPlanner.Point from, GridPathPlanner.Point to) {
+                        if (to.y() != 0 || Math.abs(to.z()) > 1 || to.x() < 0 || to.x() > 3) {
+                            return GridPathPlanner.Traversal.blocked();
+                        }
+                        if (manhattan(from, to) != 1) return GridPathPlanner.Traversal.blocked();
+                        if (to.z() == 0 && to.x() > 0 && to.x() < 3) {
+                            return GridPathPlanner.Traversal.move(
+                                    GridPathPlanner.Movement.SPRINT, 0.75D, 2);
+                        }
+                        return GridPathPlanner.Traversal.move(
+                                GridPathPlanner.Movement.WALK, 1.0D, 0);
+                    }
+                }, GridPathPlanner.DEFAULT_LIMITS, new GridPathPlanner.Budget(0, 0, 0, 0));
+
+        assertEquals(GridPathPlanner.Status.READY, plan.status());
+        assertTrue(plan.points().stream().anyMatch(point -> point.z() != 0));
+        assertTrue(plan.steps().stream().allMatch(step -> step.riskUnits() == 0));
+        assertEquals(0, plan.budgetUse().riskUnits());
+    }
+
+    @Test
+    void defaultBoundSupportsARepresentativeLongDistanceRoute() {
+        GridPathPlanner.Point start = new GridPathPlanner.Point(0, 0, 0);
+        GridPathPlanner.Point target = new GridPathPlanner.Point(256, 0, 0);
+        GridPathPlanner.Environment corridor = new GridPathPlanner.Environment() {
+            @Override public boolean loaded(GridPathPlanner.Point point) { return true; }
+
+            @Override public GridPathPlanner.Traversal traversal(
+                    GridPathPlanner.Point from, GridPathPlanner.Point to) {
+                return to.y() == 0 && to.z() == 0 && to.x() >= 0 && to.x() <= 256
+                        && manhattan(from, to) == 1
+                        ? GridPathPlanner.Traversal.passable(1.0D)
+                        : GridPathPlanner.Traversal.blocked();
+            }
+        };
+
+        GridPathPlanner.Plan plan = GridPathPlanner.plan(start, target, corridor);
+
+        assertEquals(GridPathPlanner.Status.READY, plan.status());
         assertEquals(target, plan.points().get(plan.points().size() - 1));
     }
 
@@ -100,10 +189,15 @@ final class GridPathPlannerTest {
             public GridPathPlanner.Traversal traversal(
                     GridPathPlanner.Point from,
                     GridPathPlanner.Point to) {
-                return blocked.contains(to) || to.y() != 0
+                return blocked.contains(to) || to.y() != 0 || manhattan(from, to) != 1
                         ? GridPathPlanner.Traversal.blocked()
                         : GridPathPlanner.Traversal.passable(1.0D + Math.abs(to.y() - from.y()) * 0.25D);
             }
         };
+    }
+
+    private static int manhattan(GridPathPlanner.Point from, GridPathPlanner.Point to) {
+        return Math.abs(to.x() - from.x()) + Math.abs(to.y() - from.y())
+                + Math.abs(to.z() - from.z());
     }
 }

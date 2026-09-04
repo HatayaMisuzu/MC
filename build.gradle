@@ -60,20 +60,22 @@ def platformBuilds = [
     'forge-1.20.1': file('minecraft/forge-1.20.1')
 ]
 
+// Preserve offline operation across nested Loader builds and serialize shared outputs.
+def platformGradleCommand = { List<String> arguments ->
+    (isWindowsHost ? ['cmd', '/c', 'gradlew.bat'] : ['./gradlew']) + arguments +
+            ['--no-parallel'] + (gradle.startParameter.offline ? ['--offline'] : [])
+}
+
 platformBuilds.each { target, directory ->
     tasks.register("build-${target}", Exec) {
         group = 'build'
         description = "Builds ${target} in its isolated loader workspace."
         workingDir = directory
-        if (isWindowsHost) {
-            commandLine 'cmd', '/c', 'gradlew.bat', 'clean', 'build', "-PsharedVersion=${project.version}"
-        } else {
-            commandLine './gradlew', 'clean', 'build', "-PsharedVersion=${project.version}"
-        }
+        commandLine platformGradleCommand(['build', "-PsharedVersion=${project.version}".toString()])
     }
 }
 
-// Every isolated loader build includes the shared root modules and runs `clean`, so parallel loader
+// Every isolated loader build includes the shared root modules, so parallel loader
 // builds (or a loader build overlapping root `check`) can race on the same Windows JAR files.
 // Keep the public `check buildPlatforms` command deterministic without disabling parallelism for
 // the ordinary shared-module test graph.
@@ -101,11 +103,7 @@ def platformLaunchTasks = platformBuilds.collectEntries { target, directory ->
     [(target): tasks.register("launchTest-${target}", Exec) {
         group = 'verification'
         workingDir = directory
-        if (isWindowsHost) {
-            commandLine 'cmd', '/c', 'gradlew.bat', 'launchTest'
-        } else {
-            commandLine './gradlew', 'launchTest'
-        }
+        commandLine platformGradleCommand(['launchTest'])
     }]
 }
 
@@ -123,11 +121,7 @@ def platformGameTests = [
     [(target): tasks.register("gameTest-${target}", Exec) {
         group = 'verification'
         workingDir = platformBuilds[target]
-        if (isWindowsHost) {
-            commandLine 'cmd', '/c', 'gradlew.bat', taskName, '--no-daemon'
-        } else {
-            commandLine './gradlew', taskName, '--no-daemon'
-        }
+        commandLine platformGradleCommand([taskName, '--no-daemon'])
     }]
 }
 
@@ -142,6 +136,7 @@ tasks.register('runtimeFabricE2E') {
     dependsOn ':runtime:runtime-app:installDist'
     doLast {
         runProcess {
+            environment 'MCAC_TEST_OFFLINE', gradle.startParameter.offline ? '1' : '0'
             environment 'MCAC_TEST_JAVA_HOME', System.getProperty('java.home')
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/runtime-fabric-e2e.ps1').absolutePath
@@ -155,6 +150,7 @@ tasks.register('runtimeForgeE2E') {
     dependsOn ':runtime:runtime-app:installDist'
     doLast {
         runProcess {
+            environment 'MCAC_TEST_OFFLINE', gradle.startParameter.offline ? '1' : '0'
             environment 'MCAC_TEST_JAVA_HOME', System.getProperty('java.home')
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/runtime-forge-e2e.ps1').absolutePath
@@ -197,6 +193,7 @@ tasks.register('persistenceRestartTest') {
     group = 'verification'
     doLast {
         runProcess {
+            environment 'MCAC_TEST_OFFLINE', gradle.startParameter.offline ? '1' : '0'
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/fabric-persistence-restart.ps1').absolutePath
         }
@@ -207,6 +204,7 @@ tasks.register('forgePersistenceRestartTest') {
     group = 'verification'
     doLast {
         runProcess {
+            environment 'MCAC_TEST_OFFLINE', gradle.startParameter.offline ? '1' : '0'
             commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     file('tools/forge-persistence-restart.ps1').absolutePath
         }
@@ -234,7 +232,7 @@ tasks.register('gameTestFixtureCheck') {
                 'minecraft/fabric-1.21.1/src/gametest/java/com/mccompanion/minecraft/v121/RegistryFixtureInitializer.java')
                 .getText('UTF-8')
         def forgeTests = file(
-                'minecraft/forge-1.20.1/src/main/java/com/mccompanion/minecraft/v120/CompanionLifecycleForgeGameTests.java')
+                'minecraft/forge-1.20.1/src/gametest/java/com/mccompanion/minecraft/v120/CompanionLifecycleForgeGameTests.java')
                 .getText('UTF-8')
 
         int mockOwnerCount = (fabricTests =~ /makeMockServerPlayerInLevel\(\)/).count
@@ -520,6 +518,8 @@ def releaseDocumentation = [
     'docs/TASK_GRAPH_DSL.md',
     'docs/MCP_PROTOCOL.md',
     'docs/PRIMITIVE_TOOLS.md',
+    'docs/WORLD_MODEL.md',
+    'docs/EVENT_DRIVEN_REPLAN.md',
     'docs/AGENT_WORKSPACE.md',
     'docs/compatibility/MCAC_COMPATIBILITY_LAYER_ENGINEERING.md',
     'docs/compatibility/FIRST_REAL_PACK_ACCEPTANCE.md',
@@ -596,9 +596,20 @@ tasks.register('jpackageTerminal', Exec) {
     }
 }
 
+tasks.register('patchJpackageLaunchers', Exec) {
+    group = 'distribution'
+    description = 'Makes the bundled Windows launchers resolve paths independently of the system ANSI code page.'
+    dependsOn 'jpackageTerminal'
+    doFirst {
+        commandLine powershellExecutable, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                file('tools/patch-windows-launcher-utf8.ps1').absolutePath,
+                '-LauncherDirectory', terminalJpackage.get().dir('mcac').asFile.absolutePath
+    }
+}
+
 tasks.register('stageTerminal') {
     group = 'distribution'
-    dependsOn 'jpackageTerminal', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
+    dependsOn 'patchJpackageLaunchers', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
     doLast {
         copy {
             into terminalImage
@@ -811,7 +822,7 @@ tasks.register('releaseGoldenPathTest') {
 tasks.register('runtimeDisabledLaunchTest', Exec) {
     group = 'verification'
     workingDir file('minecraft/fabric-1.21.1')
-    commandLine 'cmd', '/c', 'gradlew.bat', 'launchTest', '-PmccompanionRuntimeDisabled=true'
+    commandLine platformGradleCommand(['launchTest', '-PmccompanionRuntimeDisabled=true'])
     standardInput = new ByteArrayInputStream(new byte[0])
     doLast {
         def log=file('minecraft/fabric-1.21.1/build/launch-test/server/logs/latest.log').getText('UTF-8')

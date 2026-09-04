@@ -6,8 +6,9 @@
   versions; low health, explosive threats and multiple hostiles still preempt execution.
 - Deliver durable Task Graph lifecycle feedback immediately, including completion without another
   game status packet, while keeping progress/checkpoint callbacks off the synchronous conversation
-  delivery path so pause/resume/cancel controls remain responsive. Restore NeoForge's existing
-  shared navigation/event source bindings.
+  delivery path so pause/resume/cancel controls remain responsive. The Terminal now follows an
+  asynchronously accepted graph control to its durable state before clearing the control status,
+  avoiding stale `RUNNING` displays. Restore NeoForge's existing shared navigation/event bindings.
 - Prevent unrelated task-completion events from opening Brain sessions, stop failed event dispatch
   after bounded attempts, and announce reconnected Bodies before their first authenticated events.
 - Integrate bounded daily actions, survival navigation, durable player/world/inventory events,

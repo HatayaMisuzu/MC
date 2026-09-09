@@ -1,23 +1,26 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BrainPage } from './BrainPage'
 
 const requestPlan = vi.fn()
 const { post } = vi.hoisted(() => ({ post: vi.fn(() => Promise.resolve({})) }))
 let resourceCall = 0
+let selectedId = 'instance-1'
 
 vi.mock('../api/client', () => ({ api: vi.fn(), post }))
 
 vi.mock('../context/TerminalContext', () => ({
-  useTerminal: () => ({ selected: { mode: 'FULL', loader: 'FABRIC' }, selectedId: 'instance-1', requestPlan }),
+  useTerminal: () => ({ selected: { mode: 'FULL', loader: 'FABRIC' }, selectedId, requestPlan }),
 }))
 
 vi.mock('../hooks/useResource', () => ({
-  useResource: () => {
+  useResource: (_loader: unknown, _dependencies: unknown[], resourceKey: string) => {
     const values = [
-      { instanceId: 'instance-1', mode: 'SAFE_IDLE', companions: [{ id: 'c1', displayName: 'Misuzu' }], tasks: [], events: [], conversations: [], waitingQuestions: [] },
-      { mode: 'hermes', endpoint: 'http://127.0.0.1:8080', tokenEnv: 'MCAC_BRAIN_TOKEN',
-        model: 'hermes', timeoutSeconds: 60, maxToolCallsPerTurn: 12, maxOutputTokens: 1024 },
+      { instanceId: selectedId, mode: 'SAFE_IDLE', companions: [{ id: 'c1', displayName: 'Misuzu' }], tasks: [], events: [], conversations: [], waitingQuestions: [] },
+      selectedId === 'instance-1'
+        ? { mode: 'hermes', endpoint: 'https://a.example', tokenEnv: 'A_TOKEN',
+            model: 'hermes', timeoutSeconds: 60, maxToolCallsPerTurn: 12, maxOutputTokens: 1024 }
+        : { mode: 'disabled' },
       { activeControllerId: 'runtime-primary', health: { status: 'CONFIGURED', adapter: 'hermes', detail: '', checkedAt: '' },
         contextBudget: { totalChars: 40000, worldChars: 12000, conversationChars: 10000, taskChars: 8000,
           approvedMemoryChars: 6000, episodeCapsuleChars: 6000, fullGraphIncluded: false,
@@ -46,11 +49,12 @@ vi.mock('../hooks/useResource', () => ({
         suggestions: [{ suggestionId: 'ms1', companionId: 'c1', kind: 'WORLD', key: 'landmark:moon', value: { dimension: 'examplemod:moon' }, confidence: 0.5, status: 'QUARANTINED', source: 'EPISODE_CAPSULE', brainSessionId: 'b1', capsuleId: 'episode-1', conflictsWithVerified: true, expiresAt: '', createdAt: '', updatedAt: '' }],
         episodeCapsules: [{ episodeId: 'episode-1', companionId: 'c1', brainSessionId: 'b1', startedAt: '2026-07-15T00:00:00Z', endedAt: '2026-07-15T00:01:00Z', taskSummaries: [], verifiedWorldChanges: [], verifiedInventoryChanges: [], verifiedLocations: [], askUserDecisions: [], userConfirmedChoices: [], failureCategories: [], evidenceRefs: [{ callId: 't1' }], sourceSha: 'abc1234', createdAt: '2026-07-15T00:01:00Z' }] },
     ]
-    return { data: values[(resourceCall++) % values.length], refresh: vi.fn(), loading: false, error: null }
+    return { data: values[(resourceCall++) % values.length], dataKey: resourceKey, stateKey: resourceKey,
+      refresh: vi.fn(), loading: false, error: null }
   },
 }))
 
-beforeEach(() => { resourceCall = 0; requestPlan.mockClear(); post.mockClear() })
+beforeEach(() => { resourceCall = 0; selectedId = 'instance-1'; requestPlan.mockClear(); post.mockClear() })
 afterEach(() => cleanup())
 
 describe('BrainPage', () => {
@@ -90,5 +94,27 @@ describe('BrainPage', () => {
     expect(post).toHaveBeenCalledWith('/api/memories/manage', {
       instanceId: 'instance-1', companionId: 'c1', action: 'export_safe_summary',
     })
+  })
+
+  it('resets configured form ownership when the next instance is disabled', async () => {
+    const { rerender } = render(<BrainPage />)
+    await waitFor(() => expect(screen.getByLabelText('Endpoint')).toHaveValue('https://a.example'))
+    expect(screen.getByLabelText('Token environment variable')).toHaveValue('A_TOKEN')
+
+    selectedId = 'instance-2'
+    rerender(<BrainPage />)
+
+    await waitFor(() => expect(screen.getByLabelText('Endpoint')).toHaveValue('http://127.0.0.1:8080'))
+    expect(screen.getByLabelText('Token environment variable')).toHaveValue('MCAC_BRAIN_TOKEN')
+    const review = screen.getByRole('button', { name: 'Review configuration' })
+    await waitFor(() => expect(review).toBeEnabled())
+    fireEvent.click(review)
+    expect(requestPlan).toHaveBeenCalledWith('brain', expect.objectContaining({
+      instanceId: 'instance-2', action: 'configure',
+      endpoint: 'http://127.0.0.1:8080', tokenEnv: 'MCAC_BRAIN_TOKEN',
+    }))
+    expect(requestPlan).not.toHaveBeenCalledWith('brain', expect.objectContaining({
+      endpoint: 'https://a.example',
+    }))
   })
 })

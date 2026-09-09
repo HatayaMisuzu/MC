@@ -16,7 +16,9 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -26,6 +28,70 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ExternalBrainAdapterTest {
+    @Test
+    void openAiHistoryTrimmingConvergesByRemovingWholeToolGroups() {
+        List<com.fasterxml.jackson.databind.node.ObjectNode> history = new ArrayList<>();
+        history.add(Json.object().put("role", "system").put("content", "protected"));
+        for (int index = 0; index < 21; index++) {
+            var assistant = Json.object().put("role", "assistant").putNull("content");
+            assistant.putArray("tool_calls").addObject().put("id", "call-" + index)
+                    .put("type", "function").putObject("function")
+                    .put("name", "world.observe").put("arguments", "{}");
+            history.add(assistant);
+            history.add(Json.object().put("role", "tool")
+                    .put("tool_call_id", "call-" + index).put("content", "{}"));
+        }
+
+        OpenAiCompatibleBrainAdapter.trimHistory(history);
+
+        assertTrue(history.size() <= 40);
+        assertEquals("system", history.getFirst().path("role").asText());
+        assertCompleteToolGroups(history);
+    }
+
+    @Test
+    void failedRequestRestoresHistorySnapshotAfterCharacterTrimming() throws Exception {
+        List<String> requests = new CopyOnWriteArrayList<>();
+        AtomicInteger turns = new AtomicInteger();
+        try (TestServer server = new TestServer(exchange -> {
+            requests.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            int turn = turns.getAndIncrement();
+            if (turn == 0) {
+                respond(exchange, 200, """
+                        {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                        {"id":"history-tool","type":"function","function":{"name":"world.observe","arguments":"{}"}}]}}]}
+                        """);
+            } else if (turn == 8) {
+                respond(exchange, 503, "{\"error\":\"injected\"}");
+            } else {
+                respond(exchange, 200, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}");
+            }
+        }); OpenAiCompatibleBrainAdapter adapter = new OpenAiCompatibleBrainAdapter(
+                server.baseUrl(), "fixture-token", "replay-model", Duration.ofSeconds(5), 512)) {
+            BrainSession session = adapter.openSession(sessionRequest());
+            BrainTurnResult tool = adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                    "seed-tool-group", context(), List.of(), 4));
+            adapter.continueTurn(new BrainTurnRequest(session.sessionId(), "", context(),
+                    List.of(new ToolResult(tool.toolCalls().getFirst().callId(), "world.observe",
+                            true, "OK", Json.object().put("health", 18), true)), 3));
+            for (int index = 0; index < 6; index++) {
+                adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                        "bulk-marker-" + index + "-" + "x".repeat(6_000), context(), List.of(), 4));
+            }
+            assertThrows(IllegalStateException.class, () -> adapter.continueTurn(new BrainTurnRequest(
+                    session.sessionId(), "failed-marker-" + "y".repeat(20_000), context(), List.of(), 4)));
+            adapter.continueTurn(new BrainTurnRequest(session.sessionId(),
+                    "after-failure", context(), List.of(), 4));
+        }
+
+        var failedMessages = Json.parse(requests.get(8)).path("messages");
+        var retriedMessages = Json.parse(requests.get(9)).path("messages");
+        assertFalse(failedMessages.toString().contains("bulk-marker-0"), "failure turn must exercise front trimming");
+        assertTrue(retriedMessages.toString().contains("bulk-marker-0"), "pre-turn history must be restored");
+        assertFalse(retriedMessages.toString().contains("failed-marker"));
+        assertCompleteToolGroups(retriedMessages);
+    }
+
     @Test
     void openAiCompatibleAdapterPerformsNativeToolCallingRoundTrip() throws Exception {
         List<String> requests = new CopyOnWriteArrayList<>();
@@ -252,6 +318,22 @@ class ExternalBrainAdapterTest {
 
     private static AgentContext context() {
         return AgentContext.empty("c1", List.of("FollowOwner"));
+    }
+
+    private static void assertCompleteToolGroups(Iterable<? extends com.fasterxml.jackson.databind.JsonNode> messages) {
+        Set<String> pending = new HashSet<>();
+        for (var message : messages) {
+            String role = message.path("role").asText();
+            if (!"tool".equals(role)) {
+                assertTrue(pending.isEmpty(), "tool-calling assistant must keep all consecutive results");
+            }
+            if (message.path("tool_calls").isArray()) {
+                for (var call : message.path("tool_calls")) pending.add(call.path("id").asText());
+            } else if ("tool".equals(role)) {
+                assertTrue(pending.remove(message.path("tool_call_id").asText()), "orphan tool result");
+            }
+        }
+        assertTrue(pending.isEmpty(), "missing tool result");
     }
 
     private static final class ObserveGateway implements ToolGateway {

@@ -34,39 +34,55 @@ interface BrainTest {
   message: string
 }
 
+const defaultBrainForm = () => ({
+  mode: 'hermes' as 'hermes' | 'openai-compatible',
+  endpoint: 'http://127.0.0.1:8080',
+  tokenEnv: 'MCAC_BRAIN_TOKEN',
+  model: '',
+  timeoutSeconds: 60,
+  maxToolCallsPerTurn: 12,
+  maxOutputTokens: 1024,
+  maxRequests: 24,
+  maxInputTokens: 30000,
+  maxTotalOutputTokens: 8000,
+  maxWallClockMinutes: 15,
+  maxRetries: 2,
+})
+
 export function BrainPage() {
   const { selected, selectedId, requestPlan } = useTerminal()
   const { t } = useI18n()
   const companions = useResource<CompanionSnapshot>(() => selectedId
     ? api<CompanionSnapshot>(`/api/companions?instanceId=${encodeURIComponent(selectedId)}`)
-    : Promise.resolve({ instanceId: '', mode: 'SAFE_IDLE', companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [] }), [selectedId])
+    : Promise.resolve({ instanceId: '', mode: 'SAFE_IDLE', companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [] }), [selectedId], selectedId)
   const [selectedCompanion, setSelectedCompanion] = useState('')
   const [message, setMessage] = useState('')
   const [reviewing, setReviewing] = useState('')
   const [reviewError, setReviewError] = useState('')
   const config = useResource<BrainConfig>(() => selectedId
     ? api<BrainConfig>(`/api/brain/config?instanceId=${encodeURIComponent(selectedId)}`)
-    : Promise.resolve({ mode: 'disabled' }), [selectedId])
-  const [brainForm, setBrainForm] = useState({
-    mode: 'hermes' as 'hermes' | 'openai-compatible',
-    endpoint: 'http://127.0.0.1:8080',
-    tokenEnv: 'MCAC_BRAIN_TOKEN',
-    model: '',
-    timeoutSeconds: 60,
-    maxToolCallsPerTurn: 12,
-    maxOutputTokens: 1024,
-    maxRequests: 24,
-    maxInputTokens: 30000,
-    maxTotalOutputTokens: 8000,
-    maxWallClockMinutes: 15,
-    maxRetries: 2,
-  })
-  const [brainTest, setBrainTest] = useState<BrainTest | null>(null)
-  const [testingBrain, setTestingBrain] = useState(false)
+    : Promise.resolve({ mode: 'disabled' }), [selectedId], selectedId)
+  const [brainForm, setBrainForm] = useState(defaultBrainForm)
+  const [brainFormOwner, setBrainFormOwner] = useState<string | null>(null)
+  const [brainFormDirty, setBrainFormDirty] = useState(false)
+  const [brainTest, setBrainTest] = useState<{ instanceId: string, result: BrainTest } | null>(null)
+  const [brainTestError, setBrainTestError] = useState<{ instanceId: string, message: string } | null>(null)
+  const [testingBrain, setTestingBrain] = useState<string | null>(null)
+  useEffect(() => {
+    setBrainForm(defaultBrainForm())
+    setBrainFormOwner(null)
+    setBrainFormDirty(false)
+    setBrainTest(null)
+    setBrainTestError(null)
+    setTestingBrain(null)
+    setMessage('')
+    setReviewing('')
+    setReviewError('')
+  }, [selectedId])
   useEffect(() => {
     const current = config.data
-    if (!current || current.mode === 'disabled') return
-    setBrainForm({
+    if (!current || config.dataKey !== selectedId) return
+    setBrainForm(current.mode === 'disabled' ? defaultBrainForm() : {
       mode: current.mode,
       endpoint: current.endpoint ?? '',
       tokenEnv: current.tokenEnv ?? 'MCAC_BRAIN_TOKEN',
@@ -80,35 +96,50 @@ export function BrainPage() {
       maxWallClockMinutes: current.maxWallClockMinutes ?? 15,
       maxRetries: current.maxRetries ?? 2,
     })
-  }, [config.data?.mode, config.data?.endpoint, config.data?.tokenEnv, config.data?.model,
+    setBrainFormOwner(selectedId)
+    setBrainFormDirty(false)
+  }, [selectedId, config.dataKey, config.data?.mode, config.data?.endpoint, config.data?.tokenEnv, config.data?.model,
     config.data?.timeoutSeconds, config.data?.maxToolCallsPerTurn, config.data?.maxOutputTokens,
     config.data?.maxRequests, config.data?.maxInputTokens, config.data?.maxTotalOutputTokens,
     config.data?.maxWallClockMinutes, config.data?.maxRetries])
+  const updateBrainForm = (values: Partial<ReturnType<typeof defaultBrainForm>>) => {
+    setBrainForm((current) => ({ ...(brainFormOwner === selectedId ? current : defaultBrainForm()), ...values }))
+    setBrainFormOwner(selectedId)
+    setBrainFormDirty(true)
+  }
+  const configReady = config.dataKey === selectedId && brainFormOwner === selectedId && !config.loading
+  const displayedBrainForm = brainFormOwner === selectedId ? brainForm : defaultBrainForm()
   const companionId = companions.data?.companions.some((value) => value.id === selectedCompanion)
     ? selectedCompanion : companions.data?.companions[0]?.id ?? ''
   const status = useResource<BrainStatus>(() => selectedId
     ? api<BrainStatus>(`/api/brain/status?instanceId=${encodeURIComponent(selectedId)}`)
-    : Promise.resolve({ activeControllerId: '', health: { status: 'DISABLED', adapter: '', detail: '', checkedAt: '' } }), [selectedId])
+    : Promise.resolve({ activeControllerId: '', health: { status: 'DISABLED', adapter: '', detail: '', checkedAt: '' } }), [selectedId], selectedId)
+  const companionResourceKey = `${selectedId}:${companionId}`
   const audit = useResource<BrainSessionAudit[]>(() => selectedId && companionId
     ? api<BrainSessionAudit[]>(`/api/brain/audit?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
-    : Promise.resolve([]), [selectedId, companionId])
+    : Promise.resolve([]), [selectedId, companionId], companionResourceKey)
   const settings = useResource<BrainBehaviorSettings>(() => selectedId && companionId
     ? api<BrainBehaviorSettings>(`/api/brain/settings?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
     : Promise.resolve({ companionId: '', initiativeMode: 'NORMAL', personalityMode: 'COMPANION',
       revision: 0, updatedBy: 'DEFAULT', updatedAt: '', changesToolPermissions: false,
-      changesSafetyPolicy: false, changesBudgets: false, changesMemoryPolicy: false }), [selectedId, companionId])
+      changesSafetyPolicy: false, changesBudgets: false, changesMemoryPolicy: false }), [selectedId, companionId], companionResourceKey)
   const memories = useResource<MemorySnapshot>(() => selectedId && companionId
     ? api<MemorySnapshot>(`/api/memories?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(companionId)}`)
-    : Promise.resolve({ companionId: '', byKind: {} }), [selectedId, companionId])
+    : Promise.resolve({ companionId: '', byKind: {} }), [selectedId, companionId], companionResourceKey)
+  const companionDataReady = companions.dataKey === selectedId && Boolean(companionId)
+  const settingsReady = companionDataReady && settings.dataKey === companionResourceKey
+  const memoriesReady = companionDataReady && memories.dataKey === companionResourceKey
   const refresh = () => { void status.refresh(); void audit.refresh(); void settings.refresh(); void memories.refresh(); void companions.refresh() }
   const reconnectState = audit.data?.[0]?.state ?? 'IDLE'
   const semantic = audit.data?.find((session) => session.semanticState)?.semanticState
   const updateSettings = async (initiativeMode: BrainBehaviorSettings['initiativeMode'],
                                 personalityMode: BrainBehaviorSettings['personalityMode']) => {
+    if (!settingsReady) return
     await post('/api/brain/settings', { instanceId: selectedId, companionId, initiativeMode, personalityMode })
     await settings.refresh()
   }
   const reviewSuggestion = async (suggestionId: string, action: 'approve_suggestion' | 'reject_suggestion') => {
+    if (!memoriesReady) return
     setReviewing(suggestionId)
     setReviewError('')
     try {
@@ -127,6 +158,7 @@ export function BrainPage() {
     }
   }
   const manageMemory = async (action: string, extra: Record<string, unknown> = {}) => {
+    if (!memoriesReady) return {}
     const result = await post<Record<string, unknown>>('/api/memories/manage', {
       instanceId: selectedId, companionId, action, ...extra,
     })
@@ -134,17 +166,24 @@ export function BrainPage() {
     return result
   }
   const testBrain = async () => {
-    setTestingBrain(true)
+    if (!configReady) return
+    const instanceId = selectedId
+    setTestingBrain(instanceId)
+    setBrainTestError(null)
     try {
-      setBrainTest(await post<BrainTest>('/api/brain/test', { instanceId: selectedId }))
+      setBrainTest({ instanceId, result: await post<BrainTest>('/api/brain/test', { instanceId }) })
+    } catch (failure) {
+      setBrainTestError({ instanceId, message: failure instanceof Error ? failure.message : String(failure) })
     } finally {
-      setTestingBrain(false)
+      setTestingBrain((current) => current === instanceId ? null : current)
     }
   }
+  const currentBrainTest = brainTest?.instanceId === selectedId ? brainTest.result : null
+  const currentBrainTestError = brainTestError?.instanceId === selectedId ? brainTestError.message : ''
   if (!selected) return <EmptyState title={t('empty.selectInstance')}>{t('brain.empty')}</EmptyState>
   const send = () => {
     const text = message.trim()
-    if (!text || !companionId) return
+    if (!text || !companionDataReady) return
     void requestPlan('agent', { instanceId: selectedId, companionId, text })
     setMessage('')
   }
@@ -152,56 +191,57 @@ export function BrainPage() {
     <PageHeader title={t('brain.title')} description={t('brain.description')}
       actions={<ActionButton icon={<RefreshCw size={15} />} onClick={refresh}>{t('common.refresh')}</ActionButton>} />
     <section className="provider-layout">
-      <form className="form-panel" onSubmit={(event) => {
+      <form className="form-panel" data-instance-id={brainFormOwner ?? ''} data-dirty={brainFormDirty} onSubmit={(event) => {
         event.preventDefault()
-        void requestPlan('brain', { instanceId: selectedId, action: 'configure', ...brainForm })
+        if (!configReady) return
+        void requestPlan('brain', { instanceId: selectedId, action: 'configure', ...displayedBrainForm })
       }}>
         <h2>{t('brain.configTitle')}</h2>
         <p>{t('brain.configBoundary')}</p>
-        <label className="field"><span>{t('brain.adapter')}</span><select value={brainForm.mode}
-          onChange={(event) => setBrainForm((value) => ({ ...value,
-            mode: event.target.value as 'hermes' | 'openai-compatible' }))}>
+        <label className="field"><span>{t('brain.adapter')}</span><select value={displayedBrainForm.mode}
+          onChange={(event) => updateBrainForm({ mode: event.target.value as 'hermes' | 'openai-compatible' })}>
           <option value="hermes">Hermes (mcac-brain/1)</option>
           <option value="openai-compatible">OpenAI-compatible Tool calling</option>
         </select></label>
-        <label className="field"><span>{t('brain.endpoint')}</span><input type="url" required value={brainForm.endpoint}
-          onChange={(event) => setBrainForm((value) => ({ ...value, endpoint: event.target.value }))} /></label>
-        {brainForm.mode === 'openai-compatible' && <label className="field"><span>{t('brain.model')}</span><input required
-          value={brainForm.model} onChange={(event) => setBrainForm((value) => ({ ...value, model: event.target.value }))} /></label>}
+        <label className="field"><span>{t('brain.endpoint')}</span><input type="url" required value={displayedBrainForm.endpoint}
+          onChange={(event) => updateBrainForm({ endpoint: event.target.value })} /></label>
+        {displayedBrainForm.mode === 'openai-compatible' && <label className="field"><span>{t('brain.model')}</span><input required
+          value={displayedBrainForm.model} onChange={(event) => updateBrainForm({ model: event.target.value })} /></label>}
         <label className="field"><span>{t('brain.tokenEnv')}</span><input required pattern="[A-Za-z_][A-Za-z0-9_]*"
-          value={brainForm.tokenEnv} onChange={(event) => setBrainForm((value) => ({ ...value, tokenEnv: event.target.value }))} /></label>
+          value={displayedBrainForm.tokenEnv} onChange={(event) => updateBrainForm({ tokenEnv: event.target.value })} /></label>
         <label className="field"><span>{t('brain.requestTimeout')}</span><input type="number" min="1" max="300"
-          value={brainForm.timeoutSeconds} onChange={(event) => setBrainForm((value) => ({ ...value, timeoutSeconds: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.timeoutSeconds} onChange={(event) => updateBrainForm({ timeoutSeconds: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.toolCalls')}</span><input type="number" min="1" max="32"
-          value={brainForm.maxToolCallsPerTurn} onChange={(event) => setBrainForm((value) => ({ ...value, maxToolCallsPerTurn: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxToolCallsPerTurn} onChange={(event) => updateBrainForm({ maxToolCallsPerTurn: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.outputTokens')}</span><input type="number" min="128" max="4096"
-          value={brainForm.maxOutputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxOutputTokens: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxOutputTokens} onChange={(event) => updateBrainForm({ maxOutputTokens: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.maxRequests')}</span><input type="number" min="1" max="1000"
-          value={brainForm.maxRequests} onChange={(event) => setBrainForm((value) => ({ ...value, maxRequests: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxRequests} onChange={(event) => updateBrainForm({ maxRequests: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.maxInputTokens')}</span><input type="number" min="128" max="2000000"
-          value={brainForm.maxInputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxInputTokens: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxInputTokens} onChange={(event) => updateBrainForm({ maxInputTokens: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.maxTotalOutputTokens')}</span><input type="number" min="128" max="500000"
-          value={brainForm.maxTotalOutputTokens} onChange={(event) => setBrainForm((value) => ({ ...value, maxTotalOutputTokens: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxTotalOutputTokens} onChange={(event) => updateBrainForm({ maxTotalOutputTokens: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.maxWallClock')}</span><input type="number" min="1" max="480"
-          value={brainForm.maxWallClockMinutes} onChange={(event) => setBrainForm((value) => ({ ...value, maxWallClockMinutes: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxWallClockMinutes} onChange={(event) => updateBrainForm({ maxWallClockMinutes: Number(event.target.value) })} /></label>
         <label className="field"><span>{t('brain.maxRetries')}</span><input type="number" min="0" max="5"
-          value={brainForm.maxRetries} onChange={(event) => setBrainForm((value) => ({ ...value, maxRetries: Number(event.target.value) }))} /></label>
+          value={displayedBrainForm.maxRetries} onChange={(event) => updateBrainForm({ maxRetries: Number(event.target.value) })} /></label>
         <div className="form-actions">
-          <ActionButton tone="primary" icon={<Save size={16} />} type="submit">{t('brain.reviewConfig')}</ActionButton>
-          <ActionButton icon={<FlaskConical size={16} />} type="button" loading={testingBrain}
+          <ActionButton tone="primary" icon={<Save size={16} />} type="submit" disabled={!configReady}>{t('brain.reviewConfig')}</ActionButton>
+          <ActionButton icon={<FlaskConical size={16} />} type="button" disabled={!configReady} loading={testingBrain === selectedId}
             onClick={() => void testBrain()}>{t('brain.verifyProtocol')}</ActionButton>
-          <ActionButton tone="danger" icon={<Power size={16} />} type="button"
-            onClick={() => void requestPlan('brain', { instanceId: selectedId, action: 'disable' })}>{t('brain.disable')}</ActionButton>
+          <ActionButton tone="danger" icon={<Power size={16} />} type="button" disabled={!configReady}
+            onClick={() => { if (configReady) void requestPlan('brain', { instanceId: selectedId, action: 'disable' }) }}>{t('brain.disable')}</ActionButton>
         </div>
       </form>
       <section className="provider-test"><h2>{t('brain.healthTitle')}</h2>
         <p>{t('brain.configuredAdapter')}: <StatusBadge value={config.data?.mode ?? 'disabled'} /></p>
-        {brainTest
-          ? <dl className="detail-list"><div><dt>{t('brain.protocolState')}</dt><dd><StatusBadge value={brainTest.status} /></dd></div>
-            <div><dt>{t('brain.adapter')}</dt><dd>{brainTest.adapter}</dd></div>
-            <div><dt>{t('brain.latency')}</dt><dd>{brainTest.latencyMillis} ms</dd></div>
-            <div><dt>{t('brain.detail')}</dt><dd>{brainTest.message}</dd></div></dl>
+        {currentBrainTest
+          ? <dl className="detail-list"><div><dt>{t('brain.protocolState')}</dt><dd><StatusBadge value={currentBrainTest.status} /></dd></div>
+            <div><dt>{t('brain.adapter')}</dt><dd>{currentBrainTest.adapter}</dd></div>
+            <div><dt>{t('brain.latency')}</dt><dd>{currentBrainTest.latencyMillis} ms</dd></div>
+            <div><dt>{t('brain.detail')}</dt><dd>{currentBrainTest.message}</dd></div></dl>
           : <p>{t('brain.probeBoundary')}</p>}
+        {currentBrainTestError && <div className="inline-error">{currentBrainTestError}</div>}
       </section>
     </section>
     <section className="companion-toolbar">
@@ -211,12 +251,12 @@ export function BrainPage() {
       <StatusBadge value={status.data?.health.status ?? 'WAITING'} />
       <span>{status.data?.health.adapter || t('brain.noAdapter')} · {t('brain.controller')} {status.data?.activeControllerId || t('common.none')}</span>
       <span>{t('brain.reconnect')} <StatusBadge value={reconnectState} /></span>
-      <label className="field"><span>{t('brain.initiative')}</span><select value={settings.data?.initiativeMode ?? 'NORMAL'}
+      <label className="field"><span>{t('brain.initiative')}</span><select disabled={!settingsReady} value={settings.data?.initiativeMode ?? 'NORMAL'}
         onChange={(event) => void updateSettings(event.target.value as BrainBehaviorSettings['initiativeMode'],
           settings.data?.personalityMode ?? 'COMPANION')}>
         <option value="QUIET">{t('brain.quiet')}</option><option value="NORMAL">{t('brain.normal')}</option><option value="ACTIVE">{t('brain.active')}</option>
       </select></label>
-      <label className="field"><span>{t('brain.personality')}</span><select value={settings.data?.personalityMode ?? 'COMPANION'}
+      <label className="field"><span>{t('brain.personality')}</span><select disabled={!settingsReady} value={settings.data?.personalityMode ?? 'COMPANION'}
         onChange={(event) => void updateSettings(settings.data?.initiativeMode ?? 'NORMAL',
           event.target.value as BrainBehaviorSettings['personalityMode'])}>
         <option value="COMPANION">{t('term.companion')}</option><option value="IMMERSIVE_ROLEPLAY">{t('brain.roleplay')}</option>
@@ -227,7 +267,7 @@ export function BrainPage() {
         <div className="companion-chat-row"><textarea maxLength={4096} value={message} onChange={(event) => setMessage(event.target.value)}
           placeholder={t('brain.chatPlaceholder')}
           onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send() } }} />
-          <ActionButton tone="primary" icon={<Send size={15} />} disabled={!message.trim()} onClick={send}>{t('brain.send')}</ActionButton></div>
+          <ActionButton tone="primary" icon={<Send size={15} />} disabled={!message.trim() || !companionDataReady} onClick={send}>{t('brain.send')}</ActionButton></div>
       </section>
       <section className="main-panel"><header className="panel-header"><h2>{t('brain.audit')}</h2><span>{t('brain.sessionCount', { count: audit.data?.length ?? 0 })}</span></header>
         <div className="event-rows">{(audit.data ?? []).flatMap((session) => session.toolCalls.length ? session.toolCalls.map((tool) =>

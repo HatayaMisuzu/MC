@@ -23,12 +23,16 @@ vi.mock('../context/TerminalContext', () => ({
 }))
 
 vi.mock('../hooks/useResource', () => ({
-  useResource: (_loader: unknown, dependencies: unknown[]) => dependencies.length === 2 ? ({
+  useResource: (_loader: unknown, dependencies: unknown[], resourceKey: string) => dependencies.length === 2 ? ({
     data: { companionId: 'companion-1', executions: [{
       executionId: 'graph-execution-1', companionId: 'companion-1', graphId: 'external-graph',
       graphVersion: '1', state: 'PAUSED', currentNodeId: 'inspect', completedNodeCount: 2,
       resultCode: 'TASK_GRAPH_PAUSED', revision: 4, createdAt: '', updatedAt: '',
     }] },
+    dataKey: resourceKey,
+    stateKey: resourceKey,
+    loading: false,
+    error: null,
     refresh: vi.fn(() => Promise.resolve()),
   }) : ({
     data: {
@@ -40,6 +44,10 @@ vi.mock('../hooks/useResource', () => ({
       conversations: [{ eventId: 'e1', companionId: 'companion-1', direction: 'ASSISTANT', kind: 'QUESTION', content: '箱子里只有 6 个，还差 10 个。', gameDelivered: true, createdAt: 1 }],
       waitingQuestions: [{ questionId: 'q1', planId: 'p1', companionId: 'companion-1', prompt: '你想怎么做？', reason: 'RESOURCE_SHORTAGE', freeTextAllowed: true, state: 'WAITING', createdAt: 1, updatedAt: 1, options: [{ id: 'partial', label: '先拿 6 个', description: '交付现有数量' }] }],
     },
+    dataKey: resourceKey,
+    stateKey: resourceKey,
+    loading: false,
+    error: null,
     refresh: vi.fn(),
   }),
 }))

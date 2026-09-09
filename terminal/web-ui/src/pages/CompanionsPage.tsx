@@ -36,23 +36,30 @@ export function CompanionsPage() {
   const { locale, t } = useI18n()
   const snapshot = useResource(() => selectedId
     ? api<CompanionSnapshot>(`/api/companions?instanceId=${encodeURIComponent(selectedId)}`)
-    : Promise.resolve({ companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [], mode: 'SAFE_IDLE', instanceId: '' }), [selectedId])
+    : Promise.resolve({ companions: [], tasks: [], events: [], conversations: [], waitingQuestions: [], mode: 'SAFE_IDLE', instanceId: '' }), [selectedId], selectedId)
   const [companionId, setCompanionId] = useState('')
   const [coordinates, setCoordinates] = useState({ x: '0', y: '64', z: '0' })
   const [requestText, setRequestText] = useState('')
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({})
   const [graphControlError, setGraphControlError] = useState('')
   const [graphControlPending, setGraphControlPending] = useState('')
-  const liveSnapshot = companionSnapshot?.instanceId === selectedId ? companionSnapshot : snapshot.data
+  const liveSnapshot = companionSnapshot?.instanceId === selectedId
+    ? companionSnapshot
+    : snapshot.dataKey === selectedId && snapshot.data?.instanceId === selectedId ? snapshot.data : null
   const companions = liveSnapshot?.companions ?? []
+  const snapshotOperable = Boolean(selectedId && liveSnapshot?.instanceId === selectedId)
   useEffect(() => {
     if (companionSnapshot?.instanceId === selectedId) void snapshot.refresh()
   }, [companionSnapshot, selectedId])
   const activeId = companions.some((value) => value.id === companionId) ? companionId : companions[0]?.id ?? ''
+  const graphResourceKey = `${selectedId}:${activeId}`
   const taskGraphs = useResource<TaskGraphSnapshot>(() => selectedId && activeId
     ? api<TaskGraphSnapshot>(`/api/task-graphs?instanceId=${encodeURIComponent(selectedId)}&companionId=${encodeURIComponent(activeId)}`)
-    : Promise.resolve({ companionId: '', executions: [] }), [selectedId, activeId])
+    : Promise.resolve({ companionId: '', executions: [] }), [selectedId, activeId], graphResourceKey)
+  const graphOperable = snapshotOperable && taskGraphs.dataKey === graphResourceKey
+    && taskGraphs.data?.companionId === activeId
   const controlGraph = async (executionId: string, action: 'pause' | 'resume' | 'cancel') => {
+    if (!graphOperable || !taskGraphs.data?.executions.some((value) => value.executionId === executionId)) return
     setGraphControlError('')
     setGraphControlPending(`${executionId}:${action}`)
     try {
@@ -66,17 +73,20 @@ export function CompanionsPage() {
     }
   }
   if (!selected) return <EmptyState title={t('empty.selectInstance')}>{t('companions.empty')}</EmptyState>
-  const command = (action: string, extra: Record<string, unknown> = {}) =>
-    requestPlan('companions', { instanceId: selectedId, companionId: activeId, action, ...extra })
+  const command = (action: string, extra: Record<string, unknown> = {}) => {
+    if (!snapshotOperable || !activeId) return
+    return requestPlan('companions', { instanceId: selectedId, companionId: activeId, action, ...extra })
+  }
   const askCompanion = () => {
     const text = requestText.trim()
-    if (text) void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text })
+    if (text && snapshotOperable && activeId) void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text })
   }
-  const answerQuestion = (optionId: string) =>
-    void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text: optionId })
+  const answerQuestion = (optionId: string) => {
+    if (snapshotOperable && activeId) void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text: optionId })
+  }
   const answerQuestionWithText = (questionId: string) => {
     const text = questionAnswers[questionId]?.trim()
-    if (text) void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text })
+    if (text && snapshotOperable && activeId) void requestPlan('agent', { instanceId: selectedId, companionId: activeId, text })
   }
   return <div className="page">
     <PageHeader title={t('companions.title')} description={t('companions.description')}
@@ -97,12 +107,12 @@ export function CompanionsPage() {
         </section>
         <div className="companion-grid">
           <section className="control-panel"><h2>{t('companions.controls')}</h2><div className="control-buttons">
-            <ActionButton icon={<ScanSearch size={16} />} onClick={() => void command('status')}>status</ActionButton>
-            <ActionButton tone="primary" icon={<Footprints size={16} />} onClick={() => void command('follow')}>follow</ActionButton>
-            <ActionButton icon={<ArrowDownToLine size={16} />} onClick={() => void command('come')}>come</ActionButton>
-            <ActionButton icon={<CirclePause size={16} />} onClick={() => void command('pause')}>pause</ActionButton>
-            <ActionButton icon={<CirclePlay size={16} />} onClick={() => void command('resume')}>resume</ActionButton>
-            <ActionButton tone="danger" icon={<Octagon size={16} />} onClick={() => void command('stop')}>stop</ActionButton>
+            <ActionButton icon={<ScanSearch size={16} />} disabled={!snapshotOperable} onClick={() => void command('status')}>status</ActionButton>
+            <ActionButton tone="primary" icon={<Footprints size={16} />} disabled={!snapshotOperable} onClick={() => void command('follow')}>follow</ActionButton>
+            <ActionButton icon={<ArrowDownToLine size={16} />} disabled={!snapshotOperable} onClick={() => void command('come')}>come</ActionButton>
+            <ActionButton icon={<CirclePause size={16} />} disabled={!snapshotOperable} onClick={() => void command('pause')}>pause</ActionButton>
+            <ActionButton icon={<CirclePlay size={16} />} disabled={!snapshotOperable} onClick={() => void command('resume')}>resume</ActionButton>
+            <ActionButton tone="danger" icon={<Octagon size={16} />} disabled={!snapshotOperable} onClick={() => void command('stop')}>stop</ActionButton>
           </div><h3>{t('companions.goto')}</h3><form className="coordinate-row" onSubmit={(event) => {
             event.preventDefault()
             void command('goto', {
@@ -149,13 +159,13 @@ export function CompanionsPage() {
             <td>{execution.currentNodeId || '—'}</td><td>{execution.completedNodeCount}</td><td>{execution.resultCode}</td>
             <td><div className="inline-actions">
               <ActionButton loading={graphControlPending === `${execution.executionId}:pause`}
-                disabled={Boolean(graphControlPending) || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
+                disabled={!graphOperable || Boolean(graphControlPending) || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
                 onClick={() => void controlGraph(execution.executionId, 'pause')}>{t('companions.pause')}</ActionButton>
               <ActionButton loading={graphControlPending === `${execution.executionId}:resume`}
-                disabled={Boolean(graphControlPending) || !['PAUSED', 'RECONCILIATION_REQUIRED'].includes(execution.state)}
+                disabled={!graphOperable || Boolean(graphControlPending) || !['PAUSED', 'RECONCILIATION_REQUIRED'].includes(execution.state)}
                 onClick={() => void controlGraph(execution.executionId, 'resume')}>{t('companions.resume')}</ActionButton>
               <ActionButton tone="danger" loading={graphControlPending === `${execution.executionId}:cancel`}
-                disabled={Boolean(graphControlPending) || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
+                disabled={!graphOperable || Boolean(graphControlPending) || ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(execution.state)}
                 onClick={() => void controlGraph(execution.executionId, 'cancel')}>{t('common.cancel')}</ActionButton>
             </div></td>
           </tr>)}</tbody></table></div>

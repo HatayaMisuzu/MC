@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Make installer recovery ownership-aware across the PREPARED and post-move journal windows, and
+  retain the prior managed manifest inside each rollback point so verify, uninstall and later
+  updates remain valid after rollback. Trim OpenAI-compatible history by complete Tool-call groups
+  with full pre-turn rollback on request failure. Isolate Web resource and Brain-form state by
+  instance, accept the Runtime's durable timed-WAITING resume state in the product flow, and update
+  the development-only Browserslist chain from 4.28.6 to 4.28.9 and Vitest from 4.1.10 to 4.1.11.
 - Mark all bundled jpackage launchers as UTF-8-aware so the Windows package resolves its bundled
   Runtime when extracted below a Unicode path that the host ANSI code page cannot represent. The
   final artifact test now includes such a cross-code-page path instead of relying on the host locale.

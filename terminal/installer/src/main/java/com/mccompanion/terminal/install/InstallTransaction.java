@@ -24,6 +24,7 @@ import java.util.List;
 /** Crash-recoverable, cross-process serialized installer transaction. */
 public final class InstallTransaction {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String PREVIOUS_MANIFEST_BACKUP = ".previous-install-manifest.json";
     private static final Object[] JVM_LOCKS = new Object[64];
     private static final boolean WINDOWS =
             System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows");
@@ -62,48 +63,66 @@ public final class InstallTransaction {
         requireInside(backup, state.resolve("backups"), "Unsafe backup path");
         Files.createDirectories(plan.instance().modsDirectory());
         assertNoReparseEscape(game, plan.instance().modsDirectory());
+        if (Files.exists(backup, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Rollback point already exists: " + plan.rollbackId());
+        }
         Files.createDirectories(backup);
         assertNoReparseEscape(game, backup);
         Path temporary = plan.destination().resolveSibling(plan.destination().getFileName() + ".mcac.tmp");
         Path manifest = state.resolve("install-manifest.json");
-        Path previousManifest = state.resolve("transaction-previous-manifest.json");
-        List<Path> moved = new ArrayList<>();
+        Path previousManifest = backup.resolve(PREVIOUS_MANIFEST_BACKUP);
+        List<Path> replacements = existingReplacements(plan);
+        List<String> moved = new ArrayList<>();
+        boolean destinationExisted = Files.isRegularFile(plan.destination());
+        boolean previousManifestExisted = Files.isRegularFile(manifest);
+        String artifactHash = sha256(plan.artifact());
         boolean destinationInstalled = false;
-        Files.deleteIfExists(previousManifest);
-        if (Files.isRegularFile(manifest)) Files.copy(manifest, previousManifest);
-        writeJournal(state, plan, backup, "PREPARED");
+        boolean manifestUpdated = false;
+        writeJournal(state, plan, backup, replacements, moved, destinationExisted,
+                previousManifestExisted, artifactHash, destinationInstalled, manifestUpdated);
         try {
-            for (Path existing : plan.replacedFiles()) {
-                if (!Files.isRegularFile(existing)) continue;
+            faultInjector.at(Phase.AFTER_PREPARED);
+            if (previousManifestExisted) {
+                atomicCopy(manifest, previousManifest);
+            }
+            writeJournal(state, plan, backup, replacements, moved, destinationExisted,
+                    previousManifestExisted, artifactHash, destinationInstalled, manifestUpdated);
+            for (Path existing : replacements) {
                 Path source = existing.toRealPath();
                 requireInside(source, plan.instance().modsDirectory().toRealPath(), "Managed replacement escapes mods");
                 Path target = backup.resolve(existing.getFileName()).normalize();
                 requireInside(target, backup, "Unsafe backup file");
-                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
-                moved.add(target);
+                atomicMove(source, target);
+                faultInjector.at(Phase.AFTER_REPLACEMENT_MOVE_BEFORE_JOURNAL);
+                moved.add(existing.getFileName().toString());
+                writeJournal(state, plan, backup, replacements, moved, destinationExisted,
+                        previousManifestExisted, artifactHash, destinationInstalled, manifestUpdated);
             }
-            writeJournal(state, plan, backup, "BACKED_UP");
             faultInjector.at(Phase.AFTER_BACKUP);
             Files.copy(plan.artifact(), temporary, StandardCopyOption.REPLACE_EXISTING);
-            if (!sha256(plan.artifact()).equals(sha256(temporary))) {
+            if (!artifactHash.equals(sha256(temporary))) {
                 throw new IOException("Artifact hash mismatch after copy");
             }
             atomicMove(temporary, plan.destination());
+            faultInjector.at(Phase.AFTER_DESTINATION_MOVE_BEFORE_JOURNAL);
             destinationInstalled = true;
-            writeJournal(state, plan, backup, "INSTALLED");
+            writeJournal(state, plan, backup, replacements, moved, destinationExisted,
+                    previousManifestExisted, artifactHash, destinationInstalled, manifestUpdated);
             faultInjector.at(Phase.AFTER_INSTALL);
             String hash = sha256(plan.destination());
             writeManifest(plan, manifest, hash);
+            manifestUpdated = true;
+            writeJournal(state, plan, backup, replacements, moved, destinationExisted,
+                    previousManifestExisted, artifactHash, destinationInstalled, manifestUpdated);
             faultInjector.at(Phase.AFTER_MANIFEST);
             Files.deleteIfExists(state.resolve("transaction.json"));
-            Files.deleteIfExists(previousManifest);
             return new Result(plan.destination(), hash, plan.rollbackId());
         } catch (IOException failure) {
-            Files.deleteIfExists(temporary);
-            if (destinationInstalled) Files.deleteIfExists(plan.destination());
-            restoreBackup(plan.instance().modsDirectory(), backup, moved);
-            restorePreviousManifest(manifest, previousManifest);
-            Files.deleteIfExists(state.resolve("transaction.json"));
+            try {
+                recoverInterrupted(game, state);
+            } catch (IOException recoveryFailure) {
+                failure.addSuppressed(recoveryFailure);
+            }
             throw failure;
         }
     }
@@ -121,10 +140,8 @@ public final class InstallTransaction {
             Path mods = game.resolve("mods");
             Files.createDirectories(mods);
             assertNoReparseEscape(game, mods);
-            try (var files = Files.newDirectoryStream(backup, Files::isRegularFile)) {
-                for (Path saved : files) atomicMove(saved, mods.resolve(saved.getFileName()));
-            }
-            Files.deleteIfExists(state.resolve("install-manifest.json"));
+            restoreRollbackManifest(state.resolve("install-manifest.json"), backup);
+            restoreBackup(mods, backup);
             return null;
         });
     }
@@ -178,27 +195,96 @@ public final class InstallTransaction {
         Path backup = state.resolve(node.path("backup").asText()).normalize();
         requireInside(backup, state.resolve("backups"), "Interrupted backup is unsafe");
         Files.deleteIfExists(destination.resolveSibling(destination.getFileName() + ".mcac.tmp"));
-        // Delete the destination unconditionally: in the PREPARED phase it does not exist yet
-        // (no side effect), and in the crash window after atomicMove but before the INSTALLED
-        // journal write it removes the new artifact so it cannot coexist with the restored backup.
-        Files.deleteIfExists(destination);
-        if (Files.isDirectory(backup)) restoreBackup(game.resolve("mods"), backup, null);
-        restorePreviousManifest(state.resolve("install-manifest.json"),
-                state.resolve("transaction-previous-manifest.json"));
+        int schema = node.path("schemaVersion").asInt(1);
+        if (schema == 1) {
+            recoverLegacyTransaction(game, state, node, destination, backup);
+        } else if (schema == 2) {
+            recoverCurrentTransaction(game, state, node, destination, backup);
+        } else {
+            throw new IOException("Unsupported install transaction schema: " + schema);
+        }
         Files.deleteIfExists(journal);
     }
 
-    private static void restorePreviousManifest(Path manifest, Path previousManifest) throws IOException {
-        if (Files.isRegularFile(previousManifest)) atomicMove(previousManifest, manifest);
-        else Files.deleteIfExists(manifest);
+    private static void recoverCurrentTransaction(Path game, Path state, JsonNode node,
+                                                   Path destination, Path backup) throws IOException {
+        boolean destinationExisted = node.path("destinationExisted").asBoolean(false);
+        String artifactHash = node.path("artifactSha256").asText("");
+        boolean destinationBackupExists = Files.isRegularFile(backup.resolve(destination.getFileName()));
+        boolean destinationMatchesArtifact = Files.isRegularFile(destination)
+                && !artifactHash.isBlank() && artifactHash.equals(sha256(destination));
+        if (destinationMatchesArtifact && (!destinationExisted || destinationBackupExists)) {
+            Files.delete(destination);
+        } else if (destinationBackupExists && Files.exists(destination)) {
+            throw new IOException("Interrupted install destination changed; refusing to overwrite it during recovery");
+        }
+        Path manifest = state.resolve("install-manifest.json");
+        Path previousManifest = backup.resolve(PREVIOUS_MANIFEST_BACKUP);
+        if (Files.isRegularFile(previousManifest)) {
+            atomicMove(previousManifest, manifest);
+        } else if (!node.path("previousManifestExisted").asBoolean(false)) {
+            Files.deleteIfExists(manifest);
+        }
+        restoreBackup(game.resolve("mods"), backup);
     }
 
-    private static void writeJournal(Path state, InstallPlan plan, Path backup, String phase) throws IOException {
-        ObjectNode root = JSON.createObjectNode().put("schemaVersion", 1).put("phase", phase)
+    private static void recoverLegacyTransaction(Path game, Path state, JsonNode node,
+                                                  Path destination, Path backup) throws IOException {
+        boolean destinationWasReplacement = false;
+        for (JsonNode replacement : node.path("replacements")) {
+            if (destination.getFileName().toString().equals(replacement.asText())) {
+                destinationWasReplacement = true;
+                break;
+            }
+        }
+        boolean destinationBackupExists = Files.isRegularFile(backup.resolve(destination.getFileName()));
+        String phase = node.path("phase").asText("PREPARED");
+        if (destinationBackupExists || (!destinationWasReplacement && !"PREPARED".equals(phase))) {
+            Files.deleteIfExists(destination);
+        }
+        Path manifest = state.resolve("install-manifest.json");
+        Path previousManifest = state.resolve("transaction-previous-manifest.json");
+        if (Files.isRegularFile(previousManifest)) {
+            atomicMove(previousManifest, manifest);
+        } else if (destinationBackupExists || (!destinationWasReplacement && !"PREPARED".equals(phase))) {
+            Files.deleteIfExists(manifest);
+        }
+        restoreBackup(game.resolve("mods"), backup);
+    }
+
+    private static List<Path> existingReplacements(InstallPlan plan) throws IOException {
+        List<Path> replacements = new ArrayList<>();
+        for (Path candidate : plan.replacedFiles()) {
+            if (!Files.isRegularFile(candidate)) continue;
+            Path normalized = candidate.toAbsolutePath().normalize();
+            if (replacements.stream().noneMatch(normalized::equals)) replacements.add(normalized);
+        }
+        Path destination = plan.destination().toAbsolutePath().normalize();
+        if (Files.isRegularFile(destination) && replacements.stream().noneMatch(destination::equals)) {
+            replacements.add(destination);
+        }
+        return replacements;
+    }
+
+    private static void writeJournal(Path state, InstallPlan plan, Path backup,
+                                     List<Path> replacements, List<String> moved,
+                                     boolean destinationExisted, boolean previousManifestExisted,
+                                     String artifactHash, boolean destinationInstalled,
+                                     boolean manifestUpdated) throws IOException {
+        ObjectNode root = JSON.createObjectNode().put("schemaVersion", 2).put("phase", "ACTIVE")
                 .put("destination", plan.instance().gameDirectory().relativize(plan.destination()).toString().replace('\\', '/'))
-                .put("backup", state.relativize(backup).toString().replace('\\', '/'));
-        ArrayNode replacements = root.putArray("replacements");
-        plan.replacedFiles().forEach(path -> replacements.add(path.getFileName().toString()));
+                .put("backup", state.relativize(backup).toString().replace('\\', '/'))
+                .put("destinationExisted", destinationExisted)
+                .put("previousManifestExisted", previousManifestExisted)
+                .put("previousManifestBackedUp", Files.isRegularFile(backup.resolve(PREVIOUS_MANIFEST_BACKUP)))
+                .put("artifactSha256", artifactHash)
+                .put("destinationInstalled", destinationInstalled)
+                .put("manifestUpdated", manifestUpdated);
+        ArrayNode replacementValues = root.putArray("replacements");
+        for (Path path : replacements) {
+            replacementValues.addObject().put("file", path.getFileName().toString())
+                    .put("moved", moved.contains(path.getFileName().toString()));
+        }
         atomicJson(root, state.resolve("transaction.json"));
     }
 
@@ -237,15 +323,28 @@ public final class InstallTransaction {
         return installed;
     }
 
-    private static void restoreBackup(Path mods, Path backup, List<Path> selected) throws IOException {
+    private static void restoreRollbackManifest(Path manifest, Path backup) throws IOException {
+        Path previousManifest = backup.resolve(PREVIOUS_MANIFEST_BACKUP);
+        if (Files.isRegularFile(previousManifest)) atomicMove(previousManifest, manifest);
+        else Files.deleteIfExists(manifest);
+    }
+
+    private static void restoreBackup(Path mods, Path backup) throws IOException {
         Files.createDirectories(mods);
         if (!Files.isDirectory(backup)) return;
-        if (selected != null) {
-            for (Path saved : selected) if (Files.exists(saved)) atomicMove(saved, mods.resolve(saved.getFileName()));
-            return;
-        }
         try (var files = Files.newDirectoryStream(backup, Files::isRegularFile)) {
-            for (Path saved : files) atomicMove(saved, mods.resolve(saved.getFileName()));
+            for (Path saved : files) {
+                String name = saved.getFileName().toString();
+                if (name.startsWith(".mcac-copy-") && name.endsWith(".tmp")) {
+                    Files.delete(saved);
+                } else if (!PREVIOUS_MANIFEST_BACKUP.equals(name)) {
+                    Path destination = mods.resolve(saved.getFileName());
+                    if (Files.exists(destination)) {
+                        throw new IOException("Backup destination changed; refusing to overwrite it during recovery");
+                    }
+                    atomicMove(saved, destination);
+                }
+            }
         }
     }
 
@@ -332,6 +431,28 @@ public final class InstallTransaction {
         }
     }
 
+    private static void atomicCopy(Path source, Path destination) throws IOException {
+        Path temporary = Files.createTempFile(destination.getParent(), ".mcac-copy-", ".tmp");
+        IOException pending = null;
+        try {
+            Files.copy(source, temporary, StandardCopyOption.REPLACE_EXISTING);
+            try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
+                channel.force(true);
+            }
+            atomicMove(temporary, destination);
+        } catch (IOException failure) {
+            pending = failure;
+            throw failure;
+        } finally {
+            try {
+                Files.deleteIfExists(temporary);
+            } catch (IOException cleanupFailure) {
+                if (pending == null) throw cleanupFailure;
+                pending.addSuppressed(cleanupFailure);
+            }
+        }
+    }
+
     private static void atomicMove(Path from, Path to) throws IOException {
         int attempts = WINDOWS ? WINDOWS_ATOMIC_MOVE_ATTEMPTS : 1;
         for (int attempt = 0; attempt < attempts; attempt++) {
@@ -368,7 +489,14 @@ public final class InstallTransaction {
 
     @FunctionalInterface private interface IoSupplier<T> { T get() throws IOException; }
     @FunctionalInterface interface FaultInjector { void at(Phase phase) throws IOException; }
-    enum Phase { AFTER_BACKUP, AFTER_INSTALL, AFTER_MANIFEST }
+    enum Phase {
+        AFTER_PREPARED,
+        AFTER_REPLACEMENT_MOVE_BEFORE_JOURNAL,
+        AFTER_BACKUP,
+        AFTER_DESTINATION_MOVE_BEFORE_JOURNAL,
+        AFTER_INSTALL,
+        AFTER_MANIFEST
+    }
     public enum UninstallMode { PRESERVE_USER_DATA, DELETE_INSTANCE_USER_DATA }
     public record Result(Path installedFile, String sha256, String rollbackId) { }
 }

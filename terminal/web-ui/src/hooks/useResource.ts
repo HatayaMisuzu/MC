@@ -1,25 +1,45 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-export function useResource<T>(loader: () => Promise<T>, dependencies: unknown[] = []) {
-  const [data, setData] = useState<T | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+interface ResourceSnapshot<T> {
+  owner: object
+  data: T | null
+  loading: boolean
+  error: string | null
+}
+
+export function useResource<T>(loader: () => Promise<T>, dependencies: unknown[] = [], resourceKey = '') {
+  const owner = useMemo(() => ({ resourceKey }), dependencies)
+  const [snapshot, setSnapshot] = useState<ResourceSnapshot<T>>(
+    () => ({ owner, data: null, loading: true, error: null }),
+  )
   const generation = useRef(0)
 
   const refresh = useCallback(async () => {
     const request = ++generation.current
-    setLoading(true)
+    setSnapshot((current) => ({
+      owner,
+      data: current.owner === owner ? current.data : null,
+      loading: true,
+      error: null,
+    }))
     try {
       const next = await loader()
       if (request === generation.current) {
-        setData(next)
-        setError(null)
+        setSnapshot({ owner, data: next, loading: false, error: null })
       }
     } catch (failure) {
-      if (request === generation.current)
-        setError(failure instanceof Error ? failure.message : String(failure))
+      if (request === generation.current) {
+        setSnapshot({
+          owner,
+          data: null,
+          loading: false,
+          error: failure instanceof Error ? failure.message : String(failure),
+        })
+      }
     } finally {
-      if (request === generation.current) setLoading(false)
+      if (request === generation.current) {
+        setSnapshot((current) => current.owner === owner ? { ...current, loading: false } : current)
+      }
     }
   }, dependencies)
 
@@ -34,5 +54,13 @@ export function useResource<T>(loader: () => Promise<T>, dependencies: unknown[]
     return () => window.removeEventListener('mcac:refresh', reload)
   }, [refresh])
 
-  return { data, loading, error, refresh }
+  const current = snapshot.owner === owner
+  return {
+    data: current ? snapshot.data : null,
+    loading: current ? snapshot.loading : true,
+    error: current ? snapshot.error : null,
+    dataKey: current && snapshot.data !== null ? resourceKey : null,
+    stateKey: current ? resourceKey : null,
+    refresh,
+  }
 }

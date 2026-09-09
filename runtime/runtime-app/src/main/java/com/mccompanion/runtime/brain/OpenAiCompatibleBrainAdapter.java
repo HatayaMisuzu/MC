@@ -74,7 +74,8 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         State state = sessions.get(request.sessionId());
         if (state == null) throw new IllegalStateException("BRAIN_SESSION_NOT_FOUND");
         synchronized (state) {
-        int historyWatermark = state.history.size();
+        List<ObjectNode> historySnapshot = new ArrayList<>(state.history.size());
+        for (ObjectNode message : state.history) historySnapshot.add(message.deepCopy());
         try {
         for (ToolResult result : request.toolResults()) {
             ObjectNode tool = Json.object().put("role", "tool").put("tool_call_id", result.callId());
@@ -140,11 +141,11 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         state.history.add(Json.object().put("role", "assistant").put("content", content));
         return BrainTurnResult.finalResponse(content);
         } catch (RuntimeException failure) {
-            // Roll back entries appended by this turn so a transient HTTP failure cannot leave
-            // orphan tool messages (which would poison every subsequent request with a 400).
-            while (state.history.size() > historyWatermark) {
-                state.history.remove(state.history.size() - 1);
-            }
+            // Trimming can remove entries from the front as well as append this turn at the end.
+            // Restore the complete pre-turn snapshot so an HTTP failure cannot leave an orphaned
+            // tool result or silently discard otherwise valid conversation groups.
+            state.history.clear();
+            state.history.addAll(historySnapshot);
             throw failure;
         }
         }
@@ -261,19 +262,27 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         return schema;
     }
 
-    private static void trimHistory(List<ObjectNode> history) {
+    static void trimHistory(List<ObjectNode> history) {
         while (history.size() > 40 || history.stream().mapToInt(value -> Json.write(value).length()).sum() > 48_000) {
-            if (history.size() <= 1) break;
-            int candidate = 1;
-            // Never drop an assistant message carrying tool_calls while its tool results are
-            // still present: that would orphan the tool messages and permanently 400 the session.
-            while (candidate < history.size() - 1
-                    && hasToolCalls(history.get(candidate))
-                    && nextToolResultSpan(history, candidate) > 0) {
-                candidate += 1 + nextToolResultSpan(history, candidate);
-            }
-            history.remove(candidate);
+            HistoryRange candidate = oldestDeletableGroup(history);
+            if (candidate == null) break;
+            history.subList(candidate.start(), candidate.endExclusive()).clear();
         }
+    }
+
+    private static HistoryRange oldestDeletableGroup(List<ObjectNode> history) {
+        if (history.size() <= 2) return null;
+        int start = 1; // system is always protected
+        int end = start + 1;
+        if (hasToolCalls(history.get(start))) {
+            end += nextToolResultSpan(history, start);
+        } else if ("tool".equals(history.get(start).path("role").asText())) {
+            // A pre-existing malformed history is not repaired by deleting one orphan at a time.
+            // Treat its contiguous tool results as one bounded unit.
+            while (end < history.size() && "tool".equals(history.get(end).path("role").asText())) end++;
+        }
+        // Preserve the newest complete group as the minimum context for the current turn.
+        return end < history.size() ? new HistoryRange(start, end) : null;
     }
 
     private static boolean hasToolCalls(ObjectNode message) {
@@ -288,6 +297,8 @@ public final class OpenAiCompatibleBrainAdapter implements ExternalBrainAdapter 
         }
         return span;
     }
+
+    private record HistoryRange(int start, int endExclusive) { }
 
     private static BrainQuestion parseQuestion(JsonNode value) {
         JsonNode options = value.path("options");

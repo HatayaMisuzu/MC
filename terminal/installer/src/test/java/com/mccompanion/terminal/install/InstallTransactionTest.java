@@ -97,10 +97,93 @@ class InstallTransactionTest {
         assertEquals("partial",Files.readString(managed));
 
         normal.recover(instance.gameDirectory());
+        byte[] recoveredJar=Files.readAllBytes(managed);
+        byte[] recoveredManifest=Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json"));
+        normal.recover(instance.gameDirectory());
         assertEquals("stable",Files.readString(managed));
         assertArrayEquals(stableManifest,Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json")));
+        assertArrayEquals(recoveredJar,Files.readAllBytes(managed));
+        assertArrayEquals(recoveredManifest,Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json")));
         assertTrue(normal.verify(instance.gameDirectory()));
+        assertFalse(normal.rollbackPoints(instance.gameDirectory()).contains("partial"));
+        assertFalse(Files.exists(instance.gameDirectory().resolve(".mccompanion/backups/partial")));
         assertFalse(Files.exists(instance.gameDirectory().resolve(".mccompanion/transaction.json")));
+    }
+
+    @Test void preparedSameNameRecoveryPreservesTheOriginalManagedInstall() throws Exception {
+        MinecraftInstance instance=instance();Files.createDirectories(instance.modsDirectory());
+        Path managed=instance.modsDirectory().resolve("mcac.jar");
+        Path v1=temp.resolve("prepared-v1.jar");Files.writeString(v1,"stable-before-prepared");
+        InstallTransaction normal=new InstallTransaction();
+        normal.execute(new InstallPlan(instance,v1,managed,List.of(),false,"prepared-v1"));
+        byte[] originalJar=Files.readAllBytes(managed);
+        byte[] originalManifest=Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json"));
+
+        Path v2=temp.resolve("prepared-v2.jar");Files.writeString(v2,"replacement-not-started");
+        InstallTransaction crash=new InstallTransaction(phase->{
+            if(phase==InstallTransaction.Phase.AFTER_PREPARED)throw new SimulatedCrash();
+        });
+        assertThrows(SimulatedCrash.class,()->crash.execute(
+                new InstallPlan(instance,v2,managed,List.of(managed),false,"prepared-v2")));
+
+        normal.recover(instance.gameDirectory());
+        normal.recover(instance.gameDirectory());
+        assertArrayEquals(originalJar,Files.readAllBytes(managed));
+        assertArrayEquals(originalManifest,Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json")));
+        assertTrue(normal.verify(instance.gameDirectory()));
+    }
+
+    @Test void recoveryDetectsInstalledDestinationBeforeJournalCatchesUp() throws Exception {
+        MinecraftInstance instance=instance();Files.createDirectories(instance.modsDirectory());
+        Path managed=instance.modsDirectory().resolve("mcac.jar");
+        Path v1=temp.resolve("lag-v1.jar");Files.writeString(v1,"stable-before-move");
+        InstallTransaction normal=new InstallTransaction();
+        normal.execute(new InstallPlan(instance,v1,managed,List.of(),false,"lag-v1"));
+        byte[] originalManifest=Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json"));
+
+        Path v2=temp.resolve("lag-v2.jar");Files.writeString(v2,"installed-before-journal");
+        InstallTransaction crash=new InstallTransaction(phase->{
+            if(phase==InstallTransaction.Phase.AFTER_DESTINATION_MOVE_BEFORE_JOURNAL)throw new SimulatedCrash();
+        });
+        assertThrows(SimulatedCrash.class,()->crash.execute(
+                new InstallPlan(instance,v2,managed,List.of(managed),false,"lag-v2")));
+        assertEquals("installed-before-journal",Files.readString(managed));
+
+        normal.recover(instance.gameDirectory());
+        normal.recover(instance.gameDirectory());
+        assertEquals("stable-before-move",Files.readString(managed));
+        assertArrayEquals(originalManifest,Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json")));
+        assertTrue(normal.verify(instance.gameDirectory()));
+    }
+
+    @Test void managedRollbackRestoresManifestForVerifyUninstallAndLaterUpdate() throws Exception {
+        MinecraftInstance instance=instance();Files.createDirectories(instance.modsDirectory());
+        Path managed=instance.modsDirectory().resolve("mcac.jar");
+        InstallTransaction transaction=new InstallTransaction();
+        Path v1=temp.resolve("rollback-v1.jar");Files.writeString(v1,"rollback-one");
+        transaction.execute(new InstallPlan(instance,v1,managed,List.of(),false,"rollback-v1"));
+        Path v2=temp.resolve("rollback-v2.jar");Files.writeString(v2,"rollback-two");
+        transaction.execute(new InstallPlan(instance,v2,managed,List.of(managed),false,"rollback-v2"));
+        assertTrue(transaction.rollbackPoints(instance.gameDirectory()).contains("rollback-v2"));
+
+        transaction.rollback(instance.gameDirectory(),"rollback-v2");
+        assertEquals("rollback-one",Files.readString(managed));
+        assertTrue(transaction.verify(instance.gameDirectory()));
+        byte[] restoredJar=Files.readAllBytes(managed);
+        Path manifest=instance.gameDirectory().resolve(".mccompanion/install-manifest.json");
+        byte[] restoredManifest=Files.readAllBytes(manifest);
+        assertFalse(transaction.rollbackPoints(instance.gameDirectory()).contains("rollback-v2"));
+        assertThrows(java.io.IOException.class,
+                ()->transaction.rollback(instance.gameDirectory(),"rollback-v2"));
+        assertArrayEquals(restoredJar,Files.readAllBytes(managed));
+        assertArrayEquals(restoredManifest,Files.readAllBytes(manifest));
+        assertTrue(transaction.verify(instance.gameDirectory()));
+        transaction.uninstall(instance.gameDirectory());
+        assertFalse(Files.exists(managed));
+
+        Path v3=temp.resolve("rollback-v3.jar");Files.writeString(v3,"rollback-three");
+        transaction.execute(new InstallPlan(instance,v3,managed,List.of(),false,"rollback-v3"));
+        assertTrue(transaction.verify(instance.gameDirectory()));
     }
 
     @Test void uninstallOffersPreserveAndExplicitDeleteDataModesWithoutTouchingGameContent() throws Exception {

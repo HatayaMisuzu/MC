@@ -97,9 +97,16 @@ class InstallTransactionTest {
         assertEquals("partial",Files.readString(managed));
 
         normal.recover(instance.gameDirectory());
+        byte[] recoveredJar=Files.readAllBytes(managed);
+        byte[] recoveredManifest=Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json"));
+        normal.recover(instance.gameDirectory());
         assertEquals("stable",Files.readString(managed));
         assertArrayEquals(stableManifest,Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json")));
+        assertArrayEquals(recoveredJar,Files.readAllBytes(managed));
+        assertArrayEquals(recoveredManifest,Files.readAllBytes(instance.gameDirectory().resolve(".mccompanion/install-manifest.json")));
         assertTrue(normal.verify(instance.gameDirectory()));
+        assertFalse(normal.rollbackPoints(instance.gameDirectory()).contains("partial"));
+        assertFalse(Files.exists(instance.gameDirectory().resolve(".mccompanion/backups/partial")));
         assertFalse(Files.exists(instance.gameDirectory().resolve(".mccompanion/transaction.json")));
     }
 
@@ -157,9 +164,19 @@ class InstallTransactionTest {
         transaction.execute(new InstallPlan(instance,v1,managed,List.of(),false,"rollback-v1"));
         Path v2=temp.resolve("rollback-v2.jar");Files.writeString(v2,"rollback-two");
         transaction.execute(new InstallPlan(instance,v2,managed,List.of(managed),false,"rollback-v2"));
+        assertTrue(transaction.rollbackPoints(instance.gameDirectory()).contains("rollback-v2"));
 
         transaction.rollback(instance.gameDirectory(),"rollback-v2");
         assertEquals("rollback-one",Files.readString(managed));
+        assertTrue(transaction.verify(instance.gameDirectory()));
+        byte[] restoredJar=Files.readAllBytes(managed);
+        Path manifest=instance.gameDirectory().resolve(".mccompanion/install-manifest.json");
+        byte[] restoredManifest=Files.readAllBytes(manifest);
+        assertFalse(transaction.rollbackPoints(instance.gameDirectory()).contains("rollback-v2"));
+        assertThrows(java.io.IOException.class,
+                ()->transaction.rollback(instance.gameDirectory(),"rollback-v2"));
+        assertArrayEquals(restoredJar,Files.readAllBytes(managed));
+        assertArrayEquals(restoredManifest,Files.readAllBytes(manifest));
         assertTrue(transaction.verify(instance.gameDirectory()));
         transaction.uninstall(instance.gameDirectory());
         assertFalse(Files.exists(managed));

@@ -25,6 +25,8 @@ import java.util.List;
 public final class InstallTransaction {
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String PREVIOUS_MANIFEST_BACKUP = ".previous-install-manifest.json";
+    private static final String ACTIVE_ROLLBACK_POINT = ".rollback-point.json";
+    private static final String CONSUMED_ROLLBACK_POINT = ".rollback-point.consumed.json";
     private static final Object[] JVM_LOCKS = new Object[64];
     private static final boolean WINDOWS =
             System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT).contains("windows");
@@ -115,6 +117,7 @@ public final class InstallTransaction {
             writeJournal(state, plan, backup, replacements, moved, destinationExisted,
                     previousManifestExisted, artifactHash, destinationInstalled, manifestUpdated);
             faultInjector.at(Phase.AFTER_MANIFEST);
+            writeRollbackPoint(backup, plan.rollbackId(), moved, previousManifestExisted);
             Files.deleteIfExists(state.resolve("transaction.json"));
             return new Result(plan.destination(), hash, plan.rollbackId());
         } catch (IOException failure) {
@@ -136,12 +139,16 @@ public final class InstallTransaction {
             requireInside(backup, state.resolve("backups"), "Unknown rollback point");
             assertNoReparseEscape(game, backup);
             if (!Files.isDirectory(backup)) throw new IOException("Unknown rollback point");
-            deleteManagedArtifact(game, state.resolve("install-manifest.json"), false);
             Path mods = game.resolve("mods");
             Files.createDirectories(mods);
             assertNoReparseEscape(game, mods);
-            restoreRollbackManifest(state.resolve("install-manifest.json"), backup);
-            restoreBackup(mods, backup);
+            Path manifest = state.resolve("install-manifest.json");
+            List<String> backupFiles = preflightRollback(game, manifest, mods, backup, rollbackId);
+            markRollbackPointConsumed(backup);
+            deleteManagedArtifact(game, manifest, true);
+            restoreRollbackFiles(mods, backup, backupFiles);
+            restoreRollbackManifest(manifest, backup);
+            deleteTree(backup, state.resolve("backups"));
             return null;
         });
     }
@@ -181,7 +188,9 @@ public final class InstallTransaction {
         if (!Files.isDirectory(root)) return List.of();
         try (var dirs = Files.newDirectoryStream(root, Files::isDirectory)) {
             List<String> values = new ArrayList<>();
-            for (Path path : dirs) values.add(path.getFileName().toString());
+            for (Path path : dirs) {
+                if (isActiveRollbackPoint(path)) values.add(path.getFileName().toString());
+            }
             return values.stream().sorted().toList();
         }
     }
@@ -203,6 +212,7 @@ public final class InstallTransaction {
         } else {
             throw new IOException("Unsupported install transaction schema: " + schema);
         }
+        deleteTree(backup, state.resolve("backups"));
         Files.deleteIfExists(journal);
     }
 
@@ -299,6 +309,109 @@ public final class InstallTransaction {
         atomicJson(root, file);
     }
 
+    private static void writeRollbackPoint(Path backup, String rollbackId, List<String> backupFiles,
+                                           boolean previousManifestExisted) throws IOException {
+        ObjectNode root = JSON.createObjectNode().put("schemaVersion", 1)
+                .put("rollbackId", rollbackId)
+                .put("previousManifestExisted", previousManifestExisted);
+        ArrayNode files = root.putArray("backupFiles");
+        backupFiles.forEach(files::add);
+        atomicJson(root, backup.resolve(ACTIVE_ROLLBACK_POINT));
+    }
+
+    private static List<String> preflightRollback(Path game, Path manifest, Path mods, Path backup,
+                                                  String rollbackId) throws IOException {
+        Path active = backup.resolve(ACTIVE_ROLLBACK_POINT);
+        if (!Files.isRegularFile(active) || Files.exists(backup.resolve(CONSUMED_ROLLBACK_POINT))) {
+            throw new IOException("Rollback point is unknown or already consumed: " + rollbackId);
+        }
+        JsonNode point = JSON.readTree(active.toFile());
+        if (point.path("schemaVersion").asInt(-1) != 1
+                || !rollbackId.equals(point.path("rollbackId").asText())) {
+            throw new IOException("Rollback point metadata is invalid: " + rollbackId);
+        }
+        JsonNode backupFiles = point.path("backupFiles");
+        if (!backupFiles.isArray() || !point.path("previousManifestExisted").isBoolean()) {
+            throw new IOException("Rollback point metadata is incomplete: " + rollbackId);
+        }
+        boolean previousManifestExisted = point.path("previousManifestExisted").asBoolean();
+        Path previousManifest = backup.resolve(PREVIOUS_MANIFEST_BACKUP);
+        if (previousManifestExisted != Files.isRegularFile(previousManifest)) {
+            throw new IOException("Rollback point previous manifest backup is incomplete: " + rollbackId);
+        }
+        if (!Files.isRegularFile(manifest)) {
+            throw new IOException("Current managed install manifest is missing");
+        }
+        JsonNode currentManifest = readManifest(manifest);
+        Path currentManaged = managedPath(game, currentManifest);
+        if (!Files.isRegularFile(currentManaged)
+                || !sha256(currentManaged).equals(currentManifest.path("sha256").asText())) {
+            throw new IOException("Current managed artifact is missing or modified");
+        }
+        List<String> expectedFiles = new ArrayList<>();
+        for (JsonNode value : backupFiles) {
+            String name = value.asText("");
+            if (name.isBlank() || !Path.of(name).getFileName().toString().equals(name)
+                    || ACTIVE_ROLLBACK_POINT.equals(name) || CONSUMED_ROLLBACK_POINT.equals(name)
+                    || PREVIOUS_MANIFEST_BACKUP.equals(name) || expectedFiles.contains(name)) {
+                throw new IOException("Rollback point contains an unsafe backup name");
+            }
+            Path saved = backup.resolve(name).normalize();
+            requireInside(saved, backup, "Rollback point backup escapes its directory");
+            assertNoReparseEscape(game, saved);
+            if (!Files.isRegularFile(saved)) {
+                throw new IOException("Rollback point backup is incomplete: " + name);
+            }
+            Path destination = mods.resolve(name).normalize();
+            requireInside(destination, mods, "Rollback destination escapes mods directory");
+            if (Files.exists(destination) && !destination.equals(currentManaged)) {
+                throw new IOException("Rollback destination already exists: " + name);
+            }
+            expectedFiles.add(name);
+        }
+        try (var files = Files.newDirectoryStream(backup, Files::isRegularFile)) {
+            for (Path file : files) {
+                String name = file.getFileName().toString();
+                if (!ACTIVE_ROLLBACK_POINT.equals(name) && !PREVIOUS_MANIFEST_BACKUP.equals(name)
+                        && !expectedFiles.contains(name)) {
+                    throw new IOException("Rollback point contains unexpected backup content: " + name);
+                }
+            }
+        }
+        return List.copyOf(expectedFiles);
+    }
+
+    private static boolean isActiveRollbackPoint(Path backup) {
+        Path active = backup.resolve(ACTIVE_ROLLBACK_POINT);
+        if (!Files.isRegularFile(active) || Files.exists(backup.resolve(CONSUMED_ROLLBACK_POINT))) return false;
+        try {
+            JsonNode point = JSON.readTree(active.toFile());
+            if (point.path("schemaVersion").asInt(-1) != 1
+                    || !backup.getFileName().toString().equals(point.path("rollbackId").asText())
+                    || !point.path("previousManifestExisted").isBoolean()
+                    || !point.path("backupFiles").isArray()) return false;
+            if (point.path("previousManifestExisted").asBoolean()
+                    && !Files.isRegularFile(backup.resolve(PREVIOUS_MANIFEST_BACKUP))) return false;
+            for (JsonNode value : point.path("backupFiles")) {
+                String name = value.asText("");
+                if (name.isBlank() || !Path.of(name).getFileName().toString().equals(name)
+                        || !Files.isRegularFile(backup.resolve(name))) return false;
+            }
+            return true;
+        } catch (IOException | RuntimeException invalid) {
+            return false;
+        }
+    }
+
+    private static void markRollbackPointConsumed(Path backup) throws IOException {
+        Path active = backup.resolve(ACTIVE_ROLLBACK_POINT);
+        Path consumed = backup.resolve(CONSUMED_ROLLBACK_POINT);
+        if (!Files.isRegularFile(active) || Files.exists(consumed)) {
+            throw new IOException("Rollback point is already consumed");
+        }
+        atomicMoveNew(active, consumed);
+    }
+
     private static JsonNode readManifest(Path manifest) throws IOException {
         JsonNode node = JSON.readTree(manifest.toFile());
         int schema = node.path("schemaVersion").asInt(1);
@@ -337,7 +450,9 @@ public final class InstallTransaction {
                 String name = saved.getFileName().toString();
                 if (name.startsWith(".mcac-copy-") && name.endsWith(".tmp")) {
                     Files.delete(saved);
-                } else if (!PREVIOUS_MANIFEST_BACKUP.equals(name)) {
+                } else if (!PREVIOUS_MANIFEST_BACKUP.equals(name)
+                        && !ACTIVE_ROLLBACK_POINT.equals(name)
+                        && !CONSUMED_ROLLBACK_POINT.equals(name)) {
                     Path destination = mods.resolve(saved.getFileName());
                     if (Files.exists(destination)) {
                         throw new IOException("Backup destination changed; refusing to overwrite it during recovery");
@@ -345,6 +460,12 @@ public final class InstallTransaction {
                     atomicMove(saved, destination);
                 }
             }
+        }
+    }
+
+    private static void restoreRollbackFiles(Path mods, Path backup, List<String> backupFiles) throws IOException {
+        for (String name : backupFiles) {
+            atomicMoveNew(backup.resolve(name), mods.resolve(name));
         }
     }
 
@@ -472,6 +593,14 @@ public final class InstallTransaction {
                     throw failure;
                 }
             }
+        }
+    }
+
+    private static void atomicMoveNew(Path from, Path to) throws IOException {
+        try {
+            Files.move(from, to, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException ignored) {
+            Files.move(from, to);
         }
     }
 

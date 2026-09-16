@@ -36,6 +36,12 @@ connection; old pairing bearers and MCP sessions bound to the old token generati
 Fabric 1.21.1 and Forge 1.20.1 both support the Full Runtime Bridge. NeoForge 1.21.1 remains
 `LOCAL_ONLY`.
 
+Runtime 0.4.0 and the two Full Bridge Mods negotiate `mc-companion/2`. The handshake includes the
+exact Catalog target, product/component versions, world and session identity, plus the actual
+structured capability snapshot. Runtime, Terminal and Mod must come from one release package; an
+older protocol or product version is rejected with an upgrade reason while local Body safety
+controls remain available.
+
 ## External Brain
 
 The Brain page stores independent public adapter settings and the name of an environment variable

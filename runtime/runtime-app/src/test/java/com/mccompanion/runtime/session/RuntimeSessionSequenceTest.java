@@ -11,7 +11,7 @@ class RuntimeSessionSequenceTest {
   @Test
   void observedSequenceRemainsConsumedAfterRoutingFailureAndRetryUsesNextSequence() {
     RuntimeSession session = new RuntimeSession("session", new Peer(),
-        new Handshake("mc-companion/1", "test", "1.21.1", "fabric", "world", Json.object()),
+        new Handshake("mc-companion/2", "test", "1.21.1", "fabric", "world", Json.object()),
         Instant.EPOCH, 1);
     assertTrue(session.acceptIncomingSequence(7));
     // Routing failure happens after this fence. Replaying 7 is rejected; retry identity uses 8.

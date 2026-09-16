@@ -6,7 +6,7 @@
 
 ## 状态为 LOCAL_ONLY
 
-这是 Runtime 离线时的正常安全状态。本地 create/spawn/follow/goto/stop 仍应可用。若需要 Runtime，确认它监听所选 Profile 分配的稳定 loopback 端口（`8766..8866` 范围；管理/健康端口为 Runtime 端口加 `10000`），两侧 token 和 `mc-companion/1` 协议一致。
+这是 Runtime 离线时的正常安全状态。本地 create/spawn/follow/goto/stop 仍应可用。若需要 Runtime，确认它监听所选 Profile 分配的稳定 loopback 端口（`8766..8866` 范围；管理/健康端口为 Runtime 端口加 `10000`），两侧 token 和 `mc-companion/2` 协议一致。Runtime、Terminal 与 Mod 必须来自同一个 0.4.0 发布包。
 
 ## 协议不兼容
 
@@ -35,4 +35,3 @@ Mod 会拒绝 Runtime 控制并保持本地可用。升级或降级 Runtime/Mod 
 - `/companion status` 和 capability 输出；
 - 可复现步骤；
 - 不要提供配对 token、API key 或账号文件。
-

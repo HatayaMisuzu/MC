@@ -32,8 +32,28 @@ public final class ProtocolJsonCodec {
             MessageType.ERROR, ErrorEnvelope.class,
             MessageType.HEARTBEAT, Heartbeat.class);
 
+    private abstract static class CapabilityAvailabilityJson {
+        @com.fasterxml.jackson.annotation.JsonCreator
+        static CapabilityAvailability fromWire(String value) { return CapabilityAvailability.fromWire(value); }
+        @com.fasterxml.jackson.annotation.JsonValue
+        abstract String toWire();
+    }
+
+    private abstract static class CapabilitySetJson {
+        @com.fasterxml.jackson.annotation.JsonCreator(mode = com.fasterxml.jackson.annotation.JsonCreator.Mode.DELEGATING)
+        CapabilitySetJson(Map<String, CapabilityDescriptor> capabilities) { }
+        @com.fasterxml.jackson.annotation.JsonValue
+        abstract Map<String, CapabilityDescriptor> asMap();
+    }
+
     private final ObjectMapper mapper;
     private final int maxDocumentBytes;
+
+    /** Register serialization for dependency-free API types on an application's existing mapper. */
+    public static void configureApiTypes(ObjectMapper mapper) {
+        mapper.addMixIn(CapabilityAvailability.class, CapabilityAvailabilityJson.class);
+        mapper.addMixIn(CapabilitySet.class, CapabilitySetJson.class);
+    }
 
     public ProtocolJsonCodec() {
         this(DEFAULT_MAX_DOCUMENT_BYTES);
@@ -57,6 +77,8 @@ public final class ProtocolJsonCodec {
                 .build();
         this.mapper = JsonMapper.builder(factory)
                 .addModule(new JavaTimeModule())
+                .addMixIn(CapabilityAvailability.class, CapabilityAvailabilityJson.class)
+                .addMixIn(CapabilitySet.class, CapabilitySetJson.class)
                 .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
                 .enable(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS)
                 .enable(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY)

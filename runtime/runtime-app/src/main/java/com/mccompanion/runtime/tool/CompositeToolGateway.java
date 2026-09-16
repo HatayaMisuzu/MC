@@ -1,5 +1,6 @@
 package com.mccompanion.runtime.tool;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
 import java.util.List;
 
@@ -8,6 +9,21 @@ public final class CompositeToolGateway implements ToolGateway, AutoCloseable {
     public CompositeToolGateway(List<ToolGateway> delegates) { this.delegates = List.copyOf(delegates); }
     @Override public List<ToolDefinition> definitions(ToolContext context) {
         return delegates.stream().flatMap(value -> value.definitions(context).stream()).toList();
+    }
+    @Override public JsonNode compatibilityBinding(ToolContext context) {
+        var merged = com.mccompanion.runtime.json.Json.object();
+        for (ToolGateway delegate : delegates) {
+            var binding = delegate.compatibilityBinding(context);
+            if (binding == null || !binding.isObject()) continue;
+            binding.fields().forEachRemaining(entry -> {
+                JsonNode existing = merged.get(entry.getKey());
+                if (existing != null && !existing.equals(entry.getValue())) {
+                    throw new IllegalStateException("Conflicting compatibility binding field: " + entry.getKey());
+                }
+                merged.set(entry.getKey(), entry.getValue().deepCopy());
+            });
+        }
+        return merged;
     }
     @Override public ToolResult execute(ToolContext context, ToolCall call) {
         return delegate(context, call).map(value -> value.execute(context, call))

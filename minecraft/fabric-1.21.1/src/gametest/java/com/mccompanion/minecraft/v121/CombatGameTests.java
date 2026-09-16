@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;
@@ -192,7 +196,7 @@ public final class CombatGameTests implements FabricGameTest {
                             null, null, null, null)).success(), "combat start rejected");
         }
 
-        CompanionRegistry.RuntimeSnapshot snapshot() {
+        BodySnapshots.RuntimeSnapshot snapshot() {
             return registry.runtimeSnapshots(false).stream().filter(s -> s.companionId().equals(id)).findFirst().orElseThrow();
         }
 

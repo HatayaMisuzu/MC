@@ -1,7 +1,7 @@
 # MCAC user guide (English)
 
-Applies to: 0.3.1 (automated baseline frozen and published; one live-Brain vertical slice verified,
-long-duration human play still pending)
+Applies to: 0.4.0 candidate (the 0.3.1 automated release baseline remains frozen; one historical
+live-Brain vertical slice is verified, and current-version long-duration human play is pending)
 
 ## Get started
 

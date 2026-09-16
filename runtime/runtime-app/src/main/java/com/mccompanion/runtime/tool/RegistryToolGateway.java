@@ -42,10 +42,9 @@ public final class RegistryToolGateway implements ToolGateway, AutoCloseable {
     public List<ToolDefinition> definitions(ToolContext context) {
         RuntimeSession session = sessions.forCompanion(context.companionId()).orElse(null);
         if (session == null) return List.of();
-        boolean registry = session.handshake().capabilities().path("registry_query").asBoolean(false);
-        boolean recipes = session.handshake().capabilities().path("recipe_query").asBoolean(false);
-        boolean observations = session.handshake().capabilities()
-                .path("primitive_observation_query").asBoolean(false);
+        boolean registry = session.permits("registry_query");
+        boolean recipes = session.permits("recipe_query");
+        boolean observations = session.permits("primitive_observation_query");
         java.util.ArrayList<ToolDefinition> values = new java.util.ArrayList<>();
         if (registry) {
             values.add(new ToolDefinition("registry.search", "1.0",

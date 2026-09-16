@@ -8,6 +8,13 @@ import java.util.function.Consumer;
 
 public interface ToolGateway {
     List<ToolDefinition> definitions(ToolContext context);
+    /**
+     * Returns bounded, durable identity fields for the execution environment. Implementations must
+     * not expose transport objects or credentials. Empty means the gateway has no world binding.
+     */
+    default JsonNode compatibilityBinding(ToolContext context) {
+        return com.mccompanion.runtime.json.Json.object();
+    }
     ToolResult execute(ToolContext context, ToolCall call);
     default ToolResult awaitTerminal(ToolContext context, ToolCall call, ToolResult accepted, Duration timeout,
                                      Consumer<ToolResult> progress) {

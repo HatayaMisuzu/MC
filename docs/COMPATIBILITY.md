@@ -1,6 +1,7 @@
-# MCAC 0.3.1 compatibility
+# MCAC 0.4.0 compatibility
 
-The machine-readable support source is
+The current machine-readable support source is
+[`../targets/catalog.json`](../targets/catalog.json). The immutable 0.3.1 release facts remain in
 [`product/PRODUCT_TRUTH.json`](product/PRODUCT_TRUTH.json). “Full Bridge” means the authenticated
 Runtime/body/Tool path is an automated release gate; it does not mean Live-provider or human-play
 verification has occurred.
@@ -15,6 +16,13 @@ Other versions, Loaders and modpacks may be detected and diagnosed, but are not 
 Bridge targets. Unknown Mod content is handled as connected Registry/recipe/Observation data and
 generic interaction; MCAC does not promise support for every third-party screen or mechanic and
 does not create one Java Handler per Mod.
+
+Catalog state, installed environment state and session capability state are separate. A target row
+permits artifact selection only after exact version/range/dependency checks; it does not grant a
+Runtime Tool. Fabric and Forge sessions advertise the bindings that actually initialized, with a
+monotonic revision. Runtime checks that snapshot, the Tool contract, permission, budget and current
+action preconditions before dispatch. Runtime/Terminal/Mod 0.4.0 use `mc-companion/2` and reject an
+older bundle instead of choosing a nearby Minecraft version.
 
 Compatibility-pack fixtures prove the declaration-only Compatibility Host lifecycle, not arbitrary
 Create, AE2, Mekanism or modpack compatibility. Exact row-level evidence and remaining gaps are in

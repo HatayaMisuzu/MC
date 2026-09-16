@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodySnapshots;
+
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;
@@ -38,12 +40,12 @@ public final class RuntimeBridgeForgeGameTests {
                 "Runtime bridge companion creation failed");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst().orElseThrow();
         long commandBaseline = registry.runtimeCommandCount();
         LOGGER.info("forge_runtime_e2e_ready companion={}", companionId);
         helper.succeedWhen(() -> {
-            CompanionRegistry.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
+            BodySnapshots.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
                     .filter(value -> value.companionId().equals(companionId))
                     .findFirst().orElseThrow();
             helper.assertTrue(registry.runtimeCommandCount() >= commandBaseline + 6

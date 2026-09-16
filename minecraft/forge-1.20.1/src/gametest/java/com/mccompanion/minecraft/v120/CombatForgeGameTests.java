@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;
@@ -187,14 +191,16 @@ public final class CombatForgeGameTests {
                             null, null, null, null)).success(), "combat start rejected");
         }
 
-        CompanionRegistry.RuntimeSnapshot snapshot() {
+        BodySnapshots.RuntimeSnapshot snapshot() {
             return registry.runtimeSnapshots(false).stream().filter(s -> s.companionId().equals(id)).findFirst().orElseThrow();
         }
 
         void await(int remaining, BooleanSupplier condition, Runnable done) {
             if (condition.getAsBoolean()) { done.run(); return; }
             helper.assertTrue(remaining > 0 && snapshot().behaviorState().equals("RUNNING"),
-                    "combat blocked: " + snapshot().behaviorState() + " " + snapshot().behaviorObservation());
+                    "combat blocked: " + snapshot().behaviorState() + " " + snapshot().behaviorObservation()
+                            + " body=" + body.position() + " below="
+                            + body.serverLevel().getBlockState(body.blockPosition().below()));
             helper.runAfterDelay(1, () -> await(remaining - 1, condition, done));
         }
 

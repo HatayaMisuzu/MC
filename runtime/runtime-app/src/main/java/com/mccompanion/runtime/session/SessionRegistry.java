@@ -71,6 +71,20 @@ public final class SessionRegistry implements AutoCloseable {
         listener.onConnected(session);
     }
 
+    public synchronized void updateCapabilities(RuntimeSession session,
+            com.mccompanion.protocol.SessionCapabilitySnapshot snapshot) throws SQLException {
+        if (byId.get(session.sessionId()) != session) throw new IllegalArgumentException("STALE_CAPABILITY_SESSION");
+        if (snapshot.revision() <= session.capabilityRevision()) throw new IllegalArgumentException("STALE_CAPABILITY_REVISION");
+        try (Connection connection = database.open(); PreparedStatement statement = connection.prepareStatement(
+                "UPDATE runtime_session SET capabilities_json=? WHERE session_id=? AND state='CONNECTED'")) {
+            statement.setString(1, new com.mccompanion.protocol.ProtocolJsonCodec().encode(snapshot.capabilities()));
+            statement.setString(2, session.sessionId());
+            if (statement.executeUpdate() != 1) throw new SQLException("Capability session is no longer connected");
+        }
+        session.updateCapabilities(snapshot);
+        listener.onCapabilitiesChanged(session);
+    }
+
     public synchronized void unregister(SessionPeer peer, String reason) {
         RuntimeSession session = byPeer.remove(peer.id());
         if (session == null) {
@@ -187,7 +201,7 @@ public final class SessionRegistry implements AutoCloseable {
             statement.setString(4, session.handshake().modVersion());
             statement.setString(5, session.handshake().minecraftVersion());
             statement.setString(6, session.handshake().loader());
-            statement.setString(7, Json.write(session.handshake().capabilities()));
+            statement.setString(7, new com.mccompanion.protocol.ProtocolJsonCodec().encode(session.handshake().capabilities()));
             statement.setLong(8, session.connectedAt().toEpochMilli());
             statement.setLong(9, session.connectedAt().toEpochMilli());
             statement.executeUpdate();
@@ -213,6 +227,7 @@ public final class SessionRegistry implements AutoCloseable {
         Listener NOOP = new Listener() { };
         default void onConnected(RuntimeSession session) { }
         default void onDisconnected(RuntimeSession session, String reason) { }
+        default void onCapabilitiesChanged(RuntimeSession session) { }
         default void onCompanionUpdated(RuntimeSession session, CompanionStatus status, JsonNode statusJson) { }
     }
 }

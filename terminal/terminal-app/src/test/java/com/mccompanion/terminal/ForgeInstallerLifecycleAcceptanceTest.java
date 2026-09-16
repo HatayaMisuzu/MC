@@ -46,7 +46,7 @@ class ForgeInstallerLifecycleAcceptanceTest {
         Files.writeString(unrelated, "unrelated");
 
         Path artifacts = temp.resolve("release/artifacts");
-        Path v1 = forgeArtifact(artifacts.resolve("forge-1.20.1/mcac-forge-v1.jar"), "1.0.0");
+        Path v1 = forgeArtifact(artifacts.resolve("forge-1.20.1/mcac-forge-v1.jar"), com.mccompanion.protocol.BuildIdentity.PRODUCT_VERSION);
         InstallService installService = new InstallService();
         InstallPlan initial = installService.plan(instance, artifacts);
         assertEquals(v1.toAbsolutePath().normalize(), initial.artifact());
@@ -74,7 +74,7 @@ class ForgeInstallerLifecycleAcceptanceTest {
         transaction.execute(repair);
         assertTrue(transaction.verify(game));
 
-        Path v2 = forgeArtifact(temp.resolve("mcac-forge-v2.jar"), "2.0.0");
+        Path v2 = forgeArtifact(temp.resolve("mcac-forge-v2.jar"), com.mccompanion.protocol.BuildIdentity.PRODUCT_VERSION);
         InstallPlan update = new InstallPlanner().plan(instance, v2);
         update = new InstallPlan(
                 instance, update.artifact(), update.destination(), update.replacedFiles(),
@@ -135,12 +135,27 @@ class ForgeInstallerLifecycleAcceptanceTest {
                 versionRange="[1.20.1,1.20.2)"
                 ordering="NONE"
                 side="BOTH"
+                [[dependencies.minecraft_ai_companion]]
+                modId="forge"
+                mandatory=true
+                versionRange="[47.4.10,48)"
+                ordering="NONE"
+                side="BOTH"
                 """.formatted(version);
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(path))) {
             zip.putNextEntry(new ZipEntry("META-INF/mods.toml"));
             zip.write(metadata.getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("META-INF/mcac-target.json"));
+            zip.write(JSON.writeValueAsBytes(java.util.Map.of("schemaVersion", 1, "productVersion", version,
+                    "target", com.mccompanion.protocol.target.TargetCatalog.bundled().byId("forge-1.20.1").orElseThrow())));
+            zip.closeEntry();
         }
+        JSON.writeValue(path.getParent().resolve("release-manifest.json").toFile(), java.util.Map.of(
+                "schemaVersion", 1, "version", version, "sourceCommit", "0".repeat(40),
+                "files", java.util.List.of(java.util.Map.of("path", path.getFileName().toString(), "size", Files.size(path),
+                        "sha256", com.mccompanion.terminal.install.ArtifactValidator.sha256(path))),
+                "targets", java.util.List.of(java.util.Map.of("targetId", "forge-1.20.1", "artifact", path.getFileName().toString()))));
         return path;
     }
 }

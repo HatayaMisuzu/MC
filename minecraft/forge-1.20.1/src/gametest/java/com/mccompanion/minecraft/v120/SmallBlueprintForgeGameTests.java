@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.core.body.build.SmallBlueprint;
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import com.mojang.authlib.GameProfile;
@@ -206,7 +210,7 @@ public final class SmallBlueprintForgeGameTests {
                 "blueprint start failed: " + behavior);
     }
 
-    private static CompanionRegistry.RuntimeSnapshot snapshot(CompanionRegistry registry, String id) {
+    private static BodySnapshots.RuntimeSnapshot snapshot(CompanionRegistry registry, String id) {
         return registry.runtimeSnapshots(false).stream().filter(value -> value.companionId().equals(id))
                 .findFirst().orElseThrow();
     }

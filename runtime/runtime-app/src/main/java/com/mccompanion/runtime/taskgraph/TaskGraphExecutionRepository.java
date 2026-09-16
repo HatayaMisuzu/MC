@@ -28,6 +28,12 @@ public final class TaskGraphExecutionRepository {
 
     public TaskGraphExecutionRecord create(String executionId, ToolContext context, JsonNode graph,
                                            TaskGraphLimits limits, JsonNode inputs, JsonNode provenance) throws SQLException {
+        return create(executionId, context, graph, limits, inputs, provenance, Json.object());
+    }
+
+    public TaskGraphExecutionRecord create(String executionId, ToolContext context, JsonNode graph,
+                                           TaskGraphLimits limits, JsonNode inputs, JsonNode provenance,
+                                           JsonNode compatibility) throws SQLException {
         String canonical = Json.canonical(graph);
         String hash = Digests.sha256(canonical);
         long now = clock.millis();
@@ -35,8 +41,9 @@ public final class TaskGraphExecutionRepository {
                 INSERT INTO task_graph_execution(execution_id,controller_id,brain_session_id,companion_id,
                 graph_id,graph_version,graph_hash,graph_json,state,current_node_id,completed_nodes_json,
                 tool_results_json,variables_json,checkpoints_json,waiting_question_json,permissions_json,
-                limits_json,provenance_json,inputs_json,replan_json,evidence_json,revision,result_code,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '[]',0,'CREATED',?,?)
+                limits_json,provenance_json,compatibility_context_json,inputs_json,replan_json,evidence_json,
+                revision,result_code,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '[]',0,'CREATED',?,?)
                 """)) {
             statement.setString(1, required(executionId)); statement.setString(2, context.controllerId());
             statement.setString(3, context.brainSessionId()); statement.setString(4, context.companionId());
@@ -47,9 +54,10 @@ public final class TaskGraphExecutionRepository {
             statement.setString(16, Json.write(graph.path("permissions")));
             statement.setString(17, Json.write(limits.toJson()));
             statement.setString(18, Json.write(provenance == null ? Json.object() : provenance));
-            statement.setString(19, Json.write(inputs == null ? Json.object() : inputs));
-            statement.setString(20, Json.write(TaskGraphReplan.initial(provenance)));
-            statement.setLong(21, now); statement.setLong(22, now); statement.executeUpdate();
+            statement.setString(19, Json.write(compatibility == null ? Json.object() : compatibility));
+            statement.setString(20, Json.write(inputs == null ? Json.object() : inputs));
+            statement.setString(21, Json.write(TaskGraphReplan.initial(provenance)));
+            statement.setLong(22, now); statement.setLong(23, now); statement.executeUpdate();
         }
         return get(executionId).orElseThrow();
     }
@@ -109,12 +117,30 @@ public final class TaskGraphExecutionRepository {
                         Json.parse(row.getString("evidence_json")),
                         waiting == null ? Json.MAPPER.nullNode() : Json.parse(waiting),
                         Json.parse(row.getString("permissions_json")), Json.parse(row.getString("limits_json")),
-                        Json.parse(row.getString("provenance_json")), Json.parse(row.getString("result_json")),
+                        Json.parse(row.getString("provenance_json")),
+                        Json.parse(row.getString("compatibility_context_json")),
+                        Json.parse(row.getString("result_json")),
                         row.getLong("revision"),
                         row.getString("result_code"), Instant.ofEpochMilli(row.getLong("created_at")),
                         Instant.ofEpochMilli(row.getLong("updated_at")), Json.parse(row.getString("replan_json"))));
             }
         }
+    }
+
+    public TaskGraphExecutionRecord saveCompatibility(TaskGraphExecutionRecord record, JsonNode compatibility,
+                                                       String resultCode) throws SQLException {
+        try (var connection = database.open(); var statement = connection.prepareStatement("""
+                UPDATE task_graph_execution SET compatibility_context_json=?,result_code=?,
+                revision=revision+1,updated_at=? WHERE execution_id=? AND revision=?
+                """)) {
+            statement.setString(1, Json.write(compatibility));
+            statement.setString(2, required(resultCode));
+            statement.setLong(3, clock.millis());
+            statement.setString(4, record.executionId());
+            statement.setLong(5, record.revision());
+            if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_TASK_GRAPH_REVISION");
+        }
+        return get(record.executionId()).orElseThrow();
     }
 
     /** Replan intent is independent of the worker's snapshot revision until the graph is quiescent. */
@@ -131,18 +157,20 @@ public final class TaskGraphExecutionRepository {
 
     /** Atomic graph/epoch commit. A crash cannot expose a rewritten graph with the old request. */
     public TaskGraphExecutionRecord applyReplan(TaskGraphExecutionRecord record, JsonNode graph,
-                                                JsonNode replan) throws SQLException {
+                                                JsonNode replan, JsonNode compatibility) throws SQLException {
         try (var connection = database.open(); var statement = connection.prepareStatement("""
-                UPDATE task_graph_execution SET graph_json=?,graph_hash=?,replan_json=?,state='PAUSED',
+                UPDATE task_graph_execution SET graph_json=?,graph_hash=?,replan_json=?,compatibility_context_json=?,state='PAUSED',
                 current_node_id=NULL,waiting_question_json=NULL,result_json='{}',
                 result_code='REPLAN_APPLIED',revision=revision+1,updated_at=?
                 WHERE execution_id=? AND revision=? AND state IN ('PAUSED','FAILED') AND replan_json=?
                 """)) {
             statement.setString(1, Json.canonical(graph));
             statement.setString(2, Digests.sha256(Json.canonical(graph)));
-            statement.setString(3, Json.write(replan)); statement.setLong(4, clock.millis());
-            statement.setString(5, record.executionId()); statement.setLong(6, record.revision());
-            statement.setString(7, Json.write(record.replan()));
+            statement.setString(3, Json.write(replan));
+            statement.setString(4, Json.write(compatibility));
+            statement.setLong(5, clock.millis());
+            statement.setString(6, record.executionId()); statement.setLong(7, record.revision());
+            statement.setString(8, Json.write(record.replan()));
             if (statement.executeUpdate() != 1) throw new IllegalStateException("STALE_TASK_GRAPH_REVISION");
         }
         return get(record.executionId()).orElseThrow();

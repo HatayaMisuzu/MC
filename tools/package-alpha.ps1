@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $RepositoryRoot) { $RepositoryRoot = Split-Path -Parent $PSScriptRoot }
 $repo = (Resolve-Path -LiteralPath $RepositoryRoot).Path
+$targetCatalog = Get-Content -LiteralPath (Join-Path $repo 'targets/catalog.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $DeliveryRoot) {
     $DeliveryRoot = Join-Path (Split-Path -Parent $repo) 'minecraft-companion-alpha-0.1-delivery'
 }
@@ -23,9 +24,6 @@ if (Test-Path -LiteralPath $delivery) {
 }
 
 $directories = @(
-    'jars\fabric-1.21.1',
-    'jars\neoforge-1.21.1',
-    'jars\forge-1.20.1',
     'runtime',
     'install',
     'test-results',
@@ -34,19 +32,20 @@ $directories = @(
     'traces',
     'source-archive'
 )
+$directories += @($targetCatalog.targets | ForEach-Object { 'jars\' + $_.targetId })
 New-Item -ItemType Directory -Force -Path $delivery | Out-Null
 foreach ($dir in $directories) {
     New-Item -ItemType Directory -Force -Path (Join-Path $delivery $dir) | Out-Null
 }
 
-$artifactMap = [ordered]@{
-    'minecraft\fabric-1.21.1\build\libs' = 'jars\fabric-1.21.1'
-    'minecraft\neoforge-1.21.1\build\libs' = 'jars\neoforge-1.21.1'
-    'minecraft\forge-1.20.1\build\libs' = 'jars\forge-1.20.1'
+$artifactMap = [ordered]@{}
+foreach ($target in $targetCatalog.targets) {
+    $artifactMap[($target.buildDirectory + '/build/libs')] = 'jars/' + $target.targetId
 }
 foreach ($entry in $artifactMap.GetEnumerator()) {
     $source = Join-Path $repo $entry.Key
     if (Test-Path -LiteralPath $source) {
+        Copy-Item -LiteralPath (Join-Path $source 'release-manifest.json') -Destination (Join-Path $delivery $entry.Value) -Force
         Get-ChildItem -LiteralPath $source -File -Filter *.jar |
             Where-Object { $_.Name -notmatch '(-sources|-dev|-shadow)\.jar$' } |
             Copy-Item -Destination (Join-Path $delivery $entry.Value) -Force
@@ -75,13 +74,11 @@ function Copy-DirectoryContents([string]$source, [string]$destination) {
 Copy-DirectoryContents (Join-Path $repo 'core\pure-core\build\test-results') (Join-Path $delivery 'test-results\core')
 Copy-DirectoryContents (Join-Path $repo 'protocol\protocol-model\build\test-results') (Join-Path $delivery 'test-results\protocol')
 Copy-DirectoryContents (Join-Path $repo 'runtime\runtime-app\build\test-results') (Join-Path $delivery 'test-results\runtime')
-Copy-DirectoryContents (Join-Path $repo 'minecraft\fabric-1.21.1\build\test-results') (Join-Path $delivery 'test-results\fabric-1.21.1')
-Copy-DirectoryContents (Join-Path $repo 'minecraft\neoforge-1.21.1\build\gametest\logs') (Join-Path $delivery 'test-results\neoforge-1.21.1')
-Copy-DirectoryContents (Join-Path $repo 'minecraft\forge-1.20.1\build\gametest\logs') (Join-Path $delivery 'test-results\forge-1.20.1')
-
-foreach ($target in @('fabric-1.21.1', 'neoforge-1.21.1', 'forge-1.20.1')) {
-    Copy-DirectoryContents (Join-Path $repo "minecraft\$target\build\launch-test\server\logs") `
-        (Join-Path $delivery "launch-logs\$target")
+foreach ($target in $targetCatalog.targets) {
+    Copy-DirectoryContents (Join-Path $repo ($target.buildDirectory + '/build/test-results')) `
+        (Join-Path $delivery ('test-results/' + $target.targetId))
+    Copy-DirectoryContents (Join-Path $repo ($target.buildDirectory + '/build/launch-test/server/logs')) `
+        (Join-Path $delivery ('launch-logs/' + $target.targetId))
 }
 Copy-DirectoryContents (Join-Path $repo 'build\e2e-runtime') (Join-Path $delivery 'traces\runtime-fabric-e2e')
 Copy-DirectoryContents (Join-Path $repo 'build\persistence-restart-evidence') (Join-Path $delivery 'traces\persistence-restart')

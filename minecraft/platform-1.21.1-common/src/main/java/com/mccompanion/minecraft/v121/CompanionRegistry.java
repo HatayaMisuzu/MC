@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots.*;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mojang.authlib.GameProfile;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -547,14 +551,18 @@ public final class CompanionRegistry {
     }
 
     private static boolean runtimeSkillSupported(String capability) {
-        return DailyActionAdapter.supports(capability) || java.util.Set.of(
-                "DeliverItem", "EatAndRecover", "WithdrawFromStorage", "DepositToStorage",
-                "CraftItem", "ExploreArea", "CollectResource", "MineResourceVein", "SmeltItem",
-                "DefendOwner", "LookAt", "InteractBlock", "InteractEntity", "MenuAction",
-                "UseItem", "DropItem", "AttackEntity", "MeleeAttack", "ShieldCombat", "BowAttack", "PlaceBlock", "BuildSmallBlueprint", "RetreatFromDanger",
-                "NavigateWithWorldChanges", "FollowEntity", "ApproachEntity",
-                "KeepDistanceFromEntity", "ChaseEntity", "EscortEntity", "FleeFromEntity", "FaceEntity")
-                .contains(capability);
+        return com.mccompanion.core.body.BodyCapabilities.SKILLS.contains(capability);
+    }
+
+    public com.mccompanion.protocol.CapabilitySet runtimeCapabilities() {
+        var result = com.mccompanion.protocol.CapabilitySet.builder();
+        com.mccompanion.core.body.BodyCapabilities.SKILLS.forEach(name -> result.available(name, "1.0"));
+        // These bindings are created with this registry and its remote Bridge assembly.
+        for (String name : java.util.List.of("NavigateTo", "FollowOwner", "server_player_body", "follow", "travel",
+                "bounded_world_snapshot", "inventory_observation", "registry_query", "recipe_query",
+                "primitive_observation_query", "primitive_lifecycle", "player_entity_events",
+                "survival_events", "inventory_world_events", "runtime_safe_idle")) result.available(name, "1.0");
+        return result.build();
     }
 
     public RuntimeResult runtimePause(String companionId, String leaseId, long epoch) {
@@ -829,55 +837,13 @@ public final class CompanionRegistry {
         return java.util.Map.copyOf(values);
     }
 
-    public record RuntimeSnapshot(
-            String companionId, String ownerId, String displayName, String dimension,
-            double x, double y, double z, String bodyState, String behaviorId,
-            String behaviorState, long behaviorRevision, long controlEpoch, boolean runtimeConnected,
-            float health, float maxHealth, int foodLevel, int airSupply, boolean onFire, boolean inLava,
-            int freeInventorySlots, java.util.Map<String, Integer> inventory,
-            java.util.List<ContainerSnapshot> visibleContainers, String evidenceSummary,
-            BehaviorObservation behaviorObservation,
-            java.util.Map<String, String> equipment, java.util.Map<String, String> vehicle,
-            java.util.Map<String, String> menu, java.util.Map<String, String> sleep,
-            java.util.Map<String, String> fish, java.util.Map<String, String> glide,
-            java.util.Map<String, String> bucket, java.util.Map<String, String> crop,
-            java.util.Map<String, String> breed, java.util.Map<String, String> trade,
-            java.util.Map<String, String> enchant, java.util.Map<String, String> brew) {
-        public RuntimeSnapshot {
-            equipment = equipment == null ? java.util.Map.of() : java.util.Map.copyOf(equipment);
-            vehicle = vehicle == null ? java.util.Map.of() : java.util.Map.copyOf(vehicle);
-            menu = menu == null ? java.util.Map.of() : java.util.Map.copyOf(menu);
-            sleep = sleep == null ? java.util.Map.of() : java.util.Map.copyOf(sleep);
-            fish = fish == null ? java.util.Map.of() : java.util.Map.copyOf(fish);
-            glide = glide == null ? java.util.Map.of() : java.util.Map.copyOf(glide);
-            bucket = bucket == null ? java.util.Map.of() : java.util.Map.copyOf(bucket);
-            crop = crop == null ? java.util.Map.of() : java.util.Map.copyOf(crop);
-            breed = breed == null ? java.util.Map.of() : java.util.Map.copyOf(breed);
-            trade = trade == null ? java.util.Map.of() : java.util.Map.copyOf(trade);
-            enchant = enchant == null ? java.util.Map.of() : java.util.Map.copyOf(enchant);
-            brew = brew == null ? java.util.Map.of() : java.util.Map.copyOf(brew);
-        }
-    }
 
-    public record BehaviorObservation(String failureCode, String itemId, int requested, int available,
-                                      java.util.List<ScanCandidate> candidates,
-                                      java.util.Map<String, String> details) {
-        public BehaviorObservation {
-            candidates = candidates == null ? java.util.List.of() : java.util.List.copyOf(candidates);
-            details = details == null ? java.util.Map.of() : java.util.Map.copyOf(details);
-        }
-        public BehaviorObservation(String failureCode, String itemId, int requested, int available,
-                                   java.util.List<ScanCandidate> candidates) {
-            this(failureCode, itemId, requested, available, candidates, java.util.Map.of());
-        }
-        public BehaviorObservation(String failureCode, String itemId, int requested, int available) {
-            this(failureCode, itemId, requested, available, java.util.List.of(), java.util.Map.of());
-        }
-    }
 
-    public record ScanCandidate(String block, String dimension, int x, int y, int z, double distanceSquared) { }
 
-    public record ContainerSnapshot(String type, String dimension, int x, int y, int z) { }
+
+
+
+
 
     public record EntityEventBinding(String companionId, CompanionPlayer body, String behaviorId,
                                      com.mccompanion.minecraft.bridge.EntityEventTracker.TargetBinding target) { }

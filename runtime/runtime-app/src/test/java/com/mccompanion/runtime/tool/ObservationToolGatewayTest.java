@@ -39,8 +39,8 @@ class ObservationToolGatewayTest {
                             .put("x", 3).put("y", 70).put("z", -3).put("verified", true)));
             companions.upsert("c1", "session", "world", "owner", "Misuzu", status);
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
-            Handshake handshake = new Handshake("mc-companion/1", "test", "1.21.1", "fabric", "world",
-                    Json.object().put("NavigateTo", true).put("CollectResource", true));
+            Handshake handshake = new Handshake("mc-companion/2", "test", "1.21.1", "fabric", "world",
+                    Json.object().<com.fasterxml.jackson.databind.node.ObjectNode>set("NavigateTo", com.mccompanion.runtime.ProtocolTestCapabilities.available()).<com.fasterxml.jackson.databind.node.ObjectNode>set("CollectResource", com.mccompanion.runtime.ProtocolTestCapabilities.available()));
             ObservationToolGateway gateway = new ObservationToolGateway(companions, tasks,
                     CapabilityRegistry.standard(), ignored -> handshake);
             ToolContext context = new ToolContext("controller", "brain", "c1");

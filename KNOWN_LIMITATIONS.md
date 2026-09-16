@@ -1,15 +1,17 @@
-# Known limitations — 0.3.1
+# Known limitations — 0.4.0
 
 The authoritative completion evidence is in `docs/RC_COMPLETION_MATRIX.md`. These limitations are
 kept explicit so Replay, local automation, bounded live-provider evidence, and human play are not
-confused. The automated baseline is frozen and published as
-`mcac-productization-baseline-0.3.1`; current readiness is `HUMAN_PLAYTEST_PENDING`.
-That frozen release's exact-SHA evidence is not inherited by post-release `main`; current-main
+confused. The immutable automated release baseline remains
+`mcac-productization-baseline-0.3.1`; the current 0.4.0 candidate readiness is
+`HUMAN_PLAYTEST_PENDING`. That frozen release's exact-SHA evidence is not inherited by current
 evidence must be attached to the exact Git or GitHub Actions SHA described by
 `docs/product/CURRENT_MAIN_TRUTH.json`.
 
 - Fabric 1.21.1 and Forge 1.20.1 are the full Runtime Bridge RC targets. NeoForge 1.21.1 is detected,
   diagnosed, and packaged as `LOCAL_ONLY`; it does not claim the full body/Tool bridge.
+- Runtime, Terminal and Mod must be upgraded together for `mc-companion/2`. An older protocol or
+  product version is rejected with an upgrade reason; MCAC does not downgrade Minecraft worlds.
 - One live external-Brain vertical slice passed on 2026-08-01: PCL + Forge 1.20.1 + Runtime +
   Hermes + the official DeepSeek API, covering handshake/recovery, world observation, Follow,
   Navigate position change, safe idle, and reconnect. Fabric, other providers, broader Tools,

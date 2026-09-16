@@ -226,6 +226,8 @@ final class MinecraftSmallBlueprintBuilder {
             return java.util.stream.IntStream.rangeClosed(1, 3).boxed()
                     .flatMap(radius -> candidateRing(interaction, radius).stream())
                     .filter(candidate -> !candidate.equals(target))
+                    .filter(candidate -> candidate.getY() >= plan.anchor().y()
+                            || outsideBlueprintFootprint(candidate))
                     .filter(candidate -> !blueprintPosition(candidate))
                     .filter(this::standable)
                     .filter(candidate -> Vec3.atCenterOf(candidate).distanceToSqr(Vec3.atCenterOf(interaction)) <= 20.25D)

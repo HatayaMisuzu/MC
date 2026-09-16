@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.core.body.build.SmallBlueprint;
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import com.mccompanion.minecraft.fabric.PrimitiveObservationService;
@@ -146,7 +150,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
+                .map(BodySnapshots.RuntimeSnapshot::companionId).findFirst().orElseThrow();
         String lease = "fabric-small-blueprint";
         helper.assertTrue(registry.runtimeAcquireLease(companionId, lease, 1L,
                 System.currentTimeMillis() + 300_000L).success(), "blueprint lease failed");
@@ -225,7 +229,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "Arbiter").success(), "arbitration create failed");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst().orElseThrow();
         String lease = "fabric-control-arbitration";
         helper.assertTrue(registry.runtimeAcquireLease(
@@ -248,7 +252,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "higher-epoch handoff release failed");
         String evidence = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.companionId().equals(companionId))
-                .map(CompanionRegistry.RuntimeSnapshot::evidenceSummary)
+                .map(BodySnapshots.RuntimeSnapshot::evidenceSummary)
                 .findFirst().orElse("");
         helper.assertTrue(evidence.contains("controlAuthority=IDLE")
                         && evidence.contains("controlRevision="),
@@ -545,18 +549,20 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                     null, null, null, new SkillParameters("MenuAction", "", 1, false,
                             body.serverLevel().dimension().location().toString(),
                             null, null, null, "", "UP", "MAIN_HAND",
-                            token, 0, 0, "CLICK")).success(),
+                            MenuSessionTracker.inspect(body).token(), 0, 0, "CLICK")).success(),
                     "menu pickup click failed to start");
             awaitBehaviorIdleForChain(helper, registry, companionId, 20, picked -> {
                 helper.assertValueEqual(body.containerMenu.getCarried().getCount(), 5,
                         "menu pickup click did not move the stack to the carried cursor");
+                helper.assertTrue(!MenuSessionTracker.validate(body, token).valid(),
+                        "a pre-click observation remained authoritative after inventory mutation");
                 helper.assertTrue(picked.evidenceSummary().contains("VANILLA_CONTAINER_MENU"),
                         "menu click evidence did not identify the vanilla menu path");
                 helper.assertTrue(registry.runtimeStart(companionId, leaseId, epoch, "menu-click-return", "skill",
                         null, null, null, new SkillParameters("MenuAction", "", 1, false,
                                 body.serverLevel().dimension().location().toString(),
                                 null, null, null, "", "UP", "MAIN_HAND",
-                                token, 0, 0, "CLICK")).success(),
+                                MenuSessionTracker.inspect(body).token(), 0, 0, "CLICK")).success(),
                         "menu return click failed to start");
                 awaitBehaviorIdleForChain(helper, registry, companionId, 20, returned -> {
                     helper.assertTrue(body.containerMenu.getCarried().isEmpty(),
@@ -568,7 +574,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                             null, null, null, new SkillParameters("MenuAction", "", 1, false,
                                     body.serverLevel().dimension().location().toString(),
                                     null, null, null, "", "UP", "MAIN_HAND",
-                                    token, 0, null, "QUICK_MOVE")).success(),
+                                    MenuSessionTracker.inspect(body).token(), 0, null, "QUICK_MOVE")).success(),
                             "menu quick-move failed to start");
                     awaitBehaviorIdleForChain(helper, registry, companionId, 20, moved -> {
                         helper.assertValueEqual(chest.getItem(0).getCount(), 0,
@@ -583,7 +589,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                                 null, null, null, new SkillParameters("MenuAction", "", 1, false,
                                         body.serverLevel().dimension().location().toString(),
                                         null, null, null, "", "UP", "MAIN_HAND",
-                                        token, null, null, "CLOSE")).success(),
+                                        MenuSessionTracker.inspect(body).token(), null, null, "CLOSE")).success(),
                                 "menu close failed to start");
                         awaitBehaviorIdle(helper, registry, companionId, 20, closed -> {
                             helper.assertTrue(body.containerMenu == body.inventoryMenu,
@@ -1131,7 +1137,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         CompanionPlayer body = registry.liveBodyForOwner(owner.getUUID());
         helper.assertTrue(body != null, "retreat test created no live body");
         BlockPos origin = body.blockPosition();
-        for (int x = -9; x <= 9; x++) {
+        for (int x = -9; x <= 35; x++) {
             for (int z = -4; z <= 4; z++) {
                 body.serverLevel().setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
                 for (int y = 0; y <= 2; y++) {
@@ -1151,8 +1157,10 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         helper.assertTrue(registry.runtimeAcquireLease(
                 companionId, leaseId, 1L, System.currentTimeMillis() + 30_000L).success(),
                 "retreat lease acquisition failed");
+        // Keep the interrupted route long enough for the test to observe the resumed state;
+        // a nearby target can complete in the same tick as LOCAL_THREAT_RESUMED.
         helper.assertTrue(registry.runtimeStart(companionId, leaseId, 1L, "unsafe-travel", "goto",
-                body.getX() + 8.0D, body.getY(), body.getZ(), null).success(),
+                body.getX() + 30.0D, body.getY(), body.getZ(), null).success(),
                 "retreat test travel failed to start");
         helper.succeedWhen(() -> {
             var snapshot = registry.runtimeSnapshots(false).stream()
@@ -1738,7 +1746,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
                 "reconnect behavior failed to start");
 
         registry.runtimeDisconnected();
-        CompanionRegistry.RuntimeSnapshot disconnected = registry.runtimeSnapshots(false).stream()
+        BodySnapshots.RuntimeSnapshot disconnected = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.companionId().equals(companionId))
                 .findFirst()
                 .orElseThrow();
@@ -1798,7 +1806,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             CompanionRegistry registry,
             String companionId,
             int ticksRemaining,
-            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+            java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> terminalAssertions) {
         awaitBehaviorIdle(helper, registry, companionId, ticksRemaining, terminalAssertions, true);
     }
 
@@ -1807,7 +1815,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             CompanionRegistry registry,
             String companionId,
             int ticksRemaining,
-            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+            java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> terminalAssertions) {
         awaitBehaviorIdle(helper, registry, companionId, ticksRemaining, terminalAssertions, false);
     }
 
@@ -1816,7 +1824,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             CompanionRegistry registry,
             String companionId,
             int ticksRemaining,
-            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions,
+            java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> terminalAssertions,
             boolean completeTest) {
         var snapshot = registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
@@ -1846,7 +1854,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
             CompanionRegistry registry,
             String companionId,
             int ticksRemaining,
-            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> terminalAssertions) {
+            java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> terminalAssertions) {
         var snapshot = registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
         if (snapshot.behaviorState().equals("RUNNING")) {
@@ -2462,8 +2470,8 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
     private static void awaitRuntimeBehaviorState(
             GameTestHelper helper, CompanionRegistry registry, String companionId,
             String expectedState, int ticksRemaining,
-            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> completed) {
-        CompanionRegistry.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
+            java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> completed) {
+        BodySnapshots.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
         if (expectedState.equals(snapshot.behaviorState())) {
             completed.accept(snapshot);
@@ -2713,7 +2721,7 @@ public final class CompanionLifecycleGameTests implements FabricGameTest {
         }
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst()
                 .orElseThrow();
         String lease = "gametest-navigation-combination";

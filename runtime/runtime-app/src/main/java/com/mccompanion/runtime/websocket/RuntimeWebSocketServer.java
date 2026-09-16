@@ -53,8 +53,8 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 
 public final class RuntimeWebSocketServer extends WebSocketServer implements AutoCloseable {
-    public static final String PROTOCOL = "mc-companion/1";
-    public static final String VERSION = "0.3.1";
+    public static final String PROTOCOL = com.mccompanion.protocol.BuildIdentity.PROTOCOL;
+    public static final String VERSION = com.mccompanion.protocol.BuildIdentity.PRODUCT_VERSION;
     private static final int MAX_MESSAGE_CHARS = 1_048_576;
     private final String pairingToken;
     private final SessionRegistry sessions;
@@ -150,6 +150,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
 
     @Override
     public void onMessage(WebSocket socket, String text) {
+        if (closing) return;
         Peer peer = peers.computeIfAbsent(socket, Peer::new);
         if (text == null || text.length() > MAX_MESSAGE_CHARS) {
             peer.close(1009, "Message too large");
@@ -169,7 +170,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             return;
         }
         RuntimeSession session = current.get();
-        String sessionId = message.path("sessionId").asText(session.sessionId());
+        String sessionId = message.path("sessionId").asText("");
         if (!session.sessionId().equals(sessionId)) {
             sendError(peer, session, "SESSION_MISMATCH", "sessionId does not match this connection");
             return;
@@ -183,10 +184,12 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             sessions.touch(peer);
             route(session, message);
         } catch (SQLException failure) {
+            if (closing) return;
             log.error("Unable to persist WebSocket message for session=" + session.sessionId(), failure);
             sendError(peer, session, "PERSISTENCE_ERROR",
                     "Runtime could not persist this message; retry its stable identity with a new sequence");
         } catch (RuntimeException failure) {
+            if (closing) return;
             log.error("Unable to process WebSocket message for session=" + session.sessionId(), failure);
             sendError(peer, session, "INVALID_MESSAGE",
                     "Message fields were invalid; this observed sequence is consumed");
@@ -210,6 +213,21 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         String protocol = body.path("protocol").asText(message.path("protocol").asText(""));
         if (!PROTOCOL.equals(protocol)) {
             reject(peer, "UNSUPPORTED_PROTOCOL", "Runtime supports " + PROTOCOL);
+            return;
+        }
+        if (!VERSION.equals(body.path("modVersion").asText())) {
+            reject(peer, "COMPONENT_UPGRADE_REQUIRED", "Upgrade Runtime, Terminal and Mod from the same release");
+            return;
+        }
+        var target = com.mccompanion.protocol.target.TargetCatalog.bundled()
+                .byId(body.path("targetId").asText()).orElse(null);
+        if (target == null || !target.fullBridge()
+                || !target.matches(body.path("minecraftVersion").asText(), body.path("loader").asText())) {
+            reject(peer, "TARGET_UNSUPPORTED", "Target does not support a remote Runtime Bridge");
+            return;
+        }
+        if (!body.path("capabilityRevision").isIntegralNumber() || body.path("capabilityRevision").asLong(-1) != 0) {
+            reject(peer, "INVALID_CAPABILITY_REVISION", "Initial capability revision must be zero");
             return;
         }
         try {
@@ -241,6 +259,11 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         JsonNode payload = message.path("payload");
         switch (type) {
             case "heartbeat", "ping" -> sendHeartbeatAck(session, message.path("sequence").asLong());
+            case "capability_snapshot" -> sessions.updateCapabilities(session,
+                    new com.mccompanion.protocol.SessionCapabilitySnapshot(
+                            payload.path("revision").asLong(-1),
+                            new com.mccompanion.protocol.ProtocolJsonCodec().decode(
+                                    payload.path("capabilities").toString(), com.mccompanion.protocol.CapabilitySet.class)));
             case "companion_list" -> registerCompanionList(session, payload);
             case "companion_registered", "companion_status", "status_update", "status_event",
                     "reconciliation_status" -> registerCompanion(session, payload.isObject() ? payload : message);
@@ -396,7 +419,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                         reply.set("taskGraph", resumed.observation());
                         ObjectNode message = envelope(session, "player_reply");
                         message.set("payload", reply);
-                        if (session.peer().isOpen()) session.peer().send(Json.write(message));
+                        if (session.peer().isOpen()) session.send(message);
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.CONTROL) {
@@ -406,7 +429,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                                 .put("executionId", waiting.orElseThrow().taskGraphExecutionId());
                         ObjectNode message = envelope(session, "player_reply");
                         message.set("payload", reply);
-                        if (session.peer().isOpen()) session.peer().send(Json.write(message));
+                        if (session.peer().isOpen()) session.send(message);
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
@@ -427,7 +450,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     reply.set("capabilityStates", visible.toJson());
                     ObjectNode unavailable = envelope(session, "player_reply");
                     unavailable.set("payload", reply);
-                    if (session.peer().isOpen()) session.peer().send(Json.write(unavailable));
+                    if (session.peer().isOpen()) session.send(unavailable);
                     return;
                 }
                 if (externalBrain != null) {
@@ -445,7 +468,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                                 .put("reply", "Cancelled.");
                         ObjectNode brainMessage = envelope(session, "player_reply");
                         brainMessage.set("payload", reply);
-                        if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
+                        if (session.peer().isOpen()) session.send(brainMessage);
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.CONTROL
@@ -457,7 +480,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                                 .put("reply", paused ? "Paused." : "Nothing is currently running.");
                         ObjectNode brainMessage = envelope(session, "player_reply");
                         brainMessage.set("payload", reply);
-                        if (session.peer().isOpen()) session.peer().send(Json.write(brainMessage));
+                        if (session.peer().isOpen()) session.send(brainMessage);
                         return;
                     }
                     if (incoming.kind() == IncomingMessageKind.GOAL_MODIFICATION) {
@@ -493,7 +516,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
                     ObjectNode brainMessage = envelope(session, "player_reply");
                     brainMessage.set("payload", reply);
                     if (session.peer().isOpen()) {
-                        session.peer().send(Json.write(brainMessage));
+                        session.send(brainMessage);
                         if (brainReply != null) conversations.markDirectReplyDelivered(brainReply.eventId());
                         if (brainResult.question() != null) conversations.repository()
                                 .markQuestionGameDelivered(brainResult.question().questionId());
@@ -508,7 +531,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             ObjectNode message = envelope(session, "player_reply");
             message.set("payload", reply);
             if (session.peer().isOpen()) {
-                session.peer().send(Json.write(message));
+                session.send(message);
             }
             });
         } catch (RejectedExecutionException saturated) {
@@ -556,22 +579,22 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         ObjectNode message = envelope(session, "subscription").put("name", "status")
                 .put("intervalMillis", 1000);
         message.putObject("payload").put("includeCompanions", true).put("includeBehaviors", true);
-        session.peer().send(Json.write(message));
+        session.send(message);
         ObjectNode query = envelope(session, "query").put("name", "list_companions");
         query.set("payload", Json.object());
-        session.peer().send(Json.write(query));
+        session.send(query);
     }
 
     private void sendHeartbeatAck(RuntimeSession session, long acknowledged) {
         ObjectNode message = envelope(session, "heartbeat_ack").put("ackSequence", acknowledged);
         message.set("payload", Json.object());
-        session.peer().send(Json.write(message));
+        session.send(message);
     }
 
     private ObjectNode envelope(RuntimeSession session, String type) {
         return Json.object().put("protocol", PROTOCOL).put("type", type)
                 .put("sessionId", session.sessionId()).put("worldId", session.handshake().worldId())
-                .put("sequence", session.nextSequence()).put("timestamp", clock.millis());
+                .put("timestamp", clock.millis());
     }
 
     private void reject(Peer peer, String code, String message) {
@@ -585,9 +608,15 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
         ObjectNode error = Json.object().put("protocol", PROTOCOL).put("type", "error")
                 .put("code", code).put("message", message).put("timestamp", clock.millis());
         if (session != null) {
-            error.put("sessionId", session.sessionId()).put("sequence", session.nextSequence());
+            error.put("sessionId", session.sessionId()).put("worldId", session.handshake().worldId());
         }
-        peer.send(Json.write(error));
+        if (closing || !peer.isOpen()) return;
+        try {
+            if (session == null) peer.send(Json.write(error));
+            else session.send(error);
+        } catch (RuntimeException disconnected) {
+            if (!closing && peer.isOpen()) throw disconnected;
+        }
     }
 
     public void sweepPending(Duration timeout) {
@@ -611,6 +640,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
 
     @Override
     public void onError(WebSocket socket, Exception exception) {
+        if (closing) return;
         log.error("WebSocket transport error", exception);
     }
 
@@ -622,6 +652,7 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
 
     @Override
     public void close() {
+        beginShutdown();
         planningExecutor.shutdownNow();
         try {
             stop(3_000);
@@ -629,6 +660,11 @@ public final class RuntimeWebSocketServer extends WebSocketServer implements Aut
             Thread.currentThread().interrupt();
         }
     }
+
+    private volatile boolean closing;
+
+    /** Stop admission before Runtime services and session authority are torn down. */
+    public void beginShutdown() { closing = true; }
 
     private static String required(JsonNode node, String field) {
         String value = node.path(field).asText("").trim();

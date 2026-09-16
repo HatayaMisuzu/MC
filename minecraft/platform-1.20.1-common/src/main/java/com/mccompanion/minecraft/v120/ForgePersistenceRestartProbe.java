@@ -83,12 +83,14 @@ public final class ForgePersistenceRestartProbe {
                 "seed inventory did not accept the diamond");
 
         BlockPos origin = body.blockPosition();
-        for (int x = -1; x <= 100; x++) {
+        for (int x = -1; x <= 40; x++) {
             level.setBlockAndUpdate(origin.offset(x, -1, 0), Blocks.STONE.defaultBlockState());
             level.setBlockAndUpdate(origin.offset(x, 0, 0), Blocks.AIR.defaultBlockState());
             level.setBlockAndUpdate(origin.offset(x, 1, 0), Blocks.AIR.defaultBlockState());
         }
-        Vec3 target = Vec3.atBottomCenterOf(origin.offset(80, 0, 0));
+        // Stay inside the bounded navigation search while remaining far enough away that the
+        // fifth server tick captures an in-flight action for restart quarantine.
+        Vec3 target = Vec3.atBottomCenterOf(origin.offset(30, 0, 0));
         CompanionRegistry.Result moving = registry.goTo(owner, target.x, target.y, target.z);
         require(moving.success(), "navigation did not start: " + moving.code());
     }

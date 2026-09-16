@@ -76,10 +76,12 @@ public final class TaskGraphExecutor {
                                      TaskGraphExecutionRecord previous, TaskGraphExecutionControl control,
                                      Consumer<TaskGraphExecutionSnapshot> snapshots) {
         String id = required(executionId);
-        Map<String, ToolDefinition> available = tools.definitions(context).stream()
+        Map<String, ToolDefinition> current = tools.definitions(context).stream()
                 .filter(value -> !value.name().startsWith("task_graph.")
                         && !value.name().startsWith("task."))
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
+        Map<String, ToolDefinition> available = previous == null ? current
+                : TaskGraphCompatibility.definitionsForValidation(current, previous.compatibility());
         TaskGraphValidationResult validation = validator.validateExecutable(graph, available, executableNodeTypes);
         if (!validation.valid()) {
             return new TaskGraphExecutionResult(id, "FAILED", "TASK_GRAPH_INVALID", 0, List.of(), Map.of(),
@@ -361,10 +363,25 @@ public final class TaskGraphExecutor {
 
     private Outcome callTool(JsonNode node, String path, State state, String nodeKey) {
         String nodeId = node.path("id").asText();
+        String toolName = node.path("tool").asText();
         ToolDefinition definition = tools.definitions(state.context).stream()
-                .filter(value -> value.name().equals(node.path("tool").asText())
+                .filter(value -> value.name().equals(toolName)
                         && !value.name().startsWith("task_graph.")
                         && !value.name().startsWith("task.")).findFirst().orElse(null);
+        TaskGraphCompatibility.Assessment compatibility;
+        try {
+            compatibility = TaskGraphCompatibility.assessCall(
+                    state.compatibility, toolName, definition, tools.compatibilityBinding(state.context));
+        } catch (RuntimeException failure) {
+            return Outcome.reconciliation("TASK_GRAPH_COMPATIBILITY_CHECK_FAILED",
+                    Json.object().put("nodeId", nodeId).put("tool", toolName)
+                            .put("message", boundedMessage(failure)));
+        }
+        if (!compatibility.compatible()) {
+            return Outcome.reconciliation(compatibility.code(),
+                    Json.object().put("nodeId", nodeId).put("tool", toolName)
+                            .put("message", compatibility.message()));
+        }
         if (definition == null) {
             return Outcome.failure("TOOL_UNAVAILABLE", Json.object().put("nodeId", nodeId));
         }
@@ -542,6 +559,7 @@ public final class TaskGraphExecutor {
         private final ObjectNode inputs;
         private final ObjectNode variables;
         private final Set<String> permissions;
+        private final JsonNode compatibility;
         private final ArrayNode checkpoints = Json.MAPPER.createArrayNode();
         private final TaskGraphExecutionControl control;
         private final Consumer<TaskGraphExecutionSnapshot> snapshots;
@@ -564,6 +582,7 @@ public final class TaskGraphExecutor {
             graph.path("permissions").forEach(value -> permissions.add(value.asText()));
             this.control = control;
             this.snapshots = snapshots;
+            this.compatibility = previous == null ? Json.object() : previous.compatibility().deepCopy();
             this.deadline = System.nanoTime() + Duration.ofSeconds(limits.maxWallTimeSeconds()).toNanos();
             if (previous != null) restore(previous);
         }

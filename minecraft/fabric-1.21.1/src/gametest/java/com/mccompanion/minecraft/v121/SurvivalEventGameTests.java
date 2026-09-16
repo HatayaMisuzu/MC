@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots;
+
 import com.mccompanion.minecraft.bridge.SurvivalEventTracker;
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import java.time.Instant;
@@ -21,7 +23,7 @@ public final class SurvivalEventGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "SurvivalBody").success(), "survival companion create failed");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
+                .map(BodySnapshots.RuntimeSnapshot::companionId).findFirst().orElseThrow();
         CompanionPlayer body = registry.runtimeBody(companionId);
         helper.assertTrue(body != null, "survival body missing");
 

@@ -90,6 +90,22 @@ function Start-TestProcess([string]$file, [string]$arguments, [string]$workingDi
     return $process
 }
 
+function Stop-TestProcessTree([Diagnostics.Process]$process) {
+    if (-not $process -or $process.HasExited) { return }
+    $children = Get-CimInstance Win32_Process |
+            Where-Object { $_.ParentProcessId -eq $process.Id }
+    foreach ($child in $children) {
+        try {
+            $childProcess = [Diagnostics.Process]::GetProcessById($child.ProcessId)
+            Stop-TestProcessTree $childProcess
+        } catch {
+            # A child that exits during cleanup is already safely stopped.
+        }
+    }
+    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    try { $null = $process.WaitForExit(5000) } catch { }
+}
+
 function Wait-TestTcpListener(
     [Diagnostics.Process]$process,
     [int]$port,
@@ -1222,7 +1238,7 @@ try {
     $runtime.StandardInput.WriteLine('quit')
     $runtime.StandardInput.Flush()
     if (-not $runtime.WaitForExit(15000)) {
-        $runtime.Kill()
+        Stop-TestProcessTree $runtime
         $null = $runtime.WaitForExit(5000)
         throw 'Runtime did not shut down at the representative restart boundary.'
     }
@@ -1348,7 +1364,7 @@ try {
         throw 'Crash-window Runtime did not record the expected injected lease-release failure.'
     }
 
-    $runtime.Kill()
+    Stop-TestProcessTree $runtime
     if (-not $runtime.WaitForExit(5000)) {
         throw 'Runtime process did not terminate at the injected live Tool-result crash boundary.'
     }
@@ -1705,7 +1721,7 @@ try {
     $runtime.StandardInput.WriteLine('quit')
     $runtime.StandardInput.Flush()
     if (-not $runtime.WaitForExit(15000)) {
-        $runtime.Kill()
+        Stop-TestProcessTree $runtime
         if (-not $runtime.WaitForExit(5000)) { throw 'Runtime process tree did not stop after forced shutdown.' }
         throw 'Runtime did not shut down after quit.'
     }
@@ -1730,7 +1746,7 @@ try {
         ($primitiveEquivalenceEvidence | ConvertTo-Json -Depth 40), [Text.UTF8Encoding]::new($false))
     if ($provider) {
         if (-not $provider.HasExited) {
-            $provider.Kill()
+            Stop-TestProcessTree $provider
             $null = $provider.WaitForExit(5000)
         }
         [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\provider-replay.out.log'),
@@ -1740,7 +1756,7 @@ try {
     }
     if ($brainProvider) {
         if (-not $brainProvider.HasExited) {
-            $brainProvider.Kill()
+            Stop-TestProcessTree $brainProvider
             $null = $brainProvider.WaitForExit(5000)
         }
         [IO.File]::WriteAllText((Join-Path $runtimeHome 'evidence\hermes-replay.out.log'),
@@ -1809,7 +1825,7 @@ try {
     }
     foreach ($process in @($game, $provider, $brainProvider, $runtime)) {
         if ($process -and -not $process.HasExited) {
-            $process.Kill()
+            Stop-TestProcessTree $process
             $null = $process.WaitForExit(5000)
         }
     }
@@ -1863,9 +1879,9 @@ try {
             Write-Warning "Unable to disarm Task Graph crash-window fixture during cleanup: $_"
         }
     }
-    if ($game -and -not $game.HasExited) { $game.Kill() }
-    if ($provider -and -not $provider.HasExited) { $provider.Kill() }
-    if ($brainProvider -and -not $brainProvider.HasExited) { $brainProvider.Kill() }
-    if ($runtime -and -not $runtime.HasExited) { $runtime.Kill() }
+    if ($game -and -not $game.HasExited) { Stop-TestProcessTree $game }
+    if ($provider -and -not $provider.HasExited) { Stop-TestProcessTree $provider }
+    if ($brainProvider -and -not $brainProvider.HasExited) { Stop-TestProcessTree $brainProvider }
+    if ($runtime -and -not $runtime.HasExited) { Stop-TestProcessTree $runtime }
     Remove-Item -LiteralPath $gameToken -Force -ErrorAction SilentlyContinue
 }

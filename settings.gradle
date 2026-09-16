@@ -13,6 +13,7 @@ plugins {
 
 rootProject.name = 'minecraft-ai-companion'
 
+include 'protocol:protocol-api'
 include 'protocol:protocol-model'
 include 'core:pure-core'
 include 'compatibility:compatibility-host'

@@ -1,6 +1,11 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.core.body.BodyControlArbiter;
+import com.mccompanion.core.body.BodyControlLifecycle;
 import com.mccompanion.core.body.combat.CombatController;
 import com.mccompanion.core.body.combat.ThreatPolicy;
 import com.mccompanion.core.body.interaction.EntityInteractionController;
@@ -65,7 +70,7 @@ final class BehaviorDirector {
     private final SurvivalNavigationAdapter navigationAdapter = new SurvivalNavigationAdapter();
     private final Map<UUID, MinecraftThreatRecovery> threatRecoveries = new HashMap<>();
     private final ReflexController reflexController = new ReflexController();
-    private final BodyControlArbiter controlArbiter = new BodyControlArbiter();
+    private final BodyControlLifecycle controls = new BodyControlLifecycle();
     private final DailyActionAdapter dailyActions;
     private final MinecraftSmallBlueprintBuilder smallBlueprints;
     private final Map<UUID, RouteExecutionController.Session> navigation = new HashMap<>();
@@ -78,15 +83,14 @@ final class BehaviorDirector {
     private final Map<UUID, RetreatProgress> retreats = new HashMap<>();
     private final Map<UUID, DefendProgress> defends = new HashMap<>();
     private final Map<UUID, InteractionProgress> interactions = new HashMap<>();
-    private final Map<UUID, MenuProgress> menuActions = new HashMap<>();
+    private final Map<UUID, com.mccompanion.core.body.menu.MenuActionController.Session> menuActions = new HashMap<>();
     private final Map<UUID, MinecraftCombatController> combats = new HashMap<>();
     private final Map<UUID, EntityBehaviorProgress> entityBehaviors = new HashMap<>();
     private final Map<UUID, EntityEventTracker.TargetBinding> recentEntityTargets = new HashMap<>();
     private final Map<UUID, Long> recentEntityTargetExpiryTicks = new HashMap<>();
     private final Map<UUID, SkillParameters> eventParameters = new HashMap<>();
     private final Map<UUID, Long> eventParameterExpiryTicks = new HashMap<>();
-    private final Map<UUID, CompanionRegistry.BehaviorObservation> observations = new HashMap<>();
-    private final Map<UUID, Map<BodyControlArbiter.Authority, String>> controlTokens = new HashMap<>();
+    private final Map<UUID, BodySnapshots.BehaviorObservation> observations = new HashMap<>();
 
     BehaviorDirector(MinecraftServer server, CompanionSavedData savedData, Logger logger) {
         this.server = server;
@@ -344,20 +348,20 @@ final class BehaviorDirector {
         if (success || code.equals("RUNTIME_CANCEL") || code.equals("CANCELLED_BY_OWNER")
                 || code.equals("SUPERSEDED") || code.equals("BODY_DEAD")) {
             if (entry.blueprintSession != null && !entry.blueprintSession.temporarySupports().isEmpty()) {
-                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                         "BLUEPRINT_CANCELLED_SUPPORTS_RETAINED", "", 0, 0, java.util.List.of(), Map.of(
                         "reason", code, "retainedSupports", entry.blueprintSession.temporarySupports().toString())));
             }
             entry.blueprintSession = null;
         }
         boolean daily = dailyActions.has(entry.companionId);
-        if (daily) dailyActions.stop(entry.companionId, code, isSuspension(code));
+        if (daily) dailyActions.stop(entry.companionId, code, BodyControlLifecycle.isSuspension(code));
         actionGateway.completeBehavior(body, success, code, server.getTickCount());
         RouteExecutionController.Session route = navigation.get(entry.companionId);
-        if (route != null && isSuspension(code)) route.pause(server.getTickCount());
+        if (route != null && BodyControlLifecycle.isSuspension(code)) route.pause(server.getTickCount());
         else navigation.remove(entry.companionId);
         MinecraftSurvivalNavigationExecution survival = survivalNavigations.get(entry.companionId);
-        if (survival != null && isSuspension(code)) survival.pause(server.getTickCount());
+        if (survival != null && BodyControlLifecycle.isSuspension(code)) survival.pause(server.getTickCount());
         else {
             survivalNavigations.remove(entry.companionId);
             survivalNavigationParameters.remove(entry.companionId);
@@ -376,7 +380,7 @@ final class BehaviorDirector {
             returnFurnaceInputs(body);
             body.closeContainer();
         }
-        if (success || !isSuspension(code)) {
+        if (success || !BodyControlLifecycle.isSuspension(code)) {
             EntityBehaviorProgress entityBehavior = entityBehaviors.get(entry.companionId);
             if (entityBehavior != null) rememberEntityEventTarget(entry.companionId, entityBehavior);
             skills.remove(entry.companionId);
@@ -391,8 +395,8 @@ final class BehaviorDirector {
             combats.remove(entry.companionId);
             eventParameterExpiryTicks.put(entry.companionId, (long) server.getTickCount() + 10L);
         }
-        if ((success || !isSuspension(code))
-                && controlArbiter.snapshot(entry.companionId).authority()
+        if ((success || !BodyControlLifecycle.isSuspension(code))
+                && controls.snapshot(entry.companionId).authority()
                 != BodyControlArbiter.Authority.SAFETY_REFLEX) {
             releaseCurrent(entry, code);
         }
@@ -405,7 +409,8 @@ final class BehaviorDirector {
 
     String claimRuntime(CompanionEntry entry, String reason) {
         return claim(entry, BodyControlArbiter.Authority.RUNTIME_TASK,
-                runtimeIdentity(entry), reason);
+                BodyControlLifecycle.runtimeIdentity(entry.runtimeEpoch, entry.runtimeBehaviorId,
+                        entry.runtimeBehaviorRevision), reason);
     }
 
     String claimRuntime(CompanionEntry entry, String ownerIdentity, String reason) {
@@ -413,7 +418,8 @@ final class BehaviorDirector {
     }
 
     void releaseRuntime(CompanionEntry entry, String reason) {
-        releaseRuntime(entry, runtimeIdentity(entry), reason);
+        releaseRuntime(entry, BodyControlLifecycle.runtimeIdentity(entry.runtimeEpoch,
+                entry.runtimeBehaviorId, entry.runtimeBehaviorRevision), reason);
     }
 
     void releaseRuntime(CompanionEntry entry, String ownerIdentity, String reason) {
@@ -426,7 +432,7 @@ final class BehaviorDirector {
 
     private void releaseSafety(CompanionEntry entry) {
         release(entry, BodyControlArbiter.Authority.SAFETY_REFLEX,
-                controlArbiter.snapshot(entry.companionId).ownerIdentity(), "HAZARD_CLEARED");
+                controls.snapshot(entry.companionId).ownerIdentity(), "HAZARD_CLEARED");
     }
 
     void forget(UUID companionId) {
@@ -452,19 +458,18 @@ final class BehaviorDirector {
         actionGateway.discard(companionId);
         MenuSessionTracker.invalidate(companionId);
         observations.remove(companionId);
-        controlTokens.remove(companionId);
-        controlArbiter.clear(companionId);
+        controls.clear(companionId);
     }
 
     String evidenceSummary(UUID companionId) {
-        var control = controlArbiter.snapshot(companionId);
+        var control = controls.snapshot(companionId);
         return actionGateway.evidenceSummary(companionId)
                 + " controlAuthority=" + control.authority()
                 + " controlRevision=" + control.revision()
                 + " controlReason=" + control.reason();
     }
 
-    CompanionRegistry.BehaviorObservation behaviorObservation(UUID companionId) {
+    BodySnapshots.BehaviorObservation behaviorObservation(UUID companionId) {
         var daily = dailyActions.observation(companionId);
         if (daily != null) return dailyObservation(daily);
         return observations.get(companionId);
@@ -518,10 +523,10 @@ final class BehaviorDirector {
                 targetId.toString(), EntityEventTracker.TargetKind.CURRENT);
     }
 
-    private static CompanionRegistry.BehaviorObservation dailyObservation(
+    private static BodySnapshots.BehaviorObservation dailyObservation(
             com.mccompanion.core.body.daily.DailyActionEngine.Observation daily) {
         var mapped = com.mccompanion.core.body.daily.DailyActionOutcome.forRuntime(daily);
-        return new CompanionRegistry.BehaviorObservation(
+        return new BodySnapshots.BehaviorObservation(
                 mapped.code(), "", 0, 0, java.util.List.of(), mapped.details());
     }
 
@@ -571,7 +576,7 @@ final class BehaviorDirector {
                     savedData.changed();
                     stop(entry, body, false, "DAILY_ACTION_ERROR");
                     dailyActions.forget(entry.companionId);
-                    observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                    observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                             "DAILY_ACTION_ERROR", "", 0, 0, java.util.List.of(),
                             java.util.Map.of("exception", failure.getClass().getSimpleName())));
                 }
@@ -878,7 +883,7 @@ final class BehaviorDirector {
             // Runtime task stays RUNNING while this bounded Body operation is in progress.
             stop(entry, body, false, "LOCAL_THREAT_HANDLING");
             recovery = new MinecraftThreatRecovery(entry, body, decision, navigation.remove(entry.companionId),
-                    actionGateway, navigationAdapter, server.getTickCount(), controlArbiter.snapshot(entry.companionId));
+                    actionGateway, navigationAdapter, server.getTickCount(), controls.snapshot(entry.companionId));
             threatRecoveries.put(entry.companionId, recovery);
             claimSafety(entry, "LOCAL_THREAT_HANDLING");
             actionGateway.startBehavior(body, entry.mode, server.getTickCount());
@@ -887,7 +892,7 @@ final class BehaviorDirector {
         String result = recovery.tick(body, owner, seen, server.getTickCount(),
                 (target, ignored) -> tickNavigation(entry, body, target, 0.25, true, ignored)
                         != RouteExecutionController.Status.BLOCKED);
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 result == null ? "LOCAL_THREAT_HANDLING" : result.equals("COMPLETE") ? "LOCAL_THREAT_RESUMED" : result,
                 "", 0, 0, java.util.List.of(), recovery.details()));
         if (result == null) return true;
@@ -923,7 +928,7 @@ final class BehaviorDirector {
             if (navigationStatus == RouteExecutionController.Status.BLOCKED)
                 result = combat.fail("TARGET_UNREACHABLE");
         } else actionGateway.stopInput(body);
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 result.code(), "", 0, 0, java.util.List.of(), combat.details(body, result)));
         if (result.status() == CombatController.Status.FAILED) {
             if (entry.mode != CompanionEntry.Mode.PAUSED) pauseSafely(entry, body, result.code());
@@ -1015,7 +1020,7 @@ final class BehaviorDirector {
         details.put("distanceSquared", Double.toString(result.distanceSquared()));
         details.put("action", result.action().name());
         details.put("targetPresent", Boolean.toString(target != null));
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 result.code(), "", 0, 0, java.util.List.of(), details));
     }
 
@@ -1056,7 +1061,7 @@ final class BehaviorDirector {
         boolean clear = threat == null || !threat.isAlive() || threat.distanceToSqr(body) >= 36.0D;
         if (clear && displacement >= 9.0D) {
             if (++retreat.clearTicks < 5) { actionGateway.stopInput(body); return; }
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "SAFETY_RETREAT_COMPLETE", retreat.threatId.toString(), 1, 1));
             actionGateway.stopInput(body);
             actionGateway.completeBehavior(body, true, "NONE", server.getTickCount());
@@ -1076,7 +1081,7 @@ final class BehaviorDirector {
             entry.mode = CompanionEntry.Mode.PAUSED;
             entry.resumeMode = CompanionEntry.Mode.IDLE;
             releaseCurrent(entry, "SAFETY_RETREAT_STUCK");
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "SAFETY_RETREAT_STUCK", "", 1, 0));
             savedData.changed();
             return;
@@ -1180,7 +1185,7 @@ final class BehaviorDirector {
             }
             int available = nearbyResourceCount(body, item, 16.0D);
             if (available < parameters.quantity() && !parameters.allowPartial()) {
-                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                         "RESOURCE_INSUFFICIENT", parameters.itemId(), parameters.quantity(), available));
                 return SkillProgress.failed(parameters, "RESOURCE_INSUFFICIENT");
             }
@@ -1269,7 +1274,7 @@ final class BehaviorDirector {
             }
             if (selection == null) return SkillProgress.failed(parameters, "RECIPE_UNAVAILABLE");
             if (selection.availableItems < parameters.quantity() && !parameters.allowPartial()) {
-                observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+                observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                         "MATERIALS_INSUFFICIENT", parameters.itemId(), parameters.quantity(), selection.availableItems));
                 return SkillProgress.failed(parameters, "MATERIALS_INSUFFICIENT");
             }
@@ -1394,29 +1399,15 @@ final class BehaviorDirector {
                 server.getTickCount(), null, healthBaseline, null, null, 0);
     }
 
-    private MenuProgress createMenuAction(CompanionPlayer body, SkillParameters parameters) {
-        String action = parameters.menuAction();
-        if (!Set.of("CLICK", "QUICK_MOVE", "CLOSE").contains(action)) {
-            return MenuProgress.failed(parameters, "MENU_ACTION_INVALID");
-        }
-        MenuSessionTracker.Validation session = MenuSessionTracker.validate(
-                body, parameters.sessionToken());
-        if (!session.valid()) return MenuProgress.failed(parameters, session.code());
-        if (!action.equals("CLOSE")) {
-            if (parameters.slot() == null || parameters.slot() < 0
-                    || parameters.slot() >= session.menu().slots.size() || parameters.slot() > 127) {
-                return MenuProgress.failed(parameters, "MENU_SLOT_INVALID");
-            }
-        }
-        if (action.equals("CLICK") && (parameters.button() == null
-                || parameters.button() < 0 || parameters.button() > 1)) {
-            return MenuProgress.failed(parameters, "MENU_BUTTON_INVALID");
-        }
-        return new MenuProgress(parameters, server.getTickCount(), null);
+    private com.mccompanion.core.body.menu.MenuActionController.Session createMenuAction(
+            CompanionPlayer body, SkillParameters parameters) {
+        return new com.mccompanion.core.body.menu.MenuActionController.Session(
+                new com.mccompanion.core.body.menu.MenuActionController.Request(parameters.sessionToken(),
+                        parameters.menuAction(), parameters.slot(), parameters.button()), server.getTickCount());
     }
 
     private void recordShortage(CompanionEntry entry, SkillParameters parameters, int available) {
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 "ITEM_INSUFFICIENT", parameters.itemId(), parameters.quantity(), Math.max(0, available)));
     }
 
@@ -1434,7 +1425,7 @@ final class BehaviorDirector {
         if (defend != null) { tickDefend(entry, body, defend); return; }
         InteractionProgress interaction = interactions.get(entry.companionId);
         if (interaction != null) { tickInteraction(entry, body, interaction); return; }
-        MenuProgress menu = menuActions.get(entry.companionId);
+        var menu = menuActions.get(entry.companionId);
         if (menu != null) { tickMenuAction(entry, body, menu); return; }
         SkillProgress progress = skills.get(entry.companionId);
         if (progress == null) { pauseSafely(entry, body, "RECOVERY_REQUIRED"); return; }
@@ -1456,7 +1447,7 @@ final class BehaviorDirector {
     private void tickSmallBlueprint(CompanionEntry entry, CompanionPlayer body) {
         if (!entry.blueprintSession.plan().anchor().dimension()
                 .equals(body.serverLevel().dimension().location().toString())) {
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "BLUEPRINT_DIMENSION_CHANGED", "", 0, 0));
             pauseSafely(entry, body, "BLUEPRINT_DIMENSION_CHANGED");
             return;
@@ -1465,7 +1456,7 @@ final class BehaviorDirector {
         var result = smallBlueprints.tick(body, entry.blueprintSession,
                 target -> tickNavigation(entry, body, target, 0.10D * 0.10D, true));
         if (result.completed() != completedBeforeTick) navigation.remove(entry.companionId);
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 result.code(), "", result.total(), result.completed(), java.util.List.of(), java.util.Map.of(
                 "completedBlocks", Integer.toString(result.completed()),
                 "totalBlocks", Integer.toString(result.total()),
@@ -1540,7 +1531,7 @@ final class BehaviorDirector {
         actionGateway.applyMoveInput(body, result.yaw(), result.jump(), result.sprint());
     }
 
-    private static CompanionRegistry.BehaviorObservation survivalObservation(
+    private static BodySnapshots.BehaviorObservation survivalObservation(
             String code, SkillParameters parameters, MinecraftSurvivalNavigationExecution.Result result) {
         String destroyed = result.destroyed().stream().map(action -> action.expectedBlockId() + '@'
                         + action.position().x() + ',' + action.position().y() + ',' + action.position().z())
@@ -1548,7 +1539,7 @@ final class BehaviorDirector {
         String placed = result.placed().stream().map(action -> action.expectedBlockId() + '@'
                         + action.position().x() + ',' + action.position().y() + ',' + action.position().z())
                 .collect(java.util.stream.Collectors.joining(";"));
-        return new CompanionRegistry.BehaviorObservation(code, "",
+        return new BodySnapshots.BehaviorObservation(code, "",
                 parameters.maxBreakBlocks() + parameters.maxPlaceBlocks(),
                 result.brokenBlocks() + result.placedBlocks(), java.util.List.of(), java.util.Map.of(
                 "target", parameters.dimension() + ':' + parameters.x() + ',' + parameters.y() + ',' + parameters.z(),
@@ -1584,7 +1575,7 @@ final class BehaviorDirector {
             pauseSafely(entry, body, "LOOK_VERIFICATION_FAILED");
             return;
         }
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 "LOOK_COMPLETE", "", 1, 1));
         stop(entry, body, true, "NONE");
         entry.mode = CompanionEntry.Mode.IDLE;
@@ -1694,7 +1685,7 @@ final class BehaviorDirector {
                 }
             }
         }
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 progress.parameters.capability().equals("AttackEntity") ? "ENTITY_ATTACK_COMPLETE"
                         : progress.parameters.capability().equals("PlaceBlock")
                         ? "BLOCK_PLACE_COMPLETE" : "INTERACTION_COMPLETE",
@@ -1706,56 +1697,13 @@ final class BehaviorDirector {
         savedData.changed();
     }
 
-    private void tickMenuAction(CompanionEntry entry, CompanionPlayer body, MenuProgress progress) {
-        if (progress.failureCode != null) {
-            pauseSafely(entry, body, progress.failureCode);
-            return;
-        }
-        if (server.getTickCount() - progress.startedTick > 20) {
-            pauseSafely(entry, body, "MENU_ACTION_TIMEOUT");
-            return;
-        }
-        MenuSessionTracker.Validation session = MenuSessionTracker.validate(
-                body, progress.parameters.sessionToken());
-        if (!session.valid()) {
-            pauseSafely(entry, body, session.code());
-            return;
-        }
-        actionGateway.stopInput(body);
-        String action = progress.parameters.menuAction();
-        if (action.equals("CLOSE")) {
-            body.closeContainer();
-            MenuSessionTracker.invalidate(body.getUUID());
-            actionGateway.markVanillaMenuAction(body);
-            if (body.containerMenu != body.inventoryMenu) {
-                pauseSafely(entry, body, "MENU_CLOSE_FAILED");
-                return;
-            }
-        } else {
-            session.menu().broadcastChanges();
-            MenuEffectSnapshot before = menuEffectSnapshot(session.menu());
-            MenuMutationTracker mutations = new MenuMutationTracker();
-            session.menu().addSlotListener(mutations);
-            ClickType clickType = action.equals("QUICK_MOVE") ? ClickType.QUICK_MOVE : ClickType.PICKUP;
-            int button = action.equals("CLICK") ? progress.parameters.button() : 0;
-            try {
-                session.menu().clicked(progress.parameters.slot(), button, clickType, body);
-                session.menu().broadcastChanges();
-            } finally {
-                session.menu().removeSlotListener(mutations);
-            }
-            actionGateway.markVanillaMenuAction(body);
-            if (!mutations.changed && !menuEffectChanged(before, session.menu())) {
-                logger.warn("companion_effect_uncertain companion={} capability=MenuAction action={} slot={} "
-                                + "containerId={} stateId={}",
-                        entry.companionId, action, progress.parameters.slot(),
-                        session.menu().containerId, session.menu().getStateId());
-                pauseSafely(entry, body, "UNCERTAIN_EFFECT");
-                return;
-            }
-        }
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
-                "MENU_ACTION_COMPLETE", action, 1, 1));
+    private void tickMenuAction(CompanionEntry entry, CompanionPlayer body,
+            com.mccompanion.core.body.menu.MenuActionController.Session progress) {
+        var result = progress.tick(new MinecraftInventoryMenuPort(body, actionGateway), server.getTickCount());
+        if (!result.terminal()) return;
+        if (!result.success()) { pauseSafely(entry, body, result.code()); return; }
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
+                result.code(), progress.request().action(), 1, 1));
         stop(entry, body, true, "NONE");
         entry.mode = CompanionEntry.Mode.IDLE;
         entry.resumeMode = CompanionEntry.Mode.IDLE;
@@ -1837,7 +1785,7 @@ final class BehaviorDirector {
     private void tickCollection(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
         int collected = count(body, progress.item) - progress.itemBaseline;
         if (collected >= progress.target) {
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "COLLECT_COMPLETE", progress.parameters.itemId(), progress.parameters.quantity(), collected));
             actionGateway.stopInput(body);
             stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
@@ -1914,15 +1862,15 @@ final class BehaviorDirector {
             BlockPos position = scan.center.offset(xOffset, yOffset, zOffset);
             if (!body.serverLevel().hasChunkAt(position)) continue;
             if (body.serverLevel().getBlockState(position).is(scan.block) && scan.candidates.size() < 64) {
-                scan.candidates.add(new CompanionRegistry.ScanCandidate(
+                scan.candidates.add(new BodySnapshots.ScanCandidate(
                         BuiltInRegistries.BLOCK.getKey(scan.block).toString(), scan.parameters.dimension(),
                         position.getX(), position.getY(), position.getZ(),
                         position.distSqr(scan.center)));
             }
         }
         if (scan.index < total) return;
-        scan.candidates.sort(java.util.Comparator.comparingDouble(CompanionRegistry.ScanCandidate::distanceSquared));
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        scan.candidates.sort(java.util.Comparator.comparingDouble(BodySnapshots.ScanCandidate::distanceSquared));
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 "SCAN_COMPLETE", scan.parameters.itemId(), total, scan.candidates.size(), scan.candidates));
         stop(entry, body, true, "NONE");
         entry.mode = CompanionEntry.Mode.IDLE;
@@ -2009,7 +1957,7 @@ final class BehaviorDirector {
             if (!body.gameMode.destroyBlock(target) || body.serverLevel().getBlockState(target).is(mine.block)) {
                 pauseSafely(entry, body, "BLOCK_BREAK_REJECTED"); return;
             }
-            mine.destroyed.add(new CompanionRegistry.ScanCandidate(
+            mine.destroyed.add(new BodySnapshots.ScanCandidate(
                     BuiltInRegistries.BLOCK.getKey(mine.block).toString(), mine.parameters.dimension(),
                     target.getX(), target.getY(), target.getZ(), mine.targets.getFirst().distSqr(target)));
             body.serverLevel().getEntitiesOfClass(ItemEntity.class, dropArea,
@@ -2032,8 +1980,8 @@ final class BehaviorDirector {
                 count(body, expected.getKey()) - mine.inventoryBaseline.getOrDefault(expected.getKey(), 0)
                         >= expected.getValue());
         if (mine.expectedDropCount > 0 && drops.isEmpty() && inventoryVerified) {
-            mine.destroyed.sort(java.util.Comparator.comparingDouble(CompanionRegistry.ScanCandidate::distanceSquared));
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            mine.destroyed.sort(java.util.Comparator.comparingDouble(BodySnapshots.ScanCandidate::distanceSquared));
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "MINE_COMPLETE", mine.parameters.itemId(), mine.parameters.quantity(),
                     mine.destroyed.size(), mine.destroyed));
             actionGateway.stopInput(body);
@@ -2078,7 +2026,7 @@ final class BehaviorDirector {
         if (selection == null) return SmeltProgress.failed(parameters, "SMELTING_RECIPE_UNAVAILABLE");
         int availableOutput = selection.availableInputs * selection.outputPerInput;
         if (availableOutput < parameters.quantity() && !parameters.allowPartial()) {
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "MATERIALS_INSUFFICIENT", parameters.itemId(), parameters.quantity(), availableOutput));
             return SmeltProgress.failed(parameters, "MATERIALS_INSUFFICIENT");
         }
@@ -2157,7 +2105,7 @@ final class BehaviorDirector {
     }
 
     private void finishDefend(CompanionEntry entry, CompanionPlayer body, String result) {
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 "DEFEND_COMPLETE", result, 1, 1));
         actionGateway.stopInput(body);
         stop(entry, body, true, "NONE");
@@ -2207,7 +2155,7 @@ final class BehaviorDirector {
                 pauseSafely(entry, body, "FURNACE_RESULT_PICKUP_FAILED"); return;
             }
             returnFurnaceInputs(body);
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "SMELT_COMPLETE", progress.parameters.itemId(), progress.parameters.quantity(), produced));
             stop(entry, body, true, "NONE"); entry.mode = CompanionEntry.Mode.IDLE;
             entry.resumeMode = CompanionEntry.Mode.IDLE; savedData.changed(); return;
@@ -2389,7 +2337,7 @@ final class BehaviorDirector {
     private void tickDrop(CompanionEntry entry, CompanionPlayer body, SkillProgress progress) {
         int dropped = progress.itemBaseline - count(body, progress.item);
         if (dropped >= progress.target) {
-            observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+            observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                     "DROP_COMPLETE", progress.parameters.itemId(), progress.parameters.quantity(), dropped));
             stop(entry, body, true, "NONE");
             entry.mode = CompanionEntry.Mode.IDLE;
@@ -2444,7 +2392,7 @@ final class BehaviorDirector {
             return;
         }
         if (body.isUsingItem()) body.releaseUsingItem();
-        observations.put(entry.companionId, new CompanionRegistry.BehaviorObservation(
+        observations.put(entry.companionId, new BodySnapshots.BehaviorObservation(
                 "ITEM_USE_COMPLETE", progress.parameters.itemId(), 1, 1));
         stop(entry, body, true, "NONE");
         entry.mode = CompanionEntry.Mode.IDLE;
@@ -2783,11 +2731,7 @@ final class BehaviorDirector {
 
     private String claim(CompanionEntry entry, BodyControlArbiter.Authority authority,
             String ownerIdentity, String reason) {
-        var decision = controlArbiter.claim(entry.companionId, authority, ownerIdentity, reason);
-        if (decision.accepted()) {
-            controlTokens.computeIfAbsent(entry.companionId, ignored -> new HashMap<>())
-                    .put(authority, decision.claimToken());
-        }
+        var decision = controls.claim(entry.companionId, authority, ownerIdentity, reason);
         if (decision.accepted() && !decision.code().equals("UNCHANGED")) {
             logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
                     entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
@@ -2797,42 +2741,20 @@ final class BehaviorDirector {
 
     private void release(CompanionEntry entry, BodyControlArbiter.Authority authority,
             String ownerIdentity, String reason) {
-        var snapshot = controlArbiter.snapshot(entry.companionId);
-        if (snapshot.authority() != authority || !snapshot.ownerIdentity().equals(ownerIdentity)) return;
-        String token = controlTokens.getOrDefault(entry.companionId, Map.of()).get(authority);
-        var decision = controlArbiter.release(entry.companionId, authority, token, reason);
-        if (decision.accepted()) {
-            Map<BodyControlArbiter.Authority, String> tokens = controlTokens.get(entry.companionId);
-            if (tokens != null) tokens.remove(authority);
-        }
+        var decision = controls.release(entry.companionId, authority, ownerIdentity, reason).orElse(null);
+        if (decision == null) return;
         logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
                 entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
     }
 
     private void releaseCurrent(CompanionEntry entry, String reason) {
-        var snapshot = controlArbiter.snapshot(entry.companionId);
-        if (snapshot.authority() == BodyControlArbiter.Authority.OWNER_IMMEDIATE
-                && !snapshot.ownerIdentity().equals("owner:" + entry.ownerId)) return;
-        var decision = controlArbiter.releaseCurrent(entry.companionId, snapshot.claimToken(), reason);
-        if (decision.accepted()) controlTokens.remove(entry.companionId);
+        var decision = controls.releaseCurrent(entry.companionId,
+                "owner:" + entry.ownerId, reason).orElse(null);
+        if (decision == null) return;
         if (!decision.code().equals("UNCHANGED")) {
             logger.info("companion_control_transition companion={} previous={} current={} revision={} reason={}",
                     entry.companionId, decision.previous(), decision.current(), decision.revision(), decision.reason());
         }
-    }
-
-    private static String runtimeIdentity(CompanionEntry entry) {
-        return "runtime:" + entry.runtimeEpoch + ":"
-                + (entry.runtimeBehaviorId == null ? "" : entry.runtimeBehaviorId)
-                + ":" + entry.runtimeBehaviorRevision;
-    }
-
-    private static boolean isSuspension(String code) {
-        return code.equals("LOCAL_THREAT_HANDLING") || code.startsWith("RECOVERY_")
-                || code.equals("THREAT_RECOVERY_TIMEOUT") || code.equals("RUNTIME_PAUSE") || code.equals("RUNTIME_DISCONNECTED")
-                || code.equals("RUNTIME_OFFLINE") || code.equals("LEASE_EXPIRED")
-                || code.equals("PAUSED_BY_OWNER") || code.equals("LOW_HEALTH")
-                || code.equals("ENVIRONMENT_HAZARD") || code.equals("DROWNING_RISK");
     }
 
     private static final class EntityBehaviorProgress {
@@ -2978,22 +2900,6 @@ final class BehaviorDirector {
         }
     }
 
-    private static final class MenuProgress {
-        private final SkillParameters parameters;
-        private final int startedTick;
-        private final String failureCode;
-
-        private MenuProgress(SkillParameters parameters, int startedTick, String failureCode) {
-            this.parameters = parameters;
-            this.startedTick = startedTick;
-            this.failureCode = failureCode;
-        }
-
-        private static MenuProgress failed(SkillParameters parameters, String code) {
-            return new MenuProgress(parameters, 0, code);
-        }
-    }
-
     private static final class ScanProgress {
         private final SkillParameters parameters;
         private final Block block;
@@ -3002,7 +2908,7 @@ final class BehaviorDirector {
         private final int verticalRadius;
         private final int startedTick;
         private final String failureCode;
-        private final java.util.List<CompanionRegistry.ScanCandidate> candidates = new java.util.ArrayList<>();
+        private final java.util.List<BodySnapshots.ScanCandidate> candidates = new java.util.ArrayList<>();
         private int index;
 
         private ScanProgress(SkillParameters parameters, Block block, BlockPos center, int radius,
@@ -3025,7 +2931,7 @@ final class BehaviorDirector {
         private final String failureCode;
         private final java.util.Set<UUID> dropEntities = new java.util.HashSet<>();
         private final java.util.Map<Item, Integer> expectedDrops = new java.util.HashMap<>();
-        private final java.util.List<CompanionRegistry.ScanCandidate> destroyed = new java.util.ArrayList<>();
+        private final java.util.List<BodySnapshots.ScanCandidate> destroyed = new java.util.ArrayList<>();
         private int targetIndex;
         private float destroyProgress;
         private int expectedDropCount;

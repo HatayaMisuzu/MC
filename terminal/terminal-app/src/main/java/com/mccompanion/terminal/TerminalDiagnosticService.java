@@ -1,5 +1,6 @@
 package com.mccompanion.terminal;
 
+import com.mccompanion.protocol.BuildIdentity;
 import com.mccompanion.terminal.diagnostics.DiagnosticEngine;
 import com.mccompanion.terminal.diagnostics.DiagnosticResult;
 import com.mccompanion.terminal.install.InstallTransaction;
@@ -18,7 +19,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 /** Combines static instance checks with control-home and live Runtime evidence. */
 final class TerminalDiagnosticService {
-    private static final String PROTOCOL = "mc-companion/1";
+    private static final String PROTOCOL = BuildIdentity.PROTOCOL;
     private static final ObjectMapper JSON = new ObjectMapper();
 
     List<DiagnosticResult> run(

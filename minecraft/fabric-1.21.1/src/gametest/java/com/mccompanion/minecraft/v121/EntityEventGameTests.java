@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.bridge.EntityEventTracker;
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import java.time.Instant;
@@ -61,7 +65,7 @@ public final class EntityEventGameTests implements FabricGameTest {
         helper.assertTrue(registry.create(owner, "EventBody").success(), "entity event companion create failed");
         CompanionPlayer body = registry.runtimeBody(registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow());
+                .map(BodySnapshots.RuntimeSnapshot::companionId).findFirst().orElseThrow());
         helper.assertTrue(body != null, "entity event body missing");
         helper.assertTrue(registry.follow(owner).success(), "follow target setup failed");
 
@@ -198,14 +202,14 @@ public final class EntityEventGameTests implements FabricGameTest {
                         minimum, maximum, 80));
     }
 
-    private static CompanionRegistry.RuntimeSnapshot snapshot(CompanionRegistry registry, String companionId) {
+    private static BodySnapshots.RuntimeSnapshot snapshot(CompanionRegistry registry, String companionId) {
         return registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
     }
 
     private static void await(GameTestHelper helper, CompanionRegistry registry, String companionId,
                               int ticksRemaining, BooleanSupplier condition, String failure, Runnable completed) {
-        CompanionRegistry.RuntimeSnapshot snapshot = snapshot(registry, companionId);
+        BodySnapshots.RuntimeSnapshot snapshot = snapshot(registry, companionId);
         helper.assertTrue(!snapshot.behaviorState().equals("PAUSED"),
                 failure + ": behavior paused with " + snapshot.behaviorObservation());
         if (condition.getAsBoolean()) { completed.run(); return; }
@@ -215,12 +219,6 @@ public final class EntityEventGameTests implements FabricGameTest {
     }
 
     private static void prepareArena(CompanionPlayer body, ServerPlayer owner, ServerPlayer target, Vec3 origin) {
-        owner.teleportTo(owner.serverLevel(), origin.x, origin.y, origin.z + 8.0D,
-                owner.getYRot(), owner.getXRot());
-        body.teleportTo(body.serverLevel(), origin.x, origin.y, origin.z, body.getYRot(), body.getXRot());
-        target.teleportTo(target.serverLevel(), origin.x + 10.0D, origin.y, origin.z,
-                target.getYRot(), target.getXRot());
-        body.setDeltaMovement(Vec3.ZERO);
         int chunkX = net.minecraft.core.BlockPos.containing(origin).getX() >> 4;
         int chunkZ = net.minecraft.core.BlockPos.containing(origin).getZ() >> 4;
         for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++) {
@@ -235,5 +233,11 @@ public final class EntityEventGameTests implements FabricGameTest {
                 }
             }
         }
+        owner.teleportTo(owner.serverLevel(), origin.x, origin.y, origin.z + 8.0D,
+                owner.getYRot(), owner.getXRot());
+        body.teleportTo(body.serverLevel(), origin.x, origin.y, origin.z, body.getYRot(), body.getXRot());
+        target.teleportTo(target.serverLevel(), origin.x + 10.0D, origin.y, origin.z,
+                target.getYRot(), target.getXRot());
+        body.setDeltaMovement(Vec3.ZERO);
     }
 }

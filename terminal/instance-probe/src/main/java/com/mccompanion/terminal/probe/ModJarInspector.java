@@ -10,6 +10,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -37,8 +39,11 @@ public final class ModJarInspector {
             ZipEntry fabric = zip.getEntry("fabric.mod.json");
             if (fabric != null) {
                 JsonNode node = readJson(zip, fabric);
+                Map<String, String> dependencies = new LinkedHashMap<>();
+                node.path("depends").fields().forEachRemaining(field -> dependencies.put(field.getKey(), constraint(field.getValue())));
                 return new ModInfo(jar, node.path("id").asText("unknown"), node.path("version").asText("unknown"),
-                        isCompanion(node.path("id").asText()), "fabric", fabricMinecraft(node));
+                        isCompanion(node.path("id").asText()), "fabric", constraint(node.path("depends").path("minecraft")),
+                        dependencies.getOrDefault("fabricloader", "unknown"), dependencies);
             }
             ZipEntry neo = zip.getEntry("META-INF/neoforge.mods.toml");
             if (neo != null) return tomlInfo(jar, zip, neo, "neoforge");
@@ -65,8 +70,15 @@ public final class ModJarInspector {
         }
         String id = match(text, "(?m)^\\s*modId\\s*=\\s*[\"']([^\"']+)");
         String version = match(text, "(?m)^\\s*version\\s*=\\s*[\"']([^\"']+)");
-        String minecraft = match(text, "(?s)modId\\s*=\\s*[\"']minecraft[\"'].*?versionRange\\s*=\\s*[\"']([^\"']+)");
-        return new ModInfo(jar, id, version, isCompanion(id), loader, minecraft);
+        Map<String, String> dependencies = new LinkedHashMap<>();
+        for (String section : text.split("(?m)^\\s*\\[\\[")) {
+            if (!section.startsWith("dependencies.")) continue;
+            String dependency = match(section, "(?m)^\\s*modId\\s*=\\s*[\"']([^\"']+)");
+            String range = match(section, "(?m)^\\s*versionRange\\s*=\\s*[\"']([^\"']+)");
+            if (!dependency.equals("unknown")) dependencies.put(dependency, range);
+        }
+        return new ModInfo(jar, id, version, isCompanion(id), loader,
+                dependencies.getOrDefault("minecraft", "unknown"), dependencies.getOrDefault(loader, "unknown"), dependencies);
     }
     private static String match(String text, String pattern) {
         var matcher = java.util.regex.Pattern.compile(pattern).matcher(text);
@@ -76,6 +88,23 @@ public final class ModJarInspector {
         String value = id == null ? "" : id.toLowerCase(Locale.ROOT);
         return value.equals("minecraft_ai_companion") || value.equals("minecraft-ai-companion") || value.equals("mccompanion");
     }
-    private static String fabricMinecraft(JsonNode node){JsonNode value=node.path("depends").path("minecraft");if(value.isTextual())return value.asText();if(value.isArray()&&value.size()>0)return value.get(0).asText();return "unknown";}
-    public record ModInfo(Path jar, String id, String version, boolean companion, String metadataType, String minecraftRange) {}
+    private static String constraint(JsonNode value) {
+        if (value.isTextual()) return value.asText();
+        if (value.isArray() && !value.isEmpty() && value.size() <= 16) {
+            List<String> alternatives = new ArrayList<>();
+            for (JsonNode entry : value) {
+                if (!entry.isTextual()) return "unknown";
+                alternatives.add(entry.asText());
+            }
+            return String.join(" || ", alternatives);
+        }
+        return "unknown";
+    }
+    public record ModInfo(Path jar, String id, String version, boolean companion, String metadataType,
+                          String minecraftRange, String loaderRange, Map<String, String> dependencies) {
+        public ModInfo { dependencies = Map.copyOf(dependencies); }
+        public ModInfo(Path jar, String id, String version, boolean companion, String metadataType, String minecraftRange) {
+            this(jar, id, version, companion, metadataType, minecraftRange, "unknown", Map.of());
+        }
+    }
 }

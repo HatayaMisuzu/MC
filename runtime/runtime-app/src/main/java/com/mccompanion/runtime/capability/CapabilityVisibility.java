@@ -48,25 +48,18 @@ public final class CapabilityVisibility {
     }
 
     private static boolean supportsFullBridge(Handshake handshake) {
-        return "fabric".equalsIgnoreCase(handshake.loader()) && "1.21.1".equals(handshake.minecraftVersion())
-                || "forge".equalsIgnoreCase(handshake.loader()) && "1.20.1".equals(handshake.minecraftVersion());
+        return com.mccompanion.protocol.target.TargetCatalog.bundled()
+                .find(handshake.minecraftVersion(), handshake.loader())
+                .map(com.mccompanion.protocol.target.TargetDescriptor::fullBridge).orElse(false);
     }
 
     private static CapabilityStatus value(CapabilityDefinition definition, CapabilityLifecycleState state, String reason) {
         return new CapabilityStatus(definition.name(), state, reason);
     }
 
-    private static boolean bodyDeclares(JsonNode capabilities, String name) {
-        JsonNode value = capabilities == null ? null : capabilities.get(name);
-        if (value == null || value.isNull()) return false;
-        if (value.isBoolean()) return value.asBoolean();
-        if (value.isTextual()) return value.asText().equalsIgnoreCase("AVAILABLE")
-                || value.asText().equalsIgnoreCase("AVAILABLE_NOW");
-        if (!value.isObject()) return false;
-        return value.path("available").asBoolean(false)
-                || value.path("enabled").asBoolean(false)
-                || value.path("availability").asText("").equalsIgnoreCase("AVAILABLE")
-                || value.path("state").asText("").equalsIgnoreCase("AVAILABLE_NOW");
+    private static boolean bodyDeclares(com.mccompanion.protocol.CapabilitySet capabilities, String name) {
+        return capabilities.find(name).filter(com.mccompanion.protocol.CapabilityDescriptor::available)
+                .filter(value -> "1.0".equals(value.version())).isPresent();
     }
 
     public record Snapshot(List<CapabilityStatus> statuses) {

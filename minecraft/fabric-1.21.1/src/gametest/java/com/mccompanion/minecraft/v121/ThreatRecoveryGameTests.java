@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.core.body.build.SmallBlueprint;
 import java.util.ArrayList;
 import java.util.Map;

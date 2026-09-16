@@ -54,11 +54,12 @@ tasks.named('resolveAndLockAll') {
     dependsOn subprojects.collect { it.tasks.named('resolveAndLockAll') }
 }
 
-def platformBuilds = [
-    'fabric-1.21.1': file('minecraft/fabric-1.21.1'),
-    'neoforge-1.21.1': file('minecraft/neoforge-1.21.1'),
-    'forge-1.20.1': file('minecraft/forge-1.20.1')
-]
+def targetCatalog = new JsonSlurper().parse(file('targets/catalog.json'))
+if (targetCatalog.schemaVersion != 1) throw new GradleException('Unsupported target catalog schema')
+def targetDeclarations = targetCatalog.targets
+def platformBuilds = targetDeclarations.collectEntries { target ->
+    [(target.targetId): file(target.buildDirectory)]
+}
 
 // Preserve offline operation across nested Loader builds and serialize shared outputs.
 def platformGradleCommand = { List<String> arguments ->
@@ -79,9 +80,12 @@ platformBuilds.each { target, directory ->
 // builds (or a loader build overlapping root `check`) can race on the same Windows JAR files.
 // Keep the public `check buildPlatforms` command deterministic without disabling parallelism for
 // the ordinary shared-module test graph.
-tasks.named('build-fabric-1.21.1') { mustRunAfter 'check' }
-tasks.named('build-forge-1.20.1') { mustRunAfter 'build-fabric-1.21.1' }
-tasks.named('build-neoforge-1.21.1') { mustRunAfter 'build-forge-1.20.1' }
+def previousPlatformTask = 'check'
+platformBuilds.keySet().each { target ->
+    def previous = previousPlatformTask
+    tasks.named("build-${target}") { mustRunAfter previous }
+    previousPlatformTask = "build-${target}"
+}
 
 tasks.register('buildPlatforms') {
     group = 'build'
@@ -113,11 +117,9 @@ tasks.register('launchTest') {
     dependsOn platformLaunchTasks.values()
 }
 
-def platformGameTests = [
-    'fabric-1.21.1'  : 'runGameTest',
-    'neoforge-1.21.1': 'runGameTestServer',
-    'forge-1.20.1'   : 'runGameTestServer'
-].collectEntries { target, taskName ->
+def platformGameTests = targetDeclarations.collectEntries { declaration ->
+    def target = declaration.targetId
+    def taskName = declaration.gameTestTask
     [(target): tasks.register("gameTest-${target}", Exec) {
         group = 'verification'
         workingDir = platformBuilds[target]
@@ -611,6 +613,35 @@ tasks.register('stageTerminal') {
     group = 'distribution'
     dependsOn 'patchJpackageLaunchers', ':runtime:runtime-app:installDist', 'buildPlatforms', 'webBuild'
     doLast {
+        def targetSha256 = { f ->
+            java.security.MessageDigest.getInstance('SHA-256').digest(f.bytes).encodeHex().toString()
+        }
+        def targetArtifacts = targetDeclarations.collectEntries { target ->
+            def artifactRoot = file("${target.buildDirectory}/build/libs").canonicalFile
+            def targetManifestFile = new File(artifactRoot, 'release-manifest.json')
+            if (!targetManifestFile.isFile()) {
+                throw new GradleException("Missing target release manifest for ${target.targetId}")
+            }
+            def targetManifest = new JsonSlurper().parse(targetManifestFile)
+            if (targetManifest.version?.toString() != project.version.toString()) {
+                throw new GradleException("Target manifest version mismatch for ${target.targetId}")
+            }
+            def mappings = targetManifest.targets.findAll { it.targetId == target.targetId }
+            if (mappings.size() != 1) {
+                throw new GradleException("Expected one target mapping for ${target.targetId}")
+            }
+            def artifact = new File(artifactRoot, mappings.first().artifact.toString()).canonicalFile
+            if (!artifact.toPath().startsWith(artifactRoot.toPath()) || !artifact.isFile()
+                    || !artifact.name.endsWith('.jar')) {
+                throw new GradleException("Invalid target artifact path for ${target.targetId}")
+            }
+            def fileEntries = targetManifest.files.findAll { it.path == mappings.first().artifact }
+            if (fileEntries.size() != 1 || fileEntries.first().size as long != artifact.length()
+                    || fileEntries.first().sha256 != targetSha256(artifact)) {
+                throw new GradleException("Target artifact hash mismatch for ${target.targetId}")
+            }
+            [(target.targetId): artifact]
+        }
         copy {
             into terminalImage
             from(terminalJpackage.map { it.dir('mcac') })
@@ -619,9 +650,11 @@ tasks.register('stageTerminal') {
             from('tools/runtime-app-bundled.cmd')
             from('terminal/web-ui/dist') { into 'web' }
             from('启动终端.cmd')
-            from('minecraft/fabric-1.21.1/build/libs') { into 'artifacts/fabric-1.21.1'; include '*.jar'; exclude '*sources*', '*gametest*' }
-            from('minecraft/neoforge-1.21.1/build/libs') { into 'artifacts/neoforge-1.21.1'; include '*.jar'; exclude '*sources*' }
-            from('minecraft/forge-1.20.1/build/libs') { into 'artifacts/forge-1.20.1'; include '*.jar'; exclude '*sources*' }
+            targetDeclarations.each { target ->
+                from(targetArtifacts[target.targetId]) {
+                    into "artifacts/${target.targetId}"
+                }
+            }
             // Gradle 单文件 from 的目标路径是文件 basename；docs/ 下的文档必须
             // 用 into 保留目录结构（例如 docs/user/USER_GUIDE.zh-CN.md）。
             releaseDocumentation.each { doc ->
@@ -632,6 +665,7 @@ tasks.register('stageTerminal') {
                     from(doc)
                 }
             }
+            from('targets/catalog.json') { into 'targets' }
             from('LICENSE') { into 'legal' }
             from('NOTICE') { into 'legal' }
         }
@@ -651,7 +685,12 @@ tasks.register('stageTerminal') {
                 .files.findAll { it.isFile() }.sort { relative(it) }
         def manifest=[schemaVersion:1,product:'Minecraft AI Companion',version:project.version.toString(),
                 buildType:'RC_CANDIDATE',sourceCommit:sourceCommit,
-                files:payload.collect{f->[path:relative(f),size:f.length(),sha256:sha256(f)]}]
+                files:payload.collect{f->[path:relative(f),size:f.length(),sha256:sha256(f)]},
+                targets:targetDeclarations.collect { target ->
+                    def artifacts = payload.findAll { f -> relative(f).startsWith("artifacts/${target.targetId}/") && f.name.endsWith('.jar') }
+                    if (artifacts.size() != 1) throw new GradleException("Expected one release artifact for ${target.targetId}")
+                    [targetId:target.targetId, artifact:relative(artifacts.first())]
+                }]
         file("${root}/release-manifest.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson(manifest))+'\n','UTF-8')
         def licenseByCoordinate=[
                 'org.java-websocket:Java-WebSocket':'Apache-2.0',

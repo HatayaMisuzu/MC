@@ -11,6 +11,7 @@ import com.mccompanion.compat.CompatibilityHost;
 import com.mccompanion.compat.CompatibilityPack;
 import com.mccompanion.compat.EnvironmentFingerprint;
 import com.mccompanion.compat.EnvironmentFingerprinter;
+import com.mccompanion.protocol.BuildIdentity;
 import com.mccompanion.terminal.diagnostics.DiagnosticResult;
 import com.mccompanion.terminal.install.InstallPlan;
 import com.mccompanion.terminal.install.InstallTransaction;
@@ -151,7 +152,7 @@ final class WebTerminalApi {
     List<MinecraftInstance> instances = root.context.instances(root.roots());
     ObjectNode value =
         JSON.createObjectNode()
-            .put("version", "0.3.1")
+            .put("version", BuildIdentity.PRODUCT_VERSION)
             .put("backend", "CONNECTED")
             .put("loopbackOnly", true)
             .put("controlHome", "<CONTROL_HOME>")
@@ -217,6 +218,7 @@ final class WebTerminalApi {
       installed = new InstallTransaction().verify(instance.gameDirectory());
     } catch (IOException ignored) {
     }
+    var environmentIssues = com.mccompanion.terminal.install.InstallPlanner.environmentIssues(instance);
     return JSON.createObjectNode()
         .put("id", instance.instanceId())
         .put("launcherId", instance.launcherId())
@@ -230,8 +232,12 @@ final class WebTerminalApi {
         .put("confidence", instance.confidence().name())
         .put("isolation", instance.isolation().name())
         .put("compatible", com.mccompanion.terminal.install.InstallPlanner.isSupported(instance))
+        .put("targetId", com.mccompanion.terminal.install.InstallPlanner.target(instance)
+            .map(com.mccompanion.protocol.target.TargetDescriptor::targetId).orElse(""))
+        .put("environmentReady", environmentIssues.isEmpty())
         .put("installed", installed)
-        .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY");
+        .put("mode", FullBridgeSupport.supports(instance) ? "FULL" : "LOCAL_ONLY")
+        .set("compatibilityIssues", JSON.valueToTree(environmentIssues));
   }
 
   private ObjectNode doctor(JsonNode request) throws Exception {

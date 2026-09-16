@@ -1,4 +1,4 @@
-package com.mccompanion.minecraft.v121;
+package com.mccompanion.core.body;
 
 import com.mccompanion.core.body.build.SmallBlueprint;
 

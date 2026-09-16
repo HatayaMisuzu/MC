@@ -220,6 +220,7 @@ public final class PrimitiveObservationService {
         ObjectNode observation = envelope(body, "MENU")
                 .put("sessionToken", session.token())
                 .put("containerId", session.containerId())
+                .put("observationRevision", session.revision())
                 .put("expiresAtEpochMillis", session.expiresAtEpochMillis())
                 .put("menuType", menuType == null ? "minecraft:unknown" : menuType.toString())
                 .put("slotCount", menu.slots.size())

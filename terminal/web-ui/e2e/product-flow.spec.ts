@@ -137,7 +137,9 @@ async function confirmAndWait(page: Page, locale: Locale) {
 }
 
 async function clickPlan(page: Page, locale: Locale, label: string) {
-  await page.getByRole('button', { name: label, exact: true }).click()
+  const button = page.getByRole('button', { name: label, exact: true })
+  await expect(button).toBeEnabled({ timeout: 15_000 })
+  await button.click()
   await confirmAndWait(page, locale)
 }
 
@@ -147,7 +149,9 @@ async function clickPlanExpectFailure(
   label: string,
   expectedCode: string,
 ) {
-  await page.getByRole('button', { name: label, exact: true }).click()
+  const button = page.getByRole('button', { name: label, exact: true })
+  await expect(button).toBeEnabled({ timeout: 15_000 })
+  await button.click()
   const dialog = page.getByRole('dialog')
   await dialog.getByRole('button', { name: copy[locale].confirm, exact: true }).click()
   await expect(dialog.locator('.operation-meta strong')).toHaveText('FAILED', { timeout: 60_000 })
@@ -258,7 +262,7 @@ async function verifyDiscoveryAndBrain(
   expect(disabled.mode).toBe('disabled')
 }
 
-async function connectProtocolCompanion(runtimePort: number, instanceId: string) {
+async function connectProtocolCompanion(runtimePort: number, runtimeVersion: string, instanceId: string) {
   const profile = resolve(tmpdir(), 'mcac-playwright-fixture', 'local-app-data',
     'MinecraftAICompanion', 'profiles', instanceId)
   const token = readFileSync(resolve(profile, 'pairing.token'), 'ascii').trim()
@@ -281,6 +285,10 @@ async function connectProtocolCompanion(runtimePort: number, instanceId: string)
       const message = JSON.parse(String(event.data))
       if (message.type === 'hello_ack') {
         clearTimeout(timer)
+        if (message.accepted !== true || typeof message.sessionId !== 'string' || !message.sessionId) {
+          reject(new Error(`Runtime rejected Body fixture: ${message.code ?? 'INVALID_ACK'} ${message.message ?? ''}`))
+          return
+        }
         sessionId = message.sessionId
         resolveAck()
       }
@@ -288,18 +296,20 @@ async function connectProtocolCompanion(runtimePort: number, instanceId: string)
   })
   socket.send(JSON.stringify({
     type: 'hello',
-    protocol: 'mc-companion/1',
+    protocol: 'mc-companion/2',
     token,
-    modVersion: 'playwright-fixture',
+    modVersion: runtimeVersion,
     minecraftVersion: '1.21.1',
     loader: 'fabric',
+    targetId: 'fabric-1.21.1',
+    capabilityRevision: 0,
     worldId: 'playwright-world',
     capabilities: {
-      NavigateTo: true,
-      FollowOwner: true,
-      DeliverItem: true,
-      EatAndRecover: true,
-      CraftItem: true,
+      NavigateTo: { availability: 'available', version: '1.0', attributes: {} },
+      FollowOwner: { availability: 'available', version: '1.0', attributes: {} },
+      DeliverItem: { availability: 'available', version: '1.0', attributes: {} },
+      EatAndRecover: { availability: 'available', version: '1.0', attributes: {} },
+      CraftItem: { availability: 'available', version: '1.0', attributes: {} },
     },
   }))
   await acknowledged
@@ -467,9 +477,9 @@ async function startWaitingTaskGraph(page: Page, healthPort: number, token: stri
 async function verifyCompanionAndTaskGraphControls(
   page: Page,
   instanceId: string,
-  runtime: { port: number; healthPort: number },
+  runtime: { port: number; healthPort: number; runtimeVersion: string },
 ) {
-  const fixture = await connectProtocolCompanion(runtime.port, instanceId)
+  const fixture = await connectProtocolCompanion(runtime.port, runtime.runtimeVersion, instanceId)
   try {
     await expect.poll(async () => {
       const value = await apiJson(page,

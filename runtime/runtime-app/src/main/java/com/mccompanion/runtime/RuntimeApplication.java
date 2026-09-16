@@ -190,6 +190,18 @@ public final class RuntimeApplication implements AutoCloseable {
                 } catch (java.sql.SQLException failure) {
                     return java.util.List.of();
                 }
+            }, companionId -> {
+                var binding = Json.object();
+                var session = activeSessionRegistry.forCompanion(companionId).orElse(null);
+                if (session == null) return binding.put("connected", false);
+                var handshake = session.handshake();
+                return binding.put("connected", true)
+                        .put("targetId", handshake.targetId())
+                        .put("worldId", handshake.worldId())
+                        .put("sessionId", session.sessionId())
+                        .put("protocol", handshake.protocol())
+                        .put("componentVersion", handshake.modVersion())
+                        .put("capabilityRevision", session.capabilityRevision());
             });
             SearchProvider searchProvider = searchOverride == null ? createSearchProvider(config, redactor, log) : searchOverride;
             SearchSessionRepository searchSessions = new SearchSessionRepository(database);
@@ -337,7 +349,7 @@ public final class RuntimeApplication implements AutoCloseable {
                     runtimeEvents,
                     webSocket, healthServer, maintenance, cli);
             holder[0] = application;
-            log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/1, legacyProvider=disabled"
+            log.info("Minecraft AI Companion Runtime started: protocol=mc-companion/2, legacyProvider=disabled"
                     + ", externalBrain=" + (externalBrain == null ? "disabled"
                     : brainOverride == null ? config.brain.mode : "injected-replay")
                     + ", database=WAL, bind=" + config.server.bind + ':' + webSocket.getPort());
@@ -444,6 +456,7 @@ public final class RuntimeApplication implements AutoCloseable {
             return;
         }
         log.info("Minecraft AI Companion Runtime shutting down");
+        webSocket.beginShutdown();
         closeQuietly(cli);
         shutdownExecutor(maintenance);
         closeQuietly(runtimeEvents);

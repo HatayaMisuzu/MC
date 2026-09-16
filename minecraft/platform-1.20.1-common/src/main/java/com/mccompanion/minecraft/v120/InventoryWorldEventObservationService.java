@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.bridge.InventoryWorldEventTracker;
 import java.time.Instant;
 import java.util.Map;

@@ -1,6 +1,6 @@
 # MCAC architecture
 
-Updated: 2026-09-04
+Updated: 2026-09-12
 
 ## Authority boundary
 
@@ -56,8 +56,10 @@ External Brain adapters
 Runtime Tool Gateway / MCP / authenticated Brain ingress
                               │
 Task Graph Runtime · Skill Workspace · reviewed Memory · Episode Capsule · Search · Audit
-                              │ authenticated WebSocket
-Minecraft loader bridge (Fabric + Forge full bridge; NeoForge LOCAL_ONLY)
+                              │ authenticated mc-companion/2 WebSocket
+Shared Bridge core (sessions · epochs · correlation · delivery)
+                              │
+Minecraft loader codec/binding (Fabric + Forge full bridge; NeoForge LOCAL_ONLY)
                               │
 Version body / CompanionPlayer / behavior lifecycle
                               │
@@ -71,6 +73,12 @@ Vanilla/Mod player interaction paths
 Current code still contains composite capabilities such as mining, smelting, storage, crafting, and
 defense. They are compatibility conveniences with real vanilla behavior evidence. They must migrate
 to shared primitive executors or declarative built-in Skills and must not remain the only path.
+
+Target support is declared once in `targets/catalog.json`. Build and packaging use it to assemble
+the exact Loader artifact; Runtime, Terminal, Doctor and installer use the packaged resource for
+the same version/range/dependency judgment. Catalog capabilities are expectations for validation.
+Only an authenticated Body's current structured capability snapshot grants session availability.
+Build expectation, session state and verification evidence remain separate facts.
 
 ## Tool, Task Graph, and Skill relationship
 
@@ -119,6 +127,13 @@ receipt explicitly has `completionVerified=false`. The Brain observes later stat
 `task_graph.inspect`. A request/transport timeout therefore does not cancel healthy background
 work. Task Graph nodes may wait up to the connected body's five-minute bounded behavior limit,
 while the graph's own persistent duration and recovery policy remain separate.
+
+Each Task Graph execution persists a versioned compatibility context containing target, world,
+session, Body protocol/component identity, capability revision and exact contracts for Tools the
+graph references. Resume compares only pending nodes, retains completed nodes, and can refresh a
+new session identity only at a safe durable boundary. Target/world/protocol drift, a changed pending
+Tool contract, or an active-boundary session change enters reconciliation; Runtime does not choose a
+replacement plan or replay an effect whose outcome is unknown.
 
 Episode Capsules are deterministic Runtime projections of durable verified records, not model
 summaries and not formal Memory. They contain bounded task/change/location/decision/failure metadata
@@ -182,9 +197,11 @@ features extend these surfaces rather than creating parallel products.
   `ServerPlayer.attack`, and accepts only observed damage/death. Neither the Tool Gateway nor Task
   Graph Runtime chooses a target or develops combat strategy.
 - Menu mutation is a two-stage capability flow: live `menu.inspect` issues a random, process-local
-  sixty-second handle bound to the exact `AbstractContainerMenu` instance and container ID; each
-  click, quick-move, or close revalidates that handle at execution time. Menu replacement, close,
-  expiry, reconnect, or Runtime/Mod process restart invalidates the handle.
+  sixty-second handle bound to the authenticated session, exact menu instance/container ID and
+  observation revision. The shared controller accepts a click, quick-move, or close only after
+  native preconditions pass, then waits for a later observation before reporting success. Menu
+  replacement, close, expiry, reconnect, observation invalidation, or Runtime/Mod process restart
+  invalidates the handle; an unknown effect is reconciled instead of replayed.
 - Generic item use and drop select declared Registry items through vanilla inventory-menu state,
   invoke `ServerPlayerGameMode.useItem` or `ServerPlayer.drop`, and require observed consumption,
   projectile/world-entity, inventory-delta, and action-path evidence rather than editing stacks.
@@ -196,3 +213,5 @@ features extend these surfaces rather than creating parallel products.
   companion, and owner.
 - Runtime failure degrades the body to `LOCAL_ONLY`/`SAFE_IDLE`; it must not prevent Mod loading.
 - Replay is automation evidence, not Live-provider or human-play evidence.
+- `protocol-api`, shared Bridge and shared Body public types compile without Minecraft/Loader APIs;
+  Fabric keeps Jackson, Forge keeps Gson, and NeoForge assembles no remote Bridge core.

@@ -160,8 +160,10 @@ public final class TaskGraphRuntime implements AutoCloseable {
             if (!admission.accepted()) return admissionRejected(call, admission);
             TaskGraphExecutionRecord record;
             try {
+                JsonNode compatibility = TaskGraphCompatibility.capture(graph, definitions,
+                        tools.compatibilityBinding(context));
                 record = repository.create(call.callId(), context, graph,
-                        validation.limits(), boundedInputs, provenance);
+                        validation.limits(), boundedInputs, provenance, compatibility);
                 notifyLifecycle(record, "STARTED");
             } catch (RuntimeException | SQLException failure) {
                 release(admission);
@@ -431,6 +433,35 @@ public final class TaskGraphRuntime implements AutoCloseable {
                     return ToolResult.rejected(call, assessment.code(), assessment.message());
                 }
             }
+            Map<String, ToolDefinition> currentDefinitions = ordinaryDefinitions(context);
+            JsonNode currentBinding = tools.compatibilityBinding(context);
+            if (!TaskGraphCompatibility.isCurrent(record.compatibility())) {
+                if (!recovery) {
+                    TaskGraphExecutionRecord reconciliation = repository.save(record.executionId(), record.revision(),
+                            "RECONCILIATION_REQUIRED", record.currentNodeId(), record.completedNodes(),
+                            record.toolResults(), record.variables(), record.outputs(), record.checkpoints(),
+                            record.evidence(), record.waitingQuestion(), record.result(),
+                            "TASK_GRAPH_COMPATIBILITY_CONTEXT_MISSING");
+                    notifyLifecycle(reconciliation, "PAUSED");
+                    return ToolResult.rejected(call, "TASK_GRAPH_COMPATIBILITY_CONTEXT_MISSING",
+                            "legacy execution requires recovery against a fresh observation before resume");
+                }
+                record = repository.saveCompatibility(record,
+                        TaskGraphCompatibility.capture(record.graph(), currentDefinitions, currentBinding),
+                        "COMPATIBILITY_CONTEXT_MIGRATED");
+            } else {
+                TaskGraphCompatibility.Assessment compatibility = TaskGraphCompatibility.assessResume(
+                        record.compatibility(), record.graph(), record.completedNodes(),
+                        currentDefinitions, currentBinding);
+                if (!compatibility.compatible()) {
+                    return ToolResult.rejected(call, compatibility.code(), compatibility.message());
+                }
+                if (compatibility.refreshRequired()) {
+                    record = repository.saveCompatibility(record,
+                            TaskGraphCompatibility.refreshBinding(record.compatibility(), currentBinding),
+                            "COMPATIBILITY_BINDING_REFRESHED");
+                }
+            }
             long inactiveDeadline = System.nanoTime() + cancellationConfirmationTimeout.toNanos();
             while (active.containsKey(executionId) && System.nanoTime() < inactiveDeadline) {
                 Thread.sleep(5);
@@ -613,7 +644,9 @@ public final class TaskGraphRuntime implements AutoCloseable {
             TaskGraphReplan.removed(record.graph(), graph).forEach(state.withArray("retiredNodeIds")::add);
             state.put("phase", "APPLIED").put("epoch", epoch + 1).put("appliedHash", hash)
                     .put("appliedAt", System.currentTimeMillis());
-            record = repository.applyReplan(record, graph, state);
+            JsonNode compatibility = TaskGraphCompatibility.capture(graph,
+                    ordinaryDefinitions(context), tools.compatibilityBinding(context));
+            record = repository.applyReplan(record, graph, state, compatibility);
             return new ToolResult(call.callId(), call.name(), true, "REPLAN_APPLIED", inspectJson(record), true);
         } catch (SQLException failure) {
             return ToolResult.rejected(call, "PERSISTENCE_ERROR", "replan state is unavailable");
@@ -1277,9 +1310,11 @@ public final class TaskGraphRuntime implements AutoCloseable {
         }
         ToolContext context = new ToolContext(
                 record.controllerId(), record.brainSessionId(), record.companionId());
-        Map<String, ToolDefinition> definitions = tools.definitions(context).stream()
+        Map<String, ToolDefinition> currentDefinitions = tools.definitions(context).stream()
                 .filter(TaskGraphRuntime::isGraphCallable)
                 .collect(java.util.stream.Collectors.toMap(ToolDefinition::name, value -> value));
+        Map<String, ToolDefinition> definitions = TaskGraphCompatibility.definitionsForValidation(
+                currentDefinitions, record.compatibility());
         TaskGraphValidationResult validation =
                 validator.validateExecutable(record.graph(), definitions, executableNodeTypes);
         if (!validation.valid()) {
@@ -1474,6 +1509,7 @@ public final class TaskGraphRuntime implements AutoCloseable {
         result.set("value", record.result());
         result.set("graph", record.graph());
         result.set("replan", record.replan());
+        result.set("compatibility", record.compatibility());
         return result;
     }
 

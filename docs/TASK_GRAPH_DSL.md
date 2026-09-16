@@ -269,6 +269,15 @@ one command binding and one behavior run. This is local deterministic external-c
 a Live Brain or human-play claim. A Tool transport or worker failure with
 unknown effect is also persisted as `RECONCILIATION_REQUIRED` rather than being left `RUNNING` or
 reported as a verified failure.
+
+Migration 35 adds a versioned compatibility context to each execution. It records the actual target,
+world, session, Body protocol/component version, capability revision, and the exact version,
+permission, risk, idempotence, input schema and timeout of every referenced Tool. Resume restores
+persisted definitions for already completed nodes, compares only the remaining nodes against the
+current Gateway, and refreshes a changed session only from a safe persisted boundary. Target,
+world, protocol or pending-contract drift remains `RECONCILIATION_REQUIRED`. Execution repeats the
+same exact contract/session check immediately before every Tool dispatch, so an old menu handle or
+other invalidated reference cannot continue merely because the graph validated before disconnect.
 `read_memory` is implemented as a permission-bound convenience node over the generic
 `memory.search` Tool; it requires `MEMORY`, filters by the declared memory kind, and retains
 provenance and verification metadata in its observation. `suggest_memory` is a permission-bound

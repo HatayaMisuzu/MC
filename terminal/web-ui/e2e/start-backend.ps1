@@ -18,6 +18,61 @@ $env:MCAC_E2E_BRAIN_TOKEN = 'playwright-local-hermes-token'
 New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
 New-Item -ItemType Directory -Path $env:APPDATA -Force | Out-Null
 
+# Keep the installable PCL2 fixture aligned with the repository-owned target declaration. The
+# dependency JAR contains metadata only; Minecraft is never launched from this fixture.
+$targetCatalog = Get-Content -LiteralPath (Join-Path $repository 'targets\catalog.json') -Raw -Encoding UTF8 |
+    ConvertFrom-Json
+$fabricTarget = @($targetCatalog.targets | Where-Object { $_.targetId -eq 'fabric-1.21.1' })
+if ($fabricTarget.Count -ne 1) { throw 'Expected one fabric-1.21.1 target in targets/catalog.json' }
+$fabricTarget = $fabricTarget[0]
+$instanceRoot = Join-Path $fixture '.minecraft\versions\Fabric 1.21.1'
+$instanceMetadataPath = Join-Path $instanceRoot 'Fabric 1.21.1.json'
+$instanceMetadata = Get-Content -LiteralPath $instanceMetadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$instanceMetadata.clientVersion = $fabricTarget.minecraftVersion
+$instanceMetadata.javaVersion.majorVersion = $fabricTarget.javaMinimum
+$instanceMetadata.libraries = @([pscustomobject]@{
+    name = "net.fabricmc:fabric-loader:$($fabricTarget.loaderVersion)"
+})
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+[System.IO.File]::WriteAllText(
+    $instanceMetadataPath, (($instanceMetadata | ConvertTo-Json -Depth 10) + "`n"), $utf8)
+
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$modsDirectory = Join-Path $instanceRoot 'mods'
+foreach ($dependency in $fabricTarget.dependencies.PSObject.Properties) {
+    $versionMatch = [regex]::Match([string]$dependency.Value, '\d+(?:\.\d+)+')
+    if (-not $versionMatch.Success) {
+        throw "Cannot derive fixture version for target dependency $($dependency.Name)"
+    }
+    $metadata = [ordered]@{
+        schemaVersion = 1
+        id = $dependency.Name
+        version = $versionMatch.Value
+        name = "$($dependency.Name) Playwright metadata fixture"
+        environment = '*'
+    } | ConvertTo-Json -Depth 5
+    $jarPath = Join-Path $modsDirectory "$($dependency.Name)-$($versionMatch.Value)-fixture.jar"
+    $jarStream = [System.IO.File]::Open($jarPath, [System.IO.FileMode]::Create)
+    try {
+        $jar = [System.IO.Compression.ZipArchive]::new(
+            $jarStream, [System.IO.Compression.ZipArchiveMode]::Create, $false)
+        try {
+            $entryStream = $jar.CreateEntry('fabric.mod.json').Open()
+            try {
+                $writer = [System.IO.StreamWriter]::new($entryStream, $utf8, 1024, $true)
+                try { $writer.Write($metadata) } finally { $writer.Dispose() }
+            } finally {
+                $entryStream.Dispose()
+            }
+        } finally {
+            $jar.Dispose()
+        }
+    } finally {
+        $jarStream.Dispose()
+    }
+}
+
 function Get-Sha256Hex {
     param([string]$Path)
     $stream = [System.IO.File]::OpenRead($Path)

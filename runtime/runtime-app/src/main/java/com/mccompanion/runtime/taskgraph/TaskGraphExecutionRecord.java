@@ -11,6 +11,7 @@ public record TaskGraphExecutionRecord(String executionId, String controllerId, 
                                        JsonNode checkpoints,
                                        JsonNode evidence,
                                        JsonNode waitingQuestion, JsonNode permissions, JsonNode limits,
-                                       JsonNode provenance, JsonNode result, long revision, String resultCode,
+                                       JsonNode provenance, JsonNode compatibility, JsonNode result,
+                                       long revision, String resultCode,
                                        Instant createdAt, Instant updatedAt, JsonNode replan) {
 }

@@ -15,6 +15,9 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 dependencies {
+    testImplementation project(':protocol:protocol-api')
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
+    testImplementation 'com.google.code.gson:gson:2.10'
     testImplementation platform('org.junit:junit-bom:5.12.1')
     testImplementation 'org.junit.jupiter:junit-jupiter'
     testImplementation 'org.junit.jupiter:junit-jupiter-params'
@@ -22,3 +25,9 @@ dependencies {
 }
 
 tasks.withType(Test).configureEach { useJUnitPlatform() }
+
+// Compile the actual two codecs against the shared contract, without a Minecraft/Loader classpath.
+tasks.named('compileTestJava') {
+    source '../../minecraft/fabric-1.21.1/src/main/java/com/mccompanion/minecraft/fabric/JacksonBridgeCodec.java'
+    source '../../minecraft/forge-1.20.1/src/main/java/com/mccompanion/minecraft/forge/GsonBridgeCodec.java'
+}

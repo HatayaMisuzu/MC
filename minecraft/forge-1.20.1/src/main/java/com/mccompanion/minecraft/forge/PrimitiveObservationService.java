@@ -234,6 +234,7 @@ public final class PrimitiveObservationService {
         ObjectNode observation = envelope(body, "MENU")
                 .put("sessionToken", session.token())
                 .put("containerId", session.containerId())
+                .put("observationRevision", session.revision())
                 .put("expiresAt", session.expiresAtEpochMillis())
                 .put("menuType", session.menu().getClass().getSimpleName())
                 .put("slotCount", session.menu().slots.size());

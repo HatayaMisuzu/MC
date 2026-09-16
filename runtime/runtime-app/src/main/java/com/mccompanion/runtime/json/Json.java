@@ -37,6 +37,7 @@ public final class Json {
             .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
             .enable(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY)
             .build();
+    static { com.mccompanion.protocol.ProtocolJsonCodec.configureApiTypes(MAPPER); }
 
     private Json() {
     }

@@ -24,7 +24,10 @@ public final class DiagnosticEngine {
         result.add(check("target.support", InstallPlanner.isSupported(instance), DiagnosticResult.Severity.BLOCKED,
                 InstallPlanner.isSupported(instance) ? "Supported Minecraft/loader target" :
                         "Unsupported target: Minecraft " + instance.minecraftVersion() + " / " + instance.loader()));
-        int expected = switch (instance.minecraftVersion()) { case "1.20.1" -> 17; case "1.21.1" -> 21; default -> 0; };
+        int expected = InstallPlanner.target(instance).map(com.mccompanion.protocol.target.TargetDescriptor::javaMinimum).orElse(0);
+        for (String issue : InstallPlanner.environmentIssues(instance)) {
+            result.add(new DiagnosticResult(DiagnosticResult.Severity.BLOCKED, "target.environment", issue, Map.of()));
+        }
         boolean javaKnown = instance.requiredJavaMajor() > 0;
         result.add(new DiagnosticResult(expected == 0 ? DiagnosticResult.Severity.BLOCKED
                 : instance.requiredJavaMajor() == expected ? DiagnosticResult.Severity.PASS : DiagnosticResult.Severity.WARNING,

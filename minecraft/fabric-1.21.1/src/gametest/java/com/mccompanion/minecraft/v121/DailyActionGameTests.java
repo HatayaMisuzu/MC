@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.fabric.MinecraftAiCompanionFabric;
 import java.util.UUID;
 import net.fabricmc.fabric.api.gametest.v1.FabricGameTest;
@@ -122,17 +126,9 @@ public final class DailyActionGameTests implements FabricGameTest {
     @GameTest(template = FabricGameTest.EMPTY_STRUCTURE, timeoutTicks = 700, batch = "daily_sleep_cancel")
     public void nearbyBedNavigationCanBeCancelledWithoutLeavingTheBodyAsleep(GameTestHelper helper) {
         Fixture f = fixture(helper, "daily-sleep-cancel");
-        f.body.moveTo(512.5D, 80.0D, 512.5D, 0.0F, 0.0F);
-        f.owner.moveTo(512.5D, 80.0D, 510.5D, 0.0F, 0.0F);
+        moveFixtureToIsolatedArena(f, 512, 512);
         BlockPos start = f.body.blockPosition();
         BlockPos bed = start.offset(5, 0, 0);
-        for (int x = -2; x <= 7; x++) for (int z = -2; z <= 2; z++) {
-            f.body.serverLevel().setBlockAndUpdate(
-                    start.offset(x, -1, z), Blocks.STONE.defaultBlockState());
-            for (int y = 0; y <= 2; y++) {
-                f.body.serverLevel().setBlockAndUpdate(start.offset(x, y, z), Blocks.AIR.defaultBlockState());
-            }
-        }
         f.body.serverLevel().setDayTime(13000L);
         placeBed(f, bed, false);
         var approachPlan = new SurvivalNavigationAdapter().plan(
@@ -150,7 +146,7 @@ public final class DailyActionGameTests implements FabricGameTest {
             helper.assertTrue(cancelled.success() && "CANCELLED".equals(cancelled.state()),
                     "sleep cancellation failed: " + cancelled.code());
             helper.runAfterDelay(1, () -> {
-                CompanionRegistry.RuntimeSnapshot terminal = snapshot(f);
+                BodySnapshots.RuntimeSnapshot terminal = snapshot(f);
                 helper.assertTrue(!f.body.isSleeping(),
                         "cancelled sleep left the real ServerPlayer asleep");
                 helper.assertValueEqual(terminal.behaviorState(), "IDLE",
@@ -750,7 +746,7 @@ public final class DailyActionGameTests implements FabricGameTest {
             helper.assertTrue(paused.success() && "PAUSED".equals(paused.state()),
                     "mid-action runtime pause failed: " + paused.code());
             helper.runAfterDelay(3, () -> {
-                CompanionRegistry.RuntimeSnapshot pausedSnapshot = snapshot(f);
+                BodySnapshots.RuntimeSnapshot pausedSnapshot = snapshot(f);
                 helper.assertValueEqual(pausedSnapshot.behaviorState(), "PAUSED",
                         "paused daily action resumed without an explicit runtime resume");
                 CompanionRegistry.RuntimeResult resumed = f.registry.runtimeResume(f.id, f.lease, 1L);
@@ -781,7 +777,7 @@ public final class DailyActionGameTests implements FabricGameTest {
             helper.assertTrue(cancelled.success() && "CANCELLED".equals(cancelled.state()),
                     "mid-action runtime cancel failed: " + cancelled.code());
             helper.runAfterDelay(3, () -> {
-                CompanionRegistry.RuntimeSnapshot terminal = snapshot(f);
+                BodySnapshots.RuntimeSnapshot terminal = snapshot(f);
                 helper.assertValueEqual(terminal.behaviorState(), "IDLE",
                         "cancelled daily action did not return to IDLE");
                 helper.assertTrue(f.body.containerMenu == f.body.inventoryMenu,
@@ -828,13 +824,15 @@ public final class DailyActionGameTests implements FabricGameTest {
                 "invalid-daily-start", "skill", null, null, null, missingDestination);
         helper.assertTrue(!rejected.success() && "INVALID_SKILL_PARAMETERS".equals(rejected.code()),
                 "invalid daily request was not rejected before state mutation: " + rejected);
-        CompanionRegistry.RuntimeSnapshot state = snapshot(f);
+        BodySnapshots.RuntimeSnapshot state = snapshot(f);
         helper.assertTrue("IDLE".equals(state.behaviorState()) && state.behaviorId() == null,
                 "invalid daily request left a half-started behavior: " + state);
         finish(helper, f);
     }
 
     private static Fixture fixture(GameTestHelper helper, String name) {
+        helper.getLevel().getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING)
+                .set(false, helper.getLevel().getServer());
         CompanionRegistry registry = MinecraftAiCompanionFabric.integrationRegistryFor(helper.getLevel().getServer());
         ServerPlayer owner = helper.makeMockServerPlayerInLevel();
         helper.assertTrue(registry.create(owner, name).success(), name + " companion create failed");
@@ -849,12 +847,7 @@ public final class DailyActionGameTests implements FabricGameTest {
 
     private static void moveFixtureToIsolatedArena(Fixture fixture, int x, int z) {
         Vec3 spawn = new Vec3(x + 0.5D, 100.0D, z + 0.5D);
-        fixture.owner.teleportTo(fixture.owner.serverLevel(), spawn.x, spawn.y, spawn.z - 3.0D,
-                fixture.owner.getYRot(), fixture.owner.getXRot());
-        fixture.body.teleportTo(fixture.body.serverLevel(), spawn.x, spawn.y, spawn.z,
-                fixture.body.getYRot(), fixture.body.getXRot());
-        fixture.body.setDeltaMovement(Vec3.ZERO);
-        BlockPos origin = fixture.body.blockPosition();
+        BlockPos origin = BlockPos.containing(spawn);
         int chunkX = origin.getX() >> 4;
         int chunkZ = origin.getZ() >> 4;
         for (int offsetX = -1; offsetX <= 1; offsetX++) {
@@ -872,6 +865,11 @@ public final class DailyActionGameTests implements FabricGameTest {
                 }
             }
         }
+        fixture.owner.teleportTo(fixture.owner.serverLevel(), spawn.x, spawn.y, spawn.z - 3.0D,
+                fixture.owner.getYRot(), fixture.owner.getXRot());
+        fixture.body.teleportTo(fixture.body.serverLevel(), spawn.x, spawn.y, spawn.z,
+                fixture.body.getYRot(), fixture.body.getXRot());
+        fixture.body.setDeltaMovement(Vec3.ZERO);
     }
 
     private static void start(Fixture f, String id, SkillParameters p) {
@@ -945,14 +943,14 @@ public final class DailyActionGameTests implements FabricGameTest {
         return count;
     }
 
-    private static CompanionRegistry.RuntimeSnapshot snapshot(Fixture f) {
+    private static BodySnapshots.RuntimeSnapshot snapshot(Fixture f) {
         return f.registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.companionId().equals(f.id)).findFirst().orElseThrow();
     }
 
     private static void awaitRunningPhase(GameTestHelper helper, Fixture f, String phase,
                                           int remaining, Runnable action) {
-        CompanionRegistry.RuntimeSnapshot current = snapshot(f);
+        BodySnapshots.RuntimeSnapshot current = snapshot(f);
         String currentPhase = current.behaviorObservation() == null ? ""
                 : current.behaviorObservation().details().getOrDefault("phase", "");
         if ("RUNNING".equals(current.behaviorState()) && phase.equals(currentPhase)) {
@@ -966,7 +964,7 @@ public final class DailyActionGameTests implements FabricGameTest {
 
     private static void awaitSleepingWhileRunning(GameTestHelper helper, Fixture f, int remaining,
                                                   Runnable action) {
-        CompanionRegistry.RuntimeSnapshot current = snapshot(f);
+        BodySnapshots.RuntimeSnapshot current = snapshot(f);
         if (f.body.isSleeping() && "RUNNING".equals(current.behaviorState())) {
             action.run();
             return;
@@ -980,8 +978,8 @@ public final class DailyActionGameTests implements FabricGameTest {
     }
 
     private static void await(GameTestHelper helper, Fixture f, int remaining,
-                              java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> assertion) {
-        CompanionRegistry.RuntimeSnapshot snapshot = snapshot(f);
+                              java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> assertion) {
+        BodySnapshots.RuntimeSnapshot snapshot = snapshot(f);
         if ("RUNNING".equals(snapshot.behaviorState())) {
             helper.assertTrue(remaining > 0, "daily action timed out: " + snapshot.evidenceSummary()
                     + " code=" + (snapshot.behaviorObservation() == null ? "" : snapshot.behaviorObservation().failureCode())
@@ -1034,5 +1032,5 @@ public final class DailyActionGameTests implements FabricGameTest {
                            String id, String lease) { }
 
     private record Step(Runnable before, String id, SkillParameters parameters, int timeout,
-                        java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> assertion) { }
+                        java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> assertion) { }
 }

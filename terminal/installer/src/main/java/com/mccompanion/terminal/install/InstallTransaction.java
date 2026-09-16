@@ -45,6 +45,7 @@ public final class InstallTransaction {
     }
 
     public Result execute(InstallPlan plan) throws IOException {
+        verifyPlannedArtifact(plan);
         Path game = safeGameDirectory(plan.instance().gameDirectory());
         return locked(game, () -> executeLocked(plan, game));
     }
@@ -59,6 +60,7 @@ public final class InstallTransaction {
     }
 
     private Result executeLocked(InstallPlan plan, Path game) throws IOException {
+        verifyPlannedArtifact(plan);
         Path state = state(game);
         recoverInterrupted(game, state);
         Path backup = state.resolve("backups").resolve(plan.rollbackId()).normalize();
@@ -77,7 +79,7 @@ public final class InstallTransaction {
         List<String> moved = new ArrayList<>();
         boolean destinationExisted = Files.isRegularFile(plan.destination());
         boolean previousManifestExisted = Files.isRegularFile(manifest);
-        String artifactHash = sha256(plan.artifact());
+        String artifactHash = plan.artifactSha256();
         boolean destinationInstalled = false;
         boolean manifestUpdated = false;
         writeJournal(state, plan, backup, replacements, moved, destinationExisted,
@@ -127,6 +129,12 @@ public final class InstallTransaction {
                 failure.addSuppressed(recoveryFailure);
             }
             throw failure;
+        }
+    }
+
+    private static void verifyPlannedArtifact(InstallPlan plan) throws IOException {
+        if (!plan.artifactSha256().equals(sha256(plan.artifact()))) {
+            throw new IOException("ARTIFACT_CHANGED_AFTER_PLAN");
         }
     }
 

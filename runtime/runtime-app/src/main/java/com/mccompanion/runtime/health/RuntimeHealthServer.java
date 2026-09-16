@@ -1,5 +1,7 @@
 package com.mccompanion.runtime.health;
 
+import com.mccompanion.protocol.BuildIdentity;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mccompanion.runtime.config.RuntimeConfig;
@@ -309,7 +311,8 @@ public final class RuntimeHealthServer implements AutoCloseable {
         ObjectNode capabilities = Json.object();
         capabilities.set("tools", Json.object().put("listChanged", false));
         result.set("capabilities", capabilities);
-        result.set("serverInfo", Json.object().put("name", "mcac-runtime").put("version", "0.3.1"));
+        result.set("serverInfo", Json.object().put("name", "mcac-runtime")
+                .put("version", BuildIdentity.PRODUCT_VERSION));
         return result;
     }
 

@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 
 public record ProtocolVersion(String product, int major, int minor) implements Comparable<ProtocolVersion> {
     public static final String PRODUCT = "mc-companion";
-    public static final ProtocolVersion CURRENT = new ProtocolVersion(PRODUCT, 1, 0);
+    public static final ProtocolVersion CURRENT = new ProtocolVersion(PRODUCT, 2, 0);
     private static final Pattern FORMAT = Pattern.compile("([a-z][a-z0-9-]{1,63})/([0-9]{1,5})(?:\\.([0-9]{1,5}))?");
     private static final int MAX_COMPONENT = 65_535;
 

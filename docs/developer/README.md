@@ -40,11 +40,17 @@ a new Runtime, planner, Tool catalog or copy of the deterministic controllers.
 
 | Existing location | Responsibility |
 | --- | --- |
-| `protocol`, `runtime`, `core` | Version-independent wire contracts, capability validation, persistent tasks/graphs, events and World Model. Body-common and navigation-common are compiled and tested by pure-core with Java 17. |
-| `minecraft/body-common`, `minecraft/navigation-common`, `minecraft/bridge-common` | Plain Java action/state machines, navigation policy, identity/event normalization and connection lifecycle. No Minecraft version branches or Loader imports. |
+| `protocol/protocol-api` | Java 17 value types for product/protocol identity, targets and structured capabilities. It has no JSON, Minecraft or Loader dependency and enters each product through one precompiled path. |
+| `protocol/protocol-model`, `runtime`, `core` | Serialization, capability validation, persistent tasks/graphs, events and World Model. Body-common, bridge-common and navigation-common are compiled and tested by pure-core with Java 17. |
+| `minecraft/body-common`, `minecraft/navigation-common`, `minecraft/bridge-common` | Plain Java action/state machines, navigation policy, menu action lifecycle, identity/event normalization and connection lifecycle. Public contracts contain no Minecraft object or JSON-node type. |
 | `minecraft/navigation-minecraft-common`, `minecraft/platform-bootstrap-common` | Minecraft API bindings that currently compile unchanged on both supported versions. Share only APIs verified against both targets. |
 | `minecraft/platform-1.20.1-common`, `minecraft/platform-1.21.1-common` | Version-specific player/menu/item/NBT access and the existing Body lifecycle. Translate API differences here while preserving the shared outcomes and budgets. |
-| `minecraft/fabric-1.21.1`, `minecraft/forge-1.20.1`, `minecraft/neoforge-1.21.1` | Loader startup/events, authenticated bridge, metadata and isolated dependencies/toolchain. NeoForge remains `LOCAL_ONLY`. |
+| `minecraft/fabric-1.21.1`, `minecraft/forge-1.20.1`, `minecraft/neoforge-1.21.1` | Loader startup/events, native API/codec binding, metadata and isolated dependencies/toolchain. Fabric uses Jackson, Forge uses Gson, and NeoForge remains `LOCAL_ONLY` without the remote Bridge core. |
+
+`targets/catalog.json` is the sole current target list. Loader plugin configuration remains inside
+each target build, while the Catalog supplies exact Minecraft/Loader/Java/dependency/Bridge facts,
+artifact mapping and existing validation task names. Declaring a capability there never grants it
+to a connected session; the Loader reports only bindings that initialized successfully.
 
 Prefer a small adapter at an actual API difference over speculative interfaces or version checks
 inside Runtime. A future target reuses the shared engines, implements the required bindings and

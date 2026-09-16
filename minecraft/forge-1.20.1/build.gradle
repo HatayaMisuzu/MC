@@ -5,6 +5,8 @@ plugins {
     id 'net.neoforged.moddev.legacyforge' version '2.0.91'
 }
 
+apply from: rootProject.file('../gradle/target-catalog.gradle')
+
 version = project.mod_version
 group = project.mod_group_id
 
@@ -93,7 +95,6 @@ legacyForge {
 
 dependencies {
     implementation "com.mccompanion:pure-core:${mod_version}"
-    implementation "com.mccompanion:protocol-model:${mod_version}"
     gameTestModImplementation sourceSets.main.output
     gameTestImplementation sourceSets.main.output
 }
@@ -149,9 +150,9 @@ jar {
 def verifyRuntimeBridgeArtifact = tasks.register('verifyRuntimeBridgeArtifact') {
     group = 'verification'
     description = 'Fails if Loader-neutral Runtime Bridge classes are absent from the production JAR.'
-    dependsOn tasks.named('jar')
+    dependsOn tasks.named('reobfJar')
     doLast {
-        File artifact = tasks.named('jar').get().archiveFile.get().asFile
+        File artifact = tasks.named('reobfJar').get().archiveFile.get().asFile
         Set<String> required = [
                 'com/mccompanion/minecraft/forge/RuntimeBridge.class',
                 'com/mccompanion/minecraft/bridge/ConversationDeliveryWindow.class',

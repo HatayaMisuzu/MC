@@ -11,6 +11,7 @@ on:
       - 'gradle/**'
       - 'core/**'
       - 'protocol/**'
+      - 'targets/**'
       - 'runtime/**'
       - 'terminal/**'
       - 'compatibility/**'

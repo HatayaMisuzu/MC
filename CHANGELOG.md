@@ -1,6 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 (Unreleased)
+
+- Add a repository-owned three-target Catalog consumed by Runtime, Terminal, installer, build and
+  release packaging. Installation now validates exact Minecraft/Loader/dependency facts, native
+  artifact metadata, product version and SHA-256 again immediately before mutation.
+- Move dependency-free protocol/capability values into Java 17 `protocol-api`, upgrade the
+  Runtime/Body contract to `mc-companion/2`, and derive session capabilities from registered Body
+  bindings with monotonic, session-bound snapshots.
+- Share Bridge connection epochs, correlation, bounded queues, status/event delivery and menu
+  action lifecycle across Fabric and Forge while keeping their Jackson/Gson and native Minecraft
+  adapters isolated. NeoForge remains `LOCAL_ONLY` and does not assemble the remote Bridge.
+- Persist Task Graph compatibility context and exact pending Tool contracts. Resume and dispatch
+  now stop for reconciliation on target/world/protocol/contract drift and refresh a changed session
+  only at a safe boundary, without repeating completed effects.
 
 - Make installer recovery ownership-aware across the PREPARED and post-move journal windows, and
   retain the prior managed manifest inside each rollback point so verify, uninstall and later

@@ -6,6 +6,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = [System.IO.Path]::GetFullPath($RepositoryRoot)
 $errors = [System.Collections.Generic.List[string]]::new()
+$versionMatch = [regex]::Match(
+    (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'gradle.properties')),
+    '(?m)^version=([^\r\n]+)$')
+if (-not $versionMatch.Success) { throw 'gradle.properties does not declare the product version' }
+$currentVersion = $versionMatch.Groups[1].Value.Trim()
+$escapedCurrentVersion = [regex]::Escape($currentVersion)
 
 function Add-Error([string]$message) { $script:errors.Add($message) }
 function Read-Repo([string]$relative) {
@@ -53,7 +59,7 @@ foreach ($relative in $required) {
 $adapterMatrixPath = Join-Path $root 'docs/product/BRAIN_ADAPTER_CAPABILITIES.json'
 try {
     $adapterMatrix = Get-Content -Raw -Encoding UTF8 -LiteralPath $adapterMatrixPath | ConvertFrom-Json
-    if ($adapterMatrix.schemaVersion -ne 1 -or $adapterMatrix.productVersion -ne '0.3.1') {
+    if ($adapterMatrix.schemaVersion -ne 1 -or $adapterMatrix.productVersion -ne $currentVersion) {
         Add-Error 'Brain Adapter capability matrix schema or product version is invalid'
     }
     $allowedAdapterEvidence = @('SUPPORTED', 'PARTIAL', 'NOT_SUPPORTED', 'TEST_ONLY', 'PENDING_EXTERNAL')
@@ -84,6 +90,45 @@ try {
     }
 } catch {
     Add-Error "Brain Adapter capability matrix is missing or invalid JSON: $($_.Exception.Message)"
+}
+
+$catalogPath = Join-Path $root 'targets/catalog.json'
+$catalog = $null
+$catalogTargets = @()
+try {
+    $catalog = Get-Content -Raw -Encoding UTF8 -LiteralPath $catalogPath | ConvertFrom-Json
+    $catalogTargets = @($catalog.targets)
+    if ($catalog.schemaVersion -ne 1 -or $catalogTargets.Count -eq 0) {
+        Add-Error 'target Catalog schema is invalid or contains no targets'
+    }
+    $targetIds = @($catalogTargets.targetId)
+    if (@($targetIds | Sort-Object -Unique).Count -ne $targetIds.Count) {
+        Add-Error 'target Catalog contains duplicate target IDs'
+    }
+    $buildDirectories = @($catalogTargets.buildDirectory)
+    if (@($buildDirectories | Sort-Object -Unique).Count -ne $buildDirectories.Count) {
+        Add-Error 'target Catalog contains duplicate build directories'
+    }
+    foreach ($target in $catalogTargets) {
+        if ([string]::IsNullOrWhiteSpace($target.targetId) -or
+                [string]::IsNullOrWhiteSpace($target.minecraftVersion) -or
+                [string]::IsNullOrWhiteSpace($target.loader) -or
+                [string]::IsNullOrWhiteSpace($target.loaderVersionRange) -or
+                [string]::IsNullOrWhiteSpace($target.buildDirectory) -or
+                $target.javaMinimum -notin @(17, 21) -or
+                $target.bridgeMode -notin @('FULL', 'LOCAL_ONLY')) {
+            Add-Error "target Catalog entry is incomplete or invalid: $($target.targetId)"
+        }
+        if ($target.bridgeMode -eq 'FULL' -and
+                ([string]::IsNullOrWhiteSpace($target.protocol) -or @($target.expectedCapabilities).Count -eq 0)) {
+            Add-Error "Full Bridge target lacks protocol or expected capabilities: $($target.targetId)"
+        }
+        if ($target.bridgeMode -eq 'LOCAL_ONLY' -and $null -ne $target.protocol) {
+            Add-Error "LOCAL_ONLY target must not declare a remote protocol: $($target.targetId)"
+        }
+    }
+} catch {
+    Add-Error "target Catalog is missing or invalid JSON: $($_.Exception.Message)"
 }
 
 if (Test-Path -LiteralPath (Join-Path $root 'docs/human-test/INSTANCE_AUDIT.md')) {
@@ -151,6 +196,11 @@ try {
             $currentTruth.scope -ne 'CURRENT_DEVELOPMENT_MAIN') {
         Add-Error 'current-main truth schema or scope is invalid'
     }
+    if ($currentTruth.productVersion -ne $currentVersion -or
+            $currentTruth.bodyProtocolVersion -ne 'mc-companion/2' -or
+            $currentTruth.targetCatalog -ne '../../targets/catalog.json') {
+        Add-Error 'current-main truth does not match the current build/protocol/catalog identity'
+    }
     if ($currentTruth.frozenReleaseBaseline.productVersion -ne '0.3.1' -or
             $currentTruth.frozenReleaseBaseline.sourceCommit -ne '747c7e8046073d9534eae6ae775645341be4cdcd' -or
             $currentTruth.frozenReleaseBaseline.truthDocument -ne 'PRODUCT_TRUTH.json') {
@@ -180,8 +230,8 @@ $versionDocs = @(
     'docs/user/USER_GUIDE.zh-CN.md', 'docs/user/USER_GUIDE.en-US.md'
 )
 foreach ($relative in $versionDocs) {
-    if ((Read-Repo $relative) -notmatch '(?<!\d)0\.3\.1(?!\d)') {
-        Add-Error "$relative does not identify product version 0.3.1"
+    if ((Read-Repo $relative) -notmatch "(?<!\d)$escapedCurrentVersion(?!\d)") {
+        Add-Error "$relative does not identify current product version $currentVersion"
     }
 }
 
@@ -189,28 +239,31 @@ $supportDocs = @('README.md', 'docs/PRODUCT_STATUS.md', 'docs/COMPATIBILITY.md',
     'KNOWN_LIMITATIONS.md', 'docs/user/USER_GUIDE.zh-CN.md', 'docs/user/USER_GUIDE.en-US.md')
 foreach ($relative in $supportDocs) {
     $text = Read-Repo $relative
-    if ($text -notmatch '(?is)(?:Fabric.{0,80}1\.21\.1|1\.21\.1.{0,80}Fabric).{0,220}(?:FULL_RUNTIME_BRIDGE|FULL Runtime Bridge|Full Runtime Bridge)') {
-        Add-Error "$relative does not declare Fabric Full Runtime Bridge"
-    }
-    if ($text -notmatch '(?is)(?:Forge.{0,80}1\.20\.1|1\.20\.1.{0,80}Forge).{0,220}(?:FULL_RUNTIME_BRIDGE|FULL Runtime Bridge|Full Runtime Bridge)') {
-        Add-Error "$relative does not declare Forge Full Runtime Bridge"
-    }
-    if ($text -notmatch '(?is)(?:NeoForge.{0,80}1\.21\.1|1\.21\.1.{0,80}NeoForge).{0,220}LOCAL_ONLY') {
-        Add-Error "$relative does not declare NeoForge LOCAL_ONLY"
-    }
-    if ($text -match '(?im)Forge\s+1\.20\.1[^\r\n]{0,160}(?:LOCAL_ONLY|不启用外部\s*Runtime|no\s+Runtime)') {
-        Add-Error "$relative incorrectly limits Forge Runtime support"
-    }
-    if ($text -match '(?im)NeoForge\s+1\.21\.1[^\r\n]{0,160}`?FULL_RUNTIME_BRIDGE`?') {
-        Add-Error "$relative incorrectly claims NeoForge Full Runtime Bridge"
+    foreach ($target in $catalogTargets) {
+        $loaderLabel = switch ($target.loader) {
+            'fabric' { 'Fabric' }
+            'forge' { '(?<!Neo)Forge' }
+            'neoforge' { 'NeoForge' }
+            default { [regex]::Escape([string]$target.loader) }
+        }
+        $minecraftVersion = [regex]::Escape([string]$target.minecraftVersion)
+        $identity = "(?:$loaderLabel.{0,80}$minecraftVersion|$minecraftVersion.{0,80}$loaderLabel)"
+        $mode = if ($target.bridgeMode -eq 'FULL') {
+            '(?:FULL_RUNTIME_BRIDGE|Full Runtime Bridge)'
+        } else {
+            'LOCAL_ONLY'
+        }
+        if ($text -notmatch "(?is)$identity.{0,220}$mode") {
+            Add-Error "$relative does not declare $($target.targetId) as $($target.bridgeMode)"
+        }
     }
 }
 
 $matrixHead = ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root 'docs/RC_COMPLETION_MATRIX.md') |
     Select-Object -First 80) -join "`n")
 foreach ($requiredText in @(
-    'Overall status: `HUMAN_PLAYTEST_PENDING`', 'Automated productization baseline: `FROZEN`',
-    'Product version: `0.3.1`', 'mcac-productization-baseline-0.3.0',
+    'Overall status: `HUMAN_PLAYTEST_PENDING`', "Current candidate version: ``$currentVersion``",
+    'Frozen automated productization baseline: `0.3.1` / `FROZEN`', 'mcac-productization-baseline-0.3.0',
     'Machine-readable frozen 0.3.1 facts:', 'Machine-readable current-main scope:', '## Evidence scope',
     '### Historical live evidence', '### Current closeout evidence',
     'HUMAN_PLAYTEST_PENDING'
@@ -288,13 +341,13 @@ foreach ($file in $markdown) {
 $changelog = Read-Repo 'CHANGELOG.md'
 if ($changelog -notmatch '(?m)^## 0\.3\.1\s*$') { Add-Error 'CHANGELOG lacks a 0.3.1 section' }
 
-foreach ($versionFile in @(
-    'minecraft/fabric-1.21.1/gradle.properties',
-    'minecraft/forge-1.20.1/gradle.properties',
-    'minecraft/neoforge-1.21.1/gradle.properties'
-)) {
-    if ((Read-Repo $versionFile) -notmatch '(?m)^mod_version=0\.3\.1\s*$') {
-        Add-Error "$versionFile does not declare mod_version=0.3.1"
+foreach ($targetBuild in @($catalogTargets | ForEach-Object { "$($_.buildDirectory)/build.gradle" })) {
+    if (-not (Test-Path -LiteralPath (Join-Path $root $targetBuild))) {
+        Add-Error "target Catalog build file does not exist: $targetBuild"
+        continue
+    }
+    if (-not (Read-Repo $targetBuild).Contains("apply from: rootProject.file('../gradle/target-catalog.gradle')")) {
+        Add-Error "$targetBuild does not consume the shared target Catalog build logic"
     }
 }
 
@@ -338,11 +391,9 @@ $gitignore = Read-Repo '.gitignore'
 $gitignoreLines = $gitignore -split '\r?\n'
 if ($gitignoreLines -contains 'data/') { Add-Error '.gitignore still has an unscoped data/ rule' }
 if ($gitignoreLines -notcontains '/data/') { Add-Error '.gitignore must ignore only repository-root /data/' }
-foreach ($probe in @(
-    'minecraft/fabric-1.21.1/src/gametest/resources/data/mcac-probe.txt',
-    'minecraft/forge-1.20.1/src/gametest/resources/data/mcac-probe.txt',
-    'minecraft/neoforge-1.21.1/src/gametest/resources/data/mcac-probe.txt'
-)) {
+foreach ($probe in @($catalogTargets | ForEach-Object {
+    "$($_.buildDirectory)/src/gametest/resources/data/mcac-probe.txt"
+})) {
     & git -C $root check-ignore --no-index -q -- $probe
     if ($LASTEXITCODE -eq 0) { Add-Error ".gitignore hides Loader resource path: $probe" }
 }

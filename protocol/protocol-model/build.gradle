@@ -11,6 +11,7 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 dependencies {
+    api project(':protocol:protocol-api')
     api 'com.fasterxml.jackson.core:jackson-databind:2.18.3'
     api 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.18.3'
     testImplementation platform('org.junit:junit-bom:5.12.1')

@@ -51,7 +51,7 @@ class RuntimeToolGatewayTest {
             var tasks = new TaskRepository(database, new TaskEventStore(database));
             try (var sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 sessions.registerCompanion(session, new CompanionStatus("c1", "owner", "body", "world", "minecraft:overworld",
                         new PositionDto(0, 64, 0), CompanionBodyState.SPAWNED, null, null, 0, 0, true,
@@ -138,7 +138,7 @@ class RuntimeToolGatewayTest {
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
             try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of("c-combined", "c-placement", "c-break", "c-invalid")) {
                     sessions.registerCompanion(session, new CompanionStatus(companionId, "owner", "survival",
@@ -295,7 +295,7 @@ class RuntimeToolGatewayTest {
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
             try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 sessions.registerCompanion(session, new CompanionStatus("c-daily", "owner", "daily", "world",
                                 "minecraft:overworld", new PositionDto(0, 64, 0), CompanionBodyState.SPAWNED,
@@ -358,7 +358,7 @@ class RuntimeToolGatewayTest {
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
             try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 List<WireCase> cases = dailyWireCases();
                 for (int index = 0; index < cases.size(); index++) {
@@ -805,7 +805,7 @@ class RuntimeToolGatewayTest {
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
             try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 List<String> ids = List.of("entity-follow", "entity-approach", "entity-distance", "entity-chase",
                         "entity-escort", "entity-flee", "entity-face", "owner-follow", "entity-invalid");
@@ -878,7 +878,7 @@ class RuntimeToolGatewayTest {
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
             try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 for (String id : List.of("melee", "shield", "bow", "invalid")) {
                     sessions.registerCompanion(session, new CompanionStatus(id, "owner", id,
@@ -932,7 +932,7 @@ class RuntimeToolGatewayTest {
             TaskRepository tasks = new TaskRepository(database, new TaskEventStore(database));
             try (SessionRegistry sessions = new SessionRegistry(database, companions, log)) {
                 CapturingPeer peer = new CapturingPeer();
-                var session = sessions.register(peer, new Handshake("mc-companion/1", "test", "1.21.1",
+                var session = sessions.register(peer, new Handshake("mc-companion/2", "test", "1.21.1",
                         "fabric", "world", Json.object()));
                 for (String companionId : List.of(
                         "c-step", "c-look", "c-stop", "c-idle", "c-break", "c-block-interact",

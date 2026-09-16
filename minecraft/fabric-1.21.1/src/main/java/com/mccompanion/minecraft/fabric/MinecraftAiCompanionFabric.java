@@ -1,5 +1,6 @@
 package com.mccompanion.minecraft.fabric;
 
+import com.mccompanion.protocol.BuildIdentity;
 import com.mccompanion.minecraft.bootstrap.BootstrapCapabilityReport;
 import com.mccompanion.minecraft.v121.CompanionCommands;
 import com.mccompanion.minecraft.v121.CompanionRegistry;
@@ -16,7 +17,7 @@ import org.slf4j.LoggerFactory;
 
 public final class MinecraftAiCompanionFabric implements ModInitializer {
     public static final String MOD_ID = "minecraft_ai_companion";
-    public static final String MOD_VERSION = "0.3.1";
+    public static final String MOD_VERSION = BuildIdentity.PRODUCT_VERSION;
     private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     private static final BootstrapCapabilityReport CAPABILITIES = new BootstrapCapabilityReport(
             MOD_VERSION,

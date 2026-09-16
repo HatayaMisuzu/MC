@@ -1,6 +1,7 @@
 import { useI18n } from '../i18n/I18nContext'
 import type { Instance } from '../types'
 import { StatusBadge } from './StatusBadge'
+import { CompatibilityIssues } from './CompatibilityIssues'
 
 export function InstanceTable({ instances, selectedId, onSelect }: {
   instances: Instance[]; selectedId: string; onSelect: (id: string) => void
@@ -9,7 +10,7 @@ export function InstanceTable({ instances, selectedId, onSelect }: {
   return <div className="table-scroll"><table className="data-table">
     <thead><tr><th>{t('instances.instance')}</th><th>Minecraft</th><th>Loader</th>
       <th>{t('instances.gameDirConfidence')}</th><th>Java</th>
-      <th>{t('instances.install')}</th><th>{t('instances.mode')}</th></tr></thead>
+      <th>{t('instances.install')}</th><th>{t('instances.mode')}</th><th>{t('install.environment')}</th></tr></thead>
     <tbody>{instances.map((instance) => <tr key={instance.id}
       className={selectedId === instance.id ? 'selected' : ''} onClick={() => onSelect(instance.id)}>
       <td><span className="instance-name"><input type="radio" readOnly
@@ -19,6 +20,8 @@ export function InstanceTable({ instances, selectedId, onSelect }: {
       <td>{instance.javaConfigured || t('instances.javaRequired', { version: instance.javaRequired })}</td>
       <td><StatusBadge value={instance.installed ? 'PASS' : 'WAITING'} /></td>
       <td><StatusBadge value={instance.mode} /></td>
+      <td><StatusBadge value={!instance.compatible || instance.environmentReady === false ? 'BLOCKED' : 'PASS'} />
+        <CompatibilityIssues issues={instance.compatibilityIssues ?? []} /></td>
     </tr>)}</tbody>
   </table></div>
 }

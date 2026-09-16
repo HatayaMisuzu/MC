@@ -67,9 +67,9 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"entity-event-world","capabilities":{"player_entity_events":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
+                     "worldId":"entity-event-world","capabilities":{"player_entity_events":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -126,9 +126,9 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"survival-event-world","capabilities":{"survival_events":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
+                     "worldId":"survival-event-world","capabilities":{"survival_events":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -186,9 +186,9 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"inventory-event-world","capabilities":{"inventory_world_events":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
+                     "worldId":"inventory-event-world","capabilities":{"inventory_world_events":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -245,9 +245,9 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.3.1","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"event-world","capabilities":{"NavigateTo":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
+                     "worldId":"event-world","capabilities":{"NavigateTo":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -553,10 +553,10 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"world-test","capabilities":{"NavigateTo":true,"FollowOwner":true,
-                     "DeliverItem":true,"EatAndRecover":true,"CraftItem":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
+                     "worldId":"world-test","capabilities":{"NavigateTo":{"availability":"available","version":"1.0","attributes":{}},"FollowOwner":{"availability":"available","version":"1.0","attributes":{}},
+                     "DeliverItem":{"availability":"available","version":"1.0","attributes":{}},"EatAndRecover":{"availability":"available","version":"1.0","attributes":{}},"CraftItem":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             JsonNode hello = client.awaitType("hello_ack", 5);
             assertTrue(hello.path("accepted").asBoolean());
@@ -612,8 +612,8 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"wrong-token-value",
-                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
+                    {"type":"hello","protocol":"mc-companion/2","token":"wrong-token-value",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
                      "worldId":"world-test","capabilities":{}}
                     """);
             JsonNode response = client.awaitType("hello_ack", 5);
@@ -809,9 +809,9 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.3.1","minecraftVersion":"1.20.1","loader":"forge",
-                     "worldId":"forge-world","capabilities":{"NavigateTo":true,"FollowOwner":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.20.1","loader":"forge","targetId":"forge-1.20.1","capabilityRevision":0,
+                     "worldId":"forge-world","capabilities":{"NavigateTo":{"availability":"available","version":"1.0","attributes":{}},"FollowOwner":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -876,11 +876,11 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
                      "worldId":"registry-world",
-                     "capabilities":{"registry_query":true,"recipe_query":true,
-                       "primitive_observation_query":true}}
+                     "capabilities":{"registry_query":{"availability":"available","version":"1.0","attributes":{}},"recipe_query":{"availability":"available","version":"1.0","attributes":{}},
+                       "primitive_observation_query":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -1047,9 +1047,9 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
-                     "worldId":"brain-world","capabilities":{"NavigateTo":true}}
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
+                     "worldId":"brain-world","capabilities":{"NavigateTo":{"availability":"available","version":"1.0","attributes":{}}}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();
             client.send("""
@@ -1337,8 +1337,8 @@ class RuntimeApplicationTest {
             TestClient client = new TestClient(new URI("ws://127.0.0.1:" + application.port()));
             assertTrue(client.connectBlocking(5, TimeUnit.SECONDS));
             client.send("""
-                    {"type":"hello","protocol":"mc-companion/1","token":"%s",
-                     "modVersion":"0.1.0-alpha","minecraftVersion":"1.21.1","loader":"fabric",
+                    {"type":"hello","protocol":"mc-companion/2","token":"%s",
+                     "modVersion":"0.4.0","minecraftVersion":"1.21.1","loader":"fabric","targetId":"fabric-1.21.1","capabilityRevision":0,
                      "worldId":"graph-world","capabilities":{}}
                     """.formatted(token));
             String sessionId = client.awaitType("hello_ack", 5).path("sessionId").asText();

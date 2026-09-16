@@ -1,7 +1,5 @@
 package com.mccompanion.protocol;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonValue;
 
 import java.util.Collection;
 import java.util.Collections;
@@ -14,7 +12,6 @@ public final class CapabilitySet {
     private static final CapabilitySet EMPTY = new CapabilitySet(Map.of());
     private final Map<String, CapabilityDescriptor> capabilities;
 
-    @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
     public CapabilitySet(Map<String, CapabilityDescriptor> capabilities) {
         Objects.requireNonNull(capabilities, "capabilities");
         TreeMap<String, CapabilityDescriptor> copy = new TreeMap<>();
@@ -32,7 +29,6 @@ public final class CapabilitySet {
         return new Builder();
     }
 
-    @JsonValue
     public Map<String, CapabilityDescriptor> asMap() {
         return capabilities;
     }

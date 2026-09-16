@@ -1,6 +1,6 @@
 # MCAC documentation
 
-Updated: 2026-09-04
+Updated: 2026-09-12
 
 This is the current documentation entry point. It separates product status, evidence, user
 instructions, developer contracts and historical logs so one old milestone cannot override the
@@ -11,8 +11,10 @@ current candidate.
 - [Product status](PRODUCT_STATUS.md): reader-facing phase and support matrix.
 - [Frozen-release product truth](product/PRODUCT_TRUTH.json): 0.3.1 version, readiness, Loader modes
   and managed Runtime port range used by documentation validation.
-- [Current-main truth](product/CURRENT_MAIN_TRUTH.json): post-release scope, frozen baseline link,
-  exact-SHA authorities, and external evidence that remains pending.
+- [Current-main truth](product/CURRENT_MAIN_TRUTH.json): 0.4.0 candidate identity, frozen baseline
+  link, exact-SHA authorities, and external evidence that remains pending.
+- [Target Catalog](../targets/catalog.json): exact Minecraft/Loader/Java/dependency/Bridge facts
+  consumed by build, Runtime, Terminal, installer and release packaging.
 - [Brain Adapter capability matrix](product/BRAIN_ADAPTER_CAPABILITIES.json): machine-readable
   Hermes, OpenAI-compatible and Replay differences.
 - [RC completion matrix](RC_COMPLETION_MATRIX.md): the only completion/evidence matrix.

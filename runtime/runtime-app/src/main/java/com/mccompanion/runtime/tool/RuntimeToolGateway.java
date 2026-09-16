@@ -29,6 +29,7 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
     private final CompanionRepository companions;
     private final TaskRepository tasks;
     private final Function<String, List<String>> availableCapabilities;
+    private final Function<String, JsonNode> compatibilityBinding;
     private final Duration cancellationConfirmationTimeout;
     private final TaskGraphValidator taskGraphs = new TaskGraphValidator();
     private volatile TaskGraphRuntime taskGraphRuntime;
@@ -37,25 +38,54 @@ public final class RuntimeToolGateway implements ToolGateway, AutoCloseable {
 
     public RuntimeToolGateway(CommandService commands, CompanionRepository companions,
                               Function<String, List<String>> availableCapabilities) {
-        this(commands, companions, null, availableCapabilities);
+        this(commands, companions, null, availableCapabilities, (Function<String, JsonNode>) null);
     }
 
     public RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
                               Function<String, List<String>> availableCapabilities) {
-        this(commands, companions, tasks, availableCapabilities, Duration.ofSeconds(5));
+        this(commands, companions, tasks, availableCapabilities, (Function<String, JsonNode>) null);
+    }
+
+    public RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
+                              Function<String, List<String>> availableCapabilities,
+                              Function<String, JsonNode> compatibilityBinding) {
+        this(commands, companions, tasks, availableCapabilities, compatibilityBinding, Duration.ofSeconds(5));
     }
 
     RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
                        Function<String, List<String>> availableCapabilities,
                        Duration cancellationConfirmationTimeout) {
+        this(commands, companions, tasks, availableCapabilities, null, cancellationConfirmationTimeout);
+    }
+
+    RuntimeToolGateway(CommandService commands, CompanionRepository companions, TaskRepository tasks,
+                       Function<String, List<String>> availableCapabilities,
+                       Function<String, JsonNode> compatibilityBinding,
+                       Duration cancellationConfirmationTimeout) {
         this.commands = java.util.Objects.requireNonNull(commands, "commands");
         this.companions = java.util.Objects.requireNonNull(companions, "companions");
         this.tasks = tasks;
         this.availableCapabilities = java.util.Objects.requireNonNull(availableCapabilities, "availableCapabilities");
+        this.compatibilityBinding = compatibilityBinding;
         this.cancellationConfirmationTimeout = java.util.Objects.requireNonNull(
                 cancellationConfirmationTimeout, "cancellationConfirmationTimeout");
         if (cancellationConfirmationTimeout.isNegative() || cancellationConfirmationTimeout.isZero()) {
             throw new IllegalArgumentException("cancellationConfirmationTimeout must be positive");
+        }
+    }
+
+    @Override public JsonNode compatibilityBinding(ToolContext context) {
+        if (compatibilityBinding != null) {
+            JsonNode value = compatibilityBinding.apply(context.companionId());
+            return value != null && value.isObject() ? value.deepCopy() : Json.object();
+        }
+        try {
+            var companion = companions.get(context.companionId()).orElse(null);
+            return companion == null ? Json.object() : Json.object()
+                    .put("sessionId", companion.sessionId())
+                    .put("worldId", companion.worldId());
+        } catch (java.sql.SQLException failure) {
+            return Json.object();
         }
     }
 

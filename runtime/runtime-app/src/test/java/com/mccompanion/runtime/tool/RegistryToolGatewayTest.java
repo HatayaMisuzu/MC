@@ -157,10 +157,10 @@ class RegistryToolGatewayTest {
     private static RuntimeSession register(SessionRegistry sessions, CapturingPeer peer, String world,
                                            String companionId, boolean queries) throws Exception {
         var capabilities = Json.object();
-        if (queries) capabilities.put("registry_query", true).put("recipe_query", true)
-                .put("primitive_observation_query", true);
+        if (queries) capabilities.<com.fasterxml.jackson.databind.node.ObjectNode>set("registry_query", com.mccompanion.runtime.ProtocolTestCapabilities.available()).<com.fasterxml.jackson.databind.node.ObjectNode>set("recipe_query", com.mccompanion.runtime.ProtocolTestCapabilities.available())
+                .<com.fasterxml.jackson.databind.node.ObjectNode>set("primitive_observation_query", com.mccompanion.runtime.ProtocolTestCapabilities.available());
         RuntimeSession session = sessions.register(peer,
-                new Handshake("mc-companion/1", "test", "1.21.1", "fabric", world, capabilities));
+                new Handshake("mc-companion/2", "test", "1.21.1", "fabric", world, capabilities));
         CompanionStatus status = new CompanionStatus(companionId, "owner-" + companionId, companionId, world,
                 "minecraft:overworld", new PositionDto(0, 64, 0), CompanionBodyState.SPAWNED,
                 null, null, 0, 0, true, CapabilitySet.empty(), Instant.now());

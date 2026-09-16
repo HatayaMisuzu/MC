@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.forge.json.ObjectMapper;
 import com.mccompanion.minecraft.forge.PrimitiveObservationService;
 import com.mccompanion.minecraft.forge.RegistryObservationService;
@@ -56,7 +60,7 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(registry.create(owner, "Arbiter").success(), "arbitration create failed");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst().orElseThrow();
         String lease = "forge-control-arbitration";
         helper.assertTrue(registry.runtimeAcquireLease(
@@ -79,7 +83,7 @@ public final class CompanionLifecycleForgeGameTests {
                 "higher-epoch handoff release failed");
         String evidence = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.companionId().equals(companionId))
-                .map(CompanionRegistry.RuntimeSnapshot::evidenceSummary)
+                .map(BodySnapshots.RuntimeSnapshot::evidenceSummary)
                 .findFirst().orElse("");
         helper.assertTrue(evidence.contains("controlAuthority=IDLE")
                         && evidence.contains("controlRevision="),
@@ -504,8 +508,8 @@ public final class CompanionLifecycleForgeGameTests {
     private static void awaitRuntimeBehaviorState(
             GameTestHelper helper, CompanionRegistry registry, String companionId,
             String expectedState, int ticksRemaining,
-            java.util.function.Consumer<CompanionRegistry.RuntimeSnapshot> completed) {
-        CompanionRegistry.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
+            java.util.function.Consumer<BodySnapshots.RuntimeSnapshot> completed) {
+        BodySnapshots.RuntimeSnapshot snapshot = registry.runtimeSnapshots(true).stream()
                 .filter(value -> value.companionId().equals(companionId)).findFirst().orElseThrow();
         if (expectedState.equals(snapshot.behaviorState())) {
             completed.accept(snapshot);
@@ -547,7 +551,7 @@ public final class CompanionLifecycleForgeGameTests {
                 "fake connection retained a packet during login");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst()
                 .orElseThrow();
         var registrySearch = RegistryObservationService.registry(
@@ -780,7 +784,7 @@ public final class CompanionLifecycleForgeGameTests {
                                         "",
                                         "UP",
                                         "MAIN_HAND",
-                                        menuToken,
+                                        MenuSessionTracker.inspect(body).token(),
                                         0,
                                         0,
                                         "CLICK",
@@ -815,7 +819,7 @@ public final class CompanionLifecycleForgeGameTests {
                                         "",
                                         "UP",
                                         "MAIN_HAND",
-                                        menuToken,
+                                        MenuSessionTracker.inspect(body).token(),
                                         0,
                                         0,
                                         "CLICK",
@@ -850,7 +854,7 @@ public final class CompanionLifecycleForgeGameTests {
                                         "",
                                         "UP",
                                         "MAIN_HAND",
-                                        menuToken,
+                                        MenuSessionTracker.inspect(body).token(),
                                         0,
                                         null,
                                         "QUICK_MOVE",
@@ -883,7 +887,7 @@ public final class CompanionLifecycleForgeGameTests {
                                         "",
                                         "UP",
                                         "MAIN_HAND",
-                                        menuToken,
+                                        MenuSessionTracker.inspect(body).token(),
                                         null,
                                         null,
                                         "CLOSE",
@@ -1312,7 +1316,7 @@ public final class CompanionLifecycleForgeGameTests {
         }
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst()
                 .orElseThrow();
         helper.assertTrue(
@@ -1357,10 +1361,10 @@ public final class CompanionLifecycleForgeGameTests {
                         .success(),
                 "world scan failed to start");
         for (int tick = 0; tick < 5; tick++) registry.tick();
-        CompanionRegistry.BehaviorObservation scanObservation =
+        BodySnapshots.BehaviorObservation scanObservation =
                 registry.runtimeSnapshots(false).stream()
                         .filter(snapshot -> snapshot.companionId().equals(companionId))
-                        .map(CompanionRegistry.RuntimeSnapshot::behaviorObservation)
+                        .map(BodySnapshots.RuntimeSnapshot::behaviorObservation)
                         .findFirst()
                         .orElseThrow();
         helper.assertTrue(
@@ -1564,7 +1568,7 @@ public final class CompanionLifecycleForgeGameTests {
         helper.assertTrue(body != null, "reconnect body was not spawned");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst()
                 .orElseThrow();
         helper.assertTrue(
@@ -1589,7 +1593,7 @@ public final class CompanionLifecycleForgeGameTests {
                         .success(),
                 "reconnect behavior failed to start");
         registry.runtimeDisconnected();
-        CompanionRegistry.RuntimeSnapshot disconnected = registry.runtimeSnapshots(false).stream()
+        BodySnapshots.RuntimeSnapshot disconnected = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.companionId().equals(companionId))
                 .findFirst()
                 .orElseThrow();
@@ -1688,6 +1692,24 @@ public final class CompanionLifecycleForgeGameTests {
                 body.getInventory().countItem(Items.COBBLESTONE) == cobblestoneBefore - 1,
                 "placement primitive did not consume the vanilla item");
 
+        // Forge retires ordinary entity fixtures outside the GameTest-managed structure.
+        // Placement can be checked in the isolated arena, but projectile and interaction
+        // assertions must run at the managed origin to observe the real spawned entities.
+        Vec3 managedSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
+        body.teleportTo(managedSpawn.x, managedSpawn.y, managedSpawn.z);
+        body.setDeltaMovement(Vec3.ZERO);
+        BlockPos managedOrigin = body.blockPosition();
+        for (int x = -2; x <= 3; x++) {
+            for (int z = -2; z <= 2; z++) {
+                body.serverLevel().setBlockAndUpdate(
+                        managedOrigin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+                for (int y = 0; y <= 3; y++) {
+                    body.serverLevel().setBlockAndUpdate(
+                            managedOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+                }
+            }
+        }
+
         helper.assertTrue(body.addItem(new ItemStack(Items.SNOWBALL, 2)), "item-use fixture add failed");
         int snowballsBefore = body.getInventory().countItem(Items.SNOWBALL);
         int projectilesBefore = body.serverLevel()
@@ -1739,24 +1761,6 @@ public final class CompanionLifecycleForgeGameTests {
                 ownedProjectiles.size() > projectilesBefore,
                 "item-use primitive did not create a vanilla projectile");
         ownedProjectiles.forEach(Snowball::discard);
-
-        // Forge retires ordinary entity fixtures outside the GameTest-managed structure.
-        // Run only the entity-backed assertions at the managed origin, then the caller returns
-        // the body to its isolated crafting/smelting arena.
-        Vec3 managedSpawn = helper.absoluteVec(new Vec3(1.0D, 1.0D, 1.0D));
-        body.teleportTo(managedSpawn.x, managedSpawn.y, managedSpawn.z);
-        body.setDeltaMovement(Vec3.ZERO);
-        BlockPos managedOrigin = body.blockPosition();
-        for (int x = -2; x <= 3; x++) {
-            for (int z = -2; z <= 2; z++) {
-                body.serverLevel().setBlockAndUpdate(
-                        managedOrigin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
-                for (int y = 0; y <= 3; y++) {
-                    body.serverLevel().setBlockAndUpdate(
-                            managedOrigin.offset(x, y, z), Blocks.AIR.defaultBlockState());
-                }
-            }
-        }
 
         Cow cow = EntityType.COW.create(body.serverLevel());
         helper.assertTrue(cow != null, "entity-interaction fixture creation failed");
@@ -2297,7 +2301,7 @@ public final class CompanionLifecycleForgeGameTests {
         }
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(snapshot -> snapshot.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId)
+                .map(BodySnapshots.RuntimeSnapshot::companionId)
                 .findFirst()
                 .orElseThrow();
         String lease = "forge-navigation-combination";

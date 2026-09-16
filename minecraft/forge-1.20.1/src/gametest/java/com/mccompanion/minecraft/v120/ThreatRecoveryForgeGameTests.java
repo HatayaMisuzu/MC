@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.core.body.build.SmallBlueprint;
 import java.util.ArrayList;
 import java.util.Map;
@@ -247,6 +249,11 @@ public final class ThreatRecoveryForgeGameTests {
     }
 
     private static CombatForgeGameTests.Fixture fixture(GameTestHelper helper, int coordinate) {
+        // These tests create every threat explicitly. Disable natural spawning before the
+        // isolated chunks are loaded so patrols cannot add unrelated damage or invulnerability
+        // frames to a fixture that is asserting one specific vanilla attacker.
+        helper.getLevel().getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING)
+                .set(false, helper.getLevel().getServer());
         var f = new CombatForgeGameTests.Fixture(helper, coordinate);
         for (int x = -2; x <= 2; x++) for (int z = -2; z <= 2; z++)
             f.body.serverLevel().setChunkForced((coordinate >> 4) + x, (coordinate >> 4) + z, true);

@@ -21,6 +21,37 @@ class SessionRegistryRebindingTest {
   @TempDir Path temporary;
 
   @Test
+  void capabilitySnapshotsRevokeExactlyAndRejectOldSessionsAndRevisions() throws Exception {
+    try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("capabilities.db"));
+         RuntimeLog log = new RuntimeLog(temporary.resolve("capabilities.log"), false, new Redactor())) {
+      database.initialize();
+      try (SessionRegistry sessions = new SessionRegistry(database, new CompanionRepository(database), log)) {
+        RuntimeSession current = sessions.register(new Peer("current"), handshake("world"));
+        var available = new com.mccompanion.protocol.SessionCapabilitySnapshot(1,
+            CapabilitySet.builder().available("MenuAction", "1.0").build());
+        sessions.updateCapabilities(current, available);
+        assertTrue(current.permits("MenuAction"));
+        sessions.updateCapabilities(current, new com.mccompanion.protocol.SessionCapabilitySnapshot(3,
+            CapabilitySet.builder().available("MenuAction", "2.0").build()));
+        assertFalse(current.permits("MenuAction"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+            () -> sessions.updateCapabilities(current, available));
+        try (var connection = database.open(); var statement = connection.prepareStatement(
+            "SELECT capabilities_json FROM runtime_session WHERE session_id=?")) {
+          statement.setString(1, current.sessionId());
+          try (var rows = statement.executeQuery()) {
+            assertTrue(rows.next());
+            assertEquals("2.0", Json.parse(rows.getString(1)).path("MenuAction").path("version").asText());
+          }
+        }
+        sessions.register(new Peer("replacement"), handshake("world"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class,
+            () -> sessions.updateCapabilities(current, new com.mccompanion.protocol.SessionCapabilitySnapshot(4, CapabilitySet.empty())));
+      }
+    }
+  }
+
+  @Test
   void newerDisconnectDoesNotLetAnOlderActiveSessionReclaimAuthority() throws Exception {
     try (RuntimeDatabase database = new RuntimeDatabase(temporary.resolve("authority-floor.db"));
          RuntimeLog log = new RuntimeLog(temporary.resolve("authority-floor.log"), false, new Redactor())) {
@@ -79,7 +110,7 @@ class SessionRegistryRebindingTest {
   }
 
   private static Handshake handshake(String world) {
-    return new Handshake("mc-companion/1", "test", "1.21.1", "fabric", world, Json.object());
+    return new Handshake("mc-companion/2", "test", "1.21.1", "fabric", world, Json.object());
   }
 
   private static CompanionStatus status(String world) {

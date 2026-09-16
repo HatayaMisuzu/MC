@@ -1,0 +1,119 @@
+import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+
+// Loader plugins remain isolated. Only product target facts and artifact assembly are shared.
+def repository = rootProject.file('../..')
+def catalogFile = new File(repository, 'targets/catalog.json')
+def catalog = new JsonSlurper().parse(catalogFile)
+if (catalog.schemaVersion != 1) throw new GradleException('Unsupported target catalog schema')
+def target = catalog.targets.find { it.buildDirectory == "minecraft/${rootProject.projectDir.name}" }
+if (target == null) throw new GradleException("No catalog entry for ${rootProject.projectDir.name}")
+ext.mcacTarget = target
+def product = new Properties()
+new File(repository, 'gradle.properties').withInputStream { product.load(it) }
+ext.mod_version = findProperty('sharedVersion') ?: product.getProperty('version')
+ext.minecraft_version = target.minecraftVersion
+ext.minecraft_version_range = "[${target.minecraftVersion}]"
+ext.loader_version_range = target.loaderMetadataRange
+if (target.loader == 'fabric') ext.loader_version = target.loaderVersion
+if (target.loader == 'forge') {
+    ext.forge_version = target.loaderVersion
+    ext.forge_version_range = target.loaderVersionRange
+}
+if (target.loader == 'neoforge') {
+    ext.neo_version = target.loaderVersion
+    ext.neo_version_range = target.loaderVersionRange
+}
+
+configurations {
+    mcacProtocolApi { transitive = false }
+}
+dependencies {
+    implementation "com.mccompanion:protocol-api:${mod_version}"
+    mcacProtocolApi "com.mccompanion:protocol-api:${mod_version}"
+}
+// One entry path: unpack the precompiled dependency-free Java 17 API into the target's main
+// output. Loader development runs and the production JAR therefore see the exact same classes.
+def unpackProtocolApi = tasks.register('unpackProtocolApi', Sync) {
+    dependsOn configurations.mcacProtocolApi
+    from({ configurations.mcacProtocolApi.collect { zipTree(it) } }) {
+        exclude 'META-INF/MANIFEST.MF'
+    }
+    into layout.buildDirectory.dir('generated/protocolApi')
+}
+sourceSets.main.resources.srcDir(unpackProtocolApi)
+def targetMetadata = tasks.register('generateTargetMetadata') {
+    inputs.file(catalogFile)
+    inputs.property('productVersion', mod_version.toString())
+    outputs.dir(layout.buildDirectory.dir('generated/mcacTarget'))
+    doLast {
+        def output = layout.buildDirectory.file('generated/mcacTarget/META-INF/mcac-target.json').get().asFile
+        output.parentFile.mkdirs()
+        output.setText(JsonOutput.prettyPrint(JsonOutput.toJson([schemaVersion:1,
+                productVersion:project.mod_version.toString(), target:target])) + '\n', 'UTF-8')
+    }
+}
+sourceSets.main.resources.srcDir(targetMetadata)
+
+// Produce the same trusted file/target manifest shape for developer and release installations.
+def productJarTaskName = target.loader == 'fabric' ? 'remapJar'
+        : target.loader == 'forge' ? 'reobfJar' : 'jar'
+// LegacyForge creates reobfJar only after its extension is configured in the target build.
+def productJar = providers.provider { tasks.named(productJarTaskName).get() }
+def artifactManifest = tasks.register('targetArtifactManifest') {
+    dependsOn productJar
+    inputs.file(catalogFile)
+    inputs.file(productJar.flatMap { it.archiveFile })
+    // Source identity changes independently of incremental JAR content.
+    outputs.upToDateWhen { false }
+    outputs.file(layout.buildDirectory.file('libs/release-manifest.json'))
+    doLast {
+        File artifact = productJar.get().archiveFile.get().asFile
+        def commit = providers.exec {
+            workingDir repository
+            commandLine 'git', 'rev-parse', 'HEAD'
+        }.standardOutput.asText.get().trim()
+        def hash = java.security.MessageDigest.getInstance('SHA-256').digest(artifact.bytes).encodeHex().toString()
+        def document = [schemaVersion:1, product:'Minecraft AI Companion', version:project.mod_version.toString(),
+                buildType:'DEVELOPMENT_BUILD', sourceCommit:commit,
+                files:[[path:artifact.name, size:artifact.length(), sha256:hash]],
+                targets:[[targetId:target.targetId, artifact:artifact.name]]]
+        def output = layout.buildDirectory.file('libs/release-manifest.json').get().asFile
+        output.parentFile.mkdirs()
+        output.setText(JsonOutput.prettyPrint(JsonOutput.toJson(document)) + '\n', 'UTF-8')
+    }
+}
+tasks.named('assemble') { dependsOn artifactManifest }
+
+tasks.register('verifyTargetArtifact') {
+    dependsOn artifactManifest
+    doLast {
+        File artifact = productJar.get().archiveFile.get().asFile
+        def manifest = new JsonSlurper().parse(
+                layout.buildDirectory.file('libs/release-manifest.json').get().asFile)
+        def fileEntry = manifest.files.find { it.path == artifact.name }
+        def actualHash = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(artifact.bytes).encodeHex().toString()
+        if (fileEntry == null || fileEntry.size != artifact.length() || fileEntry.sha256 != actualHash) {
+            throw new GradleException("Target release manifest does not match final artifact: ${artifact}")
+        }
+        new java.util.zip.ZipFile(artifact).withCloseable { zip ->
+            def names = zip.entries().collect { it.name }
+            if (names.size() != names.toSet().size()) throw new GradleException('Duplicate target JAR entries')
+            ['META-INF/mcac-target.json', 'com/mccompanion/protocol/CapabilityDescriptor.class',
+             'mcac/build.properties'].each { name ->
+                if (zip.getEntry(name) == null) throw new GradleException("Target JAR missing ${name}")
+            }
+            names.findAll { it.endsWith('.class') }.each { name ->
+                if (name =~ /GameTests|mcac_unknown_fixture/) throw new GradleException("Test fixture in production JAR: ${name}")
+                byte[] bytes = zip.getInputStream(zip.getEntry(name)).bytes
+                int major = ((bytes[6] & 255) << 8) | (bytes[7] & 255)
+                if (major > target.javaMinimum + 44) throw new GradleException("Wrong Java class version: ${name}")
+                if (target.loader == 'forge' && new String(bytes, java.nio.charset.StandardCharsets.ISO_8859_1).contains('com/fasterxml/jackson')) {
+                    throw new GradleException("Jackson reference in production Forge class: ${name}")
+                }
+            }
+        }
+    }
+}
+tasks.named('check') { dependsOn 'verifyTargetArtifact' }

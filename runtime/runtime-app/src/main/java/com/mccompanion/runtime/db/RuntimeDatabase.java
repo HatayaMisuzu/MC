@@ -969,6 +969,8 @@ public final class RuntimeDatabase implements AutoCloseable {
                         durableBrainTracking),
                 new Migration(33, "persist bounded event-driven Brain wake admissions", runtimeEvents),
                 new Migration(34, "persist bounded Task Graph replanning", List.of(
-                        "ALTER TABLE task_graph_execution ADD COLUMN replan_json TEXT NOT NULL DEFAULT '{}'")));
+                        "ALTER TABLE task_graph_execution ADD COLUMN replan_json TEXT NOT NULL DEFAULT '{}'")),
+                new Migration(35, "persist Task Graph compatibility context", List.of(
+                        "ALTER TABLE task_graph_execution ADD COLUMN compatibility_context_json TEXT NOT NULL DEFAULT '{}'")));
     }
 }

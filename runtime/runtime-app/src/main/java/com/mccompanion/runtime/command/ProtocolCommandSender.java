@@ -43,10 +43,10 @@ public final class ProtocolCommandSender {
         CommandEnvelope commandPayload = new CommandEnvelope(commandId, command, companionId, taskId, leaseId,
                 controlEpoch, expectedRevision, values);
         JsonNode payload = codec.mapperCopy().valueToTree(commandPayload);
-        MessageEnvelope envelope = new MessageEnvelope(
+        session.send(sequence -> codec.encode(new MessageEnvelope(
                 ProtocolVersion.parse(session.handshake().protocol()), MessageType.COMMAND,
-                UUID.randomUUID().toString(), session.nextSequence(), clock.instant(), null, payload);
-        session.peer().send(codec.encode(envelope));
+                UUID.randomUUID().toString(), sequence, clock.instant(), null, payload,
+                session.sessionId(), session.handshake().worldId())));
     }
 
     private static Map<String, JsonNode> toArguments(JsonNode arguments) {

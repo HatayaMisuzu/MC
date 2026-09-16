@@ -1,5 +1,6 @@
 package com.mccompanion.minecraft.forge;
 
+import com.mccompanion.protocol.BuildIdentity;
 import com.mccompanion.minecraft.bootstrap.BootstrapCapabilityReport;
 import com.mccompanion.minecraft.v120.CompanionCommands;
 import com.mccompanion.minecraft.v120.CompanionRegistry;
@@ -22,7 +23,7 @@ import org.slf4j.LoggerFactory;
 @Mod(MinecraftAiCompanionForge.MOD_ID)
 public final class MinecraftAiCompanionForge {
     public static final String MOD_ID = "minecraft_ai_companion";
-    public static final String MOD_VERSION = "0.3.1";
+    public static final String MOD_VERSION = BuildIdentity.PRODUCT_VERSION;
     private static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     private static final BootstrapCapabilityReport CAPABILITIES = new BootstrapCapabilityReport(
             MOD_VERSION,

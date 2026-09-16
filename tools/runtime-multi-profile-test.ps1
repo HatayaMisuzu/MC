@@ -85,7 +85,7 @@ function Health($profile){
         $result=Health-Snapshot $profile
         return $result.profileId -eq $profile.Id -and
             $result.instanceId -eq $profile.Id -and
-            $result.protocolVersion -eq 'mc-companion/1' -and
+            $result.protocolVersion -eq 'mc-companion/2' -and
             $result.port -eq $profile.Port -and
             $result.taskGraph.status -eq 'READY'
     }catch{

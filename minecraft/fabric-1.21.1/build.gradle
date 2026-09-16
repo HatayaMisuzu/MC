@@ -3,6 +3,8 @@ plugins {
     id 'maven-publish'
 }
 
+apply from: rootProject.file('../gradle/target-catalog.gradle')
+
 version = project.mod_version
 group = project.maven_group
 
@@ -86,7 +88,6 @@ dependencies {
     gametestImplementation sourceSets.main.output
 
     implementation "com.mccompanion:pure-core:${mod_version}"
-    implementation "com.mccompanion:protocol-model:${mod_version}"
 }
 
 processResources {

@@ -2,6 +2,7 @@ package com.mccompanion.terminal.runtime;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mccompanion.protocol.BuildIdentity;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -24,7 +25,7 @@ import java.util.Optional;
 
 public final class WindowsRuntimeSupervisor {
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final String PROTOCOL = "mc-companion/1";
+    private static final String PROTOCOL = BuildIdentity.PROTOCOL;
     private static final Duration OPERATION_LOCK_TIMEOUT = Duration.ofSeconds(10);
     private static final ConcurrentHashMap<Path, ReentrantLock> JVM_LOCKS = new ConcurrentHashMap<>();
 

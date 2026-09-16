@@ -1,13 +1,13 @@
-# Minecraft AI Companion 0.3.1
+# Minecraft AI Companion 0.4.0
 
 Minecraft AI Companion（MCAC）是面向 PCL2/HMCL 的 Windows 本地 Minecraft 身体与控制中心。
 Hermes、DeepSeek 或其他外部 LLM/Agent 是唯一高层决策者；MCAC 提供通用 Minecraft
 Tools、上下文、记忆、搜索、安全、持久化、验证、确定性 Task Graph 执行和产品界面。
 MCAC 不是内置高层 Agent，也不是隐藏 Planner。
 
-当前产品版本为 0.3.1：自动化产品化基线已冻结（`FROZEN`），并已作为
-`mcac-productization-baseline-0.3.1` 标注 tag / GitHub Release 发布。Readiness 标签
-现为 `HUMAN_PLAYTEST_PENDING`。2026-08-01 的一次真实纵向测试已验证
+当前开发候选版本为 0.4.0，Body 协议为 `mc-companion/2`。已发布且不可变的自动化基线
+仍是 `mcac-productization-baseline-0.3.1`；0.4.0 不继承该发布提交的精确 SHA 验证。
+Readiness 标签现为 `HUMAN_PLAYTEST_PENDING`。2026-08-01 的一次真实纵向测试已验证
 PCL + Forge 1.20.1 + Runtime + Hermes + DeepSeek 官方 API 的握手/恢复、世界状态读取、
 Follow、Navigate 位置变化、安全空闲与重连；这不代表其他 Provider、Loader、全部工具、
 复杂地形或长期真人游玩已经验证。机器可读的 frozen 0.3.1 发布事实位于
@@ -15,8 +15,9 @@ Follow、Navigate 位置变化、安全空闲与重连；这不代表其他 Prov
 [CURRENT_MAIN_TRUTH.json](docs/product/CURRENT_MAIN_TRUTH.json)，自动化证据与外部待验证项以
 [RC 完成矩阵](docs/RC_COMPLETION_MATRIX.md) 为准。
 
-本版本以 Fabric 1.21.1 与 Forge 1.20.1 双 Full Runtime Bridge 为自动化产品目标；
-NeoForge 1.21.1 保持 `LOCAL_ONLY`。
+当前三个目标由发布包中的 `targets/catalog.json` 统一声明：Fabric 1.21.1 与 Forge
+1.20.1 为 Full Runtime Bridge；NeoForge 1.21.1 保持 `LOCAL_ONLY`。Catalog 的预期能力
+只用于装配、安装和诊断核对，会话权限始终来自实际连接 Body 的结构化能力快照。
 
 当前开发主线还整合了日常动作、生存导航、持久事件、任意实体交互、小型蓝图建筑、战斗恢复、
 有界 World Model 与事件驱动重规划。共享控制逻辑和版本适配边界见

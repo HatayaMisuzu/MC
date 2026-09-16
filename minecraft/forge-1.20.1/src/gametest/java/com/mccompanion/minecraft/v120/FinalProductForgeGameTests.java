@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mojang.authlib.GameProfile;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -44,6 +46,10 @@ public final class FinalProductForgeGameTests {
             level.setBlockAndUpdate(f.origin.offset(x, 0, z), Blocks.WATER.defaultBlockState());
         for (int x = 80; x <= 86; x++) for (int z = -1; z <= 1; z++)
             level.setBlockAndUpdate(f.origin.offset(x, 0, z), Blocks.STONE.defaultBlockState());
+        // Building the distant arena is intentionally expensive. Re-anchor the fixture only after
+        // every block update has completed so its first physics tick cannot use the pre-arena pose.
+        f.body.teleportTo(level, f.origin.getX() + .5, 100, f.origin.getZ() + .5, 0, 0);
+        f.body.setDeltaMovement(Vec3.ZERO);
         f.body.addItem(new ItemStack(Items.IRON_SWORD));
         ServerPlayer[] target = {player(helper, UUID.randomUUID(), Vec3.atBottomCenterOf(f.origin.offset(24, 0, 0)))};
         helper.assertTrue(!target[0].getUUID().equals(f.owner.getUUID()), "target must be a non-owner");

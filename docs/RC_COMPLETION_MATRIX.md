@@ -1,22 +1,35 @@
 # RC completion matrix
 
-Updated: 2026-09-04
+Updated: 2026-09-16
 Overall status: `HUMAN_PLAYTEST_PENDING`
-Automated productization baseline: `FROZEN`
-Product version: `0.3.1`
+Current candidate version: `0.4.0`
+Body protocol: `mc-companion/2`
+Frozen automated productization baseline: `0.3.1` / `FROZEN`
 Previous immutable baseline: `mcac-productization-baseline-0.3.0`
 Current baseline tag: `mcac-productization-baseline-0.3.1`
 External follow-up:
 
+- `LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING`
 - `HUMAN_PLAYTEST_PENDING`
 
 Machine-readable frozen 0.3.1 facts: [product/PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json).
 Machine-readable current-main scope: [product/CURRENT_MAIN_TRUTH.json](product/CURRENT_MAIN_TRUTH.json).
+Current target source: [../targets/catalog.json](../targets/catalog.json).
 Historical candidate SHAs and workflow run IDs below apply only to their named revisions.
 
 ## Evidence scope
 
 ### Current closeout evidence
+
+#### 0.4.0 compatibility architecture convergence — 2026-09-16
+
+| Scope | State | Current evidence | Remaining boundary |
+| --- | --- | --- | --- |
+| Target Catalog and installation | `LOCALLY_VERIFIED` | One packaged `targets/catalog.json` drives Runtime, Terminal, Doctor, Gradle, CI task enumeration and release artifact mapping. Installer tests cover exact native/target metadata, Loader and dependency constraints, SHA mismatch, direct resolution, transaction recovery, rollback and pre-write artifact replacement. | Real personal launcher installation remains human verification. |
+| Protocol and capabilities | `LOCALLY_VERIFIED` | Java 17 dependency-free `protocol-api`, Jackson/Gson semantic codec contracts, `mc-companion/2` product/target/world handshake, actual capability descriptors and monotonic session-bound revisions pass focused tests. | Old protocol/bundle combinations are intentionally rejected. |
+| Shared Bridge and Body | `LOCALLY_VERIFIED` | Fabric and Forge compile one shared connection/session/correlation/delivery core plus shared body-control and menu action lifecycles; menu tests separate native acceptance from observation-confirmed success and invalidate replaced, closed and expired handles. NeoForge excludes the remote Bridge core. | Resource/crafting/smelting native API details remain version bindings; current completion does not claim a future fourth target. |
+| Durable compatibility recovery | `LOCALLY_VERIFIED` | Database migration 35 stores target/world/session/protocol/capability revision and exact referenced Tool contracts. Runtime and Task Graph tests cover pending-node-only comparison, safe session refresh, active session/world/contract mismatch and pre-dispatch enforcement without replaying completed effects. | Result-unknown world actions still require the existing reconciliation or External Brain replan path. |
+| Current full product chain | `LOCALLY_VERIFIED` | The implementation worktree passes root `check`, clean Fabric 1.21.1 GameTest 81/81, clean Forge 1.20.1 GameTest 58/58, NeoForge 1.21.1 LOCAL_ONLY GameTest 1/1, both Runtime/Bridge E2E chains, all three dedicated-server launches, persistence restart, isolated multi-profile Runtime, package/Doctor and Unicode/space-path launcher checks. `releaseGoldenPathTest` rebuilt all three target artifacts plus Runtime and Terminal, verified their target metadata/classes/hashes, then passed the packaged bilingual browser flow against the real backend from a clean extraction. | The branch still requires ordinary remote PR checks. Live Brain/provider use, a personal launcher installation and human play remain separate acceptance boundaries; exact-main Layer 3 candidate validation can run only after merge. |
 
 #### Eight-capability integration — 2026-09-04
 

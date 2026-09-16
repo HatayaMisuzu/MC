@@ -77,7 +77,7 @@ class TokenRotationServiceTest {
 
     private static WindowsRuntimeSupervisor.RuntimeHealth healthy() {
         return new WindowsRuntimeSupervisor.RuntimeHealth(1L, true, true, true, true,
-                "test", "mc-companion/1", 1, true, "ok");
+                "test", "mc-companion/2", 1, true, "ok");
     }
 
     private static final class FakeRuntime implements TokenRotationService.RuntimeControl {

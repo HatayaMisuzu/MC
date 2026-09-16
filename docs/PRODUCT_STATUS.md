@@ -1,9 +1,10 @@
 # MCAC product status
 
-Updated: 2026-09-04
+Updated: 2026-09-12
 
-MCAC 0.3.1 is the released repair baseline for the frozen automated productization scope.
-Its current readiness is `HUMAN_PLAYTEST_PENDING`. One bounded live-provider vertical slice is now
+MCAC 0.4.0 is the current compatibility-architecture candidate. MCAC 0.3.1 remains the released,
+immutable repair baseline for the frozen automated productization scope. Current 0.4.0 readiness is
+`HUMAN_PLAYTEST_PENDING`. One bounded historical live-provider vertical slice is
 verified; this is not a claim that every provider, Loader, Tool, terrain, or long-duration human-play
 scenario has passed. Machine-readable frozen-release facts are in
 [PRODUCT_TRUTH.json](product/PRODUCT_TRUTH.json). Post-release `main` does not inherit that release's
@@ -13,7 +14,7 @@ exact-SHA verification; its stable scope and SHA authorities are in
 
 "Released" here means the frozen automated baseline was published as the annotated tag and GitHub
 Release `mcac-productization-baseline-0.3.1`. The frozen release remains immutable; current `main`
-contains post-release reliability work and evidence updates.
+uses `mc-companion/2` and requires Runtime, Terminal and Mod to upgrade as one 0.4.0 bundle.
 
 The current development line also integrates eight bounded gameplay enhancements: daily actions,
 survival navigation, durable events, arbitrary entity interaction, small blueprint construction,
@@ -21,6 +22,13 @@ combat recovery, a persisted [World Model](WORLD_MODEL.md), and
 [event-driven replanning](EVENT_DRIVEN_REPLAN.md). These reuse the existing Runtime/Body boundaries
 on the two Full Bridge targets. Their local automated evidence is recorded separately from the
 immutable release and does not inherit its historical Live-provider result.
+
+The three exact build targets now come from `targets/catalog.json`, which is embedded in protocol
+resources and copied into the release package. Gradle, Runtime, Terminal, Doctor and installer read
+that same declaration. Expected Catalog capabilities do not authorize a session; Runtime uses only
+the structured, revisioned capabilities reported by bindings that actually initialized. Installer
+plans validate exact target metadata and artifact hash both when planned and immediately before the
+transaction writes any file.
 
 On 2026-08-01, a disposable PCL + Forge 1.20.1 instance completed a real Runtime + Hermes + official
 DeepSeek API vertical slice. Sanitized evidence verifies handshake, recovery, world-state reading,
@@ -44,7 +52,7 @@ trusted test runner supplies evidence through the scoped Host boundary.
 
 ## Current closure state
 
-- Current `main` is a post-release development line. Its exact-SHA validation comes only from Git
+- Current 0.4.0 is a post-release development candidate. Its exact-SHA validation comes only from Git
   and Actions runs for that SHA; it does not inherit the frozen release's remote evidence.
 - Compatibility Host lifecycle and bilingual Terminal management are locally verified.
 - The `zh-CN` and `en-US` critical product paths pass in Chromium against the real packaged Java
@@ -53,11 +61,18 @@ trusted test runner supplies evidence through the scoped Host boundary.
 - The 0.3.1 repair was ordinarily merged as `747c7e8046073d9534eae6ae775645341be4cdcd`
   and published as annotated tag and GitHub Release `mcac-productization-baseline-0.3.1`.
 - The exact Forge/PCL/Hermes/official-DeepSeek vertical slice above is live-provider verified.
+- Fabric and Forge share protocol values, connection/session handling, request correlation,
+  status/event delivery, body-control lifecycle and observation-verified menu action control;
+  native Minecraft API translation and Jackson/Gson codecs remain in their version/Loader layers.
+- Task Graph records persist target, world, session, protocol, capability revision and referenced
+  Tool contracts. Resume checks only pending work and stops for reconciliation when an old reference
+  or incompatible contract could repeat an effect.
 - Broader provider/Loader coverage and subjective long-duration human play remain follow-up work.
 
-The remaining external follow-up label is:
+The current 0.4.0 external follow-up labels are:
 
 ```text
+LIVE_BRAIN_EXTERNAL_VERIFICATION_PENDING
 HUMAN_PLAYTEST_PENDING
 ```
 

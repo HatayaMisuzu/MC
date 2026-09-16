@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.minecraft.bridge.InventoryWorldEventTracker;
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import com.mojang.authlib.GameProfile;
@@ -36,7 +40,7 @@ public final class InventoryWorldEventForgeGameTests {
         helper.assertTrue(registry.create(owner, "InventoryWorldBody").success(), "companion create failed");
         String companionId = registry.runtimeSnapshots(false).stream()
                 .filter(value -> value.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
+                .map(BodySnapshots.RuntimeSnapshot::companionId).findFirst().orElseThrow();
         CompanionPlayer body = registry.runtimeBody(companionId);
         helper.assertTrue(body != null, "companion body missing");
         BlockPos target = body.blockPosition().offset(1, 0, 0);

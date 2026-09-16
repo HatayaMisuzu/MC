@@ -38,6 +38,9 @@ export interface Instance {
   confidence: string
   isolation: string
   compatible: boolean
+  targetId?: string
+  environmentReady?: boolean
+  compatibilityIssues?: string[]
   installed: boolean
   mode: 'FULL' | 'LOCAL_ONLY'
 }

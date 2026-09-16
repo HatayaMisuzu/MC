@@ -12,9 +12,7 @@ $required = @(
     'app',
     'runtime',
     'web',
-    'artifacts\fabric-1.21.1',
-    'artifacts\neoforge-1.21.1',
-    'artifacts\forge-1.20.1',
+    'targets\catalog.json',
     'legal',
     'README.txt',
     'KNOWN_LIMITATIONS.md',
@@ -23,6 +21,10 @@ $required = @(
     'sbom.spdx.json',
     'SHA256SUMS.txt'
 )
+
+$catalog = Get-Content -LiteralPath (Join-Path $release 'targets/catalog.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($catalog.schemaVersion -ne 1) { throw 'Invalid packaged target catalog' }
+$required += @($catalog.targets | ForEach-Object { 'artifacts/' + $_.targetId })
 
 foreach ($item in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $release $item))) {
@@ -61,6 +63,13 @@ if ($manifest.schemaVersion -ne 1 -or $manifest.product -ne 'Minecraft AI Compan
     throw 'Release manifest identity/schema is invalid'
 }
 if ($manifest.sourceCommit -notmatch '^[0-9a-f]{40}$') { throw 'Release manifest source commit is invalid' }
+foreach ($targetDeclaration in $catalog.targets) {
+    $mapping = @($manifest.targets | Where-Object { $_.targetId -eq $targetDeclaration.targetId })
+    if ($mapping.Count -ne 1 -or $mapping[0].artifact -notlike "artifacts/$($targetDeclaration.targetId)/*.jar") {
+        throw "Release target mapping mismatch: $($targetDeclaration.targetId)"
+    }
+}
+if (@($manifest.targets).Count -ne @($catalog.targets).Count) { throw 'Unexpected release targets' }
 $manifestPaths = @{}
 foreach ($entry in $manifest.files) {
     if ($entry.path -match '(^|/)\.\.(/|$)' -or [IO.Path]::IsPathRooted([string]$entry.path)) {

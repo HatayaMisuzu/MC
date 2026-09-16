@@ -9,9 +9,7 @@ final class FullBridgeSupport {
     }
 
     static boolean supports(MinecraftInstance instance) {
-        return (instance.loader() == LoaderType.FABRIC
-                        && instance.minecraftVersion().equals("1.21.1"))
-                || (instance.loader() == LoaderType.FORGE
-                        && instance.minecraftVersion().equals("1.20.1"));
+        return com.mccompanion.terminal.install.InstallPlanner.target(instance)
+                .map(com.mccompanion.protocol.target.TargetDescriptor::fullBridge).orElse(false);
     }
 }

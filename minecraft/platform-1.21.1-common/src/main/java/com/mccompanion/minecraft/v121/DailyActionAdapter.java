@@ -1,5 +1,7 @@
 package com.mccompanion.minecraft.v121;
 
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mccompanion.core.body.daily.DailyActionCommand;
 import com.mccompanion.core.body.daily.DailyActionEngine;
 import com.mccompanion.core.body.daily.DailyActionKind;

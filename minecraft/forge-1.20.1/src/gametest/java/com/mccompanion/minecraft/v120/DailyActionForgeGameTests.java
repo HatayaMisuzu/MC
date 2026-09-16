@@ -1,5 +1,9 @@
 package com.mccompanion.minecraft.v120;
 
+import com.mccompanion.core.body.BodySnapshots;
+
+import com.mccompanion.core.body.SkillParameters;
+
 import com.mojang.authlib.GameProfile;
 import com.mccompanion.minecraft.forge.MinecraftAiCompanionForge;
 import java.util.UUID;
@@ -129,22 +133,8 @@ public final class DailyActionForgeGameTests {
             template = "bastion/mobs/empty", timeoutTicks = 800)
     public static void nearbyBedNavigationCanBeCancelledWithoutLeavingTheBodyAsleep(GameTestHelper h) {
         Fixture f = fixture(h, "daily-sleep-cancel");
-        // This isolated arena sits outside the tiny template and must remain loaded while the
-        // real ServerPlayer travels. Reset only fixture physics before starting the action.
-        f.level.setChunkForced(32, 32, true);
-        f.body.teleportTo(512.5D, 80.0D, 512.5D);
-        f.body.setDeltaMovement(Vec3.ZERO);
-        f.body.fallDistance = 0.0F;
-        f.body.setOnGround(true);
-        f.owner.teleportTo(512.5D, 80.0D, 510.5D);
-        BlockPos origin = f.body.blockPosition();
+        BlockPos origin = moveFixtureToIsolatedArena(f, 512);
         BlockPos bed = origin.offset(5, 0, 0);
-        for (int x = -2; x <= 7; x++) for (int z = -2; z <= 2; z++) {
-            f.level.setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
-            for (int y = 0; y <= 2; y++) {
-                f.level.setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
-            }
-        }
         f.level.setDayTime(13000L);
         placeBed(f, bed, false);
         var approachPlan = new SurvivalNavigationAdapter().plan(
@@ -428,7 +418,7 @@ public final class DailyActionForgeGameTests {
             h.assertTrue(paused.success() && "PAUSED".equals(paused.state()),
                     "mid-action runtime pause was not acknowledged: " + paused.code());
             h.runAfterDelay(12, () -> {
-                CompanionRegistry.RuntimeSnapshot pausedSnapshot = runtimeSnapshot(f);
+                BodySnapshots.RuntimeSnapshot pausedSnapshot = runtimeSnapshot(f);
                 h.assertTrue("PAUSED".equals(pausedSnapshot.behaviorState()),
                         "runtime pause did not retain PAUSED state during the tick window");
                 h.assertTrue(f.body.position().distanceToSqr(pausedAt) < 4.0D
@@ -702,6 +692,7 @@ public final class DailyActionForgeGameTests {
             template = "bastion/mobs/empty", timeoutTicks = 1400)
     public static void brewingTicksAndReturnsRealPotionResult(GameTestHelper h) {
         Fixture f = fixture(h, "daily-brew");
+        BlockPos arena = moveFixtureToIsolatedArena(f, 704);
         BlockPos station = f.body.blockPosition().offset(2, 0, 0);
         f.level.setBlockAndUpdate(station, Blocks.BREWING_STAND.defaultBlockState());
         f.body.addItem(PotionUtils.setPotion(new ItemStack(Items.POTION), Potions.WATER));
@@ -723,6 +714,7 @@ public final class DailyActionForgeGameTests {
                     "terminal brewing snapshot omitted the retrieved result");
             h.assertTrue(f.body.containerMenu == f.body.inventoryMenu,
                     "completed brew left the brewing menu open");
+            f.level.setChunkForced(arena.getX() >> 4, arena.getZ() >> 4, false);
             finish(h, f);
         });
     }
@@ -805,7 +797,7 @@ public final class DailyActionForgeGameTests {
             h.assertTrue(cancelled.success() && "CANCELLED".equals(cancelled.state()),
                     "runtime cancel did not acknowledge fishing cancellation: " + cancelled.code());
             h.runAfterDelay(8, () -> {
-                CompanionRegistry.RuntimeSnapshot cancelledSnapshot = runtimeSnapshot(f);
+                BodySnapshots.RuntimeSnapshot cancelledSnapshot = runtimeSnapshot(f);
                 h.assertTrue("IDLE".equals(cancelledSnapshot.behaviorState()),
                         "cancelled fishing action did not return the runtime to IDLE");
                 h.assertTrue(f.body.fishing == null, "runtime cancel left a live fishing hook behind");
@@ -833,7 +825,7 @@ public final class DailyActionForgeGameTests {
                 "invalid-daily-start", "skill", null, null, null, missingDestination);
         h.assertTrue(!rejected.success() && "INVALID_SKILL_PARAMETERS".equals(rejected.code()),
                 "invalid daily request was not rejected before mutation: " + rejected);
-        CompanionRegistry.RuntimeSnapshot state = runtimeSnapshot(f);
+        BodySnapshots.RuntimeSnapshot state = runtimeSnapshot(f);
         h.assertTrue("IDLE".equals(state.behaviorState()) && state.behaviorId() == null,
                 "invalid daily request left a half-started behavior: " + state);
         finish(h, f);
@@ -966,6 +958,8 @@ public final class DailyActionForgeGameTests {
     }
 
     private static Fixture fixture(GameTestHelper h, String name) {
+        h.getLevel().getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOMOBSPAWNING)
+                .set(false, h.getLevel().getServer());
         FakeConnection connection = new FakeConnection();
         ServerPlayer owner = new ServerPlayer(h.getLevel().getServer(), h.getLevel(),
                 new GameProfile(UUID.randomUUID(), name + "-owner"));
@@ -988,7 +982,7 @@ public final class DailyActionForgeGameTests {
         body.setOnGround(true);
         String id = registry.runtimeSnapshots(false).stream()
                 .filter(s -> s.ownerId().equals(owner.getUUID().toString()))
-                .map(CompanionRegistry.RuntimeSnapshot::companionId).findFirst().orElseThrow();
+                .map(BodySnapshots.RuntimeSnapshot::companionId).findFirst().orElseThrow();
         String lease = name + "-lease";
         h.assertTrue(registry.runtimeAcquireLease(id, lease, 1L, System.currentTimeMillis() + 300_000L).success(),
                 "daily runtime lease failed");
@@ -1001,20 +995,20 @@ public final class DailyActionForgeGameTests {
         h.assertTrue(result.success(), "daily runtime start failed: " + result.code());
     }
 
-    private static CompanionRegistry.RuntimeSnapshot runtimeSnapshot(Fixture f) {
+    private static BodySnapshots.RuntimeSnapshot runtimeSnapshot(Fixture f) {
         return f.registry.runtimeSnapshots(false).stream()
                 .filter(s -> s.companionId().equals(f.companionId)).findFirst().orElseThrow();
     }
 
-    private static String phase(CompanionRegistry.RuntimeSnapshot snapshot) {
+    private static String phase(BodySnapshots.RuntimeSnapshot snapshot) {
         return snapshot.behaviorObservation() == null ? ""
                 : snapshot.behaviorObservation().details().getOrDefault("phase", "");
     }
 
     /** Waits for a specific in-flight phase before mutating the live world or Runtime lifecycle. */
     private static void awaitPhase(GameTestHelper h, Fixture f, String expectedPhase, int ticksRemaining,
-                                   Consumer<CompanionRegistry.RuntimeSnapshot> action) {
-        CompanionRegistry.RuntimeSnapshot snapshot = runtimeSnapshot(f);
+                                   Consumer<BodySnapshots.RuntimeSnapshot> action) {
+        BodySnapshots.RuntimeSnapshot snapshot = runtimeSnapshot(f);
         if ("RUNNING".equals(snapshot.behaviorState()) && expectedPhase.equals(phase(snapshot))) {
             action.accept(snapshot);
             return;
@@ -1026,7 +1020,7 @@ public final class DailyActionForgeGameTests {
 
     private static void awaitSleepingWhileRunning(GameTestHelper h, Fixture f, int ticksRemaining,
                                                   Runnable action) {
-        CompanionRegistry.RuntimeSnapshot snapshot = runtimeSnapshot(f);
+        BodySnapshots.RuntimeSnapshot snapshot = runtimeSnapshot(f);
         if (f.body.isSleeping() && "RUNNING".equals(snapshot.behaviorState())) {
             action.run();
             return;
@@ -1041,8 +1035,8 @@ public final class DailyActionForgeGameTests {
 
     /** Polls the live runtime snapshot on server ticks; this deliberately never calls registry.tick(). */
     private static void await(GameTestHelper h, Fixture f, int ticksRemaining,
-                               Consumer<CompanionRegistry.RuntimeSnapshot> terminal) {
-        CompanionRegistry.RuntimeSnapshot snapshot = runtimeSnapshot(f);
+                               Consumer<BodySnapshots.RuntimeSnapshot> terminal) {
+        BodySnapshots.RuntimeSnapshot snapshot = runtimeSnapshot(f);
         if ("RUNNING".equals(snapshot.behaviorState())) {
             h.assertTrue(ticksRemaining > 0,
                     "daily action timed out: " + snapshot.evidenceSummary()
@@ -1114,6 +1108,30 @@ public final class DailyActionForgeGameTests {
         return water;
     }
 
+    private static BlockPos moveFixtureToIsolatedArena(Fixture f, int coordinate) {
+        int chunk = coordinate >> 4;
+        for (int offsetX = -1; offsetX <= 1; offsetX++) {
+            for (int offsetZ = -1; offsetZ <= 1; offsetZ++) {
+                f.level.setChunkForced(chunk + offsetX, chunk + offsetZ, true);
+            }
+        }
+        BlockPos origin = new BlockPos(coordinate, 80, coordinate);
+        for (int x = -3; x <= 6; x++) for (int z = -3; z <= 3; z++) {
+            f.level.setBlockAndUpdate(origin.offset(x, -1, z), Blocks.STONE.defaultBlockState());
+            for (int y = 0; y <= 3; y++) {
+                f.level.setBlockAndUpdate(origin.offset(x, y, z), Blocks.AIR.defaultBlockState());
+            }
+        }
+        f.body.teleportTo(coordinate + 0.5D, 80.0D, coordinate + 0.5D);
+        f.owner.teleportTo(coordinate + 0.5D, 80.0D, coordinate - 2.5D);
+        f.body.setDeltaMovement(Vec3.ZERO);
+        f.body.clearFire();
+        f.body.setAirSupply(f.body.getMaxAirSupply());
+        f.body.fallDistance = 0.0F;
+        f.body.setOnGround(true);
+        return origin;
+    }
+
     private static int fishCount(CompanionPlayer body) {
         return body.getInventory().countItem(Items.COD) + body.getInventory().countItem(Items.SALMON)
                 + body.getInventory().countItem(Items.TROPICAL_FISH)
@@ -1158,7 +1176,7 @@ public final class DailyActionForgeGameTests {
         String dimension() { return level().dimension().location().toString(); }
         String lastResultCode() { return registry.runtimeSnapshots(false).stream()
                 .filter(s -> s.companionId().equals(companionId))
-                .map(CompanionRegistry.RuntimeSnapshot::behaviorObservation)
-                .map(CompanionRegistry.BehaviorObservation::failureCode).findFirst().orElse(""); }
+                .map(BodySnapshots.RuntimeSnapshot::behaviorObservation)
+                .map(BodySnapshots.BehaviorObservation::failureCode).findFirst().orElse(""); }
     }
 }

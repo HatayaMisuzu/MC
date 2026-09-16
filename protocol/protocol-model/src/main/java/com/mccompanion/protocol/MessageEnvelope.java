@@ -13,7 +13,14 @@ public record MessageEnvelope(
         long sequence,
         Instant sentAt,
         String correlationId,
-        JsonNode payload) {
+        JsonNode payload,
+        String sessionId,
+        String worldId) {
+
+    public MessageEnvelope(ProtocolVersion protocol, MessageType type, String messageId, long sequence,
+                           Instant sentAt, String correlationId, JsonNode payload) {
+        this(protocol, type, messageId, sequence, sentAt, correlationId, payload, null, null);
+    }
 
     public MessageEnvelope {
         Objects.requireNonNull(protocol, "protocol");
@@ -31,6 +38,8 @@ public record MessageEnvelope(
             throw new IllegalArgumentException("payload must be a JSON object");
         }
         payload = payload.deepCopy();
+        if (sessionId != null) sessionId = ProtocolFields.identifier(sessionId, "sessionId");
+        if (worldId != null) worldId = ProtocolFields.identifier(worldId, "worldId");
     }
 
     public static MessageEnvelope create(MessageType type, long sequence, JsonNode payload) {
@@ -39,7 +48,7 @@ public record MessageEnvelope(
     }
 
     public MessageEnvelope correlatedTo(String requestMessageId) {
-        return new MessageEnvelope(protocol, type, messageId, sequence, sentAt, requestMessageId, payload);
+        return new MessageEnvelope(protocol, type, messageId, sequence, sentAt, requestMessageId, payload, sessionId, worldId);
     }
 
     @Override

@@ -130,22 +130,18 @@ jobs:
         timeout-minutes: 35
         shell: pwsh
         run: ./gradlew.bat gameTest --no-daemon --no-parallel --stacktrace
-      - name: Run Runtime/Fabric end-to-end test
-        timeout-minutes: 10
+      - name: Run declared Runtime and persistence chains
+        timeout-minutes: 50
         shell: pwsh
-        run: ./gradlew.bat runtimeFabricE2E --no-daemon --no-parallel --stacktrace
-      - name: Run Runtime/Forge end-to-end test
-        timeout-minutes: 10
-        shell: pwsh
-        run: ./gradlew.bat runtimeForgeE2E --no-daemon --no-parallel --stacktrace
-      - name: Run Fabric persistence restart test
-        timeout-minutes: 15
-        shell: pwsh
-        run: ./gradlew.bat persistenceRestartTest --no-daemon --no-parallel --stacktrace
-      - name: Run Forge persistence restart test
-        timeout-minutes: 15
-        shell: pwsh
-        run: ./gradlew.bat forgePersistenceRestartTest --no-daemon --no-parallel --stacktrace
+        run: |
+          $catalog = Get-Content targets/catalog.json -Raw | ConvertFrom-Json
+          foreach ($target in $catalog.targets) {
+            foreach ($task in @($target.runtimeE2eTask, $target.persistenceTask)) {
+              if (-not $task) { continue }
+              ./gradlew.bat $task --no-daemon --no-parallel --stacktrace
+              if ($LASTEXITCODE -ne 0) { throw "Target chain failed: $($target.targetId) / $task" }
+            }
+          }
       - name: Run Runtime multi-profile test
         timeout-minutes: 5
         shell: pwsh

@@ -91,10 +91,10 @@ public final class ConversationService {
                 payload.set("details", event.payload());
                 ObjectNode envelope = Json.object().put("protocol", RuntimeWebSocketServer.PROTOCOL)
                         .put("type", "conversation_event").put("sessionId", session.sessionId())
-                        .put("worldId", session.handshake().worldId()).put("sequence", session.nextSequence())
+                        .put("worldId", session.handshake().worldId())
                         .put("timestamp", Instant.now().toEpochMilli());
                 envelope.set("payload", payload);
-                session.peer().send(Json.write(envelope));
+                session.send(envelope);
             }
         } catch (SQLException | RuntimeException failure) {
             log.error("Conversation outbox delivery failed: companion=" + companionId, failure);
